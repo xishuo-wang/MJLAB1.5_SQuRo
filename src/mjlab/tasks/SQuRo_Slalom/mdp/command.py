@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 
 
 # 阶段阈值（iterations）
-STAGE1_END = 500
-STAGE2_END = 1500
+STAGE1_END = 1000
+STAGE2_END = 2000
 
 # 目标最大角速度：v=0.1m/s ÷ r_min → 2.0 rad/s 留有裕度
 OMEGA_TARGET_MAX = 2.0
