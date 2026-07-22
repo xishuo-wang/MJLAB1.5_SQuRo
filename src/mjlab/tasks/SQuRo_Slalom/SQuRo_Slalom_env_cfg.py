@@ -1,8 +1,6 @@
 # uv run train Mjlab-SQuRo-Slalom
 # uv run play Mjlab-SQuRo-Slalom-Play --checkpoint_file
 
-from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
     ActionTermCfg,
     CommandTermCfg,
@@ -13,10 +11,12 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.tasks.SQuRo_Slalom import mdp
 from mjlab.viewer import ViewerConfig
+from mjlab.tasks.SQuRo_Slalom import mdp
+from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
+from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
@@ -28,12 +28,15 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     foot_names = ("FR", "FL", "HR", "HL")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
 
-    # 观测空间 — 本体感受 + 命令
+    # 观测空间 — 仅执行器关节(12维) + 本体感受 + 命令
     policy_terms = {
-        "actions": ObservationTermCfg(func=mdp.last_action, history_length=3),
-        "joint_pos": ObservationTermCfg(func=mdp.joint_pos_rel),
-        "joint_vel": ObservationTermCfg(func=mdp.joint_vel_rel),
-        "base_lin_vel_w": ObservationTermCfg(func=mdp.base_lin_vel_w),
+        "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
+        "actuator_pos": ObservationTermCfg(func=mdp.actuator_pos),
+        "actuator_vel": ObservationTermCfg(func=mdp.actuator_vel),
+        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),
+        "base_ang_vel": ObservationTermCfg(func=mdp.base_ang_vel),
+        "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
+        "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
         "heading": ObservationTermCfg(func=mdp.heading),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "slalom_cmd"}),
     }
@@ -55,7 +58,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 事件 — reset时恢复默认姿态
+    # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
@@ -66,9 +69,9 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "track_omega": RewardTermCfg(func=mdp.compute_omega_track_reward, weight=1.0),
         "spine_turn": RewardTermCfg(func=mdp.compute_spine_turn_reward, weight=1.0),
         "stability": RewardTermCfg(func=mdp.compute_stability_penalty, weight=1.0),
+        "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
+        "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
-        "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
-        "update_curriculum": RewardTermCfg(func=mdp.update_curriculum, weight=0.0),
     }
 
     # 终止条件
@@ -90,9 +93,6 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-    # 命令与实体
-    episode_length_s = 20.0
-
     commands: dict[str, CommandTermCfg] = {
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
@@ -102,16 +102,12 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    entities = {
-        "robot": SQURO_ROBOT_CFG,
-    }
-
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities=entities,
+            entities={"robot": SQURO_ROBOT_CFG},
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,
@@ -134,11 +130,11 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.001,
+                timestep=0.005,
                 iterations=10,
                 ls_iterations=20,
             ),
         ),
-        decimation=5,
-        episode_length_s=episode_length_s,
+        decimation=4,
+        episode_length_s=20.0,
     )

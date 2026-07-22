@@ -1,74 +1,69 @@
-"""SQuRo绕杆任务第一阶段 — 课程调度
+"""SQuRo绕杆任务第一阶段 — 课程调度（数据驱动模式）
 
 3阶段课程:
   阶段1 (0~500 iter): 直行 — ω=0, v逐步提升, 脊柱奖励关闭
   阶段2 (500~1500 iter): 转弯引入 — ω范围渐进扩展, 脊柱奖励逐步开启
-  阶段3 (1500+ iter): 全范围 — 随机[v, ω]混合, 全奖励权重
+  阶段3 (1500+ iter): 全范围 — 随机[v,ω]混合, 全奖励权重
+
+课程配置集中在 _STAGES 和 _CURVES 中，通过阶段索引插值查表。
 """
 
 from __future__ import annotations
-from typing import Dict, Any
-from .command import STAGE1_END, STAGE2_END
+from typing import Any
+
+_STEPS_PER_ITER = 24
+_STAGES = (0, 500, 1500)
+
+_CURVES: dict[str, tuple[float, ...]] = {
+    # 主奖励权重
+    "weight_track_vel":     (2.0, 1.0, 1.0),
+    "weight_track_omega":   (0.0, 1.0, 1.0),
+    "weight_spine_turn":    (0.0, 0.3, 1.0),
+    "weight_stability":     (0.5, 0.3, 0.3),
+    "weight_energy":        (0.01, 0.01, 0.01),
+    "weight_smooth_L1_leg": (0.1, 0.2, 0.3),
+    "weight_smooth_L1_spn": (0.0, 0.1, 0.2),
+
+    # 腿/脊柱 L2 平滑权重
+    "weight_smooth_L2_leg": (0.1, 0.2, 0.3),
+    "weight_smooth_L2_spn": (0.0, 0.1, 0.2),
+}
 
 
 class RewardWeightCurriculum:
-    """奖励权重课程调度器"""
+    """数据驱动课程调度器"""
 
-    def __init__(self):
-        self.weight_stages = {
-            0: {  # 阶段1: 直行优先，关闭转弯
-                "track_vel": 2.0,
-                "track_omega": 0.0,
-                "spine_turn": 0.0,
-                "stability": 0.5,
-                "energy": 0.01,
-                "smoothness": 0.1,
-            },
-            STAGE1_END * 24: {  # 阶段2: 引入转弯
-                "track_vel": 1.0,
-                "track_omega": 1.0,
-                "spine_turn": 0.3,
-                "stability": 0.3,
-                "energy": 0.01,
-                "smoothness": 0.2,
-            },
-            STAGE2_END * 24: {  # 阶段3: 全权重
-                "track_vel": 1.0,
-                "track_omega": 1.0,
-                "spine_turn": 1.0,
-                "stability": 0.3,
-                "energy": 0.01,
-                "smoothness": 0.5,
-            },
-        }
+    def get_reward_weights(self, current_step: int) -> dict[str, float]:
+        current_iter = current_step // _STEPS_PER_ITER
+        result: dict[str, float] = {}
+        for name, values in _CURVES.items():
+            # 找到 ≤ current_iter 的最大阶段下标
+            idx = 0
+            for i, t in enumerate(_STAGES):
+                if current_iter >= t:
+                    idx = i
+            safe_idx = idx if idx < len(values) else len(values) - 1
+            result[name] = values[safe_idx]
+        return result
 
-    def get_reward_weights(self, current_step: int) -> Dict[str, float]:
-        """根据当前步数返回奖励权重"""
-        weights = self.weight_stages[0]
-        for step_threshold in sorted(self.weight_stages.keys()):
-            if current_step >= step_threshold:
-                weights = self.weight_stages[step_threshold]
-        return weights
-
-    def get_current_stage_info(self, current_step: int) -> Dict[str, Any]:
-        weights = self.get_reward_weights(current_step)
-        current_stage = 0
-        for step_threshold in sorted(self.weight_stages.keys()):
-            if current_step >= step_threshold:
-                current_stage = step_threshold
+    def get_current_stage_info(self, current_step: int) -> dict[str, Any]:
+        current_iter = current_step // _STEPS_PER_ITER
+        stage = 0
+        for t in _STAGES:
+            if current_iter >= t:
+                stage = t
         return {
-            "current_stage": current_stage,
-            "reward_weights": weights,
+            "current_stage": stage,
+            "current_iter": current_iter,
             "current_step": current_step,
-            "total_stages": len(self.weight_stages),
+            "reward_weights": self.get_reward_weights(current_step),
         }
 
 
-# 全局单例
 reward_weight_curriculum = RewardWeightCurriculum()
 
 
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
-    """根据当前训练步数查询奖励权重"""
-    current_weights = reward_weight_curriculum.get_reward_weights(env.common_step_counter)
-    return current_weights.get(reward_name, 1.0)
+    return reward_weight_curriculum.get_reward_weights(
+        env.common_step_counter
+    ).get(reward_name, 1.0)

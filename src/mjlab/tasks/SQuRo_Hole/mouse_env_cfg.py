@@ -13,7 +13,7 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.tasks.mouse import mdp
+from mjlab.tasks.SQuRo_Hole import mdp
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
