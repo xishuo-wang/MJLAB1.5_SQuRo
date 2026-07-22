@@ -1,15 +1,31 @@
+"""SQuRo绕杆任务第一阶段 — 本体感受观测函数
+
+仅观测执行器关节（12维），滤除被动闭链关节（16个）。
+heading 使用 F_body_Link 朝向（与 vel_track 奖励一致）。
+"""
+
 from __future__ import annotations
 import torch
+
 from mjlab.entity import Entity
-from typing import TYPE_CHECKING
-from .reference import get_reference_joint_state
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES, resolve_model_indices
+from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
+
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
-
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+def _get_f_body_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    """F_body_Link 偏航角 [num_envs] — 统一供 observations + rewards 使用"""
+    asset: Entity = env.scene["robot"]
+    quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.f_body_id]  # [N, 4]
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]  # type: ignore[misc]
+    sin_h = 2.0 * (w * z + x * y)
+    cos_h = 1.0 - 2.0 * (y * y + z * z)
+    return torch.atan2(sin_h, cos_h)
 
 
 # 基座世界线速度
@@ -52,10 +68,9 @@ def actuator_force(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = ACTUATED_
     return asset.data.actuator_force
 
 
-# 朝向角
+# F_body_Link 朝向角（与 vel_track 奖励一致）
 def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    asset: Entity = env.scene[asset_cfg.name]
-    return asset.data.heading_w.unsqueeze(-1)
+    return _get_f_body_heading(env).unsqueeze(-1)
 
 
 # 基座位置
@@ -66,11 +81,13 @@ def base_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_
 
 # 参考关节位置
 def ref_joint_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    from .reference import get_reference_joint_state
     pos, _ = get_reference_joint_state(env)
     return pos
 
 
 # 参考关节速度
 def ref_joint_vel(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    from .reference import get_reference_joint_state
     _, vel = get_reference_joint_state(env)
     return vel

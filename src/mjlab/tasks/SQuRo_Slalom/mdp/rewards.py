@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
+from .observations import _get_f_body_heading
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -50,13 +51,8 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算F_body朝向
-    f_body_quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.f_body_id]
-    w, x, y, z = f_body_quat[:, 0], f_body_quat[:, 1], f_body_quat[:, 2], f_body_quat[:, 3]  # type: ignore[misc]
-    sin_cosp = 2.0 * (w * z + x * y)
-    cos_cosp = 1.0 - 2.0 * (y * y + z * z)
-    f_body_heading = torch.atan2(sin_cosp, cos_cosp)
-    # 计算F_body朝向速度误差
+    # F_body 朝向（共享函数，与 observations.heading 一致）
+    f_body_heading = _get_f_body_heading(env)
     vel_w = asset.data.root_link_lin_vel_w
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
     cmd_term = env.command_manager._terms["slalom_cmd"]
