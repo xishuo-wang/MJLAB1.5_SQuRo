@@ -66,6 +66,7 @@ class SlalomCommand(CommandTerm):
         self.fixed_height_f = cfg.fixed_height_f
         self.fixed_height_h = cfg.fixed_height_h
         self.fixed_gait_freq = cfg.fixed_gait_freq
+        self.fixed_omega = cfg.fixed_omega
 
         # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -99,6 +100,8 @@ class SlalomCommand(CommandTerm):
         return torch.full((n,), FIXED_GAIT_FREQ, device=self.device)
 
     def _get_omega(self, n: int, step_counter: int) -> torch.Tensor:
+        if self.fixed_omega is not None:
+            return torch.full((n,), float(self.fixed_omega), device=self.device)
         stage = get_current_stage(step_counter)
         omega_range = get_omega_range(stage, step_counter)
         return torch.rand(n, device=self.device) * (omega_range[1] - omega_range[0]) + omega_range[0]
@@ -158,11 +161,12 @@ class SlalomCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (4.0, 6.0)
     debug_vis: bool = False
 
-    # 固定值（None=使用默认常量，设值可覆盖）
+    # 固定值（None=使用课程采样，设值可覆盖）
     fixed_velocity: Optional[float] = None
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
+    fixed_omega: Optional[float] = None  # 固定角速度 (rad/s)，用于测试
 
     @dataclass
     class VizCfg:
