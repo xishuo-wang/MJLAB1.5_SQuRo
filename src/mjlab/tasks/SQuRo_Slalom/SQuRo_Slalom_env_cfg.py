@@ -20,7 +20,7 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
-def SQuRo_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 

@@ -5,7 +5,7 @@ from mjlab.rl import (
 )
 
 
-def SQuRo_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
+def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
   return RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
       hidden_dims=(512, 256, 128),
