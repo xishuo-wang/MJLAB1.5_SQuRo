@@ -11,20 +11,19 @@ if TYPE_CHECKING:
 
 
 # 阶段阈值（iterations）
-STAGE1_END = 500
-STAGE2_END = 1500
+STAGE1_END = 1000
+STAGE2_END = 2000
 
-# 目标最大曲率: κ = 1/R_min, R_min=0.1m → κ_max=10 m⁻¹
-# ω = κ × v, 在 v=0.1m/s 时 ω_max = 1.0 rad/s
-CURVATURE_TARGET_MAX = 5.0
 
-# 固定值
+# 命令配置
 FIXED_VEL = 0.1
 FIXED_HEIGHT_F = 0.06
 FIXED_HEIGHT_H = 0.06
 FIXED_GAIT_FREQ = 1.0
+CURVATURE_TARGET_MAX = 5.0
 
 
+# 获取当前阶段
 def get_current_stage(step_counter: int) -> int:
     iter_num = step_counter // 24
     if iter_num < STAGE1_END:
@@ -35,8 +34,8 @@ def get_current_stage(step_counter: int) -> int:
         return 3
 
 
+# 获取曲率采样范围
 def get_curvature_range(stage: int, step_counter: int) -> Tuple[float, float]:
-    """曲率采样范围 κ = 1/R, ω = κ × v"""
     if stage == 1:
         return (0.0, 0.0)  # 直行
     elif stage == 2:
@@ -50,7 +49,6 @@ def get_curvature_range(stage: int, step_counter: int) -> Tuple[float, float]:
 
 # 5D命令 [vel_x, height_f, height_h, gait_freq, curvature]
 class SlalomCommand(CommandTerm):
-    """curvature = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行; ω = κ × v"""
     cfg: "SlalomCommandCfg"
     def __init__(self, cfg: "SlalomCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
