@@ -7,8 +7,8 @@ _STAGES = (0, 1000, 2000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (5.0, 3.0, 0.5),
-    "weight_mimic_vel":         (2.5, 1.0, 0.2),
+    "weight_mimic_pos":         (5.0, 5.0, 5.0),
+    "weight_mimic_vel":         (2.5, 2.5, 2.5),
     "weight_track_vel":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (0.0, 0.5, 1.0),
     "weight_smooth_L1_leg":     (0.1, 0.2, 0.2),
