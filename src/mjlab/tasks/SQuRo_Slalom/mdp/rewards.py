@@ -43,16 +43,23 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 线速度跟踪奖励（机身前进方向投影，转弯时不受朝向影响）
+# 线速度跟踪奖励（F_body_Link 前进方向投影，脊柱弯曲时不受 base_Link 朝向影响）
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_vel = exp(-sigma * (v_forward - v_cmd)^2)
-    v_forward = vel_w · [cos(heading), sin(heading), 0] — 世界速度投影到机身前进方向"""
+    使用 F_body_Link 的朝向（而非 base_Link），因为脊柱弯曲时 base_Link
+    处于万向节中心，其朝向介于前后体之间，不能准确代表前进方向。"""
     asset: Entity = env.scene["robot"]
     vel_w = asset.data.root_link_lin_vel_w  # [N, 3] 世界系
-    heading = asset.data.heading_w           # [N] 机身偏航角
 
-    # 投影到机身前进方向（heading=0 → +X, heading=π/2 → +Y）
-    forward_speed = vel_w[:, 0] * torch.cos(heading) + vel_w[:, 1] * torch.sin(heading)
+    # 从 F_body_Link 四元数提取偏航角（前体朝向 = 实际前进方向）
+    f_body_quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.f_body_id]  # [N, 4]
+    w, x, y, z = f_body_quat[:, 0], f_body_quat[:, 1], f_body_quat[:, 2], f_body_quat[:, 3]  # type: ignore[misc]
+    sin_cosp = 2.0 * (w * z + x * y)
+    cos_cosp = 1.0 - 2.0 * (y * y + z * z)
+    f_body_heading = torch.atan2(sin_cosp, cos_cosp)
+
+    # 投影到 F_body 前进方向
+    forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
 
     cmd_term = env.command_manager._terms["slalom_cmd"]
     v_cmd = cmd_term.command[:, 0]
