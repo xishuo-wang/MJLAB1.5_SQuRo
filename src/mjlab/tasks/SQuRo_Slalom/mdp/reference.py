@@ -136,6 +136,8 @@ def _init_tables(device: torch.device | str) -> None:
 
 # =========================================================================================
 # 脊柱侧摆参考角常量
+# F_body_heading = base_heading - F_spine1 (实测验证)
+# 左转(κ>0, ω>0) → 需F_body左偏 → F_spine1<0 → 取负号
 _SPINE_LATERAL_GAIN = 2.0      # α = κ * L = (ω/v) * L, L=0.2m, v=0.1m/s → 2.0
 _SPINE_LATERAL_LIMIT = 0.6     # F_spine1 关节限位 ±0.6 rad
 
@@ -186,12 +188,12 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos = _pos_table[phase_indices].clone()  # [N, 12] — clone 避免修改预计算表
     ref_vel = _vel_table[phase_indices] * TROT_FREQ  # [N, 12]
 
-    # 动态覆盖脊柱侧摆参考: α = clamp(GAIN * ω_cmd, ±LIMIT)
-    # ω_cmd = κ_cmd × v_cmd, R = L/α → α = L*ω/v
+    # 动态覆盖脊柱侧摆参考: F_body_heading = base_heading - F_spine1
+    # 左转(κ>0, ω>0) → 需F_body左偏 → F_spine1<0 → 取负号
     curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
     vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]
     omega_cmd = curvature_cmd * vel_cmd
-    spine_lateral = torch.clamp(_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
+    spine_lateral = torch.clamp(-_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
     ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
     ref_vel[:, 8] = 0.0               # 脊柱参考速度为零（准静态弯曲）
 
