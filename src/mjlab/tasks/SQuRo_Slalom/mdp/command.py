@@ -1,16 +1,16 @@
-"""SQuRo绕杆任务第一阶段 — 速度+角速度命令系统
+"""SQuRo绕杆任务第一阶段 — 命令系统
 
-命令格式: [v_cmd (前向线速度), ω_cmd (偏航角速度)]
-课程:
-  阶段1 (直行): v ∈ [0, 0.2], ω = 0
-  阶段2 (转弯引入): v ∈ [0, 0.2], ω 从 [-0.5, 0.5] 扩展到 [-ω_max, ω_max]
-  阶段3 (全范围): v ∈ [0, 0.2], ω ∈ [-ω_max, ω_max]
+命令格式: [vel_x, height_f, height_h, gait_freq, omega]
+  前4项: 固定值（直行trot基础）
+  omega: 课程控制（阶段1=0 → 阶段2渐进 → 阶段3全范围）
+
+与 mouse_spg 风格一致: fixed_* 参数控制固定值，课程控制可变维度。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 import torch
 
 from mjlab.entity import Entity
@@ -26,15 +26,17 @@ if TYPE_CHECKING:
 STAGE1_END = 500
 STAGE2_END = 1500
 
-# 目标最大角速度：v=0.2m/s ÷ r=0.1m = 2.0 rad/s
+# 目标最大角速度：v=0.1m/s ÷ r_min → 2.0 rad/s 留有裕度
 OMEGA_TARGET_MAX = 2.0
 
-# 线速度范围
-V_MIN, V_MAX = 0.0, 0.2
+# 固定值
+FIXED_VEL = 0.1
+FIXED_HEIGHT_F = 0.06
+FIXED_HEIGHT_H = 0.06
+FIXED_GAIT_FREQ = 1.0
 
 
 def get_current_stage(step_counter: int) -> int:
-    """根据全局步数返回当前课程阶段"""
     iter_num = step_counter // 24
     if iter_num < STAGE1_END:
         return 1
@@ -42,11 +44,6 @@ def get_current_stage(step_counter: int) -> int:
         return 2
     else:
         return 3
-
-
-def get_v_range(stage: int) -> Tuple[float, float]:
-    """线速度采样范围"""
-    return (V_MIN, V_MAX)
 
 
 def get_omega_range(stage: int, step_counter: int) -> Tuple[float, float]:
@@ -63,17 +60,29 @@ def get_omega_range(stage: int, step_counter: int) -> Tuple[float, float]:
 
 
 class SlalomCommand(CommandTerm):
-    """2D命令 [v_cmd (前向线速度), ω_cmd (偏航角速度)]"""
+    """5D命令 [vel_x, height_f, height_h, gait_freq, omega]"""
 
     cfg: "SlalomCommandCfg"
 
     def __init__(self, cfg: "SlalomCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
-        self.command_tensor = torch.zeros(self.num_envs, 2, device=self.device)
-        self._v_command = self.command_tensor[:, 0]
-        self._omega_command = self.command_tensor[:, 1]
 
+        # 命令张量: [vel_x, height_f, height_h, gait_freq, omega]
+        self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
+        self.vel_command = self.command_tensor[:, 0]
+        self.height_f_command = self.command_tensor[:, 1]
+        self.height_h_command = self.command_tensor[:, 2]
+        self.gait_freq_command = self.command_tensor[:, 3]
+        self.omega_command = self.command_tensor[:, 4]
+
+        # 固定值配置（优先级高于采样）
+        self.fixed_velocity = cfg.fixed_velocity
+        self.fixed_height_f = cfg.fixed_height_f
+        self.fixed_height_h = cfg.fixed_height_h
+        self.fixed_gait_freq = cfg.fixed_gait_freq
+
+        # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
 
@@ -86,17 +95,40 @@ class SlalomCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         return self.command_tensor
 
+    def _get_velocity(self, n: int) -> torch.Tensor:
+        if self.fixed_velocity is not None:
+            return torch.full((n,), float(self.fixed_velocity), device=self.device)
+        return torch.full((n,), FIXED_VEL, device=self.device)
+
+    def _get_height_f(self, n: int) -> torch.Tensor:
+        if self.fixed_height_f is not None:
+            return torch.full((n,), float(self.fixed_height_f), device=self.device)
+        return torch.full((n,), FIXED_HEIGHT_F, device=self.device)
+
+    def _get_height_h(self, n: int) -> torch.Tensor:
+        if self.fixed_height_h is not None:
+            return torch.full((n,), float(self.fixed_height_h), device=self.device)
+        return torch.full((n,), FIXED_HEIGHT_H, device=self.device)
+
+    def _get_gait_freq(self, n: int) -> torch.Tensor:
+        if self.fixed_gait_freq is not None:
+            return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
+        return torch.full((n,), FIXED_GAIT_FREQ, device=self.device)
+
+    def _get_omega(self, n: int, step_counter: int) -> torch.Tensor:
+        stage = get_current_stage(step_counter)
+        omega_range = get_omega_range(stage, step_counter)
+        return torch.rand(n, device=self.device) * (omega_range[1] - omega_range[0]) + omega_range[0]
+
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
-        stage = get_current_stage(self._env.common_step_counter)
-        v_range = get_v_range(stage)
-        omega_range = get_omega_range(stage, self._env.common_step_counter)
+        current_step = self._env.common_step_counter
 
-        v_cmd = torch.rand(n, device=self.device) * (v_range[1] - v_range[0]) + v_range[0]
-        omega_cmd = torch.rand(n, device=self.device) * (omega_range[1] - omega_range[0]) + omega_range[0]
-
-        self._v_command[env_ids] = v_cmd
-        self._omega_command[env_ids] = omega_cmd
+        self.vel_command[env_ids] = self._get_velocity(n)
+        self.height_f_command[env_ids] = self._get_height_f(n)
+        self.height_h_command[env_ids] = self._get_height_h(n)
+        self.gait_freq_command[env_ids] = self._get_gait_freq(n)
+        self.omega_command[env_ids] = self._get_omega(n, current_step)
 
     def _update_command(self) -> None:
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
@@ -123,16 +155,15 @@ class SlalomCommand(CommandTerm):
 
         scale = self.cfg.viz.scale
         z_offset = self.cfg.viz.z_offset
-
-        # 画线速度命令箭头（蓝色）
-        cmd_vel = torch.tensor([self._v_command[batch].item(), 0.0, 0.0])
         cmd_start = base_pos + [0, 0, z_offset]
+
+        # 线速度命令箭头（蓝色）
+        cmd_vel = torch.tensor([self.vel_command[batch].item(), 0.0, 0.0])
         visualizer.add_arrow(
             cmd_start, cmd_start + cmd_vel.cpu().numpy() * scale,
             color=(0.2, 0.2, 0.8, 0.8), width=0.01,
         )
-
-        # 画实际速度箭头（绿色）
+        # 实际速度箭头（绿色）
         actual_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
         visualizer.add_arrow(
             cmd_start, cmd_start + actual_vel * scale,
@@ -147,6 +178,12 @@ class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
     resampling_time_range: Tuple[float, float] = (4.0, 6.0)
     debug_vis: bool = False
+
+    # 固定值（None=使用默认常量，设值可覆盖）
+    fixed_velocity: Optional[float] = None
+    fixed_height_f: Optional[float] = None
+    fixed_height_h: Optional[float] = None
+    fixed_gait_freq: Optional[float] = None
 
     @dataclass
     class VizCfg:

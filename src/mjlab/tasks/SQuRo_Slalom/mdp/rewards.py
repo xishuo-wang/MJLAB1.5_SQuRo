@@ -49,7 +49,7 @@ def compute_omega_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     actual_omega_z = asset.data.root_link_ang_vel_w[:, 2]
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    omega_cmd = cmd_term.command[:, 1]
+    omega_cmd = cmd_term.command[:, 4]
 
     error_omega = actual_omega_z - omega_cmd
     reward = torch.exp(-50.0 * error_omega ** 2)
@@ -66,7 +66,7 @@ def compute_spine_turn_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_spine = |ω_cmd| * (w_lat*|F_spine1| + w_twist*(|F_body|+|H_body|))"""
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    omega_cmd_abs = torch.abs(cmd_term.command[:, 1])
+    omega_cmd_abs = torch.abs(cmd_term.command[:, 4])
 
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     lateral_pos = joint_pos[:, _MODEL_INDICES.actuator_spn_lateral_id]
