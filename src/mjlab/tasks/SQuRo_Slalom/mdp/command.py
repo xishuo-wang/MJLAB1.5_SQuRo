@@ -1,22 +1,10 @@
-"""SQuRo绕杆任务第一阶段 — 命令系统
-
-命令格式: [vel_x, height_f, height_h, gait_freq, omega]
-  前4项: 固定值（直行trot基础）
-  omega: 课程控制（阶段1=0 → 阶段2渐进 → 阶段3全范围）
-
-与 mouse_spg 风格一致: fixed_* 参数控制固定值，课程控制可变维度。
-"""
-
 from __future__ import annotations
-
+import torch
+from mjlab.entity import Entity
+from mjlab.managers import CommandTermCfg
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Tuple
-import torch
-
-from mjlab.entity import Entity
 from mjlab.managers.command_manager import CommandTerm
-from mjlab.managers import CommandTermCfg
-
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -47,7 +35,6 @@ def get_current_stage(step_counter: int) -> int:
 
 
 def get_omega_range(stage: int, step_counter: int) -> Tuple[float, float]:
-    """角速度采样范围，阶段2内线性插值"""
     if stage == 1:
         return (0.0, 0.0)
     elif stage == 2:
@@ -59,11 +46,9 @@ def get_omega_range(stage: int, step_counter: int) -> Tuple[float, float]:
         return (-OMEGA_TARGET_MAX, OMEGA_TARGET_MAX)
 
 
+# 5D命令 [vel_x, height_f, height_h, gait_freq, omega]
 class SlalomCommand(CommandTerm):
-    """5D命令 [vel_x, height_f, height_h, gait_freq, omega]"""
-
     cfg: "SlalomCommandCfg"
-
     def __init__(self, cfg: "SlalomCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
@@ -87,9 +72,7 @@ class SlalomCommand(CommandTerm):
         self._resample_command(env_ids)
 
         t_range = self.cfg.resampling_time_range
-        self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-            t_range[1] - t_range[0]
-        ) + t_range[0]
+        self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
 
     @property
     def command(self) -> torch.Tensor:
@@ -135,9 +118,7 @@ class SlalomCommand(CommandTerm):
         if len(env_ids) > 0:
             self._resample_command(env_ids)
             t_range = self.cfg.resampling_time_range
-            self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-                t_range[1] - t_range[0]
-            ) + t_range[0]
+            self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
         self.time_left -= self._env.step_dt
 
     def _update_metrics(self) -> None:
@@ -173,8 +154,6 @@ class SlalomCommand(CommandTerm):
 
 @dataclass(kw_only=True)
 class SlalomCommandCfg(CommandTermCfg):
-    """SlalomCommand 配置"""
-
     asset_name: str = "robot"
     resampling_time_range: Tuple[float, float] = (4.0, 6.0)
     debug_vis: bool = False
