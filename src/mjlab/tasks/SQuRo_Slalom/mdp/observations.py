@@ -1,25 +1,18 @@
-"""SQuRo绕杆任务第一阶段 — 本体感受观测函数
-
-仅观测执行器关节（12维），滤除被动闭链关节（16个）。
-heading 使用 F_body_Link 朝向（与 vel_track 奖励一致）。
-"""
-
 from __future__ import annotations
 import torch
-
 from mjlab.entity import Entity
+from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
-
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
+# 获取F_body_Link 偏航角
 def _get_f_body_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    """F_body_Link 偏航角 [num_envs] — 统一供 observations + rewards 使用"""
     asset: Entity = env.scene["robot"]
     quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.f_body_id]  # [N, 4]
     w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]  # type: ignore[misc]
