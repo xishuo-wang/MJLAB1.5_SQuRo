@@ -100,7 +100,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
             resampling_time_range=(4.0, 6.0),
-            debug_vis=play,
+            debug_vis=False,
             viz=mdp.SlalomCommandCfg.VizCfg(z_offset=0.1, scale=1.0),
         )
     }
@@ -124,7 +124,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             origin_type=ViewerConfig.OriginType.ASSET_BODY,
             entity_name="robot",
             body_name="base_Link",
-            distance=0.3,
+            distance=0.5,
             elevation=0.0,
             azimuth=90.0,
             height=1080,
