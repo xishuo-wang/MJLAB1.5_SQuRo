@@ -1,21 +1,10 @@
-"""SQuRo绕杆任务第一阶段 — 机动基元奖励函数
-
-奖励构成:
-  R = R_vel + R_omega + R_spine + R_mimic + R_stability + R_smoothness + R_energy
-
-索引解析统一由 reference.py 的 get_reference_joint_state() 触发，
-不再需要分散的 _ensure_* 包装函数。
-"""
-
 from __future__ import annotations
 import torch
-
 from mjlab.entity import Entity
-from .curriculums import get_curriculum_reward_weight
+from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
 from .reference import get_reference_joint_state
-
-from typing import TYPE_CHECKING
+from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 

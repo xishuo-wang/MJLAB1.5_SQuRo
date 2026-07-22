@@ -1,12 +1,3 @@
-"""SQuRo Trot 参考轨迹生成器 — CSV足端轨迹 + IK → 关节角度
-
-只支持 trot 步态，Phase 由固定步频驱动（无命令依赖）。
-首次调用 get_reference_joint_state() 时自动:
-  1. 加载 Trot_F.csv / Trot_H.csv
-  2. IK 求解 → 预计算相位查找表
-  3. 解析 _MODEL_INDICES（body/site/joint ID）
-"""
-
 from __future__ import annotations
 import math
 import torch
@@ -14,11 +5,10 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
-
 from .indices import resolve_model_indices
-
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
 
 # Trot 步态参数
 TROT_FREQ = 1.5             # 步频 (Hz)
@@ -47,9 +37,8 @@ _table_device: str | None = None
 
 
 # =========================================================================================
-# 逆运动学（来自 mouse_spg，参数已校准至 SQuRo 模型）
+# 逆运动学
 def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True):
-    """足端坐标 (x, y) → (proximal_angle, distal_angle)"""
     L1, L2 = (L1_FRONT, L2_FRONT) if is_front else (L1_HIND, L2_HIND)
 
     R = torch.sqrt(x**2 + y**2)
@@ -87,13 +76,13 @@ def _init_tables(device: torch.device | str) -> None:
         return
 
     # 加载 CSV
-    df_f = pd.read_csv(_BIO_DATA_DIR / "Trot_F.csv")
-    df_h = pd.read_csv(_BIO_DATA_DIR / "Trot_H.csv")
-    phase_csv = df_f["Phase"].values.astype(np.float64)
-    y_f = df_f["Y_mean"].values.astype(np.float64)
-    z_f = df_f["Z_mean"].values.astype(np.float64)
-    y_h = df_h["Y_mean"].values.astype(np.float64)
-    z_h = df_h["Z_mean"].values.astype(np.float64)
+    df_f = pd.read_csv(_BIO_DATA_DIR / "Trot_F.csv")  # type: ignore[arg-type]
+    df_h = pd.read_csv(_BIO_DATA_DIR / "Trot_H.csv")  # type: ignore[arg-type]
+    phase_csv: np.ndarray = df_f["Phase"].values.astype(np.float64)  # type: ignore[union-attr]
+    y_f: np.ndarray = df_f["Y_mean"].values.astype(np.float64)  # type: ignore[union-attr]
+    z_f: np.ndarray = df_f["Z_mean"].values.astype(np.float64)  # type: ignore[union-attr]
+    y_h: np.ndarray = df_h["Y_mean"].values.astype(np.float64)  # type: ignore[union-attr]
+    z_h: np.ndarray = df_h["Z_mean"].values.astype(np.float64)  # type: ignore[union-attr]
 
     # 生成等距相位网格
     phases = np.linspace(0, 1, _TABLE_RESOLUTION)
@@ -105,7 +94,7 @@ def _init_tables(device: torch.device | str) -> None:
     z_h_grid = np.interp(phases, phase_csv, z_h)
 
     # 转为 torch
-    dev = torch.device(device)
+    dev = torch.device(device)  # type: ignore[arg-type]
     y_f_t = torch.tensor(y_f_grid, device=dev, dtype=torch.float32)
     z_f_t = torch.tensor(z_f_grid, device=dev, dtype=torch.float32)
     y_h_t = torch.tensor(y_h_grid, device=dev, dtype=torch.float32)
@@ -124,10 +113,10 @@ def _init_tables(device: torch.device | str) -> None:
         y_shifted = torch.roll(y_t, shifts=shift)
         z_shifted = torch.roll(z_t, shifts=shift)
         proximal, distal = _inverse_kinematics(y_shifted, z_shifted, is_front)
-        pos[:, leg * 2] = proximal
-        pos[:, leg * 2 + 1] = distal
+        pos[:, leg * 2] = proximal  # type: ignore[call-overload]
+        pos[:, leg * 2 + 1] = distal  # type: ignore[call-overload]
 
-    # 脊柱保持零位
+    # 脊柱保持零位（直行参考姿态：脊柱不动）
     pos[:, 8:] = torch.tensor(_STAND_ANGLES[8:], device=dev)
 
     # 中心差分计算速度
@@ -165,7 +154,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # 首次: 初始化相位状态 + 解析模型索引
     if getattr(env, "_ref_phase", None) is None:
-        env._ref_phase = torch.zeros(env.num_envs, device=env.device)
+        env._ref_phase = torch.zeros(env.num_envs, device=env.device)  # type: ignore[attr-defined]
         resolve_model_indices(env.scene["robot"])
 
     # 首次: 预计算查找表
@@ -176,25 +165,26 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     if _table_device != str(env.device):
         _init_tables(env.device)
 
+    assert _pos_table is not None and _vel_table is not None
+
     dt = float(env.step_dt)
-    num_envs = env.num_envs
 
     # 当前相位 → 查表索引
-    phase = env._ref_phase  # [num_envs]
+    phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [num_envs]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
     ref_pos = _pos_table[phase_indices]  # [N, 12]
     ref_vel = _vel_table[phase_indices] * TROT_FREQ  # [N, 12]
 
     # 推进相位
-    env._ref_phase = (phase + TROT_FREQ * dt) % 1.0
+    env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
 
     # 重置已终止环境
     reset_ids = getattr(env, "reset_terminated", None)
     if reset_ids is not None:
         ids = reset_ids.nonzero(as_tuple=False).flatten()
         if len(ids) > 0:
-            env._ref_phase[ids] = 0.0
+            env._ref_phase[ids] = 0.0  # type: ignore[attr-defined]
 
-    env._ref_state_cache = (current_step, ref_pos, ref_vel)
+    env._ref_state_cache = (current_step, ref_pos, ref_vel)  # type: ignore[attr-defined]
     return ref_pos, ref_vel
