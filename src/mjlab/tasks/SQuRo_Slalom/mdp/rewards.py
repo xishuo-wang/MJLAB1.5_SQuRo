@@ -3,9 +3,9 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
+from .observations import _get_f_body_heading
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
-from .observations import _get_f_body_heading
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -51,7 +51,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # F_body 朝向（共享函数，与 observations.heading 一致）
+    # 计算F_body 朝向速度误差
     f_body_heading = _get_f_body_heading(env)
     vel_w = asset.data.root_link_lin_vel_w
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
