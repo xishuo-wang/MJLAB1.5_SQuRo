@@ -68,7 +68,7 @@ def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True)
 
 
 # =========================================================================================
-# 加载 CSV + IK 预计算
+# 加载 CSV + IK 预计算（仅腿部8关节；脊柱4关节运行时动态覆盖）
 def _init_tables(device: torch.device | str) -> None:
     global _tables_initialized, _pos_table, _vel_table, _table_device
 
@@ -135,12 +135,22 @@ def _init_tables(device: torch.device | str) -> None:
 
 
 # =========================================================================================
+# 脊柱侧摆参考角常量
+_SPINE_LATERAL_GAIN = 2.0      # α = κ * L = (ω/v) * L, L=0.2m, v=0.1m/s → 2.0
+_SPINE_LATERAL_LIMIT = 0.6     # F_spine1 关节限位 ±0.6 rad
+
+
+# =========================================================================================
 # 公共接口
 def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
     """返回当前步的参考关节位置和速度
 
     首次调用自动触发: CSV加载 → IK预计算 → 模型索引解析
     步级缓存: 同一步内多次调用复用结果
+
+    腿部: 预计算表查表（CSV+IK, 50 bins）
+    脊柱: 动态计算 — F_spine1 = clamp(GAIN * ω_cmd, ±LIMIT)
+          几何关系: R = L/α → α = L/R = L*ω/v
 
     Returns:
         ref_pos: [num_envs, 12] 参考关节位置
@@ -173,8 +183,15 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [num_envs]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
-    ref_pos = _pos_table[phase_indices]  # [N, 12]
+    ref_pos = _pos_table[phase_indices].clone()  # [N, 12] — clone 避免修改预计算表
     ref_vel = _vel_table[phase_indices] * TROT_FREQ  # [N, 12]
+
+    # 动态覆盖脊柱侧摆参考: α_F_spine1 = clamp(GAIN * ω_cmd, ±LIMIT)
+    # R = L/α → 急弯=大侧摆, 直行(ω=0)=零侧摆
+    omega_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
+    spine_lateral = torch.clamp(_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
+    ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
+    ref_vel[:, 8] = 0.0               # 脊柱参考速度为零（准静态弯曲）
 
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
