@@ -186,9 +186,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos = _pos_table[phase_indices].clone()  # [N, 12] — clone 避免修改预计算表
     ref_vel = _vel_table[phase_indices] * TROT_FREQ  # [N, 12]
 
-    # 动态覆盖脊柱侧摆参考: α_F_spine1 = clamp(GAIN * ω_cmd, ±LIMIT)
-    # R = L/α → 急弯=大侧摆, 直行(ω=0)=零侧摆
-    omega_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
+    # 动态覆盖脊柱侧摆参考: α = clamp(GAIN * ω_cmd, ±LIMIT)
+    # ω_cmd = κ_cmd × v_cmd, R = L/α → α = L*ω/v
+    curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
+    vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]
+    omega_cmd = curvature_cmd * vel_cmd
     spine_lateral = torch.clamp(_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
     ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
     ref_vel[:, 8] = 0.0               # 脊柱参考速度为零（准静态弯曲）

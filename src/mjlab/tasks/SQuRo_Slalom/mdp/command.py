@@ -11,11 +11,12 @@ if TYPE_CHECKING:
 
 
 # 阶段阈值（iterations）
-STAGE1_END = 1000
-STAGE2_END = 2000
+STAGE1_END = 500
+STAGE2_END = 1500
 
-# 目标最大角速度：v=0.1m/s ÷ r_min → 2.0 rad/s 留有裕度
-OMEGA_TARGET_MAX = 2.0
+# 目标最大曲率: κ = 1/R_min, R_min=0.1m → κ_max=10 m⁻¹
+# ω = κ × v, 在 v=0.1m/s 时 ω_max = 1.0 rad/s
+CURVATURE_TARGET_MAX = 5.0
 
 # 固定值
 FIXED_VEL = 0.1
@@ -34,39 +35,41 @@ def get_current_stage(step_counter: int) -> int:
         return 3
 
 
-def get_omega_range(stage: int, step_counter: int) -> Tuple[float, float]:
+def get_curvature_range(stage: int, step_counter: int) -> Tuple[float, float]:
+    """曲率采样范围 κ = 1/R, ω = κ × v"""
     if stage == 1:
-        return (0.0, 0.0)
+        return (0.0, 0.0)  # 直行
     elif stage == 2:
         iter_num = step_counter // 24
         progress = (iter_num - STAGE1_END) / (STAGE2_END - STAGE1_END)
-        omega_max = 0.5 + progress * (OMEGA_TARGET_MAX - 0.5)
-        return (-omega_max, omega_max)
+        kappa_max = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
+        return (-kappa_max, kappa_max)
     else:
-        return (-OMEGA_TARGET_MAX, OMEGA_TARGET_MAX)
+        return (-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX)
 
 
-# 5D命令 [vel_x, height_f, height_h, gait_freq, omega]
+# 5D命令 [vel_x, height_f, height_h, gait_freq, curvature]
 class SlalomCommand(CommandTerm):
+    """curvature = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行; ω = κ × v"""
     cfg: "SlalomCommandCfg"
     def __init__(self, cfg: "SlalomCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
 
-        # 命令张量: [vel_x, height_f, height_h, gait_freq, omega]
+        # 命令张量: [vel_x, height_f, height_h, gait_freq, curvature]
         self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
         self.vel_command = self.command_tensor[:, 0]
         self.height_f_command = self.command_tensor[:, 1]
         self.height_h_command = self.command_tensor[:, 2]
         self.gait_freq_command = self.command_tensor[:, 3]
-        self.omega_command = self.command_tensor[:, 4]
+        self.curvature_command = self.command_tensor[:, 4]
 
         # 固定值配置（优先级高于采样）
         self.fixed_velocity = cfg.fixed_velocity
         self.fixed_height_f = cfg.fixed_height_f
         self.fixed_height_h = cfg.fixed_height_h
         self.fixed_gait_freq = cfg.fixed_gait_freq
-        self.fixed_omega = cfg.fixed_omega
+        self.fixed_curvature = cfg.fixed_curvature
 
         # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -99,12 +102,12 @@ class SlalomCommand(CommandTerm):
             return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
         return torch.full((n,), FIXED_GAIT_FREQ, device=self.device)
 
-    def _get_omega(self, n: int, step_counter: int) -> torch.Tensor:
-        if self.fixed_omega is not None:
-            return torch.full((n,), float(self.fixed_omega), device=self.device)
+    def _get_curvature(self, n: int, step_counter: int) -> torch.Tensor:
+        if self.fixed_curvature is not None:
+            return torch.full((n,), float(self.fixed_curvature), device=self.device)
         stage = get_current_stage(step_counter)
-        omega_range = get_omega_range(stage, step_counter)
-        return torch.rand(n, device=self.device) * (omega_range[1] - omega_range[0]) + omega_range[0]
+        kappa_range = get_curvature_range(stage, step_counter)
+        return torch.rand(n, device=self.device) * (kappa_range[1] - kappa_range[0]) + kappa_range[0]
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -114,7 +117,7 @@ class SlalomCommand(CommandTerm):
         self.height_f_command[env_ids] = self._get_height_f(n)
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
-        self.omega_command[env_ids] = self._get_omega(n, current_step)
+        self.curvature_command[env_ids] = self._get_curvature(n, current_step)
 
     def _update_command(self) -> None:
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
@@ -166,7 +169,7 @@ class SlalomCommandCfg(CommandTermCfg):
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
-    fixed_omega: Optional[float] = None  # 固定角速度 (rad/s)，用于测试
+    fixed_curvature: Optional[float] = None  # 固定曲率 κ=1/R (m⁻¹)，用于测试
 
     @dataclass
     class VizCfg:

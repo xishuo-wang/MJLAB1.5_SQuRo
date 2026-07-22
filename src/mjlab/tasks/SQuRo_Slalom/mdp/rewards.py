@@ -74,22 +74,53 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 角速度跟踪奖励
+# 角速度跟踪奖励（ω_cmd = κ_cmd × v_cmd）
 def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算角速度误差
     actual_omega_z = asset.data.root_link_ang_vel_w[:, 2]
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    omega_cmd = cmd_term.command[:, 4]
+    # 从曲率和速度计算期望角速度: ω = κ × v
+    curvature_cmd = cmd_term.command[:, 4]
+    vel_cmd = cmd_term.command[:, 0]
+    omega_cmd = curvature_cmd * vel_cmd
     error = actual_omega_z - omega_cmd
-    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_track_omg")
     weight = get_curriculum_reward_weight(env, "weight_track_omg")
-    # 计算奖励
     reward = torch.exp(-sigma * error ** 2)
-    # 记录日志
     env.extras["log"]["Data/omg_actual"] = actual_omega_z.mean().item()
+    env.extras["log"]["Data/omg_cmd"] = omega_cmd.mean().item()
     return reward * weight
+
+
+# =========================================================================================
+# 脊柱转弯奖励（ω_cmd = κ_cmd × v_cmd）
+def compute_spine_turn_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """R_spine = |ω_cmd| * (w_lat*|F_spine1| + w_twist*(|F_body|+|H_body|))"""
+    asset: Entity = env.scene["robot"]
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    omega_cmd_abs = torch.abs(cmd_term.command[:, 4] * cmd_term.command[:, 0])
+
+    joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
+    lateral_pos = joint_pos[:, _MODEL_INDICES.actuator_spn_lateral_id]
+    body_ids = _MODEL_INDICES.actuator_spn_body_ids
+    twist_pos = joint_pos[:, body_ids[0]] + joint_pos[:, body_ids[1]]
+
+    spine_activity = 2.5 * torch.abs(lateral_pos) + 1.0 * torch.abs(twist_pos)
+    reward = omega_cmd_abs * spine_activity
+    weight = get_curriculum_reward_weight(env, "weight_spine_turn")
+    env.extras["log"]["Data/spine_lateral_abs"] = torch.abs(lateral_pos).mean().item()
+    return reward * weight
+
+
+# =========================================================================================
+# 稳定性惩罚
+def compute_stability_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """R_stab = -(roll^2 + pitch^2)"""
+    asset: Entity = env.scene["robot"]
+    gravity_b = asset.data.projected_gravity_b
+    tilt_sq = torch.sum(torch.square(gravity_b[:, :2]), dim=1)
+    weight = get_curriculum_reward_weight(env, "weight_stability")
+    return -tilt_sq * weight
 
 
 

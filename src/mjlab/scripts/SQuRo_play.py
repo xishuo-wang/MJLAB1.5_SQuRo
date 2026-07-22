@@ -38,6 +38,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
+    fixed_curvature: float | None = None  # κ=1/R (m⁻¹), None=课程采样
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -209,7 +210,7 @@ class JointDataRecorder:
             'height_f_command',
             'height_h_command',
             'gait_freq_command',
-            'omega_command',
+            'curvature_command',
         ]
         for i, name in enumerate(command_names):
             record[name] = float(command[i].item())
@@ -345,6 +346,17 @@ def run_play(cfg: PlayConfig):
         if cfg.fixed_gait_freq is not None:
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq # type: ignore
             print(f"[COMMAND] 配置 fixed_gait_freq = {cfg.fixed_gait_freq}")
+        if cfg.fixed_curvature is not None:
+            cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
+            print(f"[COMMAND] 配置 fixed_curvature = {cfg.fixed_curvature}")
+
+    # 构建命令后缀（用于视频和CSV文件名）
+    cmd_suffix_parts = []
+    if cfg.fixed_curvature is not None:
+        cmd_suffix_parts.append(f"curv{cfg.fixed_curvature}")
+    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
+    if video_name is not None:
+        video_name = f"{video_name}{cmd_suffix}"
 
     # 创建环境
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
@@ -366,19 +378,19 @@ def run_play(cfg: PlayConfig):
         print("[INFO] 启用关节数据记录")
         data_recorder = JointDataRecorder(log_dir, video_name, num_envs=env_cfg.scene.num_envs)
 
-    # 添加视频录制器
+    # 添加视频录制器（文件名与CSV统一，使用 video_name 作为前缀）
     if TRAINED_MODE and cfg.video:
         print("[INFO] 播放期间录制视频")
         assert log_dir is not None
 
         video_folder = log_dir / "videos"
-        name_prefix = f"Video-{TASK_NAME}"
+        assert video_name is not None
         env = VideoRecorder(
             env,
             video_folder=video_folder,
             step_trigger=lambda step: step == 0,
             video_length=cfg.video_length,
-            name_prefix=name_prefix,
+            name_prefix=video_name,
             disable_logger=False,
         )
 
