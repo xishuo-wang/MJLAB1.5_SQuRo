@@ -1,3 +1,3 @@
-from mjlab.tasks.mouse.rl.runner import (
-    MouseOnPolicyRunner as MouseOnPolicyRunner,
+from mjlab.tasks.SQuRo_Slalom.rl.runner import (
+    SQuRoOnPolicyRunner as SQuRoOnPolicyRunner,
 )

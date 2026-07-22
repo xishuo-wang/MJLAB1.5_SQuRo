@@ -17,12 +17,12 @@ from mjlab.tasks.mouse import mdp
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_mouse_robot_cfg
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
-def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
+def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 获取 mouse 机器人配置
-    MOUSE_ROBOT_CFG = get_mouse_robot_cfg()
+    MOUSE_ROBOT_CFG = get_squro_robot_cfg()
 
     # Mouse 特定配置
     foot_names = ("FR", "FL", "HR", "HL")

@@ -5,7 +5,7 @@ from mjlab.rl import (
 )
 
 
-def Mouse_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
+def SQuRo_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
   return RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
       hidden_dims=(512, 256, 128),
@@ -36,10 +36,10 @@ def Mouse_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
       desired_kl=0.01,
       max_grad_norm=1.0,
     ),
-    experiment_name="mouse_locomotion",
+    experiment_name="SQuRo_Slalom",
     save_interval=100,
     num_steps_per_env=24,
-    max_iterations=4_000,
+    max_iterations=3_000,
     
     clip_actions=3.14,
     seed=42,
