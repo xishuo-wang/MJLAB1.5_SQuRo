@@ -1,0 +1,284 @@
+<mujoco model="Mouse">
+    <compiler angle="radian" meshdir="D:/Code/model/Mouse/meshes/"/>
+    <equality>
+        <!-- 脊柱部分闭链链接，模拟虚位效果 -->
+        <!-- <connect body1="F_spine2_Link" body2="base_Link" anchor="0 0.0169 -0.018" solimp="0.95 0.99 0.002" solref="0.015 0.9"/>
+        <connect body1="FD_spine_Link" body2="F_spine1_Link" anchor="0 -0.017 0.003" solimp="0.95 0.99 0.002" solref="0.015 0.9"/>
+        <connect body1="H_spine2_Link" body2="base_Link" anchor="0.0169 0 -0.0182" solimp="0.95 0.99 0.002" solref="0.015 0.9"/>
+        <connect body1="HR_spine_Link" body2="H_spine1_Link" anchor="-0.017 0 -0.003" solimp="0.95 0.99 0.002" solref="0.015 0.9"/> -->
+        <!-- 脊柱部分闭链链接 -->
+        <connect body1="F_spine2_Link" body2="base_Link" anchor="0 0.0169 -0.018" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="FD_spine_Link" body2="F_spine1_Link" anchor="0 -0.017 0.003" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="H_spine2_Link" body2="base_Link" anchor="0.0169 0 -0.0182" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="HR_spine_Link" body2="H_spine1_Link" anchor="-0.017 0 -0.003" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <!-- 前腿部分闭链链接 -->
+        <connect body1="FL_elbow2_Link" body2="FL_shoulder1_Link" anchor="-0.0145113 -0.0165355 -0.00435" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="FL_elbow1_Link" body2="FL_elbow3_Link" anchor="0.0263841 0.0300646 -0.00735" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="FR_elbow2_Link" body2="FR_shoulder1_Link" anchor="-0.0145113 -0.0165355 0.00435" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="FR_elbow1_Link" body2="FR_elbow3_Link" anchor="0.0263841 0.0300646 0.00735" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <!-- 后腿部分闭链链接 -->
+        <connect body1="HL_knee2_Link" body2="HL_hip1_Link" anchor="0.00766291 -0.0206223 -0.00435" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="HL_knee1_Link" body2="HL_knee3_Link" anchor="-0.0139326 0.0374951 -0.00735" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="HR_knee2_Link" body2="HR_hip1_Link" anchor="0.00766291 -0.0206223 0.00435" solimp="1 1 0.001" solref="0.002 0.9"/>
+        <connect body1="HR_knee1_Link" body2="HR_knee3_Link" anchor="-0.0139326 0.0374951 0.00735" solimp="1 1 0.001" solref="0.002 0.9"/>
+    </equality> 
+    <asset>
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+        <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="256" height="256" mark="cross" markrgb=".8 .8 .8"/>
+        <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="10 10" texuniform="true"/> 
+        <mesh name="base_Link" file="base_Link.STL"/>
+        <mesh name="FU_spine_Link" file="FU_spine_Link.STL"/>
+        <mesh name="F_spine1_Link" file="F_spine1_Link.STL"/>
+        <mesh name="F_spine2_Link" file="F_spine2_Link.STL"/>
+        <mesh name="F_body_Link" file="F_body_Link.STL"/>
+        <mesh name="Neck_yaw_Link" file="Neck_yaw_Link.STL"/>
+        <mesh name="Neck_pitch_Link" file="Neck_pitch_Link.STL"/>
+        <mesh name="FL_shoulder_Link" file="FL_shoulder_Link.STL"/>
+        <mesh name="FL_shoulder1_Link" file="FL_shoulder1_Link.STL"/>
+        <mesh name="FL_elbow_Link" file="FL_elbow_Link.STL"/>
+        <mesh name="FL_elbow1_Link" file="FL_elbow1_Link.STL"/>
+        <mesh name="FL_elbow2_Link" file="FL_elbow2_Link.STL"/>
+        <mesh name="FL_elbow3_Link" file="FL_elbow3_Link.STL"/>
+        <mesh name="FR_shoulder_Link" file="FR_shoulder_Link.STL"/>
+        <mesh name="FR_shoulder1_Link" file="FR_shoulder1_Link.STL"/>
+        <mesh name="FR_elbow_Link" file="FR_elbow_Link.STL"/>
+        <mesh name="FR_elbow1_Link" file="FR_elbow1_Link.STL"/>
+        <mesh name="FR_elbow2_Link" file="FR_elbow2_Link.STL"/>
+        <mesh name="FR_elbow3_Link" file="FR_elbow3_Link.STL"/>
+        <mesh name="FD_spine_Link" file="FD_spine_Link.STL"/>
+        <mesh name="HR_spine_Link" file="HR_spine_Link.STL"/>
+        <mesh name="HL_spine_Link" file="HL_spine_Link.STL"/>
+        <mesh name="H_spine1_Link" file="H_spine1_Link.STL"/>
+        <mesh name="H_spine2_Link" file="H_spine2_Link.STL"/>
+        <mesh name="H_body_Link" file="H_body_Link.STL"/>
+        <mesh name="HL_hip_Link" file="HL_hip_Link.STL"/>
+        <mesh name="HL_hip1_Link" file="HL_hip1_Link.STL"/>
+        <mesh name="HL_knee_Link" file="HL_knee_Link.STL"/>
+        <mesh name="HL_knee1_Link" file="HL_knee1_Link.STL"/>
+        <mesh name="HL_knee2_Link" file="HL_knee2_Link.STL"/>
+        <mesh name="HL_knee3_Link" file="HL_knee3_Link.STL"/>
+        <mesh name="HR_hip_Link" file="HR_hip_Link.STL"/>
+        <mesh name="HR_hip1_Link" file="HR_hip1_Link.STL"/>
+        <mesh name="HR_knee_Link" file="HR_knee_Link.STL"/>
+        <mesh name="HR_knee1_Link" file="HR_knee1_Link.STL"/>
+        <mesh name="HR_knee2_Link" file="HR_knee2_Link.STL"/>
+        <mesh name="HR_knee3_Link" file="HR_knee3_Link.STL"/>
+    </asset>
+
+    <size nconmax="2000" njmax="500" nstack="100000"/>
+    <option gravity="0 0 -9.81" timestep="0.001" tolerance="1e-10" iterations="150" solver="Newton" cone="elliptic"/>
+    <default>
+        <geom solimp="1 1 0.001" solref="0.002 1.0"/> 
+    </default>
+    <worldbody>
+        <geom name="floor" pos="0 0 0.0" size="1.5 1.5 .25" type="plane" material="matplane" condim="3"  contype="1" conaffinity="1" friction="0.7 0.1 0.1" solimp="1 1 0.001" solref="0.002 0.9"/>              
+        <body name="base_Link" pos="0 0 0.06" quat="0 -0.707107 -0.707107 0">
+        <camera name="follow_camera_left" mode='track' pos="-1.0 0 0" euler="1.57 -1.57 3.14" fovy="20"/>
+        <camera name="follow_camera_front" mode='track' pos="0 1.0 0" euler="-1.57 0 0" fovy="20"/>
+        <camera name="follow_camera_back" mode='track' pos="0 -1.0 0" euler="1.57 0 3.14" fovy="20"/>
+        <camera name="follow_camera_top" mode='track' pos="0 0 -1" euler="3.14 0 0" fovy="20"/>
+        <light name="follow_light" mode="track" pos="0 -0.5 0.5" dir="0 0 -1" directional="true" castshadow="false" ambient="0.3 0.3 0.3" diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2" active="true"/>
+
+        <freejoint name="robot"/>
+            <geom type="mesh" mass="0.002" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="base_Link"/>
+            <body name="FU_spine_Link" pos="-0.00486647 0 -0.0158819" quat="0 -1 0 0">
+                <joint name="FU_spine_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                <geom type="mesh" mass="0.002" contype="1" conaffinity="0" group="1" rgba="0.203922 0.203922 0.203922 1" mesh="FU_spine_Link"/>
+                <body name="F_spine1_Link" pos="0 -0.017 0.003">
+                    <joint name="F_spine1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.6 0.6" damping="0.006" type="hinge" armature="0.00005"/>
+                    <geom type="mesh" mass="0.002" contype="0" conaffinity="0" group="1" rgba="0.439216 0.439216 0.439216 1" mesh="F_spine1_Link"/>
+                    <body name="F_spine2_Link" pos="0.005 0.0001 -0.00075">
+                        <joint name="F_spine2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                        <geom type="mesh" mass="0.025" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="F_spine2_Link"/>
+                        <body name="F_body_Link" pos="0 -0.02985 -0.018" quat="0.707107 -0.707107 0 0">
+                            <joint name="F_body_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.01 0.01" damping="0.006" type="hinge" armature="0.00005"/>
+                            <geom type="mesh" mass="0.0906" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="F_body_Link"/>
+                            <site name="F_body_1_site" pos="0.02 -0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_2_site" pos="-0.02 -0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_3_site" pos="0.02 -0.022 -0.028" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_4_site" pos="-0.02 -0.022 -0.028" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_5_site" pos="0.02 -0.022 -0.010" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_6_site" pos="-0.02 -0.022 -0.010" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_7_site" pos="0.00 -0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_8_site" pos="0.00 -0.022 -0.028" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="F_body_9_site" pos="0.00 -0.022 -0.010" size="0.0015" rgba="1 0 0 0"/>
+
+                            <body name="Neck_yaw_Link" pos="0.0014 -0.011 -0.04688" quat="0 0 0.707107 -0.707107">
+                                <joint name="Neck_yaw_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.1 0.1" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom type="mesh" mass="0.010" contype="1" conaffinity="0" group="1" rgba="0.752941 0.752941 0.752941 1" mesh="Neck_yaw_Link"/>
+                                <body name="Neck_pitch_Link" pos="0.0117405 0.01213 -0.00702" quat="0.5 0.5 0.5 0.5">
+                                    <joint name="Neck_pitch_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.1 0.1" damping="0.006" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.006" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Neck_pitch_Link"/>
+                                    <site name="imu_site" pos="0.04 -0.016 -0.0117" size="0.0015" type="sphere" rgba="0 1 0 0"/>
+                                </body>
+                            </body>
+                            <body name="FL_shoulder_Link" pos="0.02765 -0.00403 -0.00015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FL_shoulder_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.8 1.9" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="FL_shoulder_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="0.752941 0.752941 0.752941 1" mesh="FL_shoulder_Link"/>
+                                <body name="FL_shoulder1_Link" pos="-0.0145113 -0.0165355 -0.00435">
+                                    <joint name="FL_shoulder1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FL_shoulder1_Link"/>
+                                </body>
+                            </body>
+                            <body name="FL_elbow_Link" pos="0.02765 -0.00403 -0.02015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FL_elbow_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.2 2.5" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="FL_elbow_collision" type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FL_elbow_Link"/>
+                                <body name="FL_elbow1_Link" pos="0.0091883 -0.00394653 -0.00585" quat="0 0 0 -1">
+                                    <joint name="FL_elbow1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FL_elbow1_Link"/>
+                                </body>
+                            </body>
+                            <body name="FL_elbow2_Link" pos="0.02765 -0.00403 -0.02015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FL_elbow2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FL_elbow2_Link"/>
+                                <body name="FL_elbow3_Link" pos="-0.0263841 -0.0300646 -0.00735" quat="0 -1 0 0">
+                                    <joint name="FL_elbow3_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.57 1.57" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom name="FL_foot_collision" type="mesh" mass="0.0008" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="FL_elbow3_Link"/>
+                                    <!-- <geom name="FL_foot_collision" pos="0.0378 0.0162 0" type="cylinder" size="0.0021 0.003" mass="0.0008" contype="1" conaffinity="1" group="1" rgba="0 0 0 1"/> -->
+                                    <site name="FL_elbow_site" pos="0.037 0.018 0" size="0.0015" rgba="1 0 0 0"/>
+                                </body>
+                            </body>
+                            <body name="FR_shoulder_Link" pos="-0.02765 -0.00403 -0.00015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FR_shoulder_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.8 1.9" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="FR_shoulder_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FR_shoulder_Link"/>
+                                <body name="FR_shoulder1_Link" pos="-0.0145113 -0.0165355 0.00435">
+                                    <joint name="FR_shoulder1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FR_shoulder1_Link"/>
+                                </body>
+                            </body>
+                            <body name="FR_elbow_Link" pos="-0.02765 -0.00403 -0.02015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FR_elbow_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.2 2.5" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="FR_elbow_collision" type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FR_elbow_Link"/>
+                                <body name="FR_elbow1_Link" pos="0.0091883 -0.00394653 0.00585" quat="0 0 0 -1">
+                                    <joint name="FR_elbow1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FR_elbow1_Link"/>
+                                </body>
+                            </body>
+                            <body name="FR_elbow2_Link" pos="-0.02765 -0.00403 -0.02015" quat="0 0.707107 0 -0.707107">
+                                <joint name="FR_elbow2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="FR_elbow2_Link"/>
+                                <body name="FR_elbow3_Link" pos="-0.0263841 -0.0300646 0.00735">
+                                    <joint name="FR_elbow3_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.57 1.57" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom name="FR_foot_collision" type="mesh" mass="0.0008" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="FR_elbow3_Link"/>
+                                    <site name="FR_elbow_site" pos="0.037 -0.018 0" size="0.0015" rgba="1 0 0 0"/>
+                                </body>
+                            </body>
+                        </body>
+                    </body> 
+                </body>
+            </body>
+            <body name="FD_spine_Link" pos="0.00498236 0.000419617 0.01575" quat="0 0 0 1">
+                <joint name="FD_spine_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                <geom type="mesh" mass="0.002" contype="1" conaffinity="0" group="1" rgba="0.203922 0.203922 0.203922 1" mesh="FD_spine_Link"/>
+            </body>
+            <body name="HR_spine_Link" pos="-0.01575 0 -0.005" quat="0.5 -0.5 -0.5 0.5">
+                <joint name="HR_spine_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                <geom type="mesh" mass="0.002" contype="1" conaffinity="0" group="1" rgba="0.85098 0.85098 0.85098 1" mesh="HR_spine_Link"/>
+            </body>
+            <body name="HL_spine_Link" pos="0.01575 0 0.005" quat="0.5 -0.5 -0.5 0.5">
+                <joint name="HL_spine_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                <geom type="mesh" mass="0.002" contype="1" conaffinity="0" group="1" rgba="0.203922 0.203922 0.203922 1" mesh="HL_spine_Link"/>
+                <body name="H_spine1_Link" pos="-0.017 0 -0.003" quat="0 -1 0 0">
+                    <joint name="H_spine1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.6 0.6" damping="0.006" type="hinge" armature="0.00005"/>
+                    <geom type="mesh" mass="0.002" contype="0" conaffinity="0" group="1" rgba="0.439216 0.439216 0.439216 1" mesh="H_spine1_Link"/>
+                    <body name="H_spine2_Link" pos="0.0001 -0.005 -0.00055">
+                        <joint name="H_spine2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                        <geom type="mesh" mass="0.025" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="H_spine2_Link"/>
+                        <body name="H_body_Link" pos="-0.02985 0 -0.0182" quat="0 0.707107 0 -0.707107">
+                            <joint name="H_body_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.01 0.01" damping="0.006" type="hinge" armature="0.00005"/>
+                            <geom type="mesh" mass="0.09" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="H_body_Link"/>
+                            <site name="H_body_1_site" pos="0.02 0.022 -0.01" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_2_site" pos="-0.02 0.022 -0.01" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_3_site" pos="0.02 0.022 0.026" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_4_site" pos="-0.02 0.022 0.026" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_5_site" pos="0.02 0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_6_site" pos="-0.02 0.022 0.012" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_7_site" pos="0.00 0.022 -0.01" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_8_site" pos="0.00 0.022 0.026" size="0.0015" rgba="1 0 0 0"/>
+                            <site name="H_body_9_site" pos="0.00 0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+
+                            <body name="HL_hip_Link" pos="-0.02765 0.00403 0.01845" quat="0.707107 0 0.707107 0">
+                                <joint name="HL_hip_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.45 0.8" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="HL_hip_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="0.752941 0.752941 0.752941 1" mesh="HL_hip_Link"/>
+                                <body name="HL_hip1_Link" pos="0.00766291 -0.0206223 -0.00435">
+                                    <joint name="HL_hip1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HL_hip1_Link"/>
+                                </body>
+                            </body>
+                            <body name="HL_knee_Link" pos="-0.02765 0.00403 -0.00155" quat="0.707107 0 0.707107 0">
+                                <joint name="HL_knee_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.5 1.9" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="HL_knee_collision" type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="0.752941 0.752941 0.752941 1" mesh="HL_knee_Link"/>
+                                <body name="HL_knee1_Link" pos="0.00968339 0.00249638 -0.00585" quat="0 0 0 1">
+                                    <joint name="HL_knee1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HL_knee1_Link"/>
+                                </body>
+                            </body>
+                            <body name="HL_knee2_Link" pos="-0.02765 0.00403 -0.00155" quat="0.707107 0 0.707107 0">
+                                <joint name="HL_knee2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HL_knee2_Link"/>
+                                <body name="HL_knee3_Link" pos="0.0139326 -0.0374951 -0.00735" quat="0 -1 0 0">
+                                    <joint name="HL_knee3_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.57 1.57" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom name="HL_foot_collision" type="mesh" mass="0.0008" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="HL_knee3_Link"/>
+                                    <site name="HL_knee_site" pos="-0.035 0.012 0" size="0.0015" rgba="1 0 0 0"/>
+                                </body>
+                            </body>
+                            <body name="HR_hip_Link" pos="0.02765 0.00403 0.01845" quat="0.707107 0 0.707107 0">
+                                <joint name="HR_hip_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.45 0.8" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="HR_hip_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HR_hip_Link"/>
+                                <body name="HR_hip1_Link" pos="0.00766291 -0.0206223 0.00435">
+                                    <joint name="HR_hip1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HR_hip1_Link"/>
+                                </body>
+                            </body>
+                            <body name="HR_knee_Link" pos="0.02765 0.00403 -0.00155" quat="0.707107 0 0.707107 0">
+                                <joint name="HR_knee_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-0.5 1.9" damping="0.006" type="hinge" armature="0.00005"/>
+                                <geom name="HR_knee_collision" type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HR_knee_Link"/>
+                                <body name="HR_knee1_Link" pos="0.00968339 0.00249638 0.00585" quat="0 0 0 -1">
+                                    <joint name="HR_knee1_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HR_knee1_Link"/>
+                                </body>
+                            </body>
+                            <body name="HR_knee2_Link" pos="0.02765 0.00403 -0.00155" quat="0.707107 0 0.707107 0">
+                                <joint name="HR_knee2_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-3.14 3.14" damping="0.0008" type="hinge" armature="0.00005"/>
+                                <geom type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="HR_knee2_Link"/>
+                                <body name="HR_knee3_Link" pos="0.0139326 -0.0374951 0.00735" quat="0 0 -1 0">
+                                    <joint name="HR_knee3_joint" pos="0 0 0" axis="0 0 1" limited="true" range="-1.57 1.57" damping="0.0008" type="hinge" armature="0.00005"/>
+                                    <geom name="HR_foot_collision" type="mesh" mass="0.0008" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="HR_knee3_Link"/>
+                                    <site name="HR_knee_site" pos="0.035 -0.012 0" size="0.0015" rgba="1 0 0 0"/>
+                                </body>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+    <actuator>
+        <position name="FL_shoulder" joint="FL_shoulder_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="FL_elbow" joint="FL_elbow_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.8 2.5" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="FR_shoulder" joint="FR_shoulder_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="FR_elbow" joint="FR_elbow_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.8 2.5" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HL_hip" joint="HL_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.45 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HL_knee" joint="HL_knee_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HR_hip" joint="HR_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.45 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HR_knee" joint="HR_knee_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
+        
+        <position name="F_spine1" joint="F_spine1_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.6 0.6" forcelimited="true" forcerange="-0.15 0.15"/>
+        <!-- <position name="F_body" joint="F_body_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.01 0.01" forcelimited="true" forcerange="-0.1 0.1"/> -->
+        <position name="H_spine1" joint="H_spine1_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.6 0.6" forcelimited="true" forcerange="-0.15 0.15"/>
+        <!-- <position name="H_body" joint="H_body_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.01 0.01" forcelimited="true" forcerange="-0.1 0.1"/> -->
+        <!-- <position name="F_spine1" joint="F_spine1_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.1 0.1" forcelimited="true" forcerange="-0.15 0.15"/>
+        <position name="F_body" joint="F_body_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.1 0.1" forcelimited="true" forcerange="-0.1 0.1"/>
+        <position name="H_spine1" joint="H_spine1_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.1 0.1" forcelimited="true" forcerange="-0.15 0.15"/>
+        <position name="H_body" joint="H_body_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.1 0.1" forcelimited="true" forcerange="-0.1 0.1"/> -->
+
+        <!-- <position name="Neck_yaw" joint="Neck_yaw_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.3 0.3" forcelimited="true" forcerange="-0.1 0.1"/>
+        <position name="Neck_pitch" joint="Neck_pitch_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.3 0.5" forcelimited="true" forcerange="-0.1 0.1"/> -->
+    </actuator>
+    <contact>
+        <pair geom1="floor" geom2="FL_foot_collision" friction="1.2 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="FR_foot_collision" friction="1.2 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="HL_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="HR_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+    </contact>
+</mujoco>
