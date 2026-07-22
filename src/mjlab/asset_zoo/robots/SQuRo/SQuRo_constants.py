@@ -98,10 +98,70 @@ def get_squro_robot_cfg() -> EntityCfg:
   )
 
 
-# mujoco可视化界面
+# 交互式 F_body 朝向角测试
+#   uv run python src/mjlab/asset_zoo/robots/SQuRo/SQuRo_constants.py
+#   拖拽滑块改变脊柱侧摆角，实时观察 base_Link vs F_body_Link 的朝向差异
 if __name__ == "__main__":
+    import math
+    import mujoco
     import mujoco.viewer as viewer
     from mjlab.entity.entity import Entity
 
     robot = Entity(get_squro_robot_cfg())
-    viewer.launch(robot.spec.compile())
+    model = robot.spec.compile()
+    data = mujoco.MjData(model)
+
+    # 获取关键 ID
+    base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_Link")
+    f_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "F_body_Link")
+    h_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "H_body_Link")
+    f_spine1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "F_spine1_joint")
+
+    # 添加脊柱关节滑块
+    with (viewer.launch_passive(model, data) as v):
+        # 在 viewer 中显示操作提示
+        print("\n=== SQuRo F_body 朝向角测试 ===")
+        print("操作: 拖拽右侧 F_spine1 滑块改变侧摆角")
+        print("观察: base_Link vs F_body_Link 朝向差异")
+        print("=" * 60)
+
+        last_print = 0.0
+        while v.is_running():
+            mujoco.mj_step(model, data)
+
+            # 每 0.1s 打印一次朝向
+            if data.time - last_print >= 0.1:
+                last_print = data.time
+
+                # base_Link heading
+                bq = data.xquat[base_id]
+                b_sin = 2.0 * (bq[0] * bq[3] + bq[1] * bq[2])
+                b_cos = 1.0 - 2.0 * (bq[2] * bq[2] + bq[3] * bq[3])
+                base_h = math.degrees(math.atan2(b_sin, b_cos))
+
+                # F_body_Link heading
+                fq = data.xquat[f_body_id]
+                f_sin = 2.0 * (fq[0] * fq[3] + fq[1] * fq[2])
+                f_cos = 1.0 - 2.0 * (fq[2] * fq[2] + fq[3] * fq[3])
+                f_body_h = math.degrees(math.atan2(f_sin, f_cos))
+
+                # H_body_Link heading
+                hq = data.xquat[h_body_id]
+                h_sin = 2.0 * (hq[0] * hq[3] + hq[1] * hq[2])
+                h_cos = 1.0 - 2.0 * (hq[2] * hq[2] + hq[3] * hq[3])
+                h_body_h = math.degrees(math.atan2(h_sin, h_cos))
+
+                # F_spine1 角度
+                f_spine1 = math.degrees(data.qpos[model.jnt_qposadr[f_spine1_id]])
+
+                print(f"\rt={data.time:5.2f}s | "
+                      f"F_spine1={f_spine1:+6.1f}° | "
+                      f"base={base_h:+7.1f}° | "
+                      f"F_body={f_body_h:+7.1f}° | "
+                      f"H_body={h_body_h:+7.1f}° | "
+                      f"F_body-base={f_body_h-base_h:+6.1f}°",
+                      end="", flush=True)
+
+            v.sync()
+
+    print()  # 换行
