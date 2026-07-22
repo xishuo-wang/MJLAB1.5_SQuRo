@@ -28,7 +28,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     foot_names = ("FR", "FL", "HR", "HL")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
 
-    # 观测空间 — 仅执行器关节(12维) + 本体感受 + 命令
+    # 观测空间
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "actuator_pos": ObservationTermCfg(func=mdp.actuator_pos),
@@ -65,14 +65,14 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励函数 — 第一阶段机动基元训练
+    # 奖励函数
     rewards = {
-        "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
-        "track_omega": RewardTermCfg(func=mdp.compute_omega_track_reward, weight=1.0),
-        "spine_turn": RewardTermCfg(func=mdp.compute_spine_turn_reward, weight=1.0),
-        "stability": RewardTermCfg(func=mdp.compute_stability_penalty, weight=1.0),
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
+        "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
+        "track_omg": RewardTermCfg(func=mdp.compute_omega_track_reward, weight=1.0),
+        "spine_turn": RewardTermCfg(func=mdp.compute_spine_turn_reward, weight=1.0),
+        "stability": RewardTermCfg(func=mdp.compute_stability_penalty, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
