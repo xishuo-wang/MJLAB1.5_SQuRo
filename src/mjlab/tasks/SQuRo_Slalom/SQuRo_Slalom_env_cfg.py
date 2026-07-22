@@ -38,6 +38,8 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
         "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
         "heading": ObservationTermCfg(func=mdp.heading),
+        "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
+        "ref_joint_vel": ObservationTermCfg(func=mdp.ref_joint_vel),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "slalom_cmd"}),
     }
 
@@ -69,6 +71,8 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "track_omega": RewardTermCfg(func=mdp.compute_omega_track_reward, weight=1.0),
         "spine_turn": RewardTermCfg(func=mdp.compute_spine_turn_reward, weight=1.0),
         "stability": RewardTermCfg(func=mdp.compute_stability_penalty, weight=1.0),
+        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
+        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
@@ -76,9 +80,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 终止条件
     terminations = {
-        "timeout": TerminationTermCfg(
-            func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True
-        ),
+        "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
     }
 
@@ -101,6 +103,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             viz=mdp.SlalomCommandCfg.VizCfg(z_offset=0.1, scale=1.0),
         )
     }
+
 
     # 完整配置
     return ManagerBasedRlEnvCfg(

@@ -12,21 +12,25 @@ from __future__ import annotations
 from typing import Any
 
 _STEPS_PER_ITER = 24
-_STAGES = (0, 500, 1500)
+_STAGES = (0, 500, 1500, 3000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
     # 主奖励权重
-    "weight_track_vel":     (2.0, 1.0, 1.0),
-    "weight_track_omega":   (0.0, 1.0, 1.0),
-    "weight_spine_turn":    (0.0, 0.3, 1.0),
-    "weight_stability":     (0.5, 0.3, 0.3),
-    "weight_energy":        (0.01, 0.01, 0.01),
-    "weight_smooth_L1_leg": (0.1, 0.2, 0.3),
-    "weight_smooth_L1_spn": (0.0, 0.1, 0.2),
+    "weight_track_vel":     (1.0, 1.0, 1.0, 1.0),
+    "weight_track_omega":   (0.0, 0.5, 1.0, 1.0),
+    "weight_spine_turn":    (0.0, 0.0, 0.5, 1.0),
+    "weight_stability":     (0.5, 0.3, 0.3, 0.3),
+    "weight_energy":        (0.01, 0.01, 0.01, 0.01),
+    "weight_smooth_L1_leg": (0.1, 0.2, 0.3, 0.3),
+    "weight_smooth_L1_spn": (0.0, 0.1, 0.2, 0.2),
+    "weight_smooth_L2_leg": (0.1, 0.2, 0.3, 0.3),
+    "weight_smooth_L2_spn": (0.0, 0.1, 0.2, 0.2),
 
-    # 腿/脊柱 L2 平滑权重
-    "weight_smooth_L2_leg": (0.1, 0.2, 0.3),
-    "weight_smooth_L2_spn": (0.0, 0.1, 0.2),
+    # 模仿奖励权重（早期高 → 后期衰减至零）
+    "weight_mimic_pos":     (5.0, 3.0, 0.5, 0.0),
+    "weight_mimic_vel":     (2.0, 1.0, 0.2, 0.0),
+    "sigma_mimic_pos":      (10.0, 10.0, 10.0, 10.0),
+    "sigma_mimic_vel":      (0.1, 0.1, 0.1, 0.1),
 }
 
 

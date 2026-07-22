@@ -10,6 +10,7 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES, resolve_model_indices
+from .reference import get_reference_joint_state
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -75,3 +76,15 @@ def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_C
 def base_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
     return asset.data.root_link_pos_w
+
+
+# Trot 参考关节位置
+def ref_joint_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    pos, _ = get_reference_joint_state(env)
+    return pos
+
+
+# Trot 参考关节速度
+def ref_joint_vel(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+    _, vel = get_reference_joint_state(env)
+    return vel
