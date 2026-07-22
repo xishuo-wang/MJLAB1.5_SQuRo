@@ -10,36 +10,32 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-# Trot 步态参数
-TROT_FREQ = 1.5             # 步频 (Hz)
+# =========================================================================================
+# 步态配置
+_STAND_ANGLES = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0]
+_BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
+PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
+TROT_FREQ = 1.0                                             # 步频 (Hz)
 
-# 腿节长度 (m)
-L1_FRONT, L2_FRONT = 0.040, 0.040
-L1_HIND, L2_HIND = 0.040, 0.036
-
-# 相位偏移（Trot: 对角同步）
-PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
 
 # 预计算表分辨率
-_TABLE_RESOLUTION = 50
-
-# Bio_Data 目录
-_BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
-
-# 12 关节顺序: FL_sh, FL_el, FR_sh, FR_el, HL_hip, HL_knee, HR_hip, HR_knee, spn...
-_STAND_ANGLES = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0]
-
-# 全局状态
+_TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
 _pos_table: torch.Tensor | None = None     # [50, 12]
 _vel_table: torch.Tensor | None = None     # [50, 12]
 _table_device: str | None = None
 
 
+# 脊柱侧摆参考角常量
+_SPINE_LATERAL_GAIN = 2.0      # α = κ * L = (ω/v) * L, L=0.2m, v=0.1m/s → 2.0
+_SPINE_LATERAL_LIMIT = 0.6     # F_spine1 关节限位 ±0.6 rad
+
+
+
 # =========================================================================================
 # 逆运动学
 def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True):
-    L1, L2 = (L1_FRONT, L2_FRONT) if is_front else (L1_HIND, L2_HIND)
+    L1, L2 = (0.040, 0.040) if is_front else (0.040, 0.036)
 
     R = torch.sqrt(x**2 + y**2)
     K = (L2**2 - x**2 - y**2 - L1**2) / (2 * L1)
@@ -65,6 +61,7 @@ def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True)
         knee = -(a2 + 1.75)
         knee = torch.where(a2 > 2, knee - 2 * math.pi, knee)
         return hip, knee
+
 
 
 # =========================================================================================
@@ -134,30 +131,10 @@ def _init_tables(device: torch.device | str) -> None:
     print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_TABLE_RESOLUTION} bins × 12 joints")
 
 
-# =========================================================================================
-# 脊柱侧摆参考角常量
-# F_body_heading = base_heading - F_spine1 (实测验证)
-# 左转(κ>0, ω>0) → 需F_body左偏 → F_spine1<0 → 取负号
-_SPINE_LATERAL_GAIN = 2.0      # α = κ * L = (ω/v) * L, L=0.2m, v=0.1m/s → 2.0
-_SPINE_LATERAL_LIMIT = 0.6     # F_spine1 关节限位 ±0.6 rad
-
 
 # =========================================================================================
-# 公共接口
+# 获取当前步的参考关节位置和速度
 def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
-    """返回当前步的参考关节位置和速度
-
-    首次调用自动触发: CSV加载 → IK预计算 → 模型索引解析
-    步级缓存: 同一步内多次调用复用结果
-
-    腿部: 预计算表查表（CSV+IK, 50 bins）
-    脊柱: 动态计算 — F_spine1 = clamp(GAIN * ω_cmd, ±LIMIT)
-          几何关系: R = L/α → α = L/R = L*ω/v
-
-    Returns:
-        ref_pos: [num_envs, 12] 参考关节位置
-        ref_vel: [num_envs, 12] 参考关节速度
-    """
     # 步级缓存
     current_step = env.common_step_counter
     cached = getattr(env, "_ref_state_cache", None)
@@ -195,7 +172,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     omega_cmd = curvature_cmd * vel_cmd
     spine_lateral = torch.clamp(-_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
     ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
-    ref_vel[:, 8] = 0.0               # 脊柱参考速度为零（准静态弯曲）
 
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
