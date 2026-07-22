@@ -1,31 +1,35 @@
+"""SQuRo绕杆任务第一阶段 — 机动基元奖励函数
+
+奖励构成:
+  R = R_vel + R_omega + R_spine + R_mimic + R_stability + R_smoothness + R_energy
+
+索引解析统一由 reference.py 的 get_reference_joint_state() 触发，
+不再需要分散的 _ensure_* 包装函数。
+"""
+
 from __future__ import annotations
 import torch
+
 from mjlab.entity import Entity
-from typing import TYPE_CHECKING
 from .curriculums import get_curriculum_reward_weight
-from .indices import _MODEL_INDICES, resolve_model_indices
+from .indices import _MODEL_INDICES
 from .reference import get_reference_joint_state
+
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
-
-
-def _ensure_ids(env: "ManagerBasedRlEnv") -> None:
-    """懒加载解析模型索引"""
-    resolve_model_indices(env.scene["robot"])
 
 
 # =========================================================================================
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_vel = exp(-sigma * (v_x - v_cmd)^2)，低速不足时加重惩罚"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     v_cmd = cmd_term.command[:, 0]
 
     error_vel = actual_vel_x - v_cmd
-    # 不对称 sigma：欠速惩罚更重（鼓励跟上命令），超速宽容
     sigma_under = 100.0
     sigma_over = 50.0
     sigma = torch.where(error_vel < 0, sigma_under, sigma_over)
@@ -42,7 +46,6 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 角速度跟踪奖励
 def compute_omega_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_omega = exp(-50 * (ω_z - ω_cmd)^2)"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     actual_omega_z = asset.data.root_link_ang_vel_w[:, 2]
     cmd_term = env.command_manager._terms["slalom_cmd"]
@@ -58,26 +61,19 @@ def compute_omega_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 脊柱转弯奖励：引导 agent 在转弯时使用侧摆+扭转协同
+# 脊柱转弯奖励
 def compute_spine_turn_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_spine = |ω_cmd| * (w_lat*|F_spine1| + w_twist*(|F_body|+|H_body|))"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     omega_cmd_abs = torch.abs(cmd_term.command[:, 1])
 
-    # 通过执行器张量列索引获取脊柱关节位置
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
-    # 侧摆 (F_spine1, 执行器索引 8)
     lateral_pos = joint_pos[:, _MODEL_INDICES.actuator_spn_lateral_id]
-    # 扭转 (F_body=9, H_body=11)
     body_ids = _MODEL_INDICES.actuator_spn_body_ids
     twist_pos = joint_pos[:, body_ids[0]] + joint_pos[:, body_ids[1]]
 
-    spine_activity = (
-        2.5 * torch.abs(lateral_pos)   # 侧摆权重最高（主驱动）
-        + 1.0 * torch.abs(twist_pos)   # 扭转辅助
-    )
+    spine_activity = 2.5 * torch.abs(lateral_pos) + 1.0 * torch.abs(twist_pos)
     reward = omega_cmd_abs * spine_activity
     weight = get_curriculum_reward_weight(env, "weight_spine_turn")
 
@@ -90,7 +86,6 @@ def compute_spine_turn_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 稳定性惩罚
 def compute_stability_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_stab = -(roll^2 + pitch^2)"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     gravity_b = asset.data.projected_gravity_b
     tilt_sq = torch.sum(torch.square(gravity_b[:, :2]), dim=1)
@@ -102,7 +97,6 @@ def compute_stability_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # L1 动作平滑惩罚（腿/脊柱分离权重）
 def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_L1 = -w_leg*Σ|Δa_leg| - w_spn*Σ|Δa_spn|"""
-    _ensure_ids(env)
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     abs_diff = torch.abs(current_action - prev_action)
@@ -119,7 +113,6 @@ def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # L2 动作平滑惩罚
 def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_L2 = -w_leg*Σ(Δa_leg)^2 - w_spn*Σ(Δa_spn)^2"""
-    _ensure_ids(env)
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     sq_diff = torch.square(current_action - prev_action)
@@ -136,7 +129,6 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 能耗惩罚
 def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_energy = -w * Σ|τ_i * vel_i|"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     actuator_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     actuator_torque = asset.data.actuator_force
@@ -146,10 +138,9 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 关节位置模仿奖励（trot 参考轨迹，课程早期权重高/后期衰减至零）
+# 关节位置模仿奖励（索引解析由 get_reference_joint_state 内部触发）
 def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_mimic_pos = exp(-sigma * MSE(joint_pos, ref_pos))"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
@@ -166,7 +157,6 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 关节速度模仿奖励
 def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     """R_mimic_vel = exp(-sigma * MSE(joint_vel, ref_vel))"""
-    _ensure_ids(env)
     asset: Entity = env.scene["robot"]
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
