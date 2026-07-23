@@ -31,7 +31,6 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 观测空间
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
-        # ref_joint 必须排在 actuator 之前：ref 触发 _MODEL_INDICES 懒加载解析
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
         "ref_joint_vel": ObservationTermCfg(func=mdp.ref_joint_vel),
         "actuator_pos": ObservationTermCfg(func=mdp.actuator_pos),
@@ -75,6 +74,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
+        "path_track": RewardTermCfg(func=mdp.compute_path_track_reward, weight=1.0),
     }
 
     # 终止条件
