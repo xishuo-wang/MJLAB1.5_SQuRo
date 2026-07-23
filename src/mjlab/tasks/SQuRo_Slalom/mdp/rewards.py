@@ -51,9 +51,9 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算F_body 朝向速度误差
+    # F_body 速度和朝向（同源一致，避免 base_Link 与 F_body 的方向不匹配）
     f_body_heading = _get_f_body_heading(env)
-    vel_w = asset.data.root_link_lin_vel_w
+    vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # type: ignore[call-overload]  # [N,3]
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
     lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
     vertical_speed = vel_w[:, 2]
@@ -88,9 +88,12 @@ def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     vel_cmd = cmd_term.command[:, 0]
     omega_cmd = curvature_cmd * vel_cmd
     error = actual_omega_z - omega_cmd
+    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_track_omg")
     weight = get_curriculum_reward_weight(env, "weight_track_omg")
+    # 计算奖励
     reward = torch.exp(-sigma * error ** 2)
+    # 记录日志
     env.extras["log"]["Data/omg_actual"] = actual_omega_z.mean().item()
     env.extras["log"]["Data/omg_cmd"] = omega_cmd.mean().item()
     return reward * weight
