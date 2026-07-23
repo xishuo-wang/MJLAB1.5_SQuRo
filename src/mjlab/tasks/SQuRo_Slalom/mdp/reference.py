@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 # =========================================================================================
 # 步态配置
-_STAND_ANGLES = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0]
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 TROT_FREQ = 1.0                                             # 步频 (Hz)
@@ -97,24 +96,29 @@ def _init_tables(device: torch.device | str) -> None:
     y_h_t = torch.tensor(y_h_grid, device=dev, dtype=torch.float32)
     z_h_t = torch.tensor(z_h_grid, device=dev, dtype=torch.float32)
 
-    # IK 求解：对每个相位 bin 计算 8 个腿关节角度
+    # IK 求解：按 _ACTUATED_JOINT_NAMES 顺序填充
+    # 列序: F_sp1(0) F_bd(1) FL_sh(2) FL_el(3) FR_sh(4) FR_el(5)
+    #        H_sp1(6) H_bd(7) HL_hp(8) HL_kn(9) HR_hp(10) HR_kn(11)
     pos = torch.zeros(_TABLE_RESOLUTION, 12, device=dev)
-    for leg, (y_t, z_t, lag, is_front) in enumerate([
-        (y_f_t, z_f_t, PHASE_LAG["FL"], True),   # FL
-        (y_f_t, z_f_t, PHASE_LAG["FR"], True),   # FR (同CSV，相位差)
-        (y_h_t, z_h_t, PHASE_LAG["HL"], False),  # HL
-        (y_h_t, z_h_t, PHASE_LAG["HR"], False),  # HR
-    ]):
-        # 对网格应用相位偏移（循环移位）
+    legs = [
+        (y_f_t, z_f_t, PHASE_LAG["FL"], True, 2),    # FL → 列 2-3
+        (y_f_t, z_f_t, PHASE_LAG["FR"], True, 4),    # FR → 列 4-5
+        (y_h_t, z_h_t, PHASE_LAG["HL"], False, 8),   # HL → 列 8-9
+        (y_h_t, z_h_t, PHASE_LAG["HR"], False, 10),  # HR → 列 10-11
+    ]
+    for y_t, z_t, lag, is_front, col_offset in legs:
         shift = int(lag * _TABLE_RESOLUTION)
         y_shifted = torch.roll(y_t, shifts=shift)
         z_shifted = torch.roll(z_t, shifts=shift)
         proximal, distal = _inverse_kinematics(y_shifted, z_shifted, is_front)
-        pos[:, leg * 2] = proximal  # type: ignore[call-overload]
-        pos[:, leg * 2 + 1] = distal  # type: ignore[call-overload]
+        pos[:, col_offset] = proximal  # type: ignore[call-overload]
+        pos[:, col_offset + 1] = distal  # type: ignore[call-overload]
 
-    # 脊柱保持零位（直行参考姿态：脊柱不动）
-    pos[:, 8:] = torch.tensor(_STAND_ANGLES[8:], device=dev)
+    # 脊柱保持零位（直行参考姿态）
+    pos[:, 0] = 0.0   # F_spine1
+    pos[:, 1] = 0.0   # F_body
+    pos[:, 6] = 0.0   # H_spine1
+    pos[:, 7] = 0.0   # H_body
 
     # 中心差分计算速度
     vel = torch.zeros_like(pos)
@@ -171,8 +175,8 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]
     omega_cmd = curvature_cmd * vel_cmd
     spine_lateral = torch.clamp(-_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
-    ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
-    ref_vel[:, 8] = 0.0               # 脊柱准静态弯曲，参考速度为零
+    ref_pos[:, 0] = spine_lateral     # F_spine1 (侧摆) — 列0
+    ref_vel[:, 0] = 0.0               # 脊柱准静态弯曲，参考速度为零
 
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
