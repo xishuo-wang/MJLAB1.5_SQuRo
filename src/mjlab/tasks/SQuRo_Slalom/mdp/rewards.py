@@ -155,76 +155,80 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 路径跟踪奖励 — 基于曲率命令生成期望圆弧/直线，跟踪 base+F_body+H_body
+# 路径跟踪奖励
 def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
 
-    # 初始化路径状态（episode 开始时记录 base 初始位置和 F_body 朝向）
+    # 初始化/更新路径起始状态
     if getattr(env, "_path_state", None) is None:
         env._path_state = {  # type: ignore[attr-defined]
             "start_pos": asset.data.root_link_pos_w.clone(),
-            "start_heading": _get_f_body_heading(env).clone(),
+            "start_heading": (_get_f_body_heading(env) - (torch.pi / 2)).clone(),
         }
 
     state = env._path_state  # type: ignore[attr-defined]
-    start_pos = state["start_pos"]   # [N, 3]
-    start_heading = state["start_heading"]  # [N]
+    start_pos = state["start_pos"]       # [N, 3]
+    start_heading = state["start_heading"]  # [N] 物理前向 (= body+X - π/2)
 
-    # 重置已终止环境
+    # 重置已终止环境的状态
     reset_ids = getattr(env, "reset_terminated", None)
     if reset_ids is not None:
         ids = reset_ids.nonzero(as_tuple=False).flatten()
         if len(ids) > 0:
             start_pos[ids] = asset.data.root_link_pos_w[ids]
-            start_heading[ids] = _get_f_body_heading(env)[ids]
+            start_heading[ids] = _get_f_body_heading(env)[ids] - (torch.pi / 2)
 
-    # 从命令获取路径参数
+    # 获取命令参数及时间
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    curvature = cmd_term.command[:, 4]    # κ [N]
-    vel_cmd = cmd_term.command[:, 0]      # v [N]
+    curvature = cmd_term.command[:, 4]
+    vel_cmd = cmd_term.command[:, 0]
+    t = env.episode_length_buf.float() * env.step_dt
 
-    # 时间
-    t = env.episode_length_buf.float() * env.step_dt  # [N]
+    # 参考路径生成 (Base)
+    omega = curvature * vel_cmd
+    delta_theta = omega * t
 
-    # 圆弧参数
-    omega = curvature * vel_cmd                                    # ω = κ×v [N]
-    delta_theta = omega * t                                       # Δθ [N]
-    R = torch.where(torch.abs(curvature) > 1e-6, 1.0 / curvature,
-                    torch.full_like(curvature, 1e6))              # [N]
+    # chord = 2R·sin(Δθ/2) = v·t·sin(Δθ/2)/(Δθ/2) = v·t·sinc(Δθ/(2π))
+    chord_length = vel_cmd * t * torch.sinc(delta_theta / (2 * torch.pi))
 
-    # 参考位置: 直行 vs 圆弧
-    is_straight = torch.abs(curvature) < 1e-6
-    # 直行: x = x0 + v*t*cos(θ0),  y = y0 + v*t*sin(θ0)
-    x_s = start_pos[:, 0] + vel_cmd * t * torch.cos(start_heading)
-    y_s = start_pos[:, 1] + vel_cmd * t * torch.sin(start_heading)
-    # 圆弧: x = x0 + R*(sin(θ0+Δθ)-sin(θ0)),  y = y0 - R*(cos(θ0+Δθ)-cos(θ0))
-    x_c = start_pos[:, 0] + R * (torch.sin(start_heading + delta_theta) - torch.sin(start_heading))
-    y_c = start_pos[:, 1] - R * (torch.cos(start_heading + delta_theta) - torch.cos(start_heading))
+    # 参考点位置：起始点 + 弦长 × 方向向量（方向为 θ₀ + Δθ/2）
+    ref_heading = start_heading + delta_theta / 2.0
+    x_ref = start_pos[:, 0] + chord_length * torch.cos(ref_heading)
+    y_ref = start_pos[:, 1] + chord_length * torch.sin(ref_heading)
 
-    x_ref = torch.where(is_straight, x_s, x_c)
-    y_ref = torch.where(is_straight, y_s, y_c)
+    ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
 
-    # 三个身体环节的当前位置
-    base_xy = asset.data.root_link_pos_w[:, :2]                                     # [N, 2]
-    f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]         # [N, 2]
-    h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]         # [N, 2]
-    ref_xy = torch.stack([x_ref, y_ref], dim=1)                                      # [N, 2]
+    # ---- 为 F_body 和 H_body 生成独立参考点 ----
+    body_offset = 0.065  # 身体节距 Base 的前后距离 (米)
+    path_heading = start_heading + delta_theta                # 当前路径切线方向
+    tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)   # [N, 2]
 
-    # 跟踪误差
-    base_err = torch.norm(base_xy - ref_xy, dim=1)
-    f_body_err = torch.norm(f_body_xy - ref_xy, dim=1)
-    h_body_err = torch.norm(h_body_xy - ref_xy, dim=1)
+    ref_f_body = ref_xy + body_offset * tangent
+    ref_h_body = ref_xy - body_offset * tangent
 
-    # 奖励
+    # ---- 当前身体环节的 XY 位置 ----
+    base_xy   = asset.data.root_link_pos_w[:, :2]             # [N, 2]
+    f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]  # [N, 2]
+    h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]  # [N, 2]
+
+    # ---- 跟踪误差（欧氏距离） ----
+    base_err   = torch.norm(base_xy - ref_xy, dim=1)
+    f_body_err = torch.norm(f_body_xy - ref_f_body, dim=1)
+    h_body_err = torch.norm(h_body_xy - ref_h_body, dim=1)
+
+    # ---- 奖励计算 ----
     sigma = get_curriculum_reward_weight(env, "sigma_path_track")
     w_base = get_curriculum_reward_weight(env, "weight_path_base")
     w_fbody = get_curriculum_reward_weight(env, "weight_path_fbody")
     w_hbody = get_curriculum_reward_weight(env, "weight_path_hbody")
 
-    r_base = torch.exp(-sigma * base_err ** 2)
-    r_fbody = torch.exp(-sigma * f_body_err ** 2)
-    r_hbody = torch.exp(-sigma * h_body_err ** 2)
+    r_base   = torch.exp(-sigma * base_err ** 2)
+    r_fbody  = torch.exp(-sigma * f_body_err ** 2)
+    r_hbody  = torch.exp(-sigma * h_body_err ** 2)
 
+    # 日志
     env.extras["log"]["Data/path_base_err"] = base_err.mean().item()
     env.extras["log"]["Data/path_fbody_err"] = f_body_err.mean().item()
+    env.extras["log"]["Data/path_hbody_err"] = h_body_err.mean().item()
+
     return w_base * r_base + w_fbody * r_fbody + w_hbody * r_hbody
