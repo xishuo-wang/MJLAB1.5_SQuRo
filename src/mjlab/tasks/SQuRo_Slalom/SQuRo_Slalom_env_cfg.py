@@ -40,6 +40,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
         "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
         "heading": ObservationTermCfg(func=mdp.heading),
+        "path_ref": ObservationTermCfg(func=mdp.path_ref),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "slalom_cmd"}),
     }
 

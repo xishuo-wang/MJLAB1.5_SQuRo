@@ -3,7 +3,7 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .observations import _get_f_body_heading
+from .observations import _compute_path_ref
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
@@ -60,32 +60,30 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 线速度跟踪奖励
+# 线速度跟踪奖励 — 世界坐标系，直接比较期望 vs 实际速度
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算速度误差
-    f_body_heading = _get_f_body_heading(env) - (torch.pi / 2)
-    vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # type: ignore[call-overload]  # [N,3]
-    forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
-    lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
-    vertical_speed = vel_w[:, 2]
-    cmd_term = env.command_manager._terms["slalom_cmd"]
-    v_cmd = cmd_term.command[:, 0]
-    error = forward_speed - v_cmd
-    error_vy = lateral_speed
-    error_vz = vertical_speed
-    # 获取课程学习量
+    # 期望世界系速度（路径切线方向）
+    _, _, vx_des, vy_des = _compute_path_ref(env)
+    # 实际世界系速度（F_body）
+    vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
+    vx_actual = vel_w[:, 0]
+    vy_actual = vel_w[:, 1]
+    vz_actual = vel_w[:, 2]
+    # 误差
+    error_x = vx_actual - vx_des
+    error_y = vy_actual - vy_des
+    error_z = vz_actual
     weight = get_curriculum_reward_weight(env, "weight_track_vel")
     weight_yz = get_curriculum_reward_weight(env, "weight_track_vyz")
     sigma = get_curriculum_reward_weight(env, "sigma_track_vel")
     sigma_yz = get_curriculum_reward_weight(env, "sigma_track_vyz")
-    # 计算奖励
-    reward = torch.exp(-sigma * error ** 2)
-    r_vel_y = torch.exp(-sigma_yz * error_vy ** 2)
-    r_vel_z = torch.exp(-sigma_yz * error_vz ** 2)
-    # 记录日志
-    env.extras["log"]["Data/vel_actual"] = forward_speed.mean().item()
-    return reward * weight + (r_vel_y + r_vel_z) * weight_yz
+    r_vel_x = torch.exp(-sigma * error_x ** 2)
+    r_vel_y = torch.exp(-sigma_yz * error_y ** 2)
+    r_vel_z = torch.exp(-sigma_yz * error_z ** 2)
+    env.extras["log"]["Data/vel_actual"] = vx_actual.mean().item()
+    env.extras["log"]["Data/vel_des"] = vx_des.mean().item()
+    return r_vel_x * weight + (r_vel_y + r_vel_z) * weight_yz
 
 
 
@@ -169,62 +167,36 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
 
-    # 初始化/更新路径起始状态
-    if getattr(env, "_path_state", None) is None:
-        env._path_state = {  # type: ignore[attr-defined]
-            "start_pos": asset.data.root_link_pos_w.clone(),
-            "start_heading": (_get_f_body_heading(env) - (torch.pi / 2)).clone(),
-        }
+    # 复用共享路径计算
+    x_ref, y_ref, _, _ = _compute_path_ref(env)
 
-    state = env._path_state  # type: ignore[attr-defined]
-    start_pos = state["start_pos"]       # [N, 3]
-    start_heading = state["start_heading"]  # [N] 物理前向 (= body+X - π/2)
+    ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
 
-    # 重置已终止环境的状态
-    reset_ids = getattr(env, "reset_terminated", None)
-    if reset_ids is not None:
-        ids = reset_ids.nonzero(as_tuple=False).flatten()
-        if len(ids) > 0:
-            start_pos[ids] = asset.data.root_link_pos_w[ids]
-            start_heading[ids] = _get_f_body_heading(env)[ids] - (torch.pi / 2)
-
-    # 获取命令参数及时间
+    # 路径切线方向（从命令计算，避免重复状态管理）
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]
     vel_cmd = cmd_term.command[:, 0]
     t = env.episode_length_buf.float() * env.step_dt
-
-    # 参考路径生成 (Base)
+    # 从 _compute_path_ref 的共享状态获取 start_heading
+    state = env._path_obs_state  # type: ignore[attr-defined]
+    start_heading = state["start_heading"]
     omega = curvature * vel_cmd
-    delta_theta = omega * t
+    path_heading = start_heading + omega * t
+    tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
 
-    # chord = 2R·sin(Δθ/2) = v·t·sin(Δθ/2)/(Δθ/2) = v·t·sinc(Δθ/(2π))
-    chord_length = vel_cmd * t * torch.sinc(delta_theta / (2 * torch.pi))
-
-    # 参考点位置：起始点 + 弦长 × 方向向量（方向为 θ₀ + Δθ/2）
-    ref_heading = start_heading + delta_theta / 2.0
-    x_ref = start_pos[:, 0] + chord_length * torch.cos(ref_heading)
-    y_ref = start_pos[:, 1] + chord_length * torch.sin(ref_heading)
-
-    ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
-
-    # ---- 为 F_body 和 H_body 生成独立参考点 ----
-    body_offset  = 0.065  # 身体节距 Base 的前后距离 (米)
-    path_heading = start_heading + delta_theta                # 当前路径切线方向
-    tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)   # [N, 2]
-
+    body_offset = 0.065
     ref_f_body = ref_xy + body_offset * tangent
     ref_h_body = ref_xy - body_offset * tangent
 
-    # 获取当前身体环节的 XY 位置
-    base_xy   = asset.data.root_link_pos_w[:, :2]             # [N, 2]
-    f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]  # [N, 2]
-    h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]  # [N, 2]
-    # 计算跟踪误差
-    error_base  = torch.norm(base_xy - ref_xy, dim=1)
+    # 当前身体环节位置
+    base_xy = asset.data.root_link_pos_w[:, :2]
+    f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
+    h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
+    # 跟踪误差
+    error_base = torch.norm(base_xy - ref_xy, dim=1)
     error_fbody = torch.norm(f_body_xy - ref_f_body, dim=1)
     error_hbody = torch.norm(h_body_xy - ref_h_body, dim=1)
-    # 获取课程学习量
+    # 课程权重
     weight = get_curriculum_reward_weight(env, "weight_track_path")
     sigma  = get_curriculum_reward_weight(env, "sigma_track_path")
     # 计算奖励
