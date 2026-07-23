@@ -9,6 +9,36 @@ from dataclasses import dataclass
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_spec, INIT_STATE
 
 
+# ==================== 配置参数 ====================
+OUTPUT_DIR = MJLAB_SRC_PATH / "scripts" / "Data"
+OUTPUT_CSV_PATH = OUTPUT_DIR / "Turn_Cyc_Min.csv"
+TOTAL_TIME = 10.0
+START_TIME = 0.5
+
+# 步态参数
+FREQ = 2.0
+T_CYCLE = 1.0 / FREQ
+SWING_RATIO = 0.5
+
+# 各腿步态参数（等步长，靠脊柱侧摆实现转弯）
+STRIDE_FL = 0.04
+STRIDE_FR = 0.0
+STRIDE_HL = 0.04
+STRIDE_HR = 0.0
+HEIGHT_FL = 0.01
+HEIGHT_FR = 0.01
+HEIGHT_HL = 0.015
+HEIGHT_HR = 0.015
+BODY_HEIGHT_FL = 0.060
+BODY_HEIGHT_FR = 0.053
+BODY_HEIGHT_HL = 0.058
+BODY_HEIGHT_HR = 0.050
+X_OFFSET_FL = -0.02
+X_OFFSET_FR = -0.01
+X_OFFSET_HL = -0.03
+X_OFFSET_HR = -0.01
+PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
+
 
 @dataclass
 class TurnConfig:
@@ -16,7 +46,6 @@ class TurnConfig:
     total_time: float = 5.0
     start_time: float = 0.5
     freq: float = 2.0
-    spine_yaw: float = 0.6  # 脊柱侧摆角（正值=右转，见 CLAUDE.md）
     output: str | None = None  # 自定义输出 CSV 路径
     high_level_dt: float = 0.005  # 上层控制时间步长
 
@@ -91,36 +120,7 @@ def inverse_kinematics(target_pos, is_front=True):
         return (a1 + 4.325, -(a2 + 1.794))
 
 
-# ==================== 配置参数 ====================
 
-OUTPUT_DIR = MJLAB_SRC_PATH / "scripts" / "Data"
-OUTPUT_CSV_PATH = OUTPUT_DIR / "Turn_Cyc_Min.csv"
-TOTAL_TIME = 10.0
-START_TIME = 0.5
-
-# 步态参数
-FREQ = 2.0
-T_CYCLE = 1.0 / FREQ
-SWING_RATIO = 0.5
-
-# 各腿步态参数（等步长，靠脊柱侧摆实现转弯）
-STRIDE_FL = 0.04
-STRIDE_FR = 0.04
-STRIDE_HL = 0.04
-STRIDE_HR = 0.04
-HEIGHT_FL = 0.01
-HEIGHT_FR = 0.01
-HEIGHT_HL = 0.015
-HEIGHT_HR = 0.015
-BODY_HEIGHT_FL = 0.060
-BODY_HEIGHT_FR = 0.060
-BODY_HEIGHT_HL = 0.058
-BODY_HEIGHT_HR = 0.058
-X_OFFSET_FL = -0.02
-X_OFFSET_FR = -0.02
-X_OFFSET_HL = -0.03
-X_OFFSET_HR = -0.03
-PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
 
 
 
@@ -319,6 +319,8 @@ def set_initial_pose(model: mujoco.MjModel, data: mujoco.MjData):
 
     # 覆盖 INIT_STATE 中定义的关节位置
     init_joint_pos = INIT_STATE.joint_pos
+    # init_joint_pos = [0, 0, 0.1, -0.3, 0.1, -0.3, 0, 0, -0.1, 0.3, -0.1, 0.3,]
+    # init_joint_pos = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,]
     for jnt_name, target_val in init_joint_pos.items(): # type: ignore
         if jnt_name == ".*":
             continue  # 通配符，跳过
@@ -347,15 +349,13 @@ def run_simulation(model: mujoco.MjModel, data: mujoco.MjData, recorder: "TurnDa
     print(f"[INFO] 总仿真时间: {cfg.total_time}s")
     print(f"[INFO] 运动开始时间: {cfg.start_time}s")
     print(f"[INFO] 步态频率: {cfg.freq}Hz, 周期: {cfg.t_cycle:.3f}s")
-    print(f"[INFO] 脊柱侧摆目标: {cfg.spine_yaw} rad")
-
     # 仿真步进函数
     def simulation_step():
         nonlocal last_high_level_time, high_level_target, initial_base_x
         nonlocal initial_base_y, initial_heading, step_count
 
         current_time = data.time
-
+        init_joint_pos = [0,0,0.1,-0.3,0.1,-0.3,0,0,-0.1,0.3,-0.1,0.3]
         # 记录初始基座位置和朝向
         if initial_base_x is None:
             initial_base_x = data.qpos[0]
@@ -386,11 +386,11 @@ def run_simulation(model: mujoco.MjModel, data: mujoco.MjData, recorder: "TurnDa
                         target[leg_info["hip"]] = angles[0]
                         target[leg_info["knee"]] = angles[1]
 
-                # 脊柱控制：侧摆实现转弯
-                target[0] = 0.6   # F_spine1 → 侧摆
-                target[1] = 1.2              # F_body → 不扭转
-                target[6] = -0.6             # H_spine1 → 保持中立
-                target[7] = 0.9             # H_body → 不扭转
+                # 脊柱控制
+                target[0] = 0.6
+                target[1] = 1.2
+                target[6] = -0.6
+                target[7] = 0.9
 
             high_level_target = target.copy()
 
