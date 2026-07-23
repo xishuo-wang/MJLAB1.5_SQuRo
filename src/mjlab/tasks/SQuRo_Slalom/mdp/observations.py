@@ -61,9 +61,10 @@ def actuator_force(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = ACTUATED_
     return asset.data.actuator_force
 
 
-# F_body_Link 朝向角（与 vel_track 奖励一致）
+# F_body_Link 物理前向 heading (body+X - π/2 → world+X方向 = 0°)
+# 与 vel_track 奖励的 forward_heading 一致
 def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    return _get_f_body_heading(env).unsqueeze(-1)
+    return (_get_f_body_heading(env) - (torch.pi / 2)).unsqueeze(-1)
 
 
 # 基座位置
