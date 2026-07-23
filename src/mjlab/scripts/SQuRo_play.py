@@ -14,6 +14,7 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
+from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
 
 
 
@@ -39,7 +40,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = 2
+    fixed_curvature: float | None = -5
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -78,7 +79,7 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 12 个驱动关节（按执行器顺序）
+        # 12 个驱动关节（按 _ACTUATED_JOINT_NAMES 执行器顺序）
         self.joint_names = [
             'FL_shoulder', 'FL_elbow',
             'FR_shoulder', 'FR_elbow',
@@ -87,7 +88,8 @@ class JointDataRecorder:
             'F_spine1', 'F_body',
             'H_spine1', 'H_body',
         ]
-        self.actuator_joint_indices = list(range(12))
+        # 使用 ModelIndices 解析后的实体级关节索引，而非硬编码 range(12)
+        self._joint_ids_resolved = False
 
         self.action_names = [
             'FL_shoulder', 'FL_elbow',
@@ -98,11 +100,11 @@ class JointDataRecorder:
             'H_spine1', 'H_body',
         ]
 
-        # 足名称（顺序与传感器一致）
-        self.foot_names = ['FL', 'FR', 'HL', 'HR']
+        # 足名称（与接触传感器 foot_names 顺序一致：FR, FL, HR, HL）
+        self.foot_names = ['FR', 'FL', 'HR', 'HL']
 
-        # 足端 site 名称
-        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
+        # 足端 site 名称（与 foot_names 同序，配合 preserve_order=True）
+        self.foot_site_names = ['FR_elbow_site', 'FL_elbow_site', 'HR_knee_site', 'HL_knee_site']
         self._foot_site_ids = None
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
@@ -140,13 +142,22 @@ class JointDataRecorder:
             record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
             record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
 
-        # 关节状态（保持不变）
-        joint_pos_all = asset.data.joint_pos - asset.data.default_joint_pos
-        joint_pos = joint_pos_all[env_idx][self.actuator_joint_indices]
-        joint_vel_all = asset.data.joint_vel - asset.data.default_joint_vel
-        joint_vel = joint_vel_all[env_idx][self.actuator_joint_indices]
-        joint_acc_all = asset.data.joint_acc
-        joint_acc = joint_acc_all[env_idx][self.actuator_joint_indices]
+        # 关节状态 — 使用 ModelIndices 解析后的实体级关节索引
+        if not self._joint_ids_resolved:
+            resolve_model_indices(asset)
+            self._joint_ids_resolved = True
+        joint_ids = _MODEL_INDICES.joint_ids
+        # 先减默认值再升维：[J] 或 [N,J] → 统一 [N,J]
+        djp = asset.data.default_joint_pos
+        djv = asset.data.default_joint_vel
+        jp = (asset.data.joint_pos - djp) if djp is not None else asset.data.joint_pos
+        jv = (asset.data.joint_vel - djv) if djv is not None else asset.data.joint_vel
+        ja = asset.data.joint_acc
+        if jp.dim() == 1:
+            jp, jv, ja = jp.unsqueeze(0), jv.unsqueeze(0), ja.unsqueeze(0)
+        joint_pos = jp[env_idx, joint_ids]  # type: ignore[call-overload]
+        joint_vel = jv[env_idx, joint_ids]  # type: ignore[call-overload]
+        joint_acc = ja[env_idx, joint_ids]  # type: ignore[call-overload]
         actuator_force = asset.data.actuator_force[env_idx]
 
         # 基座位置（保持不变）
