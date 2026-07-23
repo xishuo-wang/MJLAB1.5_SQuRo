@@ -3,7 +3,7 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .observations import _compute_path_ref
+from .observations import _compute_path_ref, _get_f_body_heading
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
@@ -64,7 +64,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     # 期望世界系速度（路径切线方向）
-    _, _, vx_des, vy_des = _compute_path_ref(env)
+    _, _, vx_des, vy_des, _ = _compute_path_ref(env)
     # 实际世界系速度（F_body）
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
     vx_actual = vel_w[:, 0]
@@ -168,20 +168,9 @@ def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
 
     # 复用共享路径计算
-    x_ref, y_ref, _, _ = _compute_path_ref(env)
+    x_ref, y_ref, _, _, path_heading = _compute_path_ref(env)
 
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
-
-    # 路径切线方向（从命令计算，避免重复状态管理）
-    cmd_term = env.command_manager._terms["slalom_cmd"]
-    curvature = cmd_term.command[:, 4]
-    vel_cmd = cmd_term.command[:, 0]
-    t = env.episode_length_buf.float() * env.step_dt
-    # 从 _compute_path_ref 的共享状态获取 start_heading
-    state = env._path_obs_state  # type: ignore[attr-defined]
-    start_heading = state["start_heading"]
-    omega = curvature * vel_cmd
-    path_heading = start_heading + omega * t
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
 
     body_offset = 0.065
@@ -206,4 +195,19 @@ def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward  = (r_base + r_fbody + r_hbody)/3
     # 记录日志
     env.extras["log"]["Data/path_error"] = ((error_base+error_fbody+error_hbody)/3).mean().item()
+    return reward * weight
+
+
+# =========================================================================================
+# F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
+def compute_heading_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    _, _, _, _, path_heading = _compute_path_ref(env)  # 期望朝向
+    actual_heading = _get_f_body_heading(env) - (torch.pi / 2)  # type: ignore[call-arg]  # 实际物理前向
+    error = actual_heading - path_heading
+    # 归一化到 [-π, π]
+    error = torch.atan2(torch.sin(error), torch.cos(error))
+    sigma = get_curriculum_reward_weight(env, "sigma_track_heading")
+    weight = get_curriculum_reward_weight(env, "weight_track_heading")
+    reward = torch.exp(-sigma * error ** 2)
+    env.extras["log"]["Data/heading_error"] = error.abs().mean().item()
     return reward * weight

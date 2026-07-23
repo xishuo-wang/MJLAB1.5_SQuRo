@@ -89,7 +89,7 @@ def ref_joint_vel(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_A
 
 # 期望路径参考点 + 速度（共享，供观测和奖励使用）
 def _compute_path_ref(env: "ManagerBasedRlEnv"):
-    """返回 (x_ref, y_ref, vx_des, vy_des) — 世界系期望位置和速度"""
+    """返回 (x_ref, y_ref, vx_des, vy_des, path_heading)"""
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]          # [N]
@@ -127,12 +127,12 @@ def _compute_path_ref(env: "ManagerBasedRlEnv"):
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
 
-    return x_ref, y_ref, vx_des, vy_des
+    return x_ref, y_ref, vx_des, vy_des, path_heading
 
 
-# 期望路径误差 [Δx, Δy] — 相对基座的参考点偏移
+# 期望路径误差 [dx, dy, vx_des, vy_des] — 供策略观测
 def path_ref(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    x_ref, y_ref, vx_des, vy_des = _compute_path_ref(env)
+    x_ref, y_ref, vx_des, vy_des, _ = _compute_path_ref(env)
     base_pos = env.scene[asset_cfg.name].data.root_link_pos_w
     dx = x_ref - base_pos[:, 0]
     dy = y_ref - base_pos[:, 1]
