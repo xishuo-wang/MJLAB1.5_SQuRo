@@ -1,5 +1,6 @@
 wandb/
 logs/
+**/turn_data/
 onnx/
 videos/
 __pycache__/
