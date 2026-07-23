@@ -12,23 +12,19 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (5.0, 5.0, 5.0),
+    "weight_track_path":        (2.0, 2.0, 4.0),
     "weight_smooth_L1_leg":     (0.1, 0.2, 0.2),
     "weight_smooth_L1_spn":     (0.1, 0.2, 0.2),
     "weight_smooth_L2_leg":     (0.1, 0.2, 0.2),
     "weight_smooth_L2_spn":     (0.1, 0.2, 0.2),
     "weight_energy":            (0.1, 0.2, 0.2),
 
-    # 路径跟踪权重（后期逐渐增强，替代瞬时omg跟踪）
-    "weight_path_base":         (0.5, 1.0, 2.0),
-    "weight_path_fbody":        (0.5, 1.0, 2.0),
-    "weight_path_hbody":        (0.2, 0.5, 1.0),
-    "sigma_path_track":         (20, 20, 20),
-
     "sigma_mimic_pos":          (5.0, 5.0, 5.0),
     "sigma_mimic_vel":          (0.1, 0.1, 0.1),
     "sigma_track_vel":          (50, 50, 50),
     "sigma_track_vyz":          (50, 50, 50),
     "sigma_track_omg":          (20, 20, 20),
+    "sigma_track_path":         (20, 20, 20),
 }
 
 
