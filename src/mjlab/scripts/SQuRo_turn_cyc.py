@@ -126,7 +126,7 @@ def inverse_kinematics(target_pos, is_front=True):
 
 # ==================== 配置参数 ====================
 
-OUTPUT_DIR = MJLAB_SRC_PATH / "scripts" / "turn_data"
+OUTPUT_DIR = MJLAB_SRC_PATH / "scripts" / "Data"
 OUTPUT_CSV_PATH = OUTPUT_DIR / "Turn_Cyc_Min.csv"
 TOTAL_TIME = 5.0
 START_TIME = 0.5
