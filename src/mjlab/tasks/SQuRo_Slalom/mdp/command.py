@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import torch
 from mjlab.entity import Entity
 from mjlab.managers import CommandTermCfg
@@ -111,14 +112,14 @@ class SlalomCommand(CommandTerm):
         kappa_range = get_curvature_range(stage, step_counter)
         return torch.rand(n, device=self.device) * (kappa_range[1] - kappa_range[0]) + kappa_range[0]
 
+    # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        """仅在 reset 时调用，每个 episode 固定曲率不变"""
         n = len(env_ids)
         current_step = self._env.common_step_counter
         self.curvature_command[env_ids] = self._get_curvature(n, current_step)
 
+    # 定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）
     def _resample_command(self, env_ids: torch.Tensor) -> None:
-        """定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）"""
         n = len(env_ids)
         self.vel_command[env_ids] = self._get_velocity(n)
         self.height_f_command[env_ids] = self._get_height_f(n)
@@ -127,8 +128,8 @@ class SlalomCommand(CommandTerm):
         # 记录 episode 起始位置（用于可视化期望轨迹）
         self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
+    # 重置时额外采样曲率
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
-        """重置时额外采样曲率"""
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_curvature(env_ids)
@@ -152,42 +153,21 @@ class SlalomCommand(CommandTerm):
         batch = visualizer.env_idx
         if batch >= self.num_envs:
             return
-        base_pos = self.robot.data.root_link_pos_w[batch].cpu().numpy()
         if torch.norm(self.robot.data.root_link_pos_w[batch]) < 1e-6:
             return
 
-        scale = self.cfg.viz.scale
-        z_offset = self.cfg.viz.z_offset
-        cmd_start = base_pos + [0, 0, z_offset]
-
-        # 线速度命令箭头（蓝色）
-        cmd_vel = torch.tensor([self.vel_command[batch].item(), 0.0, 0.0])
-        visualizer.add_arrow(
-            cmd_start, cmd_start + cmd_vel.cpu().numpy() * scale,
-            color=(0.2, 0.2, 0.8, 0.8), width=0.01,
-        )
-        # 实际速度箭头（绿色）
-        actual_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
-        visualizer.add_arrow(
-            cmd_start, cmd_start + actual_vel * scale,
-            color=(0.2, 0.8, 0.2, 0.8), width=0.01,
-        )
-
         # 期望轨迹（基于起始位置 + 曲率命令）
-        self._draw_path(visualizer, batch, z_offset)
+        self._draw_path(visualizer, batch, self.cfg.viz.z_offset)
 
+    # 绘制期望轨迹：直行=射线, 转弯=圆弧
     def _draw_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
-        """绘制期望轨迹：直行=射线, 转弯=圆弧"""
-        import math
         curvature = self.curvature_command[batch].item()
         vel = self.vel_command[batch].item()
         start = self._start_positions[batch].cpu().numpy()
-        # body+X heading → 物理前向需要 -π/2, 这里用 world +X 方向
-        # 起始朝向简化为 world +X (物理前向)
         heading_0 = 0.0
 
         n_pts = 50
-        t_max = 5.0  # 显示未来5秒的轨迹
+        t_max = 20.0  # 显示未来5秒的轨迹
         dt_path = t_max / n_pts
         radius = 0.008  # 轨迹点小球半径
 
@@ -225,7 +205,7 @@ class SlalomCommandCfg(CommandTermCfg):
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
-    fixed_curvature: Optional[float] = None  # 固定曲率 κ=1/R (m⁻¹)，用于测试
+    fixed_curvature: Optional[float] = None
 
     @dataclass
     class VizCfg:
