@@ -97,9 +97,9 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     commands: dict[str, CommandTermCfg] = {
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
-            resampling_time_range=(4.0, 6.0),
+            resampling_time_range=(20.0, 30.0),
             debug_vis=play,
-            viz=mdp.SlalomCommandCfg.VizCfg(z_offset=0.0, scale=1.0),
+            viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
         )
     }
 
