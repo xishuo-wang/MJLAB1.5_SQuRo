@@ -12,8 +12,9 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER
-from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
+
 
 
 # 任务配置
@@ -38,7 +39,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = None  # κ=1/R (m⁻¹), None=课程采样
+    fixed_curvature: float | None = 2
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -70,8 +71,6 @@ def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
 
 
 class JointDataRecorder:
-    """SQuRo 关节数据记录器 — 记录 12 个驱动关节 + 4 足足端 + 基座状态"""
-
     def __init__(self, log_dir, video_name, num_envs=1):
         self.log_dir = log_dir
         self.video_name = video_name
@@ -109,7 +108,7 @@ class JointDataRecorder:
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
         record = {'step': float(self.step_count)}
 
-        # 记录动作（12维）
+        # 记录动作（保持不变）
         if actions is not None:
             for action_idx in range(actions.shape[1]):
                 if action_idx < len(self.action_names):
@@ -118,12 +117,11 @@ class JointDataRecorder:
                 else:
                     record[f'action_{action_idx}'] = float(actions[0, action_idx].item())
 
-        # 直接读取 MuJoCo 仿真数据
         unwrapped = env.unwrapped
         asset = unwrapped.scene["robot"]
         env_idx = 0
 
-        # 足部接触力
+        # 足部接触力（保持不变）
         contact_sensor = unwrapped.scene["feet_ground_contact"]
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)
         for i, name in enumerate(self.foot_names):
@@ -133,7 +131,7 @@ class JointDataRecorder:
             force_mag = torch.norm(feet_contact[env_idx, i * 3: i * 3 + 3]).item()
             record[f'contact_{name}_mag'] = force_mag
 
-        # 足端位置（世界坐标系）
+        # 足端位置（保持不变）
         if self._foot_site_ids is None:
             self._foot_site_ids, _ = asset.find_sites(self.foot_site_names, preserve_order=True)
         foot_pos = asset.data.site_pos_w[env_idx, self._foot_site_ids]
@@ -142,42 +140,52 @@ class JointDataRecorder:
             record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
             record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
 
-        # 关节位置（相对默认值）
+        # 关节状态（保持不变）
         joint_pos_all = asset.data.joint_pos - asset.data.default_joint_pos
         joint_pos = joint_pos_all[env_idx][self.actuator_joint_indices]
-
-        # 关节速度（相对默认值）
         joint_vel_all = asset.data.joint_vel - asset.data.default_joint_vel
         joint_vel = joint_vel_all[env_idx][self.actuator_joint_indices]
-
-        # 关节加速度（绝对）
         joint_acc_all = asset.data.joint_acc
         joint_acc = joint_acc_all[env_idx][self.actuator_joint_indices]
-
-        # 执行器力（12个驱动执行器）
         actuator_force = asset.data.actuator_force[env_idx]
 
-        # 基座位置（世界坐标系）
+        # 基座位置（保持不变）
         base_pos = asset.data.root_link_pos_w[env_idx]
-
-        # 基座线速度（世界坐标系）
         base_lin_vel_w = asset.data.root_link_lin_vel_w[env_idx]
-
-        # 基座角速度（世界坐标系）
         base_ang_vel_w = asset.data.root_link_ang_vel_w[env_idx]
 
-        # 朝向角
-        heading = asset.data.heading_w[env_idx]
+        # F_body 偏航角（find_bodies 返回 (ids, names)，取 ids 第一个元素）
+        f_body_id = self._f_body_id if hasattr(self, '_f_body_id') else None
+        if f_body_id is None:
+            try:
+                f_body_ids, _ = asset.find_bodies("F_body_Link", preserve_order=True)
+                if f_body_ids is not None and len(f_body_ids) > 0:
+                    self._f_body_id = f_body_ids[0]  # type: ignore[union-attr]
+                else:
+                    self._f_body_id = None
+            except Exception:
+                self._f_body_id = None
 
-        # 参考关节位置和速度（从预计算表查表获取）
+        f_body_heading = 0.0
+        if self._f_body_id is not None:
+            quat = asset.data.body_link_quat_w[env_idx, self._f_body_id]  # [w,x,y,z]
+            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+            sin_h = 2.0 * (w * z + x * y)
+            cos_h = 1.0 - 2.0 * (y * y + z * z)
+            f_body_heading = float(torch.atan2(sin_h, cos_h).item())
+        
+        record['f_body_heading'] = f_body_heading
+
+        # 基座朝向（原有的 base heading，可保留供参考）
+        heading = asset.data.heading_w[env_idx]
+        record['heading'] = float(heading.item())
+
+        # 控制命令等（保持不变）
         ref_joint_pos, ref_joint_vel = get_reference_joint_state(unwrapped)
         ref_joint_pos = ref_joint_pos[env_idx]
         ref_joint_vel = ref_joint_vel[env_idx]
-
-        # 控制命令（5维 slalom_cmd）
         command = unwrapped.command_manager.get_command("slalom_cmd")[env_idx]
 
-        # 记录12个驱动关节的所有状态
         for i, name in enumerate(self.joint_names):
             record[f'{name}_pos'] = float(joint_pos[i].item())
             record[f'{name}_vel'] = float(joint_vel[i].item())
@@ -186,39 +194,25 @@ class JointDataRecorder:
             record[f'{name}_ref_pos'] = float(ref_joint_pos[i].item())
             record[f'{name}_ref_vel'] = float(ref_joint_vel[i].item())
 
-        # 基座位置
         record['base_pos_x'] = float(base_pos[0].item())
         record['base_pos_y'] = float(base_pos[1].item())
         record['base_pos_z'] = float(base_pos[2].item())
-
-        # 基座线速度
         record['base_lin_vel_x'] = float(base_lin_vel_w[0].item())
         record['base_lin_vel_y'] = float(base_lin_vel_w[1].item())
         record['base_lin_vel_z'] = float(base_lin_vel_w[2].item())
-
-        # 基座角速度
         record['base_ang_vel_x'] = float(base_ang_vel_w[0].item())
         record['base_ang_vel_y'] = float(base_ang_vel_w[1].item())
         record['base_ang_vel_z'] = float(base_ang_vel_w[2].item())
 
-        # 朝向
-        record['heading'] = float(heading.item())
-
-        # 控制命令（5维）
         command_names = [
-            'vel_command_x',
-            'height_f_command',
-            'height_h_command',
-            'gait_freq_command',
-            'curvature_command',
+            'vel_command_x', 'height_f_command', 'height_h_command',
+            'gait_freq_command', 'curvature_command',
         ]
         for i, name in enumerate(command_names):
             record[name] = float(command[i].item())
 
-        # 奖励和终止标志
         if rewards is not None:
             record['reward'] = float(rewards[0].item()) if torch.is_tensor(rewards) else float(rewards[0])
-
         if dones is not None:
             record['done'] = float(dones[0].item() if torch.is_tensor(dones) else float(dones[0]))
 
