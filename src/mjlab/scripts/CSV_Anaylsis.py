@@ -13,7 +13,7 @@ from scipy.signal import welch, savgol_filter, find_peaks
 # ==================================================================================================
 # 文件路径配置
 XML_PATH = r"D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\SQuRo\xmls\SQuRo.xml"
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\2026-07-22_19-20-10\videos\SQuRo_Slalom_2999-curv2.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\2026-07-23_14-59-42\videos\SQuRo_Slalom_2999-curv-5.csv"
 
 # 控制时间配置
 TIMESTEP = 0.005
@@ -22,7 +22,7 @@ DT = TIMESTEP * DECIMATION
 
 # 分析时间配置
 START_TIME = 0.5
-END_TIME = 20.0
+END_TIME = 5.0
 TIME_RANGE = (START_TIME, END_TIME)
 
 # 周期配置
@@ -36,8 +36,8 @@ ACTION_SCALES = {
     "FR_shoulder": 0.3, "FR_elbow": 0.3,
     "HL_hip": 0.3, "HL_knee": 0.3,
     "HR_hip": 0.3, "HR_knee": 0.3,
-    "F_spine1": 0.1, "H_spine1": 0.1,
-    "F_body": 0.1, "H_body": 0.1,
+    "F_spine1": 0.3, "F_body": 0.3,
+    "H_spine1": 0.3, "H_body": 0.3,
 }
 ACTUATED_JOINTS = list(ACTION_SCALES.keys())
 
@@ -878,16 +878,16 @@ class CSVDataAnalyzer:
             print("分析区间内无数据！")
             return
 
-        # -使用 F_body 的偏航角计算前进速度
+        # F_body heading = body+X 方向(≈90°) → 物理前向需要 -π/2
         if 'f_body_heading' in self.motion_df.columns:
-            heading_col = 'f_body_heading'
+            forward_heading = self.motion_df['f_body_heading'] - np.pi / 2
         else:
             print("[警告] 未找到 f_body_heading 列，回退使用基座 heading")
-            heading_col = 'heading'
+            forward_heading = self.motion_df['heading'] - np.pi / 2
 
         self.motion_df['forward_speed'] = (
-            self.motion_df['base_lin_vel_x'] * np.cos(self.motion_df[heading_col]) +
-            self.motion_df['base_lin_vel_y'] * np.sin(self.motion_df[heading_col])
+            self.motion_df['base_lin_vel_x'] * np.cos(forward_heading) +
+            self.motion_df['base_lin_vel_y'] * np.sin(forward_heading)
         )
 
         self.spine_data = calculate_spine_data(self.motion_df)
