@@ -117,6 +117,8 @@ class SlalomCommand(CommandTerm):
         n = len(env_ids)
         current_step = self._env.common_step_counter
         self.curvature_command[env_ids] = self._get_curvature(n, current_step)
+        # 记录轨迹起始位置
+        self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
     # 定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -125,15 +127,12 @@ class SlalomCommand(CommandTerm):
         self.height_f_command[env_ids] = self._get_height_f(n)
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
-        # 记录 episode 起始位置（用于可视化期望轨迹）
-        self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
-    # 重置时额外采样曲率
+    # 重置时额外采样曲率 + 记录轨迹起始位置
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_curvature(env_ids)
-            self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
         return extras
 
     def _update_command(self) -> None:
@@ -197,7 +196,7 @@ class SlalomCommand(CommandTerm):
 @dataclass(kw_only=True)
 class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
-    resampling_time_range: Tuple[float, float] = (4.0, 6.0)
+    resampling_time_range: Tuple[float, float] = (20.0, 30.0)
     debug_vis: bool = False
 
     # 固定值（None=使用课程采样，设值可覆盖）
