@@ -51,8 +51,10 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # F_body 速度和朝向（同源一致，避免 base_Link 与 F_body 的方向不匹配）
-    f_body_heading = _get_f_body_heading(env)
+    # F_body 物理前向 = body +Y (不是 body +X)
+    # body +X → heading=90°(world +Y), body +Y → heading=0°(world +X=前向)
+    # 所以 forward_heading = f_body_heading - π/2
+    f_body_heading = _get_f_body_heading(env) - (torch.pi / 2)
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # type: ignore[call-overload]  # [N,3]
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
     lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
