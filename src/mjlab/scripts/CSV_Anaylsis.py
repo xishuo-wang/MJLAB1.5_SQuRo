@@ -1,3 +1,4 @@
+import textwrap
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,11 +10,10 @@ from typing import List, Tuple, Optional, Union
 from scipy.signal import welch, savgol_filter, find_peaks
 
 
-
 # ==================================================================================================
 # 文件路径配置
 XML_PATH = r"D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\SQuRo\xmls\SQuRo.xml"
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\2026-07-22_19-20-10\videos\SQuRo_Slalom_2999-curv5.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\2026-07-22_19-20-10\videos\SQuRo_Slalom_2999-curv2.csv"
 
 # 控制时间配置
 TIMESTEP = 0.005
@@ -22,7 +22,7 @@ DT = TIMESTEP * DECIMATION
 
 # 分析时间配置
 START_TIME = 0.5
-END_TIME = 5.0
+END_TIME = 20.0
 TIME_RANGE = (START_TIME, END_TIME)
 
 # 周期配置
@@ -353,9 +353,11 @@ def extract_contact_forces_all(motion_df: pd.DataFrame) -> Optional[dict]:
 
 
 
-# 计算总指标
+# 计算总指标（适配转弯任务，基于路径长度、F-body前进速度、曲率）
 def calculate_metrics(motion_df: pd.DataFrame, spine_data: dict) -> dict:
     motion_df = motion_df.copy()
+    
+    # 计算各关节的瞬时功率（绝对值）
     motion_df['power'] = 0.0
     for joint in ACTUATED_JOINTS:
         vel_col = f"{joint}_vel"
@@ -363,38 +365,67 @@ def calculate_metrics(motion_df: pd.DataFrame, spine_data: dict) -> dict:
         if vel_col in motion_df.columns and torque_col in motion_df.columns:
             motion_df['power'] += np.abs(motion_df[vel_col] * motion_df[torque_col])
 
+    # 总功、时间
     total_work = motion_df['power'].sum() * DT
-    displacement = motion_df['base_pos_x'].iloc[-1] - motion_df['base_pos_x'].iloc[0]
     total_time = motion_df['time'].iloc[-1] - motion_df['time'].iloc[0]
 
-    if abs(displacement) > 0 and total_time > 0:
-        vel_avg = displacement / total_time
-        work_avg = total_work / total_time
-        cot_avg = total_work / (ROBOT_MASS * GRAVITY * abs(displacement))
-    else:
-        vel_avg = 0.0; work_avg = 0.0; cot_avg = 0.0
+    # 路径长度（实际行驶距离）
+    dx = np.diff(motion_df['base_pos_x'])
+    dy = np.diff(motion_df['base_pos_y'])
+    path_length = np.sum(np.sqrt(dx**2 + dy**2))
 
-    max_velocity = motion_df['base_lin_vel_x'].abs().max()
+    # 前进速度统计（F‑body 朝向方向）
+    forward_speed = motion_df['forward_speed']
+    vel_avg = forward_speed.mean()
+    max_forward_speed = forward_speed.abs().max()
+
+    # ---- 整体曲率（稳健指标） ----
+    heading_col = 'f_body_heading' if 'f_body_heading' in motion_df.columns else 'heading'
+    heading_vals = np.asarray(motion_df[heading_col].values, dtype=np.float64)
+    heading_unwrapped = np.unwrap(heading_vals)
+    delta_heading = heading_unwrapped[-1] - heading_unwrapped[0]
+    overall_curvature = abs(delta_heading) / path_length if path_length > 0 else 0.0
+
+    # ---- 瞬时曲率（保留作参考，但标记为受低速噪声影响） ----
+    ang_vel_z = motion_df['base_ang_vel_z'].abs()
+    eps = 1e-6
+    curvature_instant = ang_vel_z / (forward_speed.abs() + eps)
+    mean_abs_curvature_instant = curvature_instant.mean()
+    max_curvature_instant = curvature_instant.max()
+
+    # COT（单位距离能耗）
+    if path_length > 0:
+        cot_avg = total_work / (ROBOT_MASS * GRAVITY * path_length)
+    else:
+        cot_avg = float('inf')
 
     # 打印核心指标
+    print(f"f_body_heading 首尾: {heading_vals[0]:.6f} -> {heading_vals[-1]:.6f}")
     print("=" * 60)
     print(f"总机械功: {total_work:.6f} J")
-    print(f"平均功率: {work_avg:.6f} W")
-    print(f"总位移: {displacement:.6f} m")
+    print(f"平均功率: {total_work / total_time:.6f} W")
+    print(f"路径总长: {path_length:.6f} m")
     print(f"运动时间: {total_time:.3f} s")
-    print(f"平均速度: {vel_avg:.6f} m/s")
+    print(f"平均前进速度: {vel_avg:.6f} m/s")
+    print(f"最大前进速度: {max_forward_speed:.6f} m/s")
     print(f"平均 COT: {cot_avg:.6f}")
+    print(f"整体曲率 (Δheading / path): {overall_curvature:.4f} rad/m")
+    print(f"瞬时平均曲率 (含低速噪声): {mean_abs_curvature_instant:.4f} rad/m")
+    print(f"最大瞬时曲率: {max_curvature_instant:.4f} rad/m")
     print(f"侧摆主频: {spine_data['yaw_freq']:.3f} Hz" if spine_data['yaw_freq'] else "侧摆主频: 未检测到")
     print(f"俯仰主频: {spine_data['pitch_freq']:.3f} Hz" if spine_data['pitch_freq'] else "俯仰主频: 未检测到")
 
     return {
         'cot_avg': cot_avg,
         'vel_avg': vel_avg,
-        'max_velocity': max_velocity,
+        'max_forward_speed': max_forward_speed,
         'total_work': total_work,
-        'work_avg': work_avg,
-        'displacement': displacement,
+        'work_avg': total_work / total_time,
+        'path_length': path_length,
         'total_time': total_time,
+        'overall_curvature': overall_curvature,
+        'mean_abs_curvature_instant': mean_abs_curvature_instant,
+        'max_curvature_instant': max_curvature_instant,
     }
 
 
@@ -444,50 +475,55 @@ def precompute_foot_cycle_average(motion_df: pd.DataFrame) -> dict:
 
 
 
-# 页面0: 基座位置分析
+# 页面0: 基座水平轨迹分析（适配转弯任务）
 def plot_base_analysis(motion_df, ax, metrics: dict):
     ax.clear()
-    ax.plot(motion_df['time'], motion_df['base_pos_x'], 'b-', linewidth=2, label='X位置')
-    ax.set_xlabel('时间 (秒)', fontsize=12)
-    ax.set_ylabel('基座X位置 (米)', fontsize=12, color='b')
-    ax.tick_params(axis='y', labelcolor='b')
+
+    # 绘制 XY 轨迹
+    x = motion_df['base_pos_x'].values
+    y = motion_df['base_pos_y'].values
+    time = motion_df['time'].values
+
+    # 用颜色表示时间进展
+    points = ax.scatter(x, y, c=time, cmap='plasma', s=10, alpha=0.7, edgecolors='none')
+    ax.plot(x, y, 'k-', linewidth=0.5, alpha=0.3)  # 淡淡连线
+
+    # 标记起点和终点
+    ax.scatter(x[0], y[0], marker='o', color='green', s=100, zorder=5, label='起点')
+    ax.scatter(x[-1], y[-1], marker='s', color='red', s=100, zorder=5, label='终点')
+
+    ax.set_xlabel('X 位置 (m)', fontsize=12)
+    ax.set_ylabel('Y 位置 (m)', fontsize=12)
+    ax.set_aspect('equal', adjustable='datalim')  # 保证X、Y轴同比例
     ax.grid(True, alpha=0.3)
-    ax2 = ax.twinx()
-    z_pos = motion_df['base_pos_z'].values
-    ax2.plot(motion_df['time'], z_pos, 'r-', linewidth=1.5, alpha=0.8, label='Z高度')
-    ax2.set_ylabel('基座Z高度 (米)', fontsize=12, color='r')
-    ax2.tick_params(axis='y', labelcolor='r')
-    z_min = float(np.min(z_pos)); 
-    z_max = float(np.max(z_pos))
-    z_mean = float(np.mean(z_pos)); 
-    displacement = metrics['displacement']
-    stats_text = f"""
-    总仿真步数: {len(motion_df)} 步
-    分析时间 ({START_TIME}s-{END_TIME}s):
-    ---------------------
-    前进距离: {displacement:.3f} 米
-    平均速度: {metrics['vel_avg']:.3f} 米/秒
-    最大速度: {metrics['max_velocity']:.3f} 米/秒
-    平均COT: {metrics['cot_avg']:.6f}
-    ---------------------
-    Z高度范围: [{z_min:.4f}, {z_max:.4f}] 米
-    Z平均高度: {z_mean:.4f} 米
-    Z高度波动: {z_max - z_min:.4f} 米
-    ---------------------
-    质量: {ROBOT_MASS} kg
-    重力加速度: {GRAVITY} m/s^2
-    """
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=STATS_FONTSIZE,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor=STATS_BGCOLOR, alpha=STATS_ALPHA))
-    lines1, labels1 = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
-    ax.set_title(f'基座位置分析 ({START_TIME}-{END_TIME}秒)', fontsize=13, fontweight='bold')
-    ax.set_xlim(TIME_RANGE[0], TIME_RANGE[1])
+    ax.legend(loc='upper left')
+    cbar = ax.figure.colorbar(points, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('时间 (s)', fontsize=10)
+
+    # 统计信息文本框
+    stats_text = textwrap.dedent(f"""\
+        总仿真步数: {len(motion_df)} 步
+        分析时间 ({START_TIME}s-{END_TIME}s):
+        ─────────────
+        路径总长: {metrics['path_length']:.3f} m
+        平均前进速度: {metrics['vel_avg']:.3f} m/s
+        最大前进速度: {metrics['max_forward_speed']:.3f} m/s
+        平均 COT: {metrics['cot_avg']:.6f}
+        ─────────────
+        平均曲率: {metrics['overall_curvature']:.4f} rad/m
+        瞬时平均: {metrics['mean_abs_curvature_instant']:.4f} rad/m)
+        ─────────────
+        质量: {ROBOT_MASS} kg
+        重力加速度: {GRAVITY} m/s^2""")
+    ax.text(0.8, 0.95, stats_text, transform=ax.transAxes,
+            fontsize=STATS_FONTSIZE+2, verticalalignment='top',
+            bbox=dict(boxstyle='round,pad=1', facecolor=STATS_BGCOLOR, alpha=STATS_ALPHA))
+
+    ax.set_title(f'基座水平轨迹 ({START_TIME}-{END_TIME}s)', fontsize=13, fontweight='bold')
 
 
 
-# 页面1-3: 关节数据分析
+# 页面1-3: 关节数据分析（保持不变）
 def plot_joint_analysis(motion_df, axs, joint_indices):
     for i, joint_idx in enumerate(joint_indices):
         if i >= len(axs):
@@ -551,7 +587,7 @@ def plot_joint_analysis(motion_df, axs, joint_indices):
 
 
 
-# 页面4: 脊柱频谱分析
+# 页面4: 脊柱频谱分析（保持不变）
 def plot_spine_spectrum(spine_data: dict, ax):
     ax.clear()
     gait_freq = spine_data.get('gait_freq', 1.0)
@@ -601,7 +637,7 @@ def plot_spine_spectrum(spine_data: dict, ax):
 
 
 
-# 页面5: 地反力分析
+# 页面5: 地反力分析（保持不变）
 def plot_ground_reaction_forces(forces: dict, impulse_data: dict, ax):
     ax.clear()
     time = np.linspace(TIME_RANGE[0], TIME_RANGE[1], len(next(iter(forces.values()))['x']))  # 从 forces 推断时间长度，这里假设所有力长度一致
@@ -662,7 +698,7 @@ def plot_ground_reaction_forces(forces: dict, impulse_data: dict, ax):
 
 
 
-# 页面6: 足端轨迹分析
+# 页面6: 足端轨迹分析（保持不变）
 def plot_foot_trajectory(motion_df, ax, cycle_avg_cache: dict, stance_duty_data: Optional[dict] = None):
     ax.clear()
     if len(motion_df) == 0:
@@ -733,7 +769,7 @@ def plot_foot_trajectory(motion_df, ax, cycle_avg_cache: dict, stance_duty_data:
 
 
 
-# 页面7：支撑相分析
+# 页面7：支撑相分析（保持不变）
 def plot_stance_phase(forces: dict, ax):
     ax.clear()
     if forces is None:
@@ -831,17 +867,28 @@ class CSVDataAnalyzer:
             return
 
         # 构建新列字典
-        new_columns = {
-            'time': df['step'] * DT,
-        }
+        new_columns = {'time': df['step'] * DT,}
         for name in FOOT_NAMES:
             new_columns[f'foot_{name}_rx'] = df[f'foot_{name}_x'] - df['base_pos_x']
 
         df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
+        self.motion_df_full = df.copy()
         self.motion_df = df[(df['time'] >= START_TIME) & (df['time'] <= END_TIME)].copy()
         if len(self.motion_df) == 0:
             print("分析区间内无数据！")
             return
+
+        # -使用 F_body 的偏航角计算前进速度
+        if 'f_body_heading' in self.motion_df.columns:
+            heading_col = 'f_body_heading'
+        else:
+            print("[警告] 未找到 f_body_heading 列，回退使用基座 heading")
+            heading_col = 'heading'
+
+        self.motion_df['forward_speed'] = (
+            self.motion_df['base_lin_vel_x'] * np.cos(self.motion_df[heading_col]) +
+            self.motion_df['base_lin_vel_y'] * np.sin(self.motion_df[heading_col])
+        )
 
         self.spine_data = calculate_spine_data(self.motion_df)
         self.metrics = calculate_metrics(self.motion_df, self.spine_data)
@@ -947,7 +994,7 @@ class CSVDataAnalyzer:
             target.set_visible(True); target.set_frame_on(True)
 
         if self.current_page == 0:
-            plot_base_analysis(self.motion_df, target, self.metrics) # type: ignore
+            plot_base_analysis(self.motion_df_full, target, self.metrics) # type: ignore
         elif self.current_page == 1:
             plot_joint_analysis(self.motion_df, target, [0,1,2,3])
         elif self.current_page == 2:
