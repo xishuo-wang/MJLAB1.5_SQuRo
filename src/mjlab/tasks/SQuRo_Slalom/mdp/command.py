@@ -69,6 +69,9 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
 
+        # 可视化：记录每环境 episode 起始位置（用于绘制期望轨迹）
+        self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
+
         # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
@@ -121,12 +124,15 @@ class SlalomCommand(CommandTerm):
         self.height_f_command[env_ids] = self._get_height_f(n)
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
+        # 记录 episode 起始位置（用于可视化期望轨迹）
+        self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         """重置时额外采样曲率"""
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_curvature(env_ids)
+            self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
         return extras
 
     def _update_command(self) -> None:
@@ -166,6 +172,46 @@ class SlalomCommand(CommandTerm):
             cmd_start, cmd_start + actual_vel * scale,
             color=(0.2, 0.8, 0.2, 0.8), width=0.01,
         )
+
+        # 期望轨迹（基于起始位置 + 曲率命令）
+        self._draw_path(visualizer, batch, z_offset)
+
+    def _draw_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
+        """绘制期望轨迹：直行=射线, 转弯=圆弧"""
+        import math
+        curvature = self.curvature_command[batch].item()
+        vel = self.vel_command[batch].item()
+        start = self._start_positions[batch].cpu().numpy()
+        # body+X heading → 物理前向需要 -π/2, 这里用 world +X 方向
+        # 起始朝向简化为 world +X (物理前向)
+        heading_0 = 0.0
+
+        n_pts = 50
+        t_max = 5.0  # 显示未来5秒的轨迹
+        dt_path = t_max / n_pts
+        radius = 0.008  # 轨迹点小球半径
+
+        for i in range(n_pts + 1):
+            t_i = i * dt_path
+            if abs(curvature) < 1e-6:
+                # 直行
+                x_i = start[0] + vel * t_i * math.cos(heading_0)
+                y_i = start[1] + vel * t_i * math.sin(heading_0)
+            else:
+                # 圆弧: R=1/κ, ω=κ·v
+                R = 1.0 / curvature
+                omega = curvature * vel
+                dtheta = omega * t_i
+                x_i = start[0] + R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
+                y_i = start[1] - R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
+
+            import numpy as np
+            pt = np.array([x_i, y_i, start[2] + z_offset])
+            visualizer.add_sphere(
+                center=pt, radius=radius,
+                color=(1.0, 0.6, 0.0, 0.6),  # 橙色半透明
+                label=f"path_{i}",
+            )
 
 
 @dataclass(kw_only=True)
