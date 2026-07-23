@@ -30,14 +30,14 @@ T = 1.0
 POINTS_PER_CYCLE = int(T / DT)
 CONTACT_THRESHOLD = 0.00
 
-# 关节配置
+# 关节配置 — 顺序与 entity actuator（关节树深度优先）一致
 ACTION_SCALES = {
+    "F_spine1": 0.3, "F_body": 0.3,
     "FL_shoulder": 0.3, "FL_elbow": 0.3,
     "FR_shoulder": 0.3, "FR_elbow": 0.3,
+    "H_spine1": 0.3, "H_body": 0.3,
     "HL_hip": 0.3, "HL_knee": 0.3,
     "HR_hip": 0.3, "HR_knee": 0.3,
-    "F_spine1": 0.3, "F_body": 0.3,
-    "H_spine1": 0.3, "H_body": 0.3,
 }
 ACTUATED_JOINTS = list(ACTION_SCALES.keys())
 

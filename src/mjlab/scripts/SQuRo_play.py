@@ -79,26 +79,18 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 12 个驱动关节（按 _ACTUATED_JOINT_NAMES 执行器顺序）
+        # 12 个驱动关节 — 顺序必须与 entity actuator 顺序一致（关节树深度优先）
         self.joint_names = [
+            'F_spine1', 'F_body',
             'FL_shoulder', 'FL_elbow',
             'FR_shoulder', 'FR_elbow',
+            'H_spine1', 'H_body',
             'HL_hip', 'HL_knee',
             'HR_hip', 'HR_knee',
-            'F_spine1', 'F_body',
-            'H_spine1', 'H_body',
         ]
-        # 使用 ModelIndices 解析后的实体级关节索引，而非硬编码 range(12)
         self._joint_ids_resolved = False
 
-        self.action_names = [
-            'FL_shoulder', 'FL_elbow',
-            'FR_shoulder', 'FR_elbow',
-            'HL_hip', 'HL_knee',
-            'HR_hip', 'HR_knee',
-            'F_spine1', 'F_body',
-            'H_spine1', 'H_body',
-        ]
+        self.action_names = self.joint_names  # 与 joint_names 同序
 
         # 足名称（与接触传感器 foot_names 顺序一致：FR, FL, HR, HL）
         self.foot_names = ['FR', 'FL', 'HR', 'HL']
