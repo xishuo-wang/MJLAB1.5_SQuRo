@@ -107,15 +107,26 @@ class SlalomCommand(CommandTerm):
         kappa_range = get_curvature_range(stage, step_counter)
         return torch.rand(n, device=self.device) * (kappa_range[1] - kappa_range[0]) + kappa_range[0]
 
-    def _resample_command(self, env_ids: torch.Tensor) -> None:
+    def _resample_curvature(self, env_ids: torch.Tensor) -> None:
+        """仅在 reset 时调用，每个 episode 固定曲率不变"""
         n = len(env_ids)
         current_step = self._env.common_step_counter
+        self.curvature_command[env_ids] = self._get_curvature(n, current_step)
 
+    def _resample_command(self, env_ids: torch.Tensor) -> None:
+        """定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）"""
+        n = len(env_ids)
         self.vel_command[env_ids] = self._get_velocity(n)
         self.height_f_command[env_ids] = self._get_height_f(n)
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
-        self.curvature_command[env_ids] = self._get_curvature(n, current_step)
+
+    def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
+        """重置时额外采样曲率"""
+        extras = super().reset(env_ids)
+        if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
+            self._resample_curvature(env_ids)
+        return extras
 
     def _update_command(self) -> None:
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()

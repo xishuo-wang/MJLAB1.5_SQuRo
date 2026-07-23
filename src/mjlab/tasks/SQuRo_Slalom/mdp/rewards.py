@@ -78,22 +78,19 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 角速度跟踪奖励（ω_cmd = κ_cmd × v_cmd）
+# 角速度跟踪奖励（ω_cmd = κ_cmd × v_cmd, 用 F_body 角速度避免万向节中心震荡）
 def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算角速度误差
-    actual_omega_z = asset.data.root_link_ang_vel_w[:, 2]
+    # F_body_Link 世界系角速度 Z 分量 → 前体偏航率
+    actual_omega_z = asset.data.body_link_ang_vel_w[:, _MODEL_INDICES.f_body_id, 2]  # type: ignore[call-overload]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature_cmd = cmd_term.command[:, 4]
     vel_cmd = cmd_term.command[:, 0]
     omega_cmd = curvature_cmd * vel_cmd
     error = actual_omega_z - omega_cmd
-    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_track_omg")
     weight = get_curriculum_reward_weight(env, "weight_track_omg")
-    # 计算奖励
     reward = torch.exp(-sigma * error ** 2)
-    # 记录日志
     env.extras["log"]["Data/omg_actual"] = actual_omega_z.mean().item()
     env.extras["log"]["Data/omg_cmd"] = omega_cmd.mean().item()
     return reward * weight
