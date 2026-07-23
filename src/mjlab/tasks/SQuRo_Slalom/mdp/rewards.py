@@ -55,17 +55,25 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     f_body_heading = _get_f_body_heading(env)
     vel_w = asset.data.root_link_lin_vel_w
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
+    lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
+    vertical_speed = vel_w[:, 2]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     v_cmd = cmd_term.command[:, 0]
     error = forward_speed - v_cmd
+    error_vy = lateral_speed
+    error_vz = vertical_speed
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_track_vel")
+    weight_yz = get_curriculum_reward_weight(env, "weight_track_vyz")
     sigma = get_curriculum_reward_weight(env, "sigma_track_vel")
+    sigma_yz = get_curriculum_reward_weight(env, "sigma_track_vyz")
     # 计算奖励
     reward = torch.exp(-sigma * error ** 2)
+    r_vel_y = torch.exp(-sigma_yz * error_vy ** 2)
+    r_vel_z = torch.exp(-sigma_yz * error_vz ** 2)
     # 记录日志
     env.extras["log"]["Data/vel_actual"] = forward_speed.mean().item()
-    return reward * weight
+    return reward * weight + (r_vel_y + r_vel_z) * weight_yz
 
 
 
