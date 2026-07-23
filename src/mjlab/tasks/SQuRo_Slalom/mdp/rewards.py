@@ -111,6 +111,25 @@ def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
+# F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
+def compute_head_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 计算朝向误差
+    _, _, _, _, path_heading = _compute_path_ref(env)  # 期望朝向
+    actual_heading = _get_f_body_heading(env) - (torch.pi / 2)  # type: ignore[call-arg]  # 实际物理前向
+    error = actual_heading - path_heading
+    error = torch.atan2(torch.sin(error), torch.cos(error))
+    # 获取课程学习量
+    sigma = get_curriculum_reward_weight(env, "sigma_track_head")
+    weight = get_curriculum_reward_weight(env, "weight_track_head")
+    # 计算奖励
+    reward = torch.exp(-sigma * error ** 2)
+    # 记录日志
+    env.extras["log"]["Data/head_error"] = error.abs().mean().item()
+    return reward * weight
+
+
+
+# =========================================================================================
 # L1 动作平滑惩罚
 def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算动作变化
@@ -197,17 +216,3 @@ def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     env.extras["log"]["Data/path_error"] = ((error_base+error_fbody+error_hbody)/3).mean().item()
     return reward * weight
 
-
-# =========================================================================================
-# F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
-def compute_heading_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    _, _, _, _, path_heading = _compute_path_ref(env)  # 期望朝向
-    actual_heading = _get_f_body_heading(env) - (torch.pi / 2)  # type: ignore[call-arg]  # 实际物理前向
-    error = actual_heading - path_heading
-    # 归一化到 [-π, π]
-    error = torch.atan2(torch.sin(error), torch.cos(error))
-    sigma = get_curriculum_reward_weight(env, "sigma_track_heading")
-    weight = get_curriculum_reward_weight(env, "weight_track_heading")
-    reward = torch.exp(-sigma * error ** 2)
-    env.extras["log"]["Data/heading_error"] = error.abs().mean().item()
-    return reward * weight
