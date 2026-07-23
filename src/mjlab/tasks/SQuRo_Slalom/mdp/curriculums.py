@@ -10,6 +10,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
     "weight_mimic_vel":         (2.5, 2.5, 2.5),
     "weight_track_vel":         (4.0, 4.0, 4.0),
+    "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (2.0, 2.0, 2.0),
     "weight_smooth_L1_leg":     (0.1, 0.2, 0.2),
     "weight_smooth_L1_spn":     (0.1, 0.2, 0.2),
@@ -20,6 +21,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_mimic_pos":          (5.0, 5.0, 5.0),
     "sigma_mimic_vel":          (0.1, 0.1, 0.1),
     "sigma_track_vel":          (50, 50, 50),
+    "sigma_track_vyz":          (100, 100, 100),
     "sigma_track_omg":          (20, 20, 20),
 }
 
