@@ -21,7 +21,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_mimic_pos":          (5.0, 5.0, 5.0),
     "sigma_mimic_vel":          (0.1, 0.1, 0.1),
     "sigma_track_vel":          (50, 50, 50),
-    "sigma_track_vyz":          (100, 100, 100),
+    "sigma_track_vyz":          (50, 50, 50),
     "sigma_track_omg":          (20, 20, 20),
 }
 
