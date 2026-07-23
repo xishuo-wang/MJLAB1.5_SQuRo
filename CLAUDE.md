@@ -49,6 +49,47 @@ src/mjlab/
 - 远程仓库：`https://github.com/xishuo-wang/SQuRo-MJLAB.git`（已迁移，旧 remote 仍可用）
 - 主分支：`main`
 
+## SQuRo 踩坑记录
+
+### 坐标系陷阱：body+X ≠ 物理前向
+
+SQuRo (Mouse) 模型的 body frame 与世界坐标系有 90° 旋转偏移：
+
+```
+世界坐标系:  前=+X, 左=+Y, 上=+Z
+SQuRo body frame (base_Link & F_body_Link):
+  body+X → world +Y (=物理左, heading=90°)
+  body+Y → world +X (base_Link 时=物理前, F_body 时=world -Z!)
+  body+Z → world -Z
+```
+
+**关键后果**: `atan2` 提取的 heading 是 body+X 在世界 XY 平面的方向(=90°)，不代表物理前向(0°)。
+
+**修复**: 所有依赖"前进方向"的投影必须减去 π/2:
+```python
+forward_heading = body_X_heading - torch.pi / 2  # body+X→world+Y → forward→world+X
+forward_speed = vel_x * cos(forward_heading) + vel_y * sin(forward_heading)
+```
+
+**教训**: 使用新机器人模型前，务必用诊断脚本验证 body frame 各轴在世界系的实际指向。诊断代码见 `SQuRo_constants.py` 的 `__main__` 块。
+
+### F_body vs base_Link 选择
+
+SQuRo 脊柱是万向节结构(F_spine1=侧摆, H_spine1=俯仰, F_body/H_body=扭转)。
+脊柱弯曲时 base_Link 处于中心会受两侧拉扯而震荡，因此**所有跟踪应以 F_body_Link 为准**:
+- 速度: `body_link_lin_vel_w[:, f_body_id]`
+- 角速度: `body_link_ang_vel_w[:, f_body_id, 2]`
+- 朝向: F_body 四元数提取 heading
+
+### 曲率命令设计
+
+命令格式 `[vel, h_f, h_h, freq, curvature]`, ω_cmd = curvature × vel_cmd。
+曲率 κ = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行。
+每次 episode reset 时采样一次，episode 内保持不变——让 agent 针对固定转弯半径学习稳态步态。
+
+脊柱参考角: F_spine1 = clamp(-GAIN × ω_cmd, ±0.6), GAIN = L/v = 2.0。
+符号: 实测 F_body_heading = base_heading - F_spine1，左转需 F_spine1<0 → 取负号。
+
 
 
 # Role
