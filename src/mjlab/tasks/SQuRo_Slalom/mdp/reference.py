@@ -172,6 +172,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     omega_cmd = curvature_cmd * vel_cmd
     spine_lateral = torch.clamp(-_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
     ref_pos[:, 8] = spine_lateral     # F_spine1 (侧摆)
+    ref_vel[:, 8] = 0.0               # 脊柱准静态弯曲，参考速度为零
 
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]

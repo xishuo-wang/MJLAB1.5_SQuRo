@@ -72,6 +72,7 @@ class SlalomCommand(CommandTerm):
         # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
+        self._resample_curvature(env_ids)
 
         t_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
