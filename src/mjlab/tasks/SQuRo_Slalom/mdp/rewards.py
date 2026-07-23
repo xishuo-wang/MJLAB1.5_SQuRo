@@ -19,12 +19,18 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
     error = joint_pos - ref_pos
+    error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
+    error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
-    sigma = get_curriculum_reward_weight(env, "sigma_mimic_pos")
+    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
+    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     # 计算奖励
-    mse = torch.mean(error ** 2, dim=1)
-    reward = torch.exp(-sigma * mse)
+    mse_leg = torch.mean(error_leg ** 2, dim=1)
+    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    reward_leg = torch.exp(-sigma_leg * mse_leg)
+    reward_spn = torch.exp(-sigma_spn * mse_spn)
+    reward = (reward_leg + reward_spn) / 2
     return reward * weight
 
 
@@ -37,12 +43,18 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
     error = joint_vel - ref_vel
+    error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
+    error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
-    sigma = get_curriculum_reward_weight(env, "sigma_mimic_vel")
+    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
+    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
     # 计算奖励
-    mse = torch.mean(error ** 2, dim=1)
-    reward = torch.exp(-sigma * mse)
+    mse_leg = torch.mean(error_leg ** 2, dim=1)
+    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    reward_leg = torch.exp(-sigma_leg * mse_leg)
+    reward_spn = torch.exp(-sigma_spn * mse_spn)
+    reward = (reward_leg + reward_spn) / 2
     return reward * weight
 
 
@@ -51,9 +63,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 线速度跟踪奖励
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # F_body 物理前向 = body +Y (不是 body +X)
-    # body +X → heading=90°(world +Y), body +Y → heading=0°(world +X=前向)
-    # 所以 forward_heading = f_body_heading - π/2
+    # 计算速度误差
     f_body_heading = _get_f_body_heading(env) - (torch.pi / 2)
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # type: ignore[call-overload]  # [N,3]
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
