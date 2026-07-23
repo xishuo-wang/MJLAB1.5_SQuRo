@@ -149,16 +149,8 @@ class VideoRecorder(ManagerBasedRlEnv):
     self.is_recording = True
     self.current_video_frames = []
 
-    # Generate video filename based on which trigger started recording.
-    assert self.trigger_type is not None, "trigger_type must be set before recording"
-
-    if self.trigger_type == "step":
-      video_filename = f"{self.name_prefix}-step-{self.step_count}.mp4"
-    elif self.trigger_type == "episode":
-      video_filename = f"{self.name_prefix}-episode-{self.episode_count}.mp4"
-    else:
-      assert_never(self.trigger_type)
-
+    # 直接使用 name_prefix 作为文件名，不加任何后缀
+    video_filename = f"{self.name_prefix}.mp4"
     self.current_video_path = self.video_folder / video_filename
 
     if not self.disable_logger:
