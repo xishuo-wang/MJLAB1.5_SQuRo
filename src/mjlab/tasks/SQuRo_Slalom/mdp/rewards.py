@@ -199,36 +199,29 @@ def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
 
     # ---- 为 F_body 和 H_body 生成独立参考点 ----
-    body_offset = 0.065  # 身体节距 Base 的前后距离 (米)
+    body_offset  = 0.065  # 身体节距 Base 的前后距离 (米)
     path_heading = start_heading + delta_theta                # 当前路径切线方向
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)   # [N, 2]
 
     ref_f_body = ref_xy + body_offset * tangent
     ref_h_body = ref_xy - body_offset * tangent
 
-    # ---- 当前身体环节的 XY 位置 ----
+    # 获取当前身体环节的 XY 位置
     base_xy   = asset.data.root_link_pos_w[:, :2]             # [N, 2]
     f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]  # [N, 2]
     h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]  # [N, 2]
-
-    # ---- 跟踪误差（欧氏距离） ----
-    base_err   = torch.norm(base_xy - ref_xy, dim=1)
-    f_body_err = torch.norm(f_body_xy - ref_f_body, dim=1)
-    h_body_err = torch.norm(h_body_xy - ref_h_body, dim=1)
-
-    # ---- 奖励计算 ----
-    sigma = get_curriculum_reward_weight(env, "sigma_path_track")
-    w_base = get_curriculum_reward_weight(env, "weight_path_base")
-    w_fbody = get_curriculum_reward_weight(env, "weight_path_fbody")
-    w_hbody = get_curriculum_reward_weight(env, "weight_path_hbody")
-
-    r_base   = torch.exp(-sigma * base_err ** 2)
-    r_fbody  = torch.exp(-sigma * f_body_err ** 2)
-    r_hbody  = torch.exp(-sigma * h_body_err ** 2)
-
-    # 日志
-    env.extras["log"]["Data/path_base_err"] = base_err.mean().item()
-    env.extras["log"]["Data/path_fbody_err"] = f_body_err.mean().item()
-    env.extras["log"]["Data/path_hbody_err"] = h_body_err.mean().item()
-
-    return w_base * r_base + w_fbody * r_fbody + w_hbody * r_hbody
+    # 计算跟踪误差
+    error_base  = torch.norm(base_xy - ref_xy, dim=1)
+    error_fbody = torch.norm(f_body_xy - ref_f_body, dim=1)
+    error_hbody = torch.norm(h_body_xy - ref_h_body, dim=1)
+    # 获取课程学习量
+    weight = get_curriculum_reward_weight(env, "weight_track_path")
+    sigma  = get_curriculum_reward_weight(env, "sigma_track_path")
+    # 计算奖励
+    r_base  = torch.exp(-sigma * error_base ** 2)
+    r_fbody = torch.exp(-sigma * error_fbody ** 2)
+    r_hbody = torch.exp(-sigma * error_hbody ** 2)
+    reward  = (r_base + r_fbody + r_hbody)/3
+    # 记录日志
+    env.extras["log"]["Data/path_error"] = ((error_base+error_fbody+error_hbody)/3).mean().item()
+    return reward * weight
