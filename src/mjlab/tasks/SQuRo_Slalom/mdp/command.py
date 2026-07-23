@@ -70,8 +70,9 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
 
-        # 可视化：记录每环境 episode 起始位置（用于绘制期望轨迹）
+        # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
+        self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # 初始化
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -117,8 +118,8 @@ class SlalomCommand(CommandTerm):
         n = len(env_ids)
         current_step = self._env.common_step_counter
         self.curvature_command[env_ids] = self._get_curvature(n, current_step)
-        # 记录轨迹起始位置
-        self._start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
+        # 标记需重新记录起始位置（在 _debug_vis_impl 首次调用时延迟读取）
+        self._start_recorded[env_ids] = False
 
     # 定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -155,7 +156,12 @@ class SlalomCommand(CommandTerm):
         if torch.norm(self.robot.data.root_link_pos_w[batch]) < 1e-6:
             return
 
-        # 期望轨迹（基于起始位置 + 曲率命令）
+        # 延迟记录起始位置（reset后entity data已同步，避免读到摔倒时的旧位置）
+        if not self._start_recorded[batch]:
+            self._start_positions[batch] = self.robot.data.root_link_pos_w[batch]
+            self._start_recorded[batch] = True
+
+        # 期望轨迹
         self._draw_path(visualizer, batch, self.cfg.viz.z_offset)
 
     # 绘制期望轨迹：直行=射线, 转弯=圆弧
