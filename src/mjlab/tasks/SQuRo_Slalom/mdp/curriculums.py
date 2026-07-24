@@ -3,7 +3,7 @@ from typing import Any
 
 
 _STEPS_PER_ITER = 24
-_STAGES = (0, 1000, 2000, 4000)
+_STAGES = (0, 1000, 3000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
@@ -27,8 +27,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50, 50, 50),
     "sigma_track_vyz":          (50, 50, 50),
     "sigma_track_omg":          (20, 20, 20),
-    "sigma_track_path":         (5, 5, 5, 10),
-    "sigma_track_head":         (20, 20, 20, 40),
+    "sigma_track_path":         (5, 5, 5),
+    "sigma_track_head":         (20, 20, 20),
 }
 
 
