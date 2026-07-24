@@ -25,11 +25,6 @@ _vel_table: torch.Tensor | None = None     # [50, 12]
 _table_device: str | None = None
 
 
-# 脊柱侧摆参考角常量
-_SPINE_LATERAL_GAIN = 2.0      # α = κ * L = (ω/v) * L, L=0.2m, v=0.1m/s → 2.0
-_SPINE_LATERAL_LIMIT = 0.6     # F_spine1 关节限位 ±0.6 rad
-
-
 
 # =========================================================================================
 # 逆运动学
@@ -174,10 +169,31 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
     vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]
     omega_cmd = curvature_cmd * vel_cmd
-    spine_lateral = torch.clamp(-_SPINE_LATERAL_GAIN * omega_cmd, -_SPINE_LATERAL_LIMIT, _SPINE_LATERAL_LIMIT)
-    ref_pos[:, 0] = spine_lateral     # F_spine1 (侧摆) — 列0
-    ref_vel[:, 0] = 0.0               # 脊柱准静态弯曲，参考速度为零
+    # 各关节增益 (rad·s/rad) —— 使 ω=0.5 时达到目标角度
+    K_sp1  =  0.6 / 0.5   # = 1.2
+    K_fbd  = -0.8 / 0.5   # = -1.6
+    K_hsp1 =  0.6 / 0.5   # = 1.2
+    K_hbd  = -0.7 / 0.5   # = -1.4
 
+    # 计算原始角度
+    raw_sp1  = K_sp1  * omega_cmd
+    raw_fbd  = K_fbd  * omega_cmd
+    raw_hsp1 = K_hsp1 * omega_cmd
+    raw_hbd  = K_hbd  * omega_cmd
+
+    # 限幅到各自安全范围
+    sp1  = torch.clamp(raw_sp1,  -0.6, 0.6)
+    fbd  = torch.clamp(raw_fbd,  -0.8, 0.8)
+    hsp1 = torch.clamp(raw_hsp1, -0.6, 0.6)
+    hbd  = torch.clamp(raw_hbd,  -0.7, 0.7)
+
+    # 覆盖预计算表中的脊柱列 (索引需与你的 _MODEL_INDICES 一致)
+    ref_pos[:, 0] = sp1    # F_spine1
+    ref_pos[:, 1] = fbd    # F_body
+    ref_pos[:, 6] = hsp1   # H_spine1
+    ref_pos[:, 7] = hbd    # H_body
+
+    ref_vel[:, [0, 1, 6, 7]] = 0.0
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
 
