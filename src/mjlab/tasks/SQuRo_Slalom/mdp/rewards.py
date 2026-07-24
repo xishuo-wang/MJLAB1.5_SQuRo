@@ -88,6 +88,32 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
+# 身体高度跟踪奖励 
+def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    # 计算高度跟踪误差
+    body_pos_w = asset.data.body_link_pos_w
+    F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]          
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    desired_height_F = cmd_term.command[:, 1]    
+    desired_height_H = cmd_term.command[:, 2]    
+    height_F_error = torch.abs(desired_height_F - F_body_height)
+    height_H_error = torch.abs(desired_height_H - H_body_height)
+    # 获取课程学习量
+    sigma_height = get_curriculum_reward_weight(env, "sigma_height")
+    w_height = get_curriculum_reward_weight(env, "weight_height")
+    # 计算奖励
+    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
+    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
+    Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
+    # 记录日志
+    env.extras["log"]["Data/height_actual"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
+    return Reward_height
+
+
+
+# =========================================================================================
 # 角速度跟踪奖励（ω_cmd = κ_cmd × v_cmd, 用 F_body 角速度避免万向节中心震荡）
 def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]

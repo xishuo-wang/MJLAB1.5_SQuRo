@@ -70,6 +70,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
+        "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
         "track_omg": RewardTermCfg(func=mdp.compute_omg_track_reward, weight=1.0),
         "track_path": RewardTermCfg(func=mdp.compute_path_track_reward, weight=1.0),

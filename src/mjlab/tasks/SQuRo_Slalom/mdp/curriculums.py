@@ -3,32 +3,34 @@ from typing import Any
 
 
 _STEPS_PER_ITER = 24
-_STAGES = (0, 1000, 3000)
+_STAGES = (0, 1000, 3000, 4000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
     "weight_mimic_vel":         (2.0, 2.0, 2.0),
+    "weight_height":            (2.5, 2.5, 2.5),
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (5.0, 5.0, 5.0),
     "weight_track_path":        (8.0, 8.0, 8.0),
     "weight_track_head":        (4.0, 4.0, 4.0),
-    "weight_smooth_L1_leg":     (0.1, 0.2, 0.2),
-    "weight_smooth_L1_spn":     (0.1, 0.2, 0.2),
-    "weight_smooth_L2_leg":     (0.1, 0.2, 0.2),
-    "weight_smooth_L2_spn":     (0.1, 0.2, 0.2),
-    "weight_energy":            (0.1, 0.2, 0.2),
+    "weight_smooth_L1_leg":     (0.1, 0.2, 0.2, 0.5),
+    "weight_smooth_L1_spn":     (0.1, 0.2, 0.2, 0.5),
+    "weight_smooth_L2_leg":     (0.1, 0.2, 0.2, 0.5),
+    "weight_smooth_L2_spn":     (0.1, 0.2, 0.2, 0.5),
+    "weight_energy":            (0.1, 0.2, 0.2, 0.5),
 
-    "sigma_leg_pos":            (5.0, 5.0, 5.0),
-    "sigma_spn_pos":            (10.0, 20.0, 20.0),
-    "sigma_leg_vel":            (0.1, 0.1, 0.1),
-    "sigma_spn_vel":            (0.5, 0.5, 0.5),
-    "sigma_track_vel":          (50, 50, 50),
-    "sigma_track_vyz":          (50, 50, 50),
-    "sigma_track_omg":          (20, 20, 20),
-    "sigma_track_path":         (5, 5, 5),
-    "sigma_track_head":         (20, 20, 20),
+    "sigma_leg_pos":            (5.0,),
+    "sigma_spn_pos":            (10.0,),
+    "sigma_leg_vel":            (0.1,),
+    "sigma_spn_vel":            (0.5,),
+    "sigma_height":             (1000,),
+    "sigma_track_vel":          (50,),
+    "sigma_track_vyz":          (50,),
+    "sigma_track_omg":          (20,),
+    "sigma_track_path":         (5,),
+    "sigma_track_head":         (20,),
 }
 
 
