@@ -189,6 +189,9 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
     log_dir_name += f"_{args.agent.run_name}"
   log_dir = log_root_path / log_dir_name
 
+  # 设置一致的 wandb run ID，确保恢复训练时 wandb 能正确关联已有 run
+  os.environ["WANDB_RUN_ID"] = log_dir_name
+
   # Select GPUs based on CUDA_VISIBLE_DEVICES and user specification.
   selected_gpus, num_gpus = select_gpus(args.gpu_ids)
 

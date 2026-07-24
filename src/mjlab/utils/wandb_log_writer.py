@@ -44,6 +44,7 @@ class MjlabWandbLogWriter(WandbLogWriter):
             name=run_name,
             id=run_name,
             dir=wandb_dir,
+            resume="allow",
             config={"log_dir": log_dir},
             settings=wandb.Settings(start_method="thread"),
         )
