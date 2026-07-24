@@ -40,7 +40,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -5
+    fixed_curvature: float | None = -1
 
 
 # 从 checkpoint 文件名提取训练轮次
