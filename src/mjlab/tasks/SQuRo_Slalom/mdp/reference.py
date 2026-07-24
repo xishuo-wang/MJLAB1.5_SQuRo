@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
+
 # =========================================================================================
 # 步态配置
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
@@ -17,11 +18,17 @@ PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 TROT_FREQ = 1.0                                             # 步频 (Hz)
 
 
+# 离散曲率绝对值表（运行时在此范围内线性插值）
+_CURVATURE_BINS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+_NUM_CURV = len(_CURVATURE_BINS)
+
+
 # 预计算表分辨率
 _TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
-_pos_table: torch.Tensor | None = None     # [50, 12]
-_vel_table: torch.Tensor | None = None     # [50, 12]
+_pos_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
+_vel_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
+_k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
 _table_device: str | None = None
 
 
@@ -59,9 +66,9 @@ def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True)
 
 
 # =========================================================================================
-# 加载 CSV + IK 预计算（仅腿部8关节；脊柱4关节运行时动态覆盖）
+# 加载 CSV + IK 预计算（腿部随曲率差速，脊柱全零直行参考）
 def _init_tables(device: torch.device | str) -> None:
-    global _tables_initialized, _pos_table, _vel_table, _table_device
+    global _tables_initialized, _pos_table, _vel_table, _k_bins, _table_device
 
     if _tables_initialized and _table_device == str(device):
         return
@@ -91,43 +98,78 @@ def _init_tables(device: torch.device | str) -> None:
     y_h_t = torch.tensor(y_h_grid, device=dev, dtype=torch.float32)
     z_h_t = torch.tensor(z_h_grid, device=dev, dtype=torch.float32)
 
-    # IK 求解：按 _ACTUATED_JOINT_NAMES 顺序填充
-    # 列序: F_sp1(0) F_bd(1) FL_sh(2) FL_el(3) FR_sh(4) FR_el(5)
-    #        H_sp1(6) H_bd(7) HL_hp(8) HL_kn(9) HR_hp(10) HR_kn(11)
-    pos = torch.zeros(_TABLE_RESOLUTION, 12, device=dev)
-    legs = [
-        (y_f_t, z_f_t, PHASE_LAG["FL"], True, 2),    # FL → 列 2-3
-        (y_f_t, z_f_t, PHASE_LAG["FR"], True, 4),    # FR → 列 4-5
-        (y_h_t, z_h_t, PHASE_LAG["HL"], False, 8),   # HL → 列 8-9
-        (y_h_t, z_h_t, PHASE_LAG["HR"], False, 10),  # HR → 列 10-11
-    ]
-    for y_t, z_t, lag, is_front, col_offset in legs:
-        shift = int(lag * _TABLE_RESOLUTION)
-        y_shifted = torch.roll(y_t, shifts=shift)
-        z_shifted = torch.roll(z_t, shifts=shift)
-        proximal, distal = _inverse_kinematics(y_shifted, z_shifted, is_front)
-        pos[:, col_offset] = proximal  # type: ignore[call-overload]
-        pos[:, col_offset + 1] = distal  # type: ignore[call-overload]
+    # 预分配三维表 [曲率, 相位, 关节]
+    pos = torch.zeros(_NUM_CURV, _TABLE_RESOLUTION, 12, device=dev)
 
-    # 脊柱保持零位（直行参考姿态）
-    pos[:, 0] = 0.0   # F_spine1
-    pos[:, 1] = 0.0   # F_body
-    pos[:, 6] = 0.0   # H_spine1
-    pos[:, 7] = 0.0   # H_body
+    # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
+    for i, abs_k in enumerate(_CURVATURE_BINS):
+        scale_inner = 1.0 - abs_k / 5.0   # 内侧腿侧向缩放因子
 
-    # 中心差分计算速度
+        # 左腿（FL, HL）为内侧，缩放其 Y_mean
+        y_fL = y_f_t * scale_inner
+        z_fL = z_f_t                      # 高度不变
+        y_hL = y_h_t * scale_inner
+        z_hL = z_h_t
+
+        # 右腿（FR, HR）为外侧，保持原轨迹
+        y_fR = y_f_t
+        z_fR = z_f_t
+        y_hR = y_h_t
+        z_hR = z_h_t
+
+        # 分别计算每条腿的关节角（应用相位差）
+        # FL
+        shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
+        y_shifted = torch.roll(y_fL, shifts=shift)
+        z_shifted = torch.roll(z_fL, shifts=shift)
+        sh, el = _inverse_kinematics(y_shifted, z_shifted, True)
+        pos[i, :, 2] = sh
+        pos[i, :, 3] = el
+
+        # FR
+        shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
+        y_shifted = torch.roll(y_fR, shifts=shift)
+        z_shifted = torch.roll(z_fR, shifts=shift)
+        sh, el = _inverse_kinematics(y_shifted, z_shifted, True)
+        pos[i, :, 4] = sh
+        pos[i, :, 5] = el
+
+        # HL
+        shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
+        y_shifted = torch.roll(y_hL, shifts=shift)
+        z_shifted = torch.roll(z_hL, shifts=shift)
+        hp, kn = _inverse_kinematics(y_shifted, z_shifted, False)
+        pos[i, :, 8] = hp
+        pos[i, :, 9] = kn
+
+        # HR
+        shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
+        y_shifted = torch.roll(y_hR, shifts=shift)
+        z_shifted = torch.roll(z_hR, shifts=shift)
+        hp, kn = _inverse_kinematics(y_shifted, z_shifted, False)
+        pos[i, :, 10] = hp
+        pos[i, :, 11] = kn
+
+        # 脊柱四列保持零位（直行参考姿态）
+        pos[i, :, 0] = 0.0   # F_spine1
+        pos[i, :, 1] = 0.0   # F_body
+        pos[i, :, 6] = 0.0   # H_spine1
+        pos[i, :, 7] = 0.0   # H_body
+
+    # 中心差分计算速度表（沿相位维度）
     vel = torch.zeros_like(pos)
     two_dt = 2.0 / _TABLE_RESOLUTION
-    vel[1:-1] = (pos[2:] - pos[:-2]) / two_dt
-    vel[0] = (pos[1] - pos[-1]) / two_dt
-    vel[-1] = (pos[0] - pos[-2]) / two_dt
+    vel[:, 1:-1] = (pos[:, 2:] - pos[:, :-2]) / two_dt
+    vel[:, 0] = (pos[:, 1] - pos[:, -1]) / two_dt
+    vel[:, -1] = (pos[:, 0] - pos[:, -2]) / two_dt
 
     _pos_table = pos.contiguous()
     _vel_table = vel.contiguous()
+    _k_bins = torch.tensor(_CURVATURE_BINS, device=dev, dtype=torch.float32)
     _table_device = str(device)
     _tables_initialized = True
 
-    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_TABLE_RESOLUTION} bins × 12 joints")
+    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 曲率 × {_TABLE_RESOLUTION} bins × 12 joints")
 
 
 
@@ -158,42 +200,88 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     dt = float(env.step_dt)
 
     # 当前相位 → 查表索引
-    phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [num_envs]
+    phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [N]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
-    ref_pos = _pos_table[phase_indices].clone()  # [N, 12] — clone 避免修改预计算表
-    ref_vel = _vel_table[phase_indices] * TROT_FREQ  # [N, 12]
+    # 获取命令曲率（有符号）及速度
+    curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]  # [N]
+    vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]  # [N]
 
-    # 动态覆盖脊柱侧摆参考: F_body_heading = base_heading - F_spine1
-    # 左转(κ>0, ω>0) → 需F_body左偏 → F_spine1<0 → 取负号
-    curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]
-    vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]
+    # 曲率绝对值及插值因子（k_bins 在 _init_tables 时缓存）
+    abs_k = curvature_cmd.abs()  # [N]
+    assert _k_bins is not None
+
+    # 找到每个环境的曲率区间索引（左侧）
+    idx = torch.searchsorted(_k_bins, abs_k) - 1
+    idx = idx.clamp(0, _NUM_CURV - 2)  # 防止边界外，使 idx+1 有效
+
+    # 对应的曲率值
+    k0 = _k_bins[idx]        # [N]
+    k1 = _k_bins[idx + 1]
+    t = (abs_k - k0) / (k1 - k0 + 1e-12)  # 插值因子，[0,1]
+
+    # 从表中取出对应相位的关节参考，两个曲率层
+    # pos_table: [_NUM_CURV, 50, 12], phase_indices: [N]
+    # 使用高级索引: pos_table[idx, phase_indices] -> [N,12]
+    pos0 = _pos_table[idx, phase_indices]      # [N,12]
+    pos1 = _pos_table[idx + 1, phase_indices]  # [N,12]
+    vel0 = _vel_table[idx, phase_indices]      # [N,12]
+    vel1 = _vel_table[idx + 1, phase_indices]
+
+    # 线性插值腿部参考（脊柱部分后续覆盖，但插值也参与）
+    ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
+    ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * TROT_FREQ  # 缩放步频
+
+    # -----------------------------------------------------------------
+    # 根据曲率符号交换左右腿关节（右转时内侧为右腿）
+    swap_mask = curvature_cmd < 0  # [N] bool
+    if swap_mask.any():
+        # 保存原值
+        FL = ref_pos[:, [2, 3]].clone()
+        FR = ref_pos[:, [4, 5]].clone()
+        HL = ref_pos[:, [8, 9]].clone()
+        HR = ref_pos[:, [10, 11]].clone()
+        FL_v = ref_vel[:, [2, 3]].clone()
+        FR_v = ref_vel[:, [4, 5]].clone()
+        HL_v = ref_vel[:, [8, 9]].clone()
+        HR_v = ref_vel[:, [10, 11]].clone()
+
+        # 交换
+        ref_pos[swap_mask, 2:4] = FR[swap_mask]
+        ref_pos[swap_mask, 4:6] = FL[swap_mask]
+        ref_pos[swap_mask, 8:10] = HR[swap_mask]
+        ref_pos[swap_mask, 10:12] = HL[swap_mask]
+
+        ref_vel[swap_mask, 2:4] = FR_v[swap_mask]
+        ref_vel[swap_mask, 4:6] = FL_v[swap_mask]
+        ref_vel[swap_mask, 8:10] = HR_v[swap_mask]
+        ref_vel[swap_mask, 10:12] = HL_v[swap_mask]
+
+    # -----------------------------------------------------------------
+    # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     omega_cmd = curvature_cmd * vel_cmd
-    # 各关节增益 (rad·s/rad) —— 使 ω=0.5 时达到目标角度
-    K_sp1  =  0.6 / 0.5   # = 1.2
-    K_fbd  = -0.8 / 0.5   # = -1.6
-    K_hsp1 =  0.6 / 0.5   # = 1.2
-    K_hbd  = -0.7 / 0.5   # = -1.4
+    K_sp1  =  0.6 / 0.5   # 1.2
+    K_fbd  = -0.8 / 0.5   # -1.6
+    K_hsp1 =  0.6 / 0.5   # 1.2
+    K_hbd  = -0.7 / 0.5   # -1.4
 
-    # 计算原始角度
     raw_sp1  = K_sp1  * omega_cmd
     raw_fbd  = K_fbd  * omega_cmd
     raw_hsp1 = K_hsp1 * omega_cmd
     raw_hbd  = K_hbd  * omega_cmd
 
-    # 限幅到各自安全范围
     sp1  = torch.clamp(raw_sp1,  -0.6, 0.6)
     fbd  = torch.clamp(raw_fbd,  -0.8, 0.8)
     hsp1 = torch.clamp(raw_hsp1, -0.6, 0.6)
     hbd  = torch.clamp(raw_hbd,  -0.7, 0.7)
 
-    # 覆盖预计算表中的脊柱列 (索引需与你的 _MODEL_INDICES 一致)
-    ref_pos[:, 0] = sp1    # F_spine1
-    ref_pos[:, 1] = fbd    # F_body
-    ref_pos[:, 6] = hsp1   # H_spine1
-    ref_pos[:, 7] = hbd    # H_body
-
+    ref_pos[:, 0] = sp1
+    ref_pos[:, 1] = fbd
+    ref_pos[:, 6] = hsp1
+    ref_pos[:, 7] = hbd
     ref_vel[:, [0, 1, 6, 7]] = 0.0
+
+    # -----------------------------------------------------------------
     # 推进相位
     env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
 
