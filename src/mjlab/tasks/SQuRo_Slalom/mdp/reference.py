@@ -26,10 +26,10 @@ _NUM_CURV = len(_CURVATURE_BINS)
 # 预计算表分辨率
 _TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
+_table_device: str | None = None
+_k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
 _pos_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
 _vel_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
-_k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
-_table_device: str | None = None
 
 
 
