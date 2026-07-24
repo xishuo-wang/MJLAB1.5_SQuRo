@@ -118,13 +118,16 @@ class SlalomCommand(CommandTerm):
         n = len(env_ids)
         current_step = self._env.common_step_counter
         self.curvature_command[env_ids] = self._get_curvature(n, current_step)
-        # 标记需重新记录起始位置（在 _debug_vis_impl 首次调用时延迟读取）
+        # 曲率越大 → 单侧腿推进 → 有效速度减半 → vel = base × (1 - 0.5·|κ|/κ_max)
+        base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+        scale = 1.0 - 0.5 * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
+        self.vel_command[env_ids] = base_vel * scale
+        # 标记需重新记录起始位置
         self._start_recorded[env_ids] = False
 
-    # 定期重采样：仅更新固定值，曲率不参与（由 reset 单独触发）
+    # 定期重采样：仅更新固定值（速度由 _resample_curvature 按曲率缩放）
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
-        self.vel_command[env_ids] = self._get_velocity(n)
         self.height_f_command[env_ids] = self._get_height_f(n)
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
