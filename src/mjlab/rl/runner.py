@@ -29,6 +29,19 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
         if train_cfg[key].get("rnn_type") is None:
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
+
+    # 将 wandb logger 重定向到自定义 MjlabWandbLogWriter
+    # 原生 WandbLogWriter 将 wandb 内部文件放在 log_dir/wandb/ 下，
+    # 导致 logger.py 的 rglob("*.mp4") 扫到 wandb 已拷贝的视频副本，
+    # 再次复制时触发 SameFileError。自定义 writer 将 wandb 文件存放到
+    # log_dir 的父级目录，与训练日志完全隔离。
+    logger_cfg = train_cfg.get("logger", "tensorboard")
+    if logger_cfg == "wandb":
+      train_cfg["logger"] = {
+        "class_name": "mjlab.utils.wandb_log_writer:MjlabWandbLogWriter",
+        "project_name": train_cfg.get("wandb_project", "mjlab"),
+      }
+
     super().__init__(env, train_cfg, log_dir, device)
 
   def export_policy_to_onnx(
