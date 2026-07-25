@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 TROT_FREQ = 1.0                                             # 步频 (Hz)
+STRIDE_MIN = 0.5                                            # 最小步幅
 
 
 # 离散曲率绝对值表（运行时在此范围内线性插值）
@@ -111,7 +112,7 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
     for i, abs_k in enumerate(_CURVATURE_BINS):
-        scale_inner = 1.0 - abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（|κ|=κ_max → scale=0）
+        scale_inner = 1.0 - STRIDE_MIN * abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（|κ|=κ_max → scale=0）
 
         # 左腿（FL, HL）为内侧，缩放其 Y_mean
         y_fL = y_f_t * scale_inner
