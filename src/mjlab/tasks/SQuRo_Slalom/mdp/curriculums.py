@@ -7,13 +7,13 @@ _STAGES = (0, 1000, 3000, 4000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (8.0, 8.0, 8.0),
-    "weight_mimic_vel":         (4.0, 4.0, 4.0),
-    "weight_height":            (4.0, 4.0, 4.0),
+    "weight_mimic_pos":         (5.0, 5.0, 5.0),
+    "weight_mimic_vel":         (2.5, 2.5, 2.5),
+    "weight_height":            (2.5, 2.5, 2.5),
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (5.0, 5.0, 5.0),
-    "weight_track_path":        (8.0, 8.0, 8.0),
+    "weight_track_path":        (5.0, 5.0, 5.0),
     "weight_track_head":        (5.0, 5.0, 5.0),
     "weight_smooth_L1_leg":     (0.1, 0.2, 0.2, 0.5),
     "weight_smooth_L1_spn":     (0.1, 0.2, 0.2, 0.5),
