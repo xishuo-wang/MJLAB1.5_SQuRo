@@ -11,8 +11,7 @@ if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 阶段阈值（iterations）
-STAGE1_END = 500
+# 阶段阈值（iterations）— 无纯直行阶段，从 iter 0 直接开始曲率线性增长
 STAGE2_END = 2500
 
 
@@ -24,24 +23,20 @@ FIXED_GAIT_FREQ = 1.0
 CURVATURE_TARGET_MAX = 10.0
 
 
-# 获取当前阶段
+# 获取当前阶段（2=曲率线性增长, 3=全范围）
 def get_current_stage(step_counter: int) -> int:
     iter_num = step_counter // 24
-    if iter_num < STAGE1_END:
-        return 1
-    elif iter_num < STAGE2_END:
+    if iter_num < STAGE2_END:
         return 2
     else:
         return 3
 
 
-# 获取曲率采样范围
+# 获取曲率采样范围 — 从 iter 0 开始线性增长至 CURVATURE_TARGET_MAX
 def get_curvature_range(stage: int, step_counter: int) -> Tuple[float, float]:
-    if stage == 1:
-        return (0.0, 0.0)  # 直行
-    elif stage == 2:
+    if stage == 2:
         iter_num = step_counter // 24
-        progress = (iter_num - STAGE1_END) / (STAGE2_END - STAGE1_END)
+        progress = iter_num / STAGE2_END  # 0 → 1
         kappa_max = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
         return (-kappa_max, kappa_max)
     else:
