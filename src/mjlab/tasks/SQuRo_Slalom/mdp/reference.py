@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
+from .command import CURVATURE_TARGET_MAX
 from .indices import resolve_model_indices
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -19,7 +20,14 @@ TROT_FREQ = 1.0                                             # 步频 (Hz)
 
 
 # 离散曲率绝对值表（运行时在此范围内线性插值）
-_CURVATURE_BINS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+# 由 CURVATURE_TARGET_MAX 动态生成：[0.0, 0.5, ..., 5.0] + (5, max] 步长 1.0
+def _generate_curvature_bins(max_k: float) -> list[float]:
+    bins = [i * 0.5 for i in range(11)]  # [0.0, 0.5, ..., 5.0]
+    if max_k > 5.0:
+        bins.extend(float(x) for x in range(6, int(max_k) + 1))
+    return bins
+
+_CURVATURE_BINS = _generate_curvature_bins(CURVATURE_TARGET_MAX)
 _NUM_CURV = len(_CURVATURE_BINS)
 
 
@@ -103,7 +111,7 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
     for i, abs_k in enumerate(_CURVATURE_BINS):
-        scale_inner = 1.0 - abs_k / 5.0   # 内侧腿侧向缩放因子
+        scale_inner = 1.0 - abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（|κ|=κ_max → scale=0）
 
         # 左腿（FL, HL）为内侧，缩放其 Y_mean
         y_fL = y_f_t * scale_inner
@@ -260,10 +268,10 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     # -----------------------------------------------------------------
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     omega_cmd = curvature_cmd * vel_cmd
-    K_sp1  =  0.6 / 0.5   # 1.2
-    K_fbd  = -0.8 / 0.5   # -1.6
-    K_hsp1 =  0.6 / 0.5   # 1.2
-    K_hbd  = -0.7 / 0.5   # -1.4
+    K_sp1  =  0.6 / 1.0   # 1.2
+    K_fbd  = -0.8 / 1.0   # -1.6
+    K_hsp1 =  0.6 / 1.0   # 1.2
+    K_hbd  = -0.7 / 1.0   # -1.4
 
     raw_sp1  = K_sp1  * omega_cmd
     raw_fbd  = K_fbd  * omega_cmd

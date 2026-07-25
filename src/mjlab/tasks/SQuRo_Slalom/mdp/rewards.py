@@ -60,29 +60,37 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 线速度跟踪奖励 — 世界坐标系，直接比较期望 vs 实际速度
+# 线速度跟踪奖励 — F_body 局部坐标系（body-frame 前进/侧向/垂向）
+# 必须在正确的朝向下才能获得前进速度得分，防止侧滑作弊
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 期望世界系速度（路径切线方向）
-    _, _, vx_des, vy_des, _ = _compute_path_ref(env)
-    # 实际世界系速度（F_body）
+    # F_body 物理前向 heading（body+X - π/2 → world+X = 0°）
+    f_body_heading = _get_f_body_heading(env) - (torch.pi / 2)
+    # F_body_Link 世界系速度
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
-    vx_actual = vel_w[:, 0]
-    vy_actual = vel_w[:, 1]
-    vz_actual = vel_w[:, 2]
+    # 投影到 F_body 局部坐标系：前进=物理前向，侧向=物理左向
+    forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
+    lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
+    vertical_speed = vel_w[:, 2]
+    # 期望前进速度
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    v_cmd = cmd_term.command[:, 0]
     # 误差
-    error_x = vx_actual - vx_des
-    error_y = vy_actual - vy_des
-    error_z = vz_actual
+    error_vx = forward_speed - v_cmd
+    error_vy = lateral_speed
+    error_vz = vertical_speed
+    # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_track_vel")
     weight_yz = get_curriculum_reward_weight(env, "weight_track_vyz")
     sigma = get_curriculum_reward_weight(env, "sigma_track_vel")
     sigma_yz = get_curriculum_reward_weight(env, "sigma_track_vyz")
-    r_vel_x = torch.exp(-sigma * error_x ** 2)
-    r_vel_y = torch.exp(-sigma_yz * error_y ** 2)
-    r_vel_z = torch.exp(-sigma_yz * error_z ** 2)
-    env.extras["log"]["Data/vel_actual"] = vx_actual.mean().item()
-    env.extras["log"]["Data/vel_des"] = vx_des.mean().item()
+    # 计算奖励
+    r_vel_x = torch.exp(-sigma * error_vx ** 2)
+    r_vel_y = torch.exp(-sigma_yz * error_vy ** 2)
+    r_vel_z = torch.exp(-sigma_yz * error_vz ** 2)
+    # 记录日志
+    env.extras["log"]["Data/vel_actual"] = forward_speed.mean().item()
+    env.extras["log"]["Data/vel_des"] = v_cmd.mean().item()
     return r_vel_x * weight + (r_vel_y + r_vel_z) * weight_yz
 
 
