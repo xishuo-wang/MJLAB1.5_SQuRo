@@ -268,26 +268,22 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # -----------------------------------------------------------------
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
-    omega_cmd = curvature_cmd * vel_cmd
-    K_sp1  =  0.6 / 1.0   # 1.2
-    K_fbd  = -0.8 / 1.0   # -1.6
-    K_hsp1 =  0.6 / 1.0   # 1.2
-    K_hbd  = -0.7 / 1.0   # -1.4
+    k_norm = curvature_cmd / CURVATURE_TARGET_MAX          # 归一化曲率，范围 [-1, 1]
+    abs_k_norm = curvature_cmd.abs() / CURVATURE_TARGET_MAX
 
-    raw_sp1  = K_sp1  * omega_cmd
-    raw_fbd  = K_fbd  * omega_cmd
-    raw_hsp1 = K_hsp1 * omega_cmd
-    raw_hbd  = K_hbd  * omega_cmd
+    # 各脊柱关节目标角度（弧度），在 |κ| = max_k 时达到极值
+    f_spine1 = -0.6 * k_norm               # κ=-max → +0.6, κ=+max → -0.6
+    f_body   = -0.9 * k_norm               # κ=-max → +0.9, κ=+max → -0.9
+    h_spine1 = -0.6 * abs_k_norm           # 始终 ≤0, |κ|=max → -0.6
+    h_body   = -0.7 * k_norm               # κ=-max → +0.7, κ=+max → -0.7
 
-    sp1  = torch.clamp(raw_sp1,  -0.6, 0.6)
-    fbd  = torch.clamp(raw_fbd,  -0.8, 0.8)
-    hsp1 = torch.clamp(raw_hsp1, -0.6, 0.6)
-    hbd  = torch.clamp(raw_hbd,  -0.7, 0.7)
+    # 覆盖预计算表中的零值
+    ref_pos[:, 0] = f_spine1
+    ref_pos[:, 1] = f_body
+    ref_pos[:, 6] = h_spine1
+    ref_pos[:, 7] = h_body
 
-    ref_pos[:, 0] = sp1
-    ref_pos[:, 1] = fbd
-    ref_pos[:, 6] = hsp1
-    ref_pos[:, 7] = hbd
+    # 脊柱参考速度保持为零
     ref_vel[:, [0, 1, 6, 7]] = 0.0
 
     # -----------------------------------------------------------------
