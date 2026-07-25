@@ -94,10 +94,24 @@ src/mjlab/
 
 ## Git / GitHub
 
-- **每次代码修改完成后自动 commit 并 push**，无需等待用户确认，但需要告诉用户提交github的内容，以及涉及到的文件
-- Commit message 使用中文概述变更内容，格式：`<type>(<scope>): <简述>`
-- 远程仓库：`https://github.com/xishuo-wang/SQuRo-MJLAB.git`（已迁移，旧 remote 仍可用）
-- 主分支：`main`
+- **每次代码修改完成后自动 commit 并 push**，无需等待用户确认，但需要告诉用户提交 GitHub 的内容，以及涉及到的文件。
+- **Commit message 规范**（基于 Conventional Commits）：
+  - 格式：`<type>(<scope>): <中文简述>`，例如：`feat(env): 新增抗扰动奖励项`
+  - type 可选值：
+    - `feat`: 新功能或实验性改动（如添加新的 reward 项、新的网络结构）
+    - `fix`: 修复 bug 或仿真异常（如修复坐标旋转错误、接触力 NaN）
+    - `refactor`: 重构代码结构，不改变外部行为
+    - `docs`: 文档或注释更新
+    - `config`: 仅修改配置文件（如 YAML / Hydra 配置）
+    - `exp`: 实验记录、结果日志、checkpoint 相关提交
+    - `chore`: 杂项（依赖更新、格式化、gitignore 等）
+  - scope 使用主要模块名：`env`, `rl`, `mdp`, `managers`, `sensor`, `sim`, `viewer`, `scripts`, `config` 等
+  - 示例：
+    - `feat(mdp): 实现曲率跟踪命令生成器`
+    - `fix(env): 修正 F_body 坐标系朝向提取`
+    - `refactor(rl): 抽取 CSC 辅助损失为独立模块`
+    - `config(exp): 更新抗扰动实验参数`
+- **网络超时处理**：如果 `git push` 因网络超时或连接失败而无法完成，**不要反复重试**。直接跳过本次 push，并告知用户“⚠️ 网络超时，已跳过 git push，请手动推送”。本地的 commit 保留，待下次网络恢复时一并推送。
 
 ## SQuRo 踩坑记录
 
