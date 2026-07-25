@@ -267,9 +267,9 @@
         <position name="Neck_pitch" joint="Neck_pitch_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.3 0.5" forcelimited="true" forcerange="-0.1 0.1"/> -->
     </actuator>
     <contact>
-        <pair geom1="floor" geom2="FL_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
-        <pair geom1="floor" geom2="FR_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
-        <pair geom1="floor" geom2="HL_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
-        <pair geom1="floor" geom2="HR_foot_collision" friction="1 0.15 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="FL_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="FR_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="HL_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
+        <pair geom1="floor" geom2="HR_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
     </contact>
 </mujoco>
