@@ -3,7 +3,18 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .observations import _compute_path_ref, _get_f_body_heading
+from .path import (
+    BODY_REF_OFFSET,
+    CORRIDOR_HALF_WIDTH,
+    F_BODY_HALF_LENGTH,
+    F_BODY_HALF_WIDTH,
+    H_BODY_HALF_LENGTH,
+    H_BODY_HALF_WIDTH,
+    compute_arc_path_ref,
+    compute_corridor_excess,
+    get_f_body_physical_heading,
+    get_h_body_physical_heading,
+)
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
@@ -61,11 +72,10 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 # =========================================================================================
 # 线速度跟踪奖励 — F_body 局部坐标系（body-frame 前进/侧向/垂向）
-# 必须在正确的朝向下才能获得前进速度得分，防止侧滑作弊
 def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     # F_body 物理前向 heading（body+X - π/2 → world+X = 0°）
-    f_body_heading = _get_f_body_heading(env) - (torch.pi / 2)
+    f_body_heading = get_f_body_physical_heading(env)
     # F_body_Link 世界系速度
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
     # 投影到 F_body 局部坐标系：前进=物理前向，侧向=物理左向
@@ -148,8 +158,8 @@ def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
 def compute_head_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算朝向误差
-    _, _, _, _, path_heading = _compute_path_ref(env)  # 期望朝向
-    actual_heading = _get_f_body_heading(env) - (torch.pi / 2)  # type: ignore[call-arg]  # 实际物理前向
+    _, _, _, _, path_heading = compute_arc_path_ref(env)  # 期望朝向
+    actual_heading = get_f_body_physical_heading(env)  # 实际物理前向
     error = actual_heading - path_heading
     error = torch.atan2(torch.sin(error), torch.cos(error))
     # 获取课程学习量
@@ -216,37 +226,49 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 路径跟踪奖励
-def compute_path_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+# 走廊一致性奖励 — 身体包络不超出参考路径周围的允许走廊
+# e_i = |d_lat| + |L·sin(Δθ)| + |W·cos(Δθ)|, v_i = max(0, e_i - C)
+# 同时惩罚位置偏差和朝向偏差，死区 = 走廊半宽 C
+def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
 
-    # 复用共享路径计算
-    x_ref, y_ref, _, _, path_heading = _compute_path_ref(env)
-
+    # 路径参考
+    x_ref, y_ref, _, _, path_heading = compute_arc_path_ref(env)
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
 
-    body_offset = 0.065
-    ref_f_body = ref_xy + body_offset * tangent
-    ref_h_body = ref_xy - body_offset * tangent
+    # F_body/H_body 参考位置（偏移 ±6.5cm 沿切线）
+    ref_f = ref_xy + BODY_REF_OFFSET * tangent
+    ref_h = ref_xy - BODY_REF_OFFSET * tangent
 
-    # 当前身体环节位置
-    base_xy = asset.data.root_link_pos_w[:, :2]
-    f_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
-    h_body_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
-    # 跟踪误差
-    error_base = torch.norm(base_xy - ref_xy, dim=1)
-    error_fbody = torch.norm(f_body_xy - ref_f_body, dim=1)
-    error_hbody = torch.norm(h_body_xy - ref_h_body, dim=1)
+    # 当前身体 XY 位置
+    f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
+    h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
+
+    # 当前物理前向 heading
+    f_heading = get_f_body_physical_heading(env)
+    h_heading = get_h_body_physical_heading(env)
+
+    # 走廊超额 e_i
+    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading,
+                                   F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
+    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading,
+                                   H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
+
+    # 超出走廊的量
+    v_f = torch.clamp(e_f - CORRIDOR_HALF_WIDTH, min=0.0)
+    v_h = torch.clamp(e_h - CORRIDOR_HALF_WIDTH, min=0.0)
+
     # 课程权重
-    weight = get_curriculum_reward_weight(env, "weight_track_path")
-    sigma  = get_curriculum_reward_weight(env, "sigma_track_path")
-    # 计算奖励
-    r_base  = torch.exp(-sigma * error_base ** 2)
-    r_fbody = torch.exp(-sigma * error_fbody ** 2)
-    r_hbody = torch.exp(-sigma * error_hbody ** 2)
-    reward  = (r_base + r_fbody + r_hbody)/3
-    # 记录日志
-    env.extras["log"]["Data/path_error"] = ((error_base+error_fbody+error_hbody)/3).mean().item()
+    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
+    weight = get_curriculum_reward_weight(env, "weight_corridor")
+    r_f = torch.exp(-sigma * v_f ** 2)
+    r_h = torch.exp(-sigma * v_h ** 2)
+    reward = (r_f + r_h) / 2
+
+    # 日志
+    env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
+    env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
+    env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
     return reward * weight
 

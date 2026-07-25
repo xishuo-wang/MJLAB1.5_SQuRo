@@ -5,6 +5,7 @@ from .curriculums import *
 from .events import *
 from .indices import *
 from .observations import *
+from .path import *
 from .reference import *
 from .rewards import *
 from .terminations import *
