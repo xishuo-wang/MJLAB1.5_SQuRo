@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 
 
 # 阶段阈值（iterations）
-STAGE1_END = 1000
-STAGE2_END = 3000
+STAGE1_END = 500
+STAGE2_END = 2500
 
 
 # 命令配置

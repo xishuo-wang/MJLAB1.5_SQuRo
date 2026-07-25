@@ -3,7 +3,7 @@ from typing import Any
 
 
 _STEPS_PER_ITER = 24
-_STAGES = (0, 1000, 3000, 4000)
+_STAGES = (0, 500, 2500, 4000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
