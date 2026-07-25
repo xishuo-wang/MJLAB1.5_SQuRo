@@ -14,7 +14,7 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
       obs_normalization=True,
       distribution_cfg={
         "class_name": "GaussianDistribution",
-        "init_std": 0.5,
+        "init_std": 1.0,
         "std_type": "scalar",
       },
     ),
