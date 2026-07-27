@@ -1,5 +1,6 @@
 from __future__ import annotations
 import torch
+import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
@@ -78,13 +79,6 @@ _RMIN = 0.10                        # 最小转弯半径 (= 1/CURVATURE_TARGET_M
 
 
 def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
-    """生成一个周期 (0,0)→(2X,0) 的路径点 (x, y) + 弧长 + heading
-
-    使用与 slalom_path_viz.py 相同的 arc_from_start_end 逻辑。
-    返回 torch 张量: arc_lengths, x_vals, y_vals, headings
-    """
-    import numpy as np
-
     def _arc_np(start, end, r, clockwise, steps=n_arc_pts):
         start = np.asarray(start, dtype=np.float64)
         end = np.asarray(end, dtype=np.float64)
@@ -186,9 +180,6 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     vy_des = vel_cmd * torch.sin(path_heading)
 
     return x_ref, y_ref, vx_des, vy_des, path_heading
-
-
-# 走廊超额计算 — 纯数学函数，不依赖 env
 
 
 # 走廊超额计算 — 纯数学函数，不依赖 env
