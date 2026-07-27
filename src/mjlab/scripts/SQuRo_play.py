@@ -47,7 +47,7 @@ class PlayConfig:
     fixed_gait_freq: float | None = 1.0
     fixed_curvature: float | None = -1
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
-    fixed_pole_spacing: float | None = None
+    fixed_pole_spacing: float | None = 30
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -369,9 +369,9 @@ def run_play(cfg: PlayConfig):
     cmd_suffix_parts = []
     if is_slalom_phase:
         spacing = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else 0.5
-        cmd_suffix_parts.append(f"slalom_sp{spacing}")
+        cmd_suffix_parts.append(f"sp{spacing}")
     elif cfg.fixed_curvature is not None:
-        cmd_suffix_parts.append(f"curv{cfg.fixed_curvature}")
+        cmd_suffix_parts.append(f"cu{cfg.fixed_curvature}")
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{cmd_suffix}"
