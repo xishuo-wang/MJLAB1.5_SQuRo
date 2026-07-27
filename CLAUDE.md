@@ -149,6 +149,31 @@ SQuRo 脊柱是万向节结构(F_spine1=侧摆, H_spine1=俯仰, F_body/H_body=�
 - 角速度: `body_link_ang_vel_w[:, f_body_id, 2]`
 - 朝向: F_body 四元数提取 heading
 
+### F_body vs H_body heading 修正方向不同
+
+F_body_Link 和 H_body_Link 在 MuJoCo XML 中的局部四元数不同，导致 body+X 在世界系中指向相反方向：
+
+```
+初始状态（面朝 world +X, 脊柱角度=0）:
+  F_body_Link: body+X → world +Y (heading=+90°)
+  H_body_Link: body+X → world -Y (heading=-90°)
+```
+
+因此物理前向（world +X = 0°）的 heading 修正量**符号相反**：
+
+```python
+# F_body: body+X → +Y, 物理前向 = +X → 需减 π/2
+f_body_physical = get_body_heading(env, f_body_id) - (torch.pi / 2)
+
+# H_body: body+X → -Y, 物理前向 = +X → 需加 π/2
+h_body_physical = get_body_heading(env, h_body_id) + (torch.pi / 2)
+```
+
+**验证方法**：F_spine1=0 时，F_body 和 H_body 的物理前向 heading 应该都 ≈ 0°。
+F_spine1>0（右转）时，F_body 前向应偏右（负），H_body 前向应偏左（正），身体呈 C 形。
+
+**教训**：不要假设对称的身体环节有相同的局部坐标系朝向。使用新模型前必须对每个关键 body link 做诊断验证。
+
 ### 曲率命令设计
 
 命令格式 `[vel, h_f, h_h, freq, curvature]`, ω_cmd = curvature × vel_cmd。

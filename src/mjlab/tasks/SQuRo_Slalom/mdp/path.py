@@ -1,46 +1,27 @@
-"""期望路径计算 + 走廊一致性评估
-
-为后续绕杆(XY平面)和钻洞(YZ平面)预留接口：
-  - compute_arc_path_ref   → 基元阶段圆弧路径
-  - compute_slalom_path_ref → 绕杆阶段交替圆弧（预留）
-  - compute_tunnel_path_ref → 钻洞阶段高度剖面（预留）
-
-走廊一致性度量统一处理水平/垂直两种场景：
-  - 绕杆: XY 平面投影，身体侧向不超过走廊
-  - 钻洞: YZ 平面投影，身体高度不超过走廊
-"""
-
 from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
-
+from .indices import _MODEL_INDICES
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
-from .indices import _MODEL_INDICES
 
 # SQuRo 身体环节在 XY 平面上的近似半长/半宽（单位: m）
-F_BODY_HALF_LENGTH = 0.04   # F_body_Link 沿身体前后轴半长
-F_BODY_HALF_WIDTH  = 0.035   # F_body_Link 左右方向半宽
-H_BODY_HALF_LENGTH = 0.04   # H_body_Link 沿身体前后轴半长
-H_BODY_HALF_WIDTH  = 0.035   # H_body_Link 左右方向半宽
+F_BODY_HALF_LENGTH = 0.04       # F_body_Link 沿身体前后轴半长
+F_BODY_HALF_WIDTH  = 0.035      # F_body_Link 左右方向半宽
+H_BODY_HALF_LENGTH = 0.04       # H_body_Link 沿身体前后轴半长
+H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 左右方向半宽
 
 # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-CORRIDOR_HALF_WIDTH = 0.04   # 身体7.5cm + 1cm容差 → 走廊总宽6cm
+CORRIDOR_HALF_WIDTH = 0.04      # 身体7.5cm + 1cm容差 → 走廊总宽6cm
 
 # F_body/H_body 参考点距 base 中心的偏移量（沿路径切线方向）
 BODY_REF_OFFSET = 0.04
 
 
-# =========================================================================================
-# 身体环节 heading 提取（body+X 在 world XY 平面的方向）
+# 获取指定 body_link 的偏航角
 def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
-    """获取指定 body_link 的偏航角
-
-    body_id=None → root_link (base_Link)
-    body_id=int  → 对应 body_link 索引
-    """
     asset: Entity = env.scene["robot"]
     if body_id is None:
         quat = asset.data.root_link_quat_w
@@ -57,9 +38,9 @@ def get_f_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return get_body_heading(env, _MODEL_INDICES.f_body_id) - (torch.pi / 2)
 
 
-# H_body_Link 物理前向 heading
+# H_body_Link 物理前向 heading（body+X → world -Y，需加 π/2 修正）
 def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_heading(env, _MODEL_INDICES.h_body_id) - (torch.pi / 2)
+    return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
 # =========================================================================================
