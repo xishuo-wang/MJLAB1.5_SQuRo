@@ -64,6 +64,81 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     return x_ref, y_ref, vx_des, vy_des, path_heading
 
 
+# =========================================================================================
+# 路径参考调度 — 根据命令模式自动选择圆弧或绕杆路径
+def compute_path_ref(env: "ManagerBasedRlEnv"):
+    """路径参考统一入口
+
+    slalom_mode=False → 基元圆弧路径 (compute_arc_path_ref)
+    slalom_mode=True  → 正弦绕杆路径 (compute_slalom_path_ref)
+    """
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    if getattr(cmd_term.cfg, "slalom_mode", False):
+        return compute_slalom_path_ref(env)
+    return compute_arc_path_ref(env)
+
+
+# =========================================================================================
+# 路径参考计算 — 绕杆阶段：正弦曲率剖面
+def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
+    """正弦曲率绕杆路径 — 曲率连续光滑变化，无阶跃
+
+    κ(t) = κ_peak · cos(ωt)
+    θ(t) = κ_peak·v/ω · sin(ωt)           (零均值对称振荡)
+    ω = 2π/T, T = 2·pole_spacing/v
+
+    返回 (x_ref, y_ref, vx_des, vy_des, path_heading)
+    """
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    vel_cmd = cmd_term.command[:, 0]            # [N]
+    kappa_peak = cmd_term.command[:, 4]          # [N] — 曲率幅值
+    pole_spacing = cmd_term.cfg.pole_spacing     # type: ignore[attr-defined]
+    dt = env.step_dt
+    t = env.episode_length_buf.float() * dt     # [N]
+
+    # ω = 2π / T, T = 2·pole_spacing / v
+    period = 2.0 * pole_spacing / (vel_cmd + 1e-8)   # [N]
+    omega = 2 * torch.pi / period                     # [N]
+
+    # κ(t), θ(t) 解析计算
+    omega_t = omega * t
+    kappa_t = kappa_peak * torch.cos(omega_t)          # 当前曲率
+    theta_t = kappa_peak * vel_cmd / omega * torch.sin(omega_t)  # 当前 heading
+
+    # 梯形积分累积位置（从上一时刻到当前时刻）
+    if getattr(env, "_slalom_ref_state", None) is None:
+        env._slalom_ref_state = {  # type: ignore[attr-defined]
+            "x": torch.zeros(env.num_envs, device=env.device),
+            "y": torch.zeros(env.num_envs, device=env.device),
+        }
+    state = env._slalom_ref_state  # type: ignore[attr-defined]
+
+    t_prev = torch.clamp(t - dt, min=0.0)
+    omega_t_prev = omega * t_prev
+    theta_prev = kappa_peak * vel_cmd / omega * torch.sin(omega_t_prev)
+
+    # 梯形法则：Δx = v · (cos(θ_prev) + cos(θ_curr)) / 2 · dt
+    dx = vel_cmd * (torch.cos(theta_prev) + torch.cos(theta_t)) / 2 * dt
+    dy = vel_cmd * (torch.sin(theta_prev) + torch.sin(theta_t)) / 2 * dt
+    state["x"] += dx
+    state["y"] += dy
+
+    # 重置已终止环境
+    reset_ids = getattr(env, "reset_terminated", None)
+    if reset_ids is not None:
+        ids = reset_ids.nonzero(as_tuple=False).flatten()
+        if len(ids) > 0:
+            state["x"][ids] = 0.0
+            state["y"][ids] = 0.0
+
+    x_ref = state["x"]
+    y_ref = state["y"]
+    vx_des = vel_cmd * torch.cos(theta_t)
+    vy_des = vel_cmd * torch.sin(theta_t)
+
+    return x_ref, y_ref, vx_des, vy_des, theta_t
+
+
 # 走廊超额计算 — 纯数学函数，不依赖 env
 def compute_corridor_excess(
     body_pos_xy: torch.Tensor,     # [N, 2] 身体中心在投影平面上的位置

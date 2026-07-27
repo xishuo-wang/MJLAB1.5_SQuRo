@@ -4,7 +4,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
-from .path import compute_arc_path_ref, get_f_body_physical_heading
+from .path import compute_path_ref, get_f_body_physical_heading
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -79,7 +79,7 @@ def ref_joint_vel(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_A
 
 # 期望路径误差 [dx, dy, vx_des, vy_des] — 供策略观测
 def path_ref(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    x_ref, y_ref, vx_des, vy_des, _ = compute_arc_path_ref(env)
+    x_ref, y_ref, vx_des, vy_des, _ = compute_path_ref(env)
     base_pos = env.scene[asset_cfg.name].data.root_link_pos_w
     dx = x_ref - base_pos[:, 0]
     dy = y_ref - base_pos[:, 1]

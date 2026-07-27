@@ -203,6 +203,11 @@ class SlalomCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (20.0, 30.0)
     debug_vis: bool = False
 
+    # 路径模式：False=圆弧基元, True=正弦绕杆
+    slalom_mode: bool = False
+    # 杆间距（仅 slalom_mode=True 时生效）
+    pole_spacing: float = 0.3
+
     # 固定值（None=使用课程采样，设值可覆盖）
     fixed_velocity: Optional[float] = None
     fixed_height_f: Optional[float] = None

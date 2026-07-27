@@ -10,8 +10,8 @@ from .path import (
     F_BODY_HALF_WIDTH,
     H_BODY_HALF_LENGTH,
     H_BODY_HALF_WIDTH,
-    compute_arc_path_ref,
     compute_corridor_excess,
+    compute_path_ref,
     get_f_body_physical_heading,
     get_h_body_physical_heading,
 )
@@ -158,7 +158,7 @@ def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
 def compute_head_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算朝向误差
-    _, _, _, _, path_heading = compute_arc_path_ref(env)  # 期望朝向
+    _, _, _, _, path_heading = compute_path_ref(env)  # 期望朝向
     actual_heading = get_f_body_physical_heading(env)  # 实际物理前向
     error = actual_heading - path_heading
     error = torch.atan2(torch.sin(error), torch.cos(error))
@@ -233,7 +233,7 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
 
     # 路径参考
-    x_ref, y_ref, _, _, path_heading = compute_arc_path_ref(env)
+    x_ref, y_ref, _, _, path_heading = compute_path_ref(env)
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
 
