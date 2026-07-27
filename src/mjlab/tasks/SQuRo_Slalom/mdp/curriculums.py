@@ -1,27 +1,18 @@
-"""自动课程学习: 两阶段训练 + 奖励权重调度
-
-Phase 0 — 转弯基元 (iter 0 → PHASE1_END_ITER):
-  恒定曲率圆弧路径, κ 从 ±0.5 线性增长至 CURVATURE_TARGET_MAX
-
-Phase 1 — 绕杆训练 (iter PHASE1_END_ITER → max_iterations):
-  圆弧拼接 LUT 路径, 杆间距从宽到窄线性缩小
-"""
-
 from __future__ import annotations
 from typing import Any
 
 _STEPS_PER_ITER = 24
 
 # 两阶段训练
-PHASE1_END_ITER = 3000       # iter 0-3000: 转弯基元
-PHASE2_END_ITER = 5000       # iter 3000-5000: 绕杆训练
+PHASE1_END_ITER = 4000       # iter 0-4000: 转弯基元
+PHASE2_END_ITER = 8000       # iter 4000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程
 POLE_SPACING_START = 0.50    # 绕杆起始杆间距 (宽)
 POLE_SPACING_MIN = 0.25      # 绕杆最小杆间距 (= 2.5×Rmin)
 
 # 奖励权重阶段 (与训练阶段对齐)
-_STAGES = (0, 3000, 4000)
+_STAGES = (0, 2000, 4000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
@@ -30,7 +21,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (5.0, 5.0, 5.0),
-    "weight_corridor":          (5.0, 8.0, 8.0),    # 绕杆阶段提高走廊权重
+    "weight_corridor":          (5.0, 5.0, 8.0),
     "weight_track_head":        (5.0, 5.0, 5.0),
     "weight_smooth_L1_leg":     (0.1, 0.3, 0.6),
     "weight_smooth_L1_spn":     (0.1, 0.3, 0.6),
