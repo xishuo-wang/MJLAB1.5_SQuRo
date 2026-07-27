@@ -40,7 +40,7 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="SQuRo_Slalom",
     save_interval=100,
     num_steps_per_env=_STEPS_PER_ITER,
-    max_iterations=6_000,
+    max_iterations=8_000,
     
     clip_actions=3.14,
     seed=42,
