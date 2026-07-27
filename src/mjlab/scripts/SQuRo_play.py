@@ -11,7 +11,12 @@ from mjlab.utils.wrappers import VideoRecorder
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
+    _STEPS_PER_ITER,
+    PHASE1_END_ITER,
+    get_curriculum_pole_spacing,
+    get_training_phase,
+)
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
@@ -35,12 +40,14 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    # 命令固定值
+    # 转弯基元 (Phase 0) 命令固定值
     fixed_velocity: float | None = 0.1
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -10
+    fixed_curvature: float | None = -1
+    # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
+    fixed_pole_spacing: float | None = None
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -328,28 +335,42 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
+    # 自动识别训练阶段（从 checkpoint 文件名提取 iter，对照 PHASE1_END_ITER）
+    train_iter = 0
+    is_slalom_phase = False
+    if TRAINED_MODE and resume_path is not None:
+        train_iter = extract_iter_from_checkpoint(resume_path)
+        is_slalom_phase = train_iter >= PHASE1_END_ITER
+
     # 命令固定值覆盖
     cmd_cfg = env_cfg.commands.get("slalom_cmd")
     if cmd_cfg is not None and TRAINED_MODE:
         if cfg.fixed_velocity is not None:
-            cmd_cfg.fixed_velocity = cfg.fixed_velocity # type: ignore
-            print(f"[COMMAND] 配置 fixed_velocity = {cfg.fixed_velocity}")
+            cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore
+            print(f"[COMMAND] fixed_velocity = {cfg.fixed_velocity}")
         if cfg.fixed_height_f is not None:
-            cmd_cfg.fixed_height_f = cfg.fixed_height_f # type: ignore
-            print(f"[COMMAND] 配置 fixed_height_f = {cfg.fixed_height_f}")
+            cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore
+            print(f"[COMMAND] fixed_height_f = {cfg.fixed_height_f}")
         if cfg.fixed_height_h is not None:
-            cmd_cfg.fixed_height_h = cfg.fixed_height_h # type: ignore
-            print(f"[COMMAND] 配置 fixed_height_h = {cfg.fixed_height_h}")
+            cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore
+            print(f"[COMMAND] fixed_height_h = {cfg.fixed_height_h}")
         if cfg.fixed_gait_freq is not None:
-            cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq # type: ignore
-            print(f"[COMMAND] 配置 fixed_gait_freq = {cfg.fixed_gait_freq}")
-        if cfg.fixed_curvature is not None:
-            cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
-            print(f"[COMMAND] 配置 fixed_curvature = {cfg.fixed_curvature}")
+            cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
+            print(f"[COMMAND] fixed_gait_freq = {cfg.fixed_gait_freq}")
+        if is_slalom_phase:
+            print(f"[PHASE] 检测到绕杆阶段 (iter {train_iter} >= {PHASE1_END_ITER})")
+        else:
+            if cfg.fixed_curvature is not None:
+                cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
+                print(f"[COMMAND] fixed_curvature = {cfg.fixed_curvature}")
+            print(f"[PHASE] 转弯基元阶段 (iter {train_iter} < {PHASE1_END_ITER})")
 
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
-    if cfg.fixed_curvature is not None:
+    if is_slalom_phase:
+        spacing = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else 0.5
+        cmd_suffix_parts.append(f"slalom_sp{spacing}")
+    elif cfg.fixed_curvature is not None:
         cmd_suffix_parts.append(f"curv{cfg.fixed_curvature}")
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
     if video_name is not None:
@@ -362,12 +383,23 @@ def run_play(cfg: PlayConfig):
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
-    # 对齐 curriculum 阶段：从 checkpoint 文件名提取训练轮次
-    if TRAINED_MODE and resume_path is not None:
-        train_iter = extract_iter_from_checkpoint(resume_path)
-        if train_iter > 0:
-            env.common_step_counter = (train_iter - 10) * _STEPS_PER_ITER
-            print(f"[INFO] curriculum 对齐到 iter {train_iter - 10} (step {env.common_step_counter})")
+    # 对齐 curriculum 阶段
+    if TRAINED_MODE and resume_path is not None and train_iter > 0:
+        align_iter = train_iter - 10
+        env.common_step_counter = align_iter * _STEPS_PER_ITER
+        phase = get_training_phase(env.common_step_counter)
+        phase_name = "绕杆训练" if phase == 1 else "转弯基元"
+        print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {env.common_step_counter}) [{phase_name}]")
+
+    # 绕杆阶段：设置杆间距
+    if is_slalom_phase:
+        env_common_step = env.common_step_counter
+        if cfg.fixed_pole_spacing is not None:
+            pole_sp = cfg.fixed_pole_spacing
+        else:
+            pole_sp = get_curriculum_pole_spacing(env_common_step)
+        print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m "
+              f"(课程值={get_curriculum_pole_spacing(env_common_step):.2f}m)")
 
     # 初始化数据记录器
     data_recorder = None
