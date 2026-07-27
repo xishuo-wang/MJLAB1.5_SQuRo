@@ -5,7 +5,7 @@ from mjlab.entity import Entity, EntityCfg
 
 
 # 杆几何常量
-POLE_RADIUS = 0.005         # 直径 1cm
+POLE_RADIUS = 0.01          # 直径 1cm
 POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
 
 
@@ -52,13 +52,13 @@ class PoleEntity(Entity):
 
 def generate_pole_positions(
     spacing: float = 0.35,
-    stagger: float = 0.08,
     num_poles: int = 6,
     start_x: float = 0.25,
+    start_y: float = -0.1,
 ) -> list[tuple[float, float, float]]:
     positions: list[tuple[float, float, float]] = []
     for i in range(num_poles):
         x = start_x + i * spacing
-        y = stagger if i % 2 == 0 else -stagger
+        y = start_y
         positions.append((x, y, 0.0))
     return positions
