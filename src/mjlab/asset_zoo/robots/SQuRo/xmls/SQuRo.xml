@@ -68,7 +68,7 @@
         <geom solimp="1 1 0.001" solref="0.002 1.0"/> 
     </default>
     <worldbody>
-        <geom name="floor" pos="0 0 0.0" size="1.5 1.5 .25" type="plane" material="matplane" condim="3"  contype="1" conaffinity="1" friction="0.7 0.1 0.1" solimp="1 1 0.001" solref="0.002 0.9"/>              
+        <geom name="floor" pos="0 0 0.0" size="1.5 1.5 .25" type="plane" material="matplane" condim="3" contype="1" conaffinity="1" friction="0.7 0.1 0.1" solimp="1 1 0.001" solref="0.002 0.9"/>              
         <body name="base_Link" pos="0 0 0.06" quat="0 -0.707107 -0.707107 0">
         <camera name="follow_camera_left" mode='track' pos="-1.0 0 0" euler="1.57 -1.57 3.14" fovy="20"/>
         <camera name="follow_camera_front" mode='track' pos="0 1.0 0" euler="-1.57 0 0" fovy="20"/>
