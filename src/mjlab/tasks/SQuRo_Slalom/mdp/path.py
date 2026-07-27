@@ -39,6 +39,14 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
+# 路径参考调度 — 根据命令模式自动选择圆弧或绕杆路径
+def compute_path_ref(env: "ManagerBasedRlEnv"):
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    if getattr(cmd_term.cfg, "slalom_mode", False):
+        return compute_slalom_path_ref(env)
+    return compute_arc_path_ref(env)
+
+
 # 路径参考计算 — 基元阶段：恒定曲率圆弧
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
@@ -65,78 +73,122 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
 
 
 # =========================================================================================
-# 路径参考调度 — 根据命令模式自动选择圆弧或绕杆路径
-def compute_path_ref(env: "ManagerBasedRlEnv"):
-    """路径参考统一入口
+# 绕杆路径查找表（LUT）— 使用圆弧拼接方式，与 slalom_path_viz.py 逻辑一致
+_RMIN = 0.10                        # 最小转弯半径 (= 1/CURVATURE_TARGET_MAX)
 
-    slalom_mode=False → 基元圆弧路径 (compute_arc_path_ref)
-    slalom_mode=True  → 正弦绕杆路径 (compute_slalom_path_ref)
+
+def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
+    """生成一个周期 (0,0)→(2X,0) 的路径点 (x, y) + 弧长 + heading
+
+    使用与 slalom_path_viz.py 相同的 arc_from_start_end 逻辑。
+    返回 torch 张量: arc_lengths, x_vals, y_vals, headings
     """
-    cmd_term = env.command_manager._terms["slalom_cmd"]
-    if getattr(cmd_term.cfg, "slalom_mode", False):
-        return compute_slalom_path_ref(env)
-    return compute_arc_path_ref(env)
+    import numpy as np
+
+    def _arc_np(start, end, r, clockwise, steps=n_arc_pts):
+        start = np.asarray(start, dtype=np.float64)
+        end = np.asarray(end, dtype=np.float64)
+        mid = (start + end) / 2
+        chord_vec = end - start
+        chord_len = np.linalg.norm(chord_vec)
+        d = np.sqrt(max(0, r**2 - (chord_len / 2)**2))
+        perp = np.array([-chord_vec[1], chord_vec[0]]) / chord_len
+        sign = -1 if clockwise else 1
+        center = mid + sign * d * perp
+        v_s = start - center; v_e = end - center
+        a_s = np.arctan2(v_s[1], v_s[0]); a_e = np.arctan2(v_e[1], v_e[0])
+        if clockwise:
+            if a_e > a_s: a_e -= 2 * np.pi
+        else:
+            if a_e < a_s: a_e += 2 * np.pi
+        theta = np.linspace(a_s, a_e, steps)
+        return center[0] + r * np.cos(theta), center[1] + r * np.sin(theta)
+
+    r = _RMIN
+    x0, y0 = 0.0, 0.0
+    pts_x, pts_y = [x0], [y0]
+
+    # S1: CW ¼ arc (0,0) → (r, -r)  [跳过首点，因与 waypoint 重复]
+    ax, ay = _arc_np((x0, y0), (x0 + r, y0 - r), r, clockwise=True)
+    pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
+    # S2: CCW ¼ arc (r, -r) → (2r, -2r)
+    ax, ay = _arc_np((x0 + r, y0 - r), (x0 + 2*r, y0 - 2*r), r, clockwise=False)
+    pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
+    # S3: straight → (X, -2r)
+    if X - 2 * r > 1e-9:
+        pts_x.append(x0 + X); pts_y.append(y0 - 2 * r)
+    # S4: CCW ¼ arc (X, -2r) → (X+r, -r)
+    ax, ay = _arc_np((x0 + X, y0 - 2*r), (x0 + X + r, y0 - r), r, clockwise=False)
+    pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
+    # S5: CW ¼ arc (X+r, -r) → (X+2r, 0)
+    ax, ay = _arc_np((x0 + X + r, y0 - r), (x0 + X + 2*r, y0), r, clockwise=True)
+    pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
+    # S6: straight → (2X, 0)
+    if X - 2 * r > 1e-9:
+        pts_x.append(x0 + 2 * X); pts_y.append(y0)
+
+    # 累积弧长 + heading (前向差分)
+    pts = np.column_stack([pts_x, pts_y])
+    diffs = np.diff(pts, axis=0)
+    seg_lens = np.linalg.norm(diffs, axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(seg_lens)])
+
+    headings = np.arctan2(diffs[:, 1], diffs[:, 0])
+    headings = np.concatenate([headings, headings[-1:]])  # 最后一点复用前一点 heading
+
+    return arc, pts_x, pts_y, headings
 
 
-# =========================================================================================
-# 路径参考计算 — 绕杆阶段：正弦曲率剖面
+# 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
 def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
-    """正弦曲率绕杆路径 — 曲率连续光滑变化，无阶跃
-
-    κ(t) = κ_peak · cos(ωt)
-    θ(t) = κ_peak·v/ω · sin(ωt)           (零均值对称振荡)
-    ω = 2π/T, T = 2·pole_spacing/v
-
-    返回 (x_ref, y_ref, vx_des, vy_des, path_heading)
-    """
     cmd_term = env.command_manager._terms["slalom_cmd"]
     vel_cmd = cmd_term.command[:, 0]            # [N]
-    kappa_peak = cmd_term.command[:, 4]          # [N] — 曲率幅值
     pole_spacing = cmd_term.cfg.pole_spacing     # type: ignore[attr-defined]
     dt = env.step_dt
     t = env.episode_length_buf.float() * dt     # [N]
 
-    # ω = 2π / T, T = 2·pole_spacing / v
-    period = 2.0 * pole_spacing / (vel_cmd + 1e-8)   # [N]
-    omega = 2 * torch.pi / period                     # [N]
-
-    # κ(t), θ(t) 解析计算
-    omega_t = omega * t
-    kappa_t = kappa_peak * torch.cos(omega_t)          # 当前曲率
-    theta_t = kappa_peak * vel_cmd / omega * torch.sin(omega_t)  # 当前 heading
-
-    # 梯形积分累积位置（从上一时刻到当前时刻）
-    if getattr(env, "_slalom_ref_state", None) is None:
-        env._slalom_ref_state = {  # type: ignore[attr-defined]
-            "x": torch.zeros(env.num_envs, device=env.device),
-            "y": torch.zeros(env.num_envs, device=env.device),
+    # 首次调用时构建 LUT
+    cache = getattr(env, "_slalom_lut_cache", None)
+    if cache is None or cache["spacing"] != pole_spacing:
+        arc_np, xs_np, ys_np, hd_np = _generate_slalom_lut_one_period(pole_spacing)
+        dev = env.device
+        cache = {
+            "spacing": pole_spacing,
+            "arc": torch.tensor(arc_np, device=dev, dtype=torch.float32),
+            "x": torch.tensor(xs_np, device=dev, dtype=torch.float32),
+            "y": torch.tensor(ys_np, device=dev, dtype=torch.float32),
+            "heading": torch.tensor(hd_np, device=dev, dtype=torch.float32),
+            "period": float(arc_np[-1]),
         }
-    state = env._slalom_ref_state  # type: ignore[attr-defined]
+        env._slalom_lut_cache = cache  # type: ignore[attr-defined]
 
-    t_prev = torch.clamp(t - dt, min=0.0)
-    omega_t_prev = omega * t_prev
-    theta_prev = kappa_peak * vel_cmd / omega * torch.sin(omega_t_prev)
+    arc_lut = cache["arc"]
+    x_lut = cache["x"]
+    y_lut = cache["y"]
+    hd_lut = cache["heading"]
+    s_period = cache["period"]
 
-    # 梯形法则：Δx = v · (cos(θ_prev) + cos(θ_curr)) / 2 · dt
-    dx = vel_cmd * (torch.cos(theta_prev) + torch.cos(theta_t)) / 2 * dt
-    dy = vel_cmd * (torch.sin(theta_prev) + torch.sin(theta_t)) / 2 * dt
-    state["x"] += dx
-    state["y"] += dy
+    # 当前弧长 s = v·t mod period
+    s = (vel_cmd * t) % s_period  # [N]
 
-    # 重置已终止环境
-    reset_ids = getattr(env, "reset_terminated", None)
-    if reset_ids is not None:
-        ids = reset_ids.nonzero(as_tuple=False).flatten()
-        if len(ids) > 0:
-            state["x"][ids] = 0.0
-            state["y"][ids] = 0.0
+    # searchsorted 查找索引 + 线性插值
+    idx = torch.searchsorted(arc_lut, s).clamp(1, len(arc_lut) - 1)  # [N]
+    idx_prev = idx - 1
+    s_prev = arc_lut[idx_prev]
+    s_next = arc_lut[idx]
 
-    x_ref = state["x"]
-    y_ref = state["y"]
-    vx_des = vel_cmd * torch.cos(theta_t)
-    vy_des = vel_cmd * torch.sin(theta_t)
+    frac = (s - s_prev) / (s_next - s_prev + 1e-12)  # [N]
+    x_ref = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
+    y_ref = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
+    path_heading = hd_lut[idx_prev]  # 分段常值 heading
 
-    return x_ref, y_ref, vx_des, vy_des, theta_t
+    vx_des = vel_cmd * torch.cos(path_heading)
+    vy_des = vel_cmd * torch.sin(path_heading)
+
+    return x_ref, y_ref, vx_des, vy_des, path_heading
+
+
+# 走廊超额计算 — 纯数学函数，不依赖 env
 
 
 # 走廊超额计算 — 纯数学函数，不依赖 env

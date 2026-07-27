@@ -109,9 +109,9 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 生成杆位
     pole_positions = mdp.generate_pole_positions(
         spacing=0.3,    # 杆间距
-        stagger=0,      # 杆 Y 方向交错偏移
         num_poles=6,    # 杆数量
-        start_x=0.3,    # 第一根杆的 X 坐标
+        start_x=0.0,    # 第一根杆的 X 坐标
+        start_y=-0.1,   # 第一根杆的 Y 坐标
     )
 
     # 构建杆实体
