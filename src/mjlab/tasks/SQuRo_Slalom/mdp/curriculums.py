@@ -5,7 +5,7 @@ _STEPS_PER_ITER = 24
 
 # 两阶段训练
 PHASE1_END_ITER = 4000       # iter 0-4000: 转弯基元
-PHASE2_END_ITER = 8000       # iter 4000-8000: 绕杆训练
+PHASE2_END_ITER = 6000       # iter 4000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程
 POLE_SPACING_START = 0.50    # 绕杆起始杆间距 (宽)
