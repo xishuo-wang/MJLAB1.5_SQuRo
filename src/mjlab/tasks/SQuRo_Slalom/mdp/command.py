@@ -2,8 +2,8 @@ from __future__ import annotations
 import math
 import torch
 from mjlab.entity import Entity
-from mjlab.managers import CommandTermCfg
 from dataclasses import dataclass, field
+from mjlab.managers import CommandTermCfg
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
 if TYPE_CHECKING:
@@ -81,6 +81,18 @@ class SlalomCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         return self.command_tensor
 
+    # 绕杆模式 (由 curriculums.get_training_phase 自动控制)
+    @property
+    def slalom_mode_active(self) -> bool:
+        from .curriculums import get_training_phase
+        return get_training_phase(self._env.common_step_counter) == 1
+
+    # 当前杆间距 (由 curriculums.get_curriculum_pole_spacing 自动控制)
+    @property
+    def active_pole_spacing(self) -> float:
+        from .curriculums import get_curriculum_pole_spacing
+        return get_curriculum_pole_spacing(self._env.common_step_counter)
+
     def _get_velocity(self, n: int) -> torch.Tensor:
         if self.fixed_velocity is not None:
             return torch.full((n,), float(self.fixed_velocity), device=self.device)
@@ -110,14 +122,28 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
+        from .curriculums import get_training_phase
         n = len(env_ids)
         current_step = self._env.common_step_counter
-        self.curvature_command[env_ids] = self._get_curvature(n, current_step)
-        # 曲率越大 → 单侧腿推进 → 有效速度减半 → vel = base × (1 - 0.5·|κ|/κ_max)
-        base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
-        scale = 1.0 - 0.5 * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
-        self.vel_command[env_ids] = base_vel * scale
-        # 标记需重新记录起始位置
+        phase = get_training_phase(current_step)
+
+        if phase == 0:
+            # Phase 0: 转弯基元 — 采样曲率, 速度按曲率缩放
+            self.curvature_command[env_ids] = self._get_curvature(n, current_step)
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+            scale = 1.0 - 0.5 * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
+            self.vel_command[env_ids] = base_vel * scale
+        else:
+            # Phase 1: 绕杆训练 — 曲率取 ±max (脊柱参考用), 速度减半
+            sign = torch.where(
+                torch.rand(n, device=self.device) > 0.5,
+                torch.tensor(1.0, device=self.device),
+                torch.tensor(-1.0, device=self.device),
+            )
+            self.curvature_command[env_ids] = sign * CURVATURE_TARGET_MAX
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+            self.vel_command[env_ids] = torch.full((n,), base_vel * 0.5, device=self.device)
+
         self._start_recorded[env_ids] = False
 
     # 定期重采样：仅更新固定值（速度由 _resample_curvature 按曲率缩放）
@@ -202,11 +228,6 @@ class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
     resampling_time_range: Tuple[float, float] = (20.0, 30.0)
     debug_vis: bool = False
-
-    # 路径模式：False=圆弧基元, True=正弦绕杆
-    slalom_mode: bool = False
-    # 杆间距（仅 slalom_mode=True 时生效）
-    pole_spacing: float = 0.3
 
     # 固定值（None=使用课程采样，设值可覆盖）
     fixed_velocity: Optional[float] = None

@@ -40,10 +40,10 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
-# 路径参考调度 — 根据命令模式自动选择圆弧或绕杆路径
+# 路径参考调度 — 根据训练阶段自动选择圆弧或绕杆路径
 def compute_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    if getattr(cmd_term.cfg, "slalom_mode", False):
+    if cmd_term.slalom_mode_active:  # type: ignore[union-attr]
         return compute_slalom_path_ref(env)
     return compute_arc_path_ref(env)
 
@@ -136,14 +136,14 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
 # 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
 def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    vel_cmd = cmd_term.command[:, 0]            # [N]
-    pole_spacing = cmd_term.cfg.pole_spacing     # type: ignore[attr-defined]
+    vel_cmd = cmd_term.command[:, 0]                # [N]
+    pole_spacing = cmd_term.active_pole_spacing      # type: ignore[union-attr]
     dt = env.step_dt
-    t = env.episode_length_buf.float() * dt     # [N]
+    t = env.episode_length_buf.float() * dt         # [N]
 
-    # 首次调用时构建 LUT
+    # 首次调用或杆间距变化时重建 LUT
     cache = getattr(env, "_slalom_lut_cache", None)
-    if cache is None or cache["spacing"] != pole_spacing:
+    if cache is None or abs(cache["spacing"] - pole_spacing) > 1e-6:
         arc_np, xs_np, ys_np, hd_np = _generate_slalom_lut_one_period(pole_spacing)
         dev = env.device
         cache = {

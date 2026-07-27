@@ -1,10 +1,27 @@
+"""自动课程学习: 两阶段训练 + 奖励权重调度
+
+Phase 0 — 转弯基元 (iter 0 → PHASE1_END_ITER):
+  恒定曲率圆弧路径, κ 从 ±0.5 线性增长至 CURVATURE_TARGET_MAX
+
+Phase 1 — 绕杆训练 (iter PHASE1_END_ITER → max_iterations):
+  圆弧拼接 LUT 路径, 杆间距从宽到窄线性缩小
+"""
+
 from __future__ import annotations
 from typing import Any
 
-
 _STEPS_PER_ITER = 24
-_STAGES = (0, 2500, 4000)
 
+# 两阶段训练
+PHASE1_END_ITER = 3000       # iter 0-3000: 转弯基元
+PHASE2_END_ITER = 5000       # iter 3000-5000: 绕杆训练
+
+# 绕杆阶段杆间距课程
+POLE_SPACING_START = 0.50    # 绕杆起始杆间距 (宽)
+POLE_SPACING_MIN = 0.25      # 绕杆最小杆间距 (= 2.5×Rmin)
+
+# 奖励权重阶段 (与训练阶段对齐)
+_STAGES = (0, 3000, 4000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
@@ -13,7 +30,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (1.0, 1.0, 1.0),
     "weight_track_omg":         (5.0, 5.0, 5.0),
-    "weight_corridor":          (5.0, 5.0, 5.0),
+    "weight_corridor":          (5.0, 8.0, 8.0),    # 绕杆阶段提高走廊权重
     "weight_track_head":        (5.0, 5.0, 5.0),
     "weight_smooth_L1_leg":     (0.1, 0.3, 0.6),
     "weight_smooth_L1_spn":     (0.1, 0.3, 0.6),
@@ -34,12 +51,27 @@ _CURVES: dict[str, tuple[float, ...]] = {
 }
 
 
+# ========== 训练阶段查询 ==========
+def get_training_phase(step_counter: int) -> int:
+    """0=转弯基元, 1=绕杆训练"""
+    return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
+
+
+def get_curriculum_pole_spacing(step_counter: int) -> float:
+    """绕杆阶段杆间距 — 从 0.5m 线性缩小到 0.25m"""
+    iter_num = step_counter // _STEPS_PER_ITER
+    if iter_num < PHASE1_END_ITER:
+        return POLE_SPACING_START
+    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_END_ITER - PHASE1_END_ITER))
+    return POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
+
+
+# ========== 奖励权重 ==========
 class RewardWeightCurriculum:
     def get_reward_weights(self, current_step: int) -> dict[str, float]:
         current_iter = current_step // _STEPS_PER_ITER
         result: dict[str, float] = {}
         for name, values in _CURVES.items():
-            # 找到 ≤ current_iter 的最大阶段下标
             idx = 0
             for i, t in enumerate(_STAGES):
                 if current_iter >= t:
