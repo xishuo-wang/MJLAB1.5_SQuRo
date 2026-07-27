@@ -107,12 +107,42 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
 
+    # 杆参数
+    pole_spacing = 0.3     # 杆间距（可调）
+    pole_stagger = 0.06    # 杆 Y 方向交错偏移
+    pole_num = 6           # 杆数量
+    pole_start_x = 0.3     # 第一根杆的 X 坐标
+
+    # 生成杆位
+    pole_positions = mdp.generate_pole_positions(
+        spacing=pole_spacing,
+        stagger=pole_stagger,
+        num_poles=pole_num,
+        start_x=pole_start_x,
+    )
+
+    # 构建杆实体
+    pole_entities: dict = {}
+    for i, pos in enumerate(pole_positions):
+        name = f"pole{i}"
+        if play:
+            # play 模式：启用物理碰撞
+            pole_entities[name] = mdp.PoleEntityCfg(
+                name=name, position=pos,
+            )
+        else:
+            # 训练模式：仅视觉提示，碰撞由 corridor 奖励虚拟处理
+            pole_entities[name] = mdp.PoleEntityCfg(
+                name=name, position=pos,
+                contype=0, conaffinity=0,
+            )
+
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities={"robot": SQURO_ROBOT_CFG},
+            entities={"robot": SQURO_ROBOT_CFG, **pole_entities},
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,
@@ -132,7 +162,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             width=1920,
         ),
         sim=SimulationCfg(
-            nconmax=35,
+            nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
                 timestep=0.005,
