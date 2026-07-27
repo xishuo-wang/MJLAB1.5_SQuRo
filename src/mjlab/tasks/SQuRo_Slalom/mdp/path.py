@@ -22,15 +22,15 @@ from .indices import _MODEL_INDICES
 
 # SQuRo 身体环节在 XY 平面上的近似半长/半宽（单位: m）
 F_BODY_HALF_LENGTH = 0.04   # F_body_Link 沿身体前后轴半长
-F_BODY_HALF_WIDTH  = 0.02   # F_body_Link 左右方向半宽
+F_BODY_HALF_WIDTH  = 0.035   # F_body_Link 左右方向半宽
 H_BODY_HALF_LENGTH = 0.04   # H_body_Link 沿身体前后轴半长
-H_BODY_HALF_WIDTH  = 0.02   # H_body_Link 左右方向半宽
+H_BODY_HALF_WIDTH  = 0.035   # H_body_Link 左右方向半宽
 
 # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-CORRIDOR_HALF_WIDTH = 0.03   # 身体2cm + 1cm容差 → 走廊总宽6cm
+CORRIDOR_HALF_WIDTH = 0.04   # 身体7.5cm + 1cm容差 → 走廊总宽6cm
 
 # F_body/H_body 参考点距 base 中心的偏移量（沿路径切线方向）
-BODY_REF_OFFSET = 0.065
+BODY_REF_OFFSET = 0.04
 
 
 # =========================================================================================
@@ -64,47 +64,34 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 # =========================================================================================
 # 路径参考计算 — 基元阶段：恒定曲率圆弧
+# 参考路径是固定在世界坐标系中的几何体，由命令参数 (κ, v) 决定，
+# 不随机器人实际状态变化 —— 机器人必须主动跟踪它。
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     """圆弧路径参考点 + 期望速度（基元训练阶段）
 
+    路径始终从世界原点 (0,0) 出发，heading=0（+X方向），
+    仅由曲率 κ 和速度 v 决定圆弧形状。
+
     返回 (x_ref, y_ref, vx_des, vy_des, path_heading)
-    ref 是 base_Link 在圆弧上的投影位置。
 
     后续绕杆阶段可替换为 compute_slalom_path_ref()，
     钻洞阶段可替换为 compute_tunnel_path_ref()。
     """
-    asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]      # [N]
     vel_cmd = cmd_term.command[:, 0]        # [N]
     t = env.episode_length_buf.float() * env.step_dt  # [N]
 
-    # 初始化路径状态
-    if getattr(env, "_path_obs_state", None) is None:
-        env._path_obs_state = {  # type: ignore[attr-defined]
-            "start_pos": asset.data.root_link_pos_w.clone(),
-            "start_heading": get_f_body_physical_heading(env).clone(),
-        }
-    state = env._path_obs_state  # type: ignore[attr-defined]
-
-    # 重置已终止环境
-    reset_ids = getattr(env, "reset_terminated", None)
-    if reset_ids is not None:
-        ids = reset_ids.nonzero(as_tuple=False).flatten()
-        if len(ids) > 0:
-            state["start_pos"][ids] = asset.data.root_link_pos_w[ids]
-            state["start_heading"][ids] = get_f_body_physical_heading(env)[ids]
-
-    start_pos = state["start_pos"]
-    start_heading = state["start_heading"]
+    # 固定世界坐标系起点 — 与 reset_model 中的初始位置一致
+    start_heading = 0.0  # 物理前向 = world +X
     omega = curvature * vel_cmd
     dtheta = omega * t
     path_heading = start_heading + dtheta
 
     # 弦长公式：chord = v·t·sinc(dθ/2π)
     chord = vel_cmd * t * torch.sinc(dtheta / (2 * torch.pi))
-    x_ref = start_pos[:, 0] + chord * torch.cos(start_heading + dtheta / 2)
-    y_ref = start_pos[:, 1] + chord * torch.sin(start_heading + dtheta / 2)
+    x_ref = chord * torch.cos(start_heading + dtheta / 2)   # start_x = 0
+    y_ref = chord * torch.sin(start_heading + dtheta / 2)   # start_y = 0
 
     # 世界系期望速度（路径切线方向）
     vx_des = vel_cmd * torch.cos(path_heading)
