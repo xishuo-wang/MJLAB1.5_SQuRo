@@ -7,17 +7,13 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-# SQuRo 身体环节在 XY 平面上的近似半长/半宽（单位: m）
-F_BODY_HALF_LENGTH = 0.04       # F_body_Link 沿身体前后轴半长
-F_BODY_HALF_WIDTH  = 0.035      # F_body_Link 左右方向半宽
-H_BODY_HALF_LENGTH = 0.04       # H_body_Link 沿身体前后轴半长
-H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 左右方向半宽
-
-# 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-CORRIDOR_HALF_WIDTH = 0.04      # 身体7.5cm + 1cm容差 → 走廊总宽6cm
-
-# F_body/H_body 参考点距 base 中心的偏移量（沿路径切线方向）
-BODY_REF_OFFSET = 0.04
+# SQuRo 身体尺寸参数
+F_BODY_HALF_LENGTH = 0.04       # F_body_Link 在XoY平面上沿身体前后轴半长(m)
+F_BODY_HALF_WIDTH  = 0.035      # F_body_Link 在XoY平面左右方向半宽(m)
+H_BODY_HALF_LENGTH = 0.04       # H_body_Link 在XoY平面沿身体前后轴半长(m)
+H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 在XoY平面左右方向半宽(m)
+BODY_REF_OFFSET = 0.04          # F_body/H_body 中心距 base 中心的X轴偏移量
+CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
 
 
 # 获取指定 body_link 的偏航角
@@ -43,21 +39,8 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
-# =========================================================================================
 # 路径参考计算 — 基元阶段：恒定曲率圆弧
-# 参考路径是固定在世界坐标系中的几何体，由命令参数 (κ, v) 决定，
-# 不随机器人实际状态变化 —— 机器人必须主动跟踪它。
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
-    """圆弧路径参考点 + 期望速度（基元训练阶段）
-
-    路径始终从世界原点 (0,0) 出发，heading=0（+X方向），
-    仅由曲率 κ 和速度 v 决定圆弧形状。
-
-    返回 (x_ref, y_ref, vx_des, vy_des, path_heading)
-
-    后续绕杆阶段可替换为 compute_slalom_path_ref()，
-    钻洞阶段可替换为 compute_tunnel_path_ref()。
-    """
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]      # [N]
     vel_cmd = cmd_term.command[:, 0]        # [N]
@@ -81,7 +64,6 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     return x_ref, y_ref, vx_des, vy_des, path_heading
 
 
-# =========================================================================================
 # 走廊超额计算 — 纯数学函数，不依赖 env
 def compute_corridor_excess(
     body_pos_xy: torch.Tensor,     # [N, 2] 身体中心在投影平面上的位置
@@ -91,15 +73,6 @@ def compute_corridor_excess(
     half_length: float,            # 身体半长
     half_width: float,             # 身体半宽
 ) -> torch.Tensor:
-    """计算身体环节在路径法向上的占据半范围
-
-    e = |d_lat| + |L·sin(Δθ)| + |W·cos(Δθ)|
-
-    其中:
-      d_lat  = 身体中心到参考路径的侧向距离
-      Δθ     = 身体朝向 − 路径切线朝向
-      L, W   = 身体半长、半宽
-    """
     # 路径法向量（指向路径左侧）
     n_x = -torch.sin(path_heading)
     n_y = torch.cos(path_heading)
