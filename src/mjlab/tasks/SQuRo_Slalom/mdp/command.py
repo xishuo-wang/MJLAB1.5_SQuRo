@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 # 阶段阈值（iterations）— 无纯直行阶段，从 iter 0 直接开始曲率线性增长
-STAGE2_END = 2500
+STAGE2_END = 2000
 
 
 # 命令配置
