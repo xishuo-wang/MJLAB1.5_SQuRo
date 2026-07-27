@@ -45,9 +45,9 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -1
+    fixed_curvature: float | None = -10
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
-    fixed_pole_spacing: float | None = 30
+    fixed_pole_spacing: float | None = None
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -335,12 +335,17 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
-    # 自动识别训练阶段（从 checkpoint 文件名提取 iter，对照 PHASE1_END_ITER）
+    # 自动识别训练阶段
+    # 注意：train_iter 仅用于提取，实际阶段判断用 align_iter（与 env 内部一致）
     train_iter = 0
-    is_slalom_phase = False
+    align_iter = 0
     if TRAINED_MODE and resume_path is not None:
         train_iter = extract_iter_from_checkpoint(resume_path)
-        is_slalom_phase = train_iter >= PHASE1_END_ITER
+        align_iter = max(0, train_iter - 10)  # -10 避免边界效应，与 env 内部对齐
+
+    # 用 align_iter 判断阶段，保证与 env.common_step_counter 一致
+    align_step = align_iter * _STEPS_PER_ITER
+    is_slalom_phase = get_training_phase(align_step) == 1
 
     # 命令固定值覆盖
     cmd_cfg = env_cfg.commands.get("slalom_cmd")
@@ -358,18 +363,18 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
             print(f"[COMMAND] fixed_gait_freq = {cfg.fixed_gait_freq}")
         if is_slalom_phase:
-            print(f"[PHASE] 检测到绕杆阶段 (iter {train_iter} >= {PHASE1_END_ITER})")
+            print(f"[PHASE] 绕杆阶段 (align_iter={align_iter} >= {PHASE1_END_ITER})")
         else:
             if cfg.fixed_curvature is not None:
                 cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
                 print(f"[COMMAND] fixed_curvature = {cfg.fixed_curvature}")
-            print(f"[PHASE] 转弯基元阶段 (iter {train_iter} < {PHASE1_END_ITER})")
+            print(f"[PHASE] 转弯基元阶段 (align_iter={align_iter} < {PHASE1_END_ITER})")
 
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
     if is_slalom_phase:
-        spacing = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else 0.5
-        cmd_suffix_parts.append(f"sp{spacing}")
+        spacing = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        cmd_suffix_parts.append(f"sp{spacing:.2f}")
     elif cfg.fixed_curvature is not None:
         cmd_suffix_parts.append(f"cu{cfg.fixed_curvature}")
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
@@ -383,23 +388,20 @@ def run_play(cfg: PlayConfig):
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
-    # 对齐 curriculum 阶段
+    # 对齐 curriculum 阶段（使用与阶段判断一致的 align_iter）
     if TRAINED_MODE and resume_path is not None and train_iter > 0:
-        align_iter = train_iter - 10
-        env.common_step_counter = align_iter * _STEPS_PER_ITER
-        phase = get_training_phase(env.common_step_counter)
-        phase_name = "绕杆训练" if phase == 1 else "转弯基元"
-        print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {env.common_step_counter}) [{phase_name}]")
+        env.common_step_counter = align_step
+        phase_name = "绕杆训练" if is_slalom_phase else "转弯基元"
+        print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{phase_name}]")
 
-    # 绕杆阶段：设置杆间距
+    # 绕杆阶段：确认杆间距
     if is_slalom_phase:
-        env_common_step = env.common_step_counter
         if cfg.fixed_pole_spacing is not None:
             pole_sp = cfg.fixed_pole_spacing
+            print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m (手动覆盖, 课程值={get_curriculum_pole_spacing(align_step):.2f}m)")
         else:
-            pole_sp = get_curriculum_pole_spacing(env_common_step)
-        print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m "
-              f"(课程值={get_curriculum_pole_spacing(env_common_step):.2f}m)")
+            pole_sp = get_curriculum_pole_spacing(align_step)
+            print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m (自动从课程读取)")
 
     # 初始化数据记录器
     data_recorder = None
