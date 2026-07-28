@@ -178,8 +178,10 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     hd_lut = cache["heading"]
     s_period = cache["period"]
 
-    # 当前弧长 s = v·t mod period
-    s = (vel_cmd * t) % s_period  # [N]
+    # 当前弧长 s = v·t mod period + 周期偏移(保证 x_ref 连续不跳变)
+    total_s = vel_cmd * t                        # [N]
+    num_periods = (total_s / s_period).floor().long()  # [N]
+    s = total_s - num_periods * s_period          # [N], = total_s % period
 
     # searchsorted 查找索引 + 线性插值
     idx = torch.searchsorted(arc_lut, s).clamp(1, len(arc_lut) - 1)  # [N]
@@ -188,8 +190,10 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     s_next = arc_lut[idx]
 
     frac = (s - s_prev) / (s_next - s_prev + 1e-12)  # [N]
-    x_ref = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
+    x_lut_val = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
     y_ref = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
+    # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing
+    x_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
     path_heading = hd_lut[idx_prev]  # 分段常值 heading
 
     vx_des = vel_cmd * torch.cos(path_heading)

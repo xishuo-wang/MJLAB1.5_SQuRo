@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # 步态配置
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
-TROT_FREQ = 1.0                                             # 步频 (Hz)
+_TABLE_TROT_FREQ = 1.0                                      # 预计算表参考步频 (Hz)
 STRIDE_MIN = 0.0                                            # 最小步幅
 
 
@@ -213,9 +213,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [N]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
-    # 获取路径瞬时曲率（Phase 0: 静态命令值, Phase 1: LUT 插值 ±15/0)
+    # 获取路径瞬时曲率 + 步频 (Phase 0: 静态命令值, Phase 1: LUT 插值)
     curvature_cmd = get_path_curvature(env)  # [N]
-    vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]  # [N]
+    cmd_tensor = env.command_manager._terms["slalom_cmd"].command  # type: ignore[union-attr]
+    vel_cmd = cmd_tensor[:, 0]  # [N]
+    gait_freq = cmd_tensor[:, 3]  # [N] — 动态步频
     slalom_mode = env.command_manager._terms["slalom_cmd"].slalom_mode_active  # type: ignore[union-attr]
     kappa_norm = 1.0 / _SLALOM_RMIN if slalom_mode else CURVATURE_TARGET_MAX  # 15 or 20
 
@@ -242,7 +244,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # 线性插值腿部参考（脊柱部分后续覆盖，但插值也参与）
     ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
-    ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * TROT_FREQ  # 缩放步频
+    ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * gait_freq.unsqueeze(1)
 
     # -----------------------------------------------------------------
     # 根据曲率符号交换左右腿关节（右转时内侧为右腿）
@@ -291,7 +293,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # -----------------------------------------------------------------
     # 推进相位
-    env._ref_phase = (phase + TROT_FREQ * dt) % 1.0  # type: ignore[attr-defined]
+    env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
 
     # 重置已终止环境
     reset_ids = getattr(env, "reset_terminated", None)

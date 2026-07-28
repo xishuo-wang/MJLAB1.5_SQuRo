@@ -139,15 +139,11 @@ class SlalomCommand(CommandTerm):
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * scale
         else:
-            # Phase 1: 绕杆训练 — 曲率取 ±max (脊柱参考用), 速度减半
-            sign = torch.where(
-                torch.rand(n, device=self.device) > 0.5,
-                torch.tensor(1.0, device=self.device),
-                torch.tensor(-1.0, device=self.device),
-            )
-            self.curvature_command[env_ids] = sign * 15.0  # κ=±15 (匹配 LUT 弧曲率)
+            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 速度按曲率缩放
+            self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
-            self.vel_command[env_ids] = torch.full((n,), base_vel * 0.5, device=self.device)
+            scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
+            self.vel_command[env_ids] = torch.full((n,), base_vel * scale, device=self.device)
 
         self._start_recorded[env_ids] = False
 
@@ -235,7 +231,7 @@ class SlalomCommand(CommandTerm):
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
 
-        _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=10)
+        _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
         period_len = np.array(xs[-1])  # 一个周期的 X 跨度 = 2*spacing
         n_periods = 3
 
@@ -256,10 +252,9 @@ class SlalomCommand(CommandTerm):
                     label=f"slalom_{k}_{i}",
                 )
 
-        # 杆位置标记（红色小球，Y = POLE_Y）
+        # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致=6）
         from .pole import POLE_Y
-        num_poles = int(n_periods * 2) + 1
-        for pi in range(num_poles):
+        for pi in range(6):
             px = start[0] + pi * spacing
             py = start[1] + POLE_Y
             pt = np.array([px, py, start[2] + z_offset + 0.05])
