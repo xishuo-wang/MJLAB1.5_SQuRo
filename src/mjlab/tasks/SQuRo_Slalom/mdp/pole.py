@@ -46,24 +46,30 @@ class PoleEntity(Entity):
             conaffinity=self.cfg.conaffinity,
         )
 
-    # 设置杆透明度 (0=全透明, 1=不透明)
-    def set_alpha(self, alpha: float) -> None:
-        if self._geom_ref is not None:
-            r, g, b, _ = self.cfg.rgba
-            self._geom_ref.rgba = np.array([r, g, b, alpha], dtype=np.float32)  # type: ignore[assignment]
+    # 设置杆透明度 — 直接修改编译后模型 geom_rgba (0=全透明, 1=不透明)
+    def set_alpha(self, alpha: float, model=None) -> None:
+        geom_name = f"{self.cfg.name}_geom"
+        r, g, b, _ = self.cfg.rgba
+        rgba = np.array([r, g, b, alpha], dtype=np.float32)
+        if model is not None:
+            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+            if geom_id >= 0:
+                model.geom_rgba[geom_id] = rgba
+        elif self._geom_ref is not None:
+            self._geom_ref.rgba = rgba  # type: ignore[assignment]
 
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec
 
 
-# 根据训练阶段更新所有杆的可见性
+# 根据训练阶段更新所有杆的可见性（通过编译后 mjModel)
 def update_pole_visibility(env, phase: int) -> None:
-    """Phase 0 (基元): 杆透明不可见; Phase 1 (绕杆): 正常显示"""
     alpha = 0.0 if phase == 0 else 1.0
+    model = env.sim.model
     for _name, entity in env.scene.entities.items():
         if hasattr(entity, "set_alpha"):
-            entity.set_alpha(alpha)
+            entity.set_alpha(alpha, model=model)
 
 
 def generate_pole_positions(
