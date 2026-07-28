@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 TROT_FREQ = 1.0                                             # 步频 (Hz)
-STRIDE_MIN = 0.5                                            # 最小步幅
+STRIDE_MIN = 0.0                                            # 最小步幅
 
 
 # 离散曲率绝对值表（运行时在此范围内线性插值）
