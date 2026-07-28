@@ -106,11 +106,13 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 杆实体的默认占位（训练/回放时由课程或脚本覆盖位置和可见性）
+    # 杆实体的默认占位 (默认透明, Phase 1 训练由 update_pole_visibility 显示,
+    # Phase 1 回放由 SQuRo_play 重建为可见)
     pole_entities: dict = {}
     for i in range(6):
         pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
-            name=f"pole{i}", position=(i * 0.3, -0.1, 0.0),
+            name=f"pole{i}", position=(i * 0.3, -0.065, 0.0),
+            rgba=(0.9, 0.35, 0.2, 0.0),  # alpha=0, 默认透明
             contype=0, conaffinity=0,
         )
 

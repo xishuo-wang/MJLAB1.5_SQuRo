@@ -51,18 +51,15 @@ class PoleEntity(Entity):
         return self._spec
 
 
-# 根据训练阶段更新所有杆的可见性（遍历编译后模型 geom 名称，兼容 WarpBridge)
+# 根据训练阶段更新所有杆的可见性（按 geom 类型匹配圆柱体，兼容 WarpBridge)
 def update_pole_visibility(env, phase: int) -> None:
     alpha = 0.0 if phase == 0 else 1.0
     model = env.sim.model
     r, g, b = 0.9, 0.35, 0.2
+    rgba = np.array([r, g, b, alpha], dtype=np.float32)
     for i in range(model.ngeom):
-        try:
-            name = model.geom(i).name  # type: ignore[union-attr]
-        except Exception:
-            continue
-        if name and name.startswith("pole") and name.endswith("_geom"):
-            model.geom_rgba[i] = np.array([r, g, b, alpha], dtype=np.float32)
+        if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_CYLINDER:
+            model.geom_rgba[i] = rgba
 
 
 def generate_pole_positions(
