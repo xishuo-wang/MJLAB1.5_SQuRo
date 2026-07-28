@@ -23,11 +23,11 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_track_omg":         (5.0, 5.0, 5.0),
     "weight_corridor":          (5.0, 5.0, 8.0),
     "weight_track_head":        (5.0, 5.0, 5.0),
-    "weight_smooth_L1_leg":     (0.1, 0.3, 0.6),
-    "weight_smooth_L1_spn":     (0.1, 0.3, 0.6),
-    "weight_smooth_L2_leg":     (0.1, 0.3, 0.6),
-    "weight_smooth_L2_spn":     (0.1, 0.3, 0.6),
-    "weight_energy":            (0.1, 0.3, 0.6),
+    "weight_smooth_L1_leg":     (0.1, 0.5, 0.5),
+    "weight_smooth_L1_spn":     (0.1, 0.5, 0.5),
+    "weight_smooth_L2_leg":     (0.1, 0.5, 0.5),
+    "weight_smooth_L2_spn":     (0.1, 0.5, 0.5),
+    "weight_energy":            (0.1, 0.5, 0.5),
 
     "sigma_leg_pos":            (5.0,),
     "sigma_spn_pos":            (10.0, 10.0, 20.0),
@@ -37,19 +37,17 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10,),
+    "sigma_corridor":           (10, 20),
     "sigma_track_head":         (20,),
 }
 
 
 # ========== 训练阶段查询 ==========
 def get_training_phase(step_counter: int) -> int:
-    """0=转弯基元, 1=绕杆训练"""
     return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
 def get_curriculum_pole_spacing(step_counter: int) -> float:
-    """绕杆阶段杆间距 — 从 0.5m 线性缩小到 0.25m"""
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_END_ITER:
         return POLE_SPACING_START
