@@ -75,7 +75,7 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
 
 # =========================================================================================
 # 绕杆路径查找表（LUT）— 使用圆弧拼接方式，与 slalom_path_viz.py 逻辑一致
-_RMIN = 0.10                        # 最小转弯半径 (= 1/CURVATURE_TARGET_MAX)
+_RMIN = 1.0 / 15.0                  # 最小转弯半径 (曲率 κ=±15)
 
 
 def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
@@ -130,16 +130,22 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
         sy = np.zeros(n_straight - 1)
         pts_x.extend(sx); pts_y.extend(sy)
 
-    # 累积弧长 + heading (前向差分)
+    # 累积弧长 + heading + curvature (前向差分)
     pts = np.column_stack([pts_x, pts_y])
     diffs = np.diff(pts, axis=0)
     seg_lens = np.linalg.norm(diffs, axis=1)
     arc = np.concatenate([[0.0], np.cumsum(seg_lens)])
 
     headings = np.arctan2(diffs[:, 1], diffs[:, 0])
-    headings = np.concatenate([headings, headings[-1:]])  # 最后一点复用前一点 heading
+    headings = np.concatenate([headings, headings[-1:]])  # 最后一点复用
 
-    return arc, pts_x, pts_y, headings
+    # 曲率: κ = Δheading / Δarc (弧度差需 wrap 到 [-π, π])
+    dtheta = np.diff(headings)
+    dtheta = np.arctan2(np.sin(dtheta), np.cos(dtheta))
+    kappa_vals = dtheta / (seg_lens + 1e-12)
+    kappa_vals = np.concatenate([kappa_vals, kappa_vals[-1:]])
+
+    return arc, pts_x, pts_y, headings, kappa_vals
 
 
 # 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
@@ -153,7 +159,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     # 首次调用或杆间距变化时重建 LUT
     cache = getattr(env, "_slalom_lut_cache", None)
     if cache is None or abs(cache["spacing"] - pole_spacing) > 1e-6:
-        arc_np, xs_np, ys_np, hd_np = _generate_slalom_lut_one_period(pole_spacing)
+        arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_one_period(pole_spacing)
         dev = env.device
         cache = {
             "spacing": pole_spacing,
@@ -161,6 +167,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
             "x": torch.tensor(xs_np, device=dev, dtype=torch.float32),
             "y": torch.tensor(ys_np, device=dev, dtype=torch.float32),
             "heading": torch.tensor(hd_np, device=dev, dtype=torch.float32),
+            "kappa": torch.tensor(kp_np, device=dev, dtype=torch.float32),
             "period": float(arc_np[-1]),
         }
         env._slalom_lut_cache = cache  # type: ignore[attr-defined]
@@ -188,7 +195,20 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
 
+    # 存储瞬时曲率供脊柱参考使用
+    kappa_lut = cache["kappa"]
+    kappa_ref = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
+    env._path_kappa = kappa_ref  # type: ignore[attr-defined]
+
     return x_ref, y_ref, vx_des, vy_des, path_heading
+
+
+# 获取当前路径瞬时曲率 κ(t) — Phase 0 返回静态命令值, Phase 1 返回 LUT 插值
+def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    if not cmd_term.slalom_mode_active:  # type: ignore[union-attr]
+        return cmd_term.command[:, 4]  # type: ignore[union-attr]
+    return getattr(env, "_path_kappa", cmd_term.command[:, 4])  # type: ignore[union-attr]
 
 
 # 走廊超额计算 — 纯数学函数，不依赖 env

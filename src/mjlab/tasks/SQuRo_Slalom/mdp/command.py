@@ -145,7 +145,7 @@ class SlalomCommand(CommandTerm):
                 torch.tensor(1.0, device=self.device),
                 torch.tensor(-1.0, device=self.device),
             )
-            self.curvature_command[env_ids] = sign * CURVATURE_TARGET_MAX
+            self.curvature_command[env_ids] = sign * 15.0  # κ=±15 (匹配 LUT 弧曲率)
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             self.vel_command[env_ids] = torch.full((n,), base_vel * 0.5, device=self.device)
 
@@ -235,7 +235,7 @@ class SlalomCommand(CommandTerm):
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
 
-        _, xs, ys, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=10)
+        _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=10)
         period_len = np.array(xs[-1])  # 一个周期的 X 跨度 = 2*spacing
         n_periods = 3
 

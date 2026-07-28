@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from .command import CURVATURE_TARGET_MAX
 from .indices import resolve_model_indices
+from .path import get_path_curvature, _RMIN as _SLALOM_RMIN
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -212,9 +213,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [N]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
-    # 获取命令曲率（有符号）及速度
-    curvature_cmd = env.command_manager._terms["slalom_cmd"].command[:, 4]  # type: ignore[union-attr]  # [N]
+    # 获取路径瞬时曲率（Phase 0: 静态命令值, Phase 1: LUT 插值 ±15/0)
+    curvature_cmd = get_path_curvature(env)  # [N]
     vel_cmd = env.command_manager._terms["slalom_cmd"].command[:, 0]  # type: ignore[union-attr]  # [N]
+    slalom_mode = env.command_manager._terms["slalom_cmd"].slalom_mode_active  # type: ignore[union-attr]
+    kappa_norm = 1.0 / _SLALOM_RMIN if slalom_mode else CURVATURE_TARGET_MAX  # 15 or 20
 
     # 曲率绝对值及插值因子（k_bins 在 _init_tables 时缓存）
     abs_k = curvature_cmd.abs()  # [N]
@@ -268,8 +271,8 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # -----------------------------------------------------------------
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
-    k_norm = curvature_cmd / CURVATURE_TARGET_MAX          # 归一化曲率，范围 [-1, 1]
-    abs_k_norm = curvature_cmd.abs() / CURVATURE_TARGET_MAX
+    k_norm = curvature_cmd / kappa_norm          # 归一化曲率，范围 [-1, 1]
+    abs_k_norm = curvature_cmd.abs() / kappa_norm
 
     # 各脊柱关节目标角度（弧度），在 |κ| = max_k 时达到极值
     f_spine1 = -0.6 * k_norm               # κ=-max → +0.6, κ=+max → -0.6
