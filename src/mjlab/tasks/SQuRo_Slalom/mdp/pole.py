@@ -1,5 +1,5 @@
 from __future__ import annotations
-import numpy as np
+import torch
 import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
@@ -51,12 +51,11 @@ class PoleEntity(Entity):
         return self._spec
 
 
-# 根据训练阶段更新所有杆的可见性（按 geom 类型匹配圆柱体，兼容 WarpBridge)
+# 根据训练阶段更新所有杆的可见性（按 geom 类型匹配圆柱体)
 def update_pole_visibility(env, phase: int) -> None:
     alpha = 0.0 if phase == 0 else 1.0
     model = env.sim.model
-    r, g, b = 0.9, 0.35, 0.2
-    rgba = np.array([r, g, b, alpha], dtype=np.float32)
+    rgba = torch.tensor([0.9, 0.35, 0.2, alpha], device=env.device, dtype=torch.float32)
     for i in range(model.ngeom):
         if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_CYLINDER:
             model.geom_rgba[i] = rgba
