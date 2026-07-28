@@ -102,24 +102,33 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
     x0, y0 = 0.0, 0.0
     pts_x, pts_y = [x0], [y0]
 
+    # 直行段采样点数 — 与弧段密度一致
+    arc_len = r * np.pi / 2            # 单个 1/4 弧的弧长
+    straight_len = X - 2 * r           # 单个直行段长度
+    n_straight = max(2, int(straight_len / arc_len * n_arc_pts)) if straight_len > 1e-9 else 0
+
     # S1: CW ¼ arc (0,0) → (r, -r)  [跳过首点，因与 waypoint 重复]
     ax, ay = _arc_np((x0, y0), (x0 + r, y0 - r), r, clockwise=True)
     pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
     # S2: CCW ¼ arc (r, -r) → (2r, -2r)
     ax, ay = _arc_np((x0 + r, y0 - r), (x0 + 2*r, y0 - 2*r), r, clockwise=False)
     pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
-    # S3: straight → (X, -2r)
-    if X - 2 * r > 1e-9:
-        pts_x.append(x0 + X); pts_y.append(y0 - 2 * r)
+    # S3: straight → (X, -2r)  [多点插值]
+    if n_straight > 0:
+        sx = np.linspace(x0 + 2*r, x0 + X, n_straight)[1:]  # 跳过首点
+        sy = np.full(n_straight - 1, y0 - 2*r)
+        pts_x.extend(sx); pts_y.extend(sy)
     # S4: CCW ¼ arc (X, -2r) → (X+r, -r)
     ax, ay = _arc_np((x0 + X, y0 - 2*r), (x0 + X + r, y0 - r), r, clockwise=False)
     pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
     # S5: CW ¼ arc (X+r, -r) → (X+2r, 0)
     ax, ay = _arc_np((x0 + X + r, y0 - r), (x0 + X + 2*r, y0), r, clockwise=True)
     pts_x.extend(ax[1:]); pts_y.extend(ay[1:])
-    # S6: straight → (2X, 0)
-    if X - 2 * r > 1e-9:
-        pts_x.append(x0 + 2 * X); pts_y.append(y0)
+    # S6: straight → (2X, 0)  [多点插值]
+    if n_straight > 0:
+        sx = np.linspace(x0 + X + 2*r, x0 + 2*X, n_straight)[1:]  # 跳过首点
+        sy = np.zeros(n_straight - 1)
+        pts_x.extend(sx); pts_y.extend(sy)
 
     # 累积弧长 + heading (前向差分)
     pts = np.column_stack([pts_x, pts_y])
