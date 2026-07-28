@@ -5,11 +5,11 @@ _STEPS_PER_ITER = 24
 
 # 两阶段训练
 PHASE1_END_ITER = 4000       # iter 0-4000: 转弯基元
-PHASE2_END_ITER = 6000       # iter 4000-8000: 绕杆训练
+PHASE2_END_ITER = 6000       # iter 4000-6000: 绕杆训练
 
 # 绕杆阶段杆间距课程
-POLE_SPACING_START = 0.50    # 绕杆起始杆间距 (宽)
-POLE_SPACING_MIN = 0.25      # 绕杆最小杆间距 (= 2.5×Rmin)
+POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
+POLE_SPACING_MIN = 0.15      # 绕杆最小杆间距 (= 2.5×Rmin)
 
 # 奖励权重阶段 (与训练阶段对齐)
 _STAGES = (0, 2000, 4000)
