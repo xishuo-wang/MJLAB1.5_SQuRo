@@ -49,9 +49,9 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -15
+    fixed_curvature: float | None = None
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
-    fixed_pole_spacing: float | None = 0.4
+    fixed_pole_spacing: float | None = 0.2
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -351,7 +351,7 @@ def run_play(cfg: PlayConfig):
     align_step = align_iter * _STEPS_PER_ITER
     is_slalom_phase = get_training_phase(align_step) == 1
 
-    # 命令固定值覆盖
+    # 命令固定值覆盖 — 按阶段互斥: Phase 0 用 curvature, Phase 1 用 pole_spacing
     cmd_cfg = env_cfg.commands.get("slalom_cmd")
     if cmd_cfg is not None and TRAINED_MODE:
         if cfg.fixed_velocity is not None:
@@ -367,8 +367,11 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
             print(f"[COMMAND] fixed_gait_freq = {cfg.fixed_gait_freq}")
         if is_slalom_phase:
+            # Phase 1: 绕杆 — curvature 由 LUT 弧决定(±1/Rmin), 不由命令控制
+            cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
             print(f"[PHASE] 绕杆阶段 (align_iter={align_iter} >= {PHASE1_END_ITER})")
         else:
+            # Phase 0: 转弯基元 — 使用 fixed_curvature
             if cfg.fixed_curvature is not None:
                 cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
                 print(f"[COMMAND] fixed_curvature = {cfg.fixed_curvature}")
