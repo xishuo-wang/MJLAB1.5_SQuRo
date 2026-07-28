@@ -106,28 +106,13 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 生成杆位
-    pole_positions = mdp.generate_pole_positions(
-        spacing=0.3,    # 杆间距
-        num_poles=6,    # 杆数量
-        start_x=0.0,    # 第一根杆的 X 坐标
-        start_y=-0.1,   # 第一根杆的 Y 坐标
-    )
-
-    # 构建杆实体
+    # 杆实体的默认占位（训练/回放时由课程或脚本覆盖位置和可见性）
     pole_entities: dict = {}
-    for i, pos in enumerate(pole_positions):
-        name = f"pole{i}"
-        if play:
-            pole_entities[name] = mdp.PoleEntityCfg(
-                name=name, position=pos,
-                contype=0, conaffinity=0,
-            )
-        else:
-            pole_entities[name] = mdp.PoleEntityCfg(
-                name=name, position=pos,
-                contype=0, conaffinity=0,
-            )
+    for i in range(6):
+        pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
+            name=f"pole{i}", position=(i * 0.3, -0.1, 0.0),
+            contype=0, conaffinity=0,
+        )
 
     # 完整配置
     return ManagerBasedRlEnvCfg(

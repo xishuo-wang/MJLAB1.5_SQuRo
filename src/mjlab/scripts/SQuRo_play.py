@@ -17,6 +17,10 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     get_curriculum_pole_spacing,
     get_training_phase,
 )
+from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
+    PoleEntityCfg,
+    generate_pole_positions,
+)
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
@@ -45,7 +49,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -20
+    fixed_curvature: float | None = -15
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
     fixed_pole_spacing: float | None = 0.4
 
@@ -380,6 +384,18 @@ def run_play(cfg: PlayConfig):
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{cmd_suffix}"
+
+    # 绕杆阶段：用正确的杆间距重建杆实体（覆盖 env_cfg 中的默认占位）
+    if is_slalom_phase and TRAINED_MODE:
+        pole_sp = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=-0.1)
+        pole_dict = {}
+        for i, pos in enumerate(positions):
+            pole_dict[f"pole{i}"] = PoleEntityCfg(
+                name=f"pole{i}", position=pos, contype=0, conaffinity=0,
+            )
+        env_cfg.scene.entities = {"robot": env_cfg.scene.entities["robot"], **pole_dict}  # type: ignore[index]
+        print(f"[SLALOM] 杆位已按间距={pole_sp:.2f}m 重建")
 
     # 创建环境
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
