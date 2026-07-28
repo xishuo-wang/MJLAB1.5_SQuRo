@@ -45,9 +45,9 @@ class PlayConfig:
     fixed_height_f: float | None = 0.06
     fixed_height_h: float | None = 0.06
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -10
+    fixed_curvature: float | None = -20
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
-    fixed_pole_spacing: float | None = None
+    fixed_pole_spacing: float | None = 0.4
 
 
 # 从 checkpoint 文件名提取训练轮次
