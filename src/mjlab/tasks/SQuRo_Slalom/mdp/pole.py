@@ -8,6 +8,7 @@ from mjlab.entity import Entity, EntityCfg
 # 杆几何常量
 POLE_RADIUS = 0.01          # 直径 1cm
 POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
+POLE_Y = -0.0667            # 杆心 Y 坐标 (= -Rmin, 路径第一弧的底部)
 
 
 @dataclass
@@ -64,8 +65,8 @@ def update_pole_visibility(env, phase: int) -> None:
 def generate_pole_positions(
     spacing: float = 0.35,
     num_poles: int = 6,
-    start_x: float = 0.25,
-    start_y: float = -0.1,
+    start_x: float = 0.0,
+    start_y: float = POLE_Y,
 ) -> list[tuple[float, float, float]]:
     positions: list[tuple[float, float, float]] = []
     for i in range(num_poles):

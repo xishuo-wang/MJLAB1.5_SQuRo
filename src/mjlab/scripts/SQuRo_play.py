@@ -18,6 +18,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     get_training_phase,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
+    POLE_Y,
     PoleEntityCfg,
     generate_pole_positions,
 )
@@ -391,7 +392,7 @@ def run_play(cfg: PlayConfig):
     # 绕杆阶段：用正确的杆间距重建杆实体（覆盖 env_cfg 中的默认占位）
     if is_slalom_phase and TRAINED_MODE:
         pole_sp = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
-        positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=-0.1)
+        positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=POLE_Y)
         pole_dict = {}
         for i, pos in enumerate(positions):
             pole_dict[f"pole{i}"] = PoleEntityCfg(

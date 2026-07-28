@@ -256,11 +256,12 @@ class SlalomCommand(CommandTerm):
                     label=f"slalom_{k}_{i}",
                 )
 
-        # 杆位置标记（红色小球）
+        # 杆位置标记（红色小球，Y = POLE_Y）
+        from .pole import POLE_Y
         num_poles = int(n_periods * 2) + 1
         for pi in range(num_poles):
             px = start[0] + pi * spacing
-            py = start[1] - 0.1  # Y = -Rmin
+            py = start[1] + POLE_Y
             pt = np.array([px, py, start[2] + z_offset + 0.05])
             visualizer.add_sphere(
                 center=pt, radius=0.007,
