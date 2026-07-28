@@ -58,7 +58,7 @@ def update_pole_visibility(env, phase: int) -> None:
     rgba = torch.tensor([0.9, 0.35, 0.2, alpha], device=env.device, dtype=torch.float32)
     for i in range(model.ngeom):
         if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_CYLINDER:
-            model.geom_rgba[i] = rgba
+            model.geom_rgba[0, i] = rgba
 
 
 def generate_pole_positions(
