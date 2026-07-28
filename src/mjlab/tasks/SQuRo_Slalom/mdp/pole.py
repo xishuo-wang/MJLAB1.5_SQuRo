@@ -1,4 +1,5 @@
 from __future__ import annotations
+import numpy as np
 import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
@@ -45,9 +46,24 @@ class PoleEntity(Entity):
             conaffinity=self.cfg.conaffinity,
         )
 
+    # 设置杆透明度 (0=全透明, 1=不透明)
+    def set_alpha(self, alpha: float) -> None:
+        if self._geom_ref is not None:
+            r, g, b, _ = self.cfg.rgba
+            self._geom_ref.rgba = np.array([r, g, b, alpha], dtype=np.float32)  # type: ignore[assignment]
+
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec
+
+
+# 根据训练阶段更新所有杆的可见性
+def update_pole_visibility(env, phase: int) -> None:
+    """Phase 0 (基元): 杆透明不可见; Phase 1 (绕杆): 正常显示"""
+    alpha = 0.0 if phase == 0 else 1.0
+    for _name, entity in env.scene.entities.items():
+        if hasattr(entity, "set_alpha"):
+            entity.set_alpha(alpha)
 
 
 def generate_pole_positions(

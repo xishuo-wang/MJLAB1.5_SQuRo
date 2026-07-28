@@ -124,9 +124,13 @@ class SlalomCommand(CommandTerm):
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
         from .curriculums import get_training_phase
+        from .pole import update_pole_visibility
         n = len(env_ids)
         current_step = self._env.common_step_counter
         phase = get_training_phase(current_step)
+
+        # 根据阶段自动切换杆可见性 (Phase 0 透明, Phase 1 正常)
+        update_pole_visibility(self._env, phase)
 
         if phase == 0:
             # Phase 0: 转弯基元 — 采样曲率, 速度按曲率缩放
