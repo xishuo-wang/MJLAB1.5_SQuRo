@@ -374,7 +374,7 @@ def run_play(cfg: PlayConfig):
         pole_dict = {}
         for i, pos in enumerate(positions):
             pole_dict[f"pole{i}"] = PoleEntityCfg(name=f"pole{i}", position=pos, contype=col_type, conaffinity=col_type,)
-        env_cfg.scene.entities = {"robot": env_cfg.scene.entities["robot"], **pole_dict}  # type: ignore[index]
+        env_cfg.scene.entities = {**env_cfg.scene.entities, **pole_dict}  # type: ignore[index]
 
     # 创建环境
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
