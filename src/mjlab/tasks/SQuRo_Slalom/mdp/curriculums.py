@@ -1,17 +1,19 @@
 from __future__ import annotations
 from typing import Any
+from .command import CURVATURE_TARGET_MAX
 
 _STEPS_PER_ITER = 24
 
 # 两阶段训练
-PHASE1_MID_ITER = 2000       # iter 0-2000: 转弯曲率增大
-PHASE1_END_ITER = 4000       # iter 2000-4000: 转弯基元
-PHASE2_MID_ITER = 6000       # iter 4000-6000: 绕杆间距缩小阶段
-PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
+PHASE1_MID_ITER = 2000          # iter 0-2000: 转弯曲率增大
+PHASE1_END_ITER = 4000          # iter 2000-4000: 转弯基元
+PHASE2_MID_ITER = 6000          # iter 4000-6000: 绕杆间距缩小阶段
+PHASE2_END_ITER = 8000          # iter 6000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程
-POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
-POLE_SPACING_MIN = 0.15      # 绕杆最小杆间距 (= 2.5×Rmin)
+Rmin = 1/CURVATURE_TARGET_MAX   # 最小转弯半径
+POLE_SPACING_START = 0.20       # 绕杆起始杆间距 (宽)
+POLE_SPACING_MIN = 2 * Rmin     # 绕杆最小杆间距 (= 2.5×Rmin)
 
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000)
