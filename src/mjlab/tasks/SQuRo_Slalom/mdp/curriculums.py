@@ -13,7 +13,7 @@ PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
 POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
 POLE_SPACING_MIN = 0.15      # 绕杆最小杆间距 (= 2.5×Rmin)
 
-# 奖励权重阶段 (与训练阶段对齐)
+# 奖励权重阶段
 _STAGES = (0, 2000, 4000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
@@ -44,11 +44,12 @@ _CURVES: dict[str, tuple[float, ...]] = {
 }
 
 
-# ========== 训练阶段查询 ==========
+# 获取训练阶段
 def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
+# 获取杆间距
 def get_curriculum_pole_spacing(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_END_ITER:
@@ -57,7 +58,7 @@ def get_curriculum_pole_spacing(step_counter: int) -> float:
     return POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
 
 
-# ========== 奖励权重 ==========
+# 奖励权重课程
 class RewardWeightCurriculum:
     def get_reward_weights(self, current_step: int) -> dict[str, float]:
         current_iter = current_step // _STEPS_PER_ITER
@@ -88,5 +89,6 @@ class RewardWeightCurriculum:
 reward_weight_curriculum = RewardWeightCurriculum()
 
 
+# 获取课程奖励权重
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
