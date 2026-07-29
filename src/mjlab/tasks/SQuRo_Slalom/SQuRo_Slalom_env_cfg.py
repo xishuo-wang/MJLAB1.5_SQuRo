@@ -140,7 +140,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             width=1920,
         ),
         sim=SimulationCfg(
-            nconmax=100,
+            nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
                 timestep=0.005,
