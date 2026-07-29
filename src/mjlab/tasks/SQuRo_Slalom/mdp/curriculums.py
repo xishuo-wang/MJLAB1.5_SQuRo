@@ -1,8 +1,10 @@
 from __future__ import annotations
 from typing import Any
-from .command import CURVATURE_TARGET_MAX
 
 _STEPS_PER_ITER = 24
+
+# 最大曲率 — 全局唯一定义 (command/reference/pole 均从此导入)
+CURVATURE_TARGET_MAX = 15.0
 
 # 两阶段训练
 PHASE1_MID_ITER = 2000          # iter 0-2000: 转弯曲率增大

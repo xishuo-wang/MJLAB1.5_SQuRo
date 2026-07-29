@@ -3,7 +3,7 @@ import torch
 import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
-from .command import CURVATURE_TARGET_MAX
+from .curriculums import CURVATURE_TARGET_MAX
 
 
 # 杆几何常量

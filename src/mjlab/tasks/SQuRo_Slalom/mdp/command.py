@@ -4,7 +4,6 @@ import torch
 from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
-from .curriculums import get_pole_spacing_range
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
 if TYPE_CHECKING:
@@ -17,13 +16,12 @@ FIXED_VEL = 0.1
 FIXED_HEIGHT_F = 0.055
 FIXED_HEIGHT_H = 0.055
 FIXED_GAIT_FREQ = 1.0
-CURVATURE_TARGET_MAX = 15.0
 VEL_MIN = 0.25
 
 
 # 获取曲率采样范围
 def get_curvature_range(step_counter: int) -> Tuple[float, float]:
-    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER
+    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER, CURVATURE_TARGET_MAX
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_MID_ITER:
         progress = iter_num / PHASE1_MID_ITER  # 0 → 1
@@ -118,7 +116,7 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        from .curriculums import get_training_phase
+        from .curriculums import get_training_phase, get_pole_spacing_range, CURVATURE_TARGET_MAX
         from .pole import update_pole_visibility
         n = len(env_ids)
         current_step = self._env.common_step_counter

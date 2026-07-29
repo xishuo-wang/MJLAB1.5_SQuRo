@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
-from .command import CURVATURE_TARGET_MAX
+from .curriculums import CURVATURE_TARGET_MAX
 from .indices import resolve_model_indices
 from .path import get_path_curvature, _RMIN as _SLALOM_RMIN
 if TYPE_CHECKING:
