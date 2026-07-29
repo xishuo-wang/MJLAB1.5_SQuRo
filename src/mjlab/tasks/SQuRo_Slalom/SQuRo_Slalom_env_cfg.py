@@ -106,8 +106,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 杆实体的默认占位 (默认透明, Phase 1 训练由 update_pole_visibility 显示,
-    # Phase 1 回放由 SQuRo_play 重建为可见)
+    # 杆实体的默认占位 (默认透明, Phase 1 训练由 update_pole_visibility 显示, Phase 1 回放由 SQuRo_play 重建为可见)
     pole_entities: dict = {}
     for i in range(6):
         pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
