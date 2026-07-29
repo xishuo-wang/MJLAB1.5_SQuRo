@@ -290,43 +290,28 @@ def run_play(cfg: PlayConfig):
             resume_path = Path(cfg.checkpoint_file)
             if not resume_path.exists():
                 raise FileNotFoundError(f"未找到checkpoint文件: {resume_path}")
-            print(f"[INFO]: 加载checkpoint: {resume_path.name}")
-
             video_name = extract_video_name_from_checkpoint(resume_path)
-            print(f"[INFO]: 数据将保存为: {video_name}.csv")
         else:
             if cfg.wandb_run_path is None:
                 print("请输入 --checkpoint-file 路径:")
                 checkpoint_file = input().strip()
-
                 if checkpoint_file.startswith('"') and checkpoint_file.endswith('"'):
                     checkpoint_file = checkpoint_file[1:-1]
                 elif checkpoint_file.startswith("'") and checkpoint_file.endswith("'"):
                     checkpoint_file = checkpoint_file[1:-1]
-
                 if not checkpoint_file:
                     raise ValueError("必须提供checkpoint文件路径")
-
                 resume_path = Path(checkpoint_file)
                 if not resume_path.exists():
                     raise FileNotFoundError(f"未找到checkpoint文件: {resume_path}")
-                print(f"[INFO]: 加载checkpoint: {resume_path.name}")
-
                 video_name = extract_video_name_from_checkpoint(resume_path)
-                print(f"[INFO]: 数据将保存为: {video_name}.csv")
             else:
                 resume_path, was_cached = get_wandb_checkpoint_path(
                     log_root_path,
                     Path(cfg.wandb_run_path),
                     cfg.wandb_checkpoint_name
                 )
-                run_id = resume_path.parent.name
-                checkpoint_name = resume_path.name
-                cached_str = "已缓存" if was_cached else "已下载"
-                print(f"[INFO]: 加载checkpoint: {checkpoint_name} (运行: {run_id}, {cached_str})")
-
                 video_name = extract_video_name_from_checkpoint(resume_path)
-                print(f"[INFO]: 数据将保存为: {video_name}.csv")
 
         log_dir = resume_path.parent
 
@@ -338,8 +323,7 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
-    # 自动识别训练阶段
-    # 注意：train_iter 仅用于提取，实际阶段判断用 align_iter（与 env 内部一致）
+    # 自动识别训练阶段，注意：train_iter 仅用于提取，实际阶段判断用 align_iter（与 env 内部一致）
     train_iter = 0
     align_iter = 0
     if TRAINED_MODE and resume_path is not None:
@@ -355,29 +339,21 @@ def run_play(cfg: PlayConfig):
     if cmd_cfg is not None and TRAINED_MODE:
         if cfg.fixed_velocity is not None:
             cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore
-            print(f"[COMMAND] fixed_velocity = {cfg.fixed_velocity}")
         if cfg.fixed_height_f is not None:
             cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore
-            print(f"[COMMAND] fixed_height_f = {cfg.fixed_height_f}")
         if cfg.fixed_height_h is not None:
             cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore
-            print(f"[COMMAND] fixed_height_h = {cfg.fixed_height_h}")
         if cfg.fixed_gait_freq is not None:
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
-            print(f"[COMMAND] fixed_gait_freq = {cfg.fixed_gait_freq}")
         if is_slalom_phase:
             # Phase 1: 绕杆 — curvature 动态, 杆间距覆盖课程
             cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
             if cfg.fixed_pole_spacing is not None:
                 cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing  # type: ignore
-                print(f"[COMMAND] fixed_pole_spacing = {cfg.fixed_pole_spacing} (覆盖课程)")
-            print(f"[PHASE] 绕杆阶段 (align_iter={align_iter} >= {PHASE1_END_ITER})")
         else:
             # Phase 0: 转弯基元 — 使用 fixed_curvature
             if cfg.fixed_curvature is not None:
                 cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
-                print(f"[COMMAND] fixed_curvature = {cfg.fixed_curvature}")
-            print(f"[PHASE] 转弯基元阶段 (align_iter={align_iter} < {PHASE1_END_ITER})")
 
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
@@ -396,11 +372,8 @@ def run_play(cfg: PlayConfig):
         positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=POLE_Y)
         pole_dict = {}
         for i, pos in enumerate(positions):
-            pole_dict[f"pole{i}"] = PoleEntityCfg(
-                name=f"pole{i}", position=pos, contype=0, conaffinity=0,
-            )
+            pole_dict[f"pole{i}"] = PoleEntityCfg(name=f"pole{i}", position=pos, contype=0, conaffinity=0,)
         env_cfg.scene.entities = {"robot": env_cfg.scene.entities["robot"], **pole_dict}  # type: ignore[index]
-        print(f"[SLALOM] 杆位已按间距={pole_sp:.2f}m 重建")
 
     # 创建环境
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
@@ -412,17 +385,17 @@ def run_play(cfg: PlayConfig):
     # 对齐 curriculum 阶段（使用与阶段判断一致的 align_iter）
     if TRAINED_MODE and resume_path is not None and train_iter > 0:
         env.common_step_counter = align_step
-        phase_name = "绕杆训练" if is_slalom_phase else "转弯基元"
+        phase_name = "绕杆阶段" if is_slalom_phase else "基元阶段"
         print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{phase_name}]")
 
     # 绕杆阶段：确认杆间距
     if is_slalom_phase:
         if cfg.fixed_pole_spacing is not None:
             pole_sp = cfg.fixed_pole_spacing
-            print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m (手动覆盖, 课程值={get_curriculum_pole_spacing(align_step):.2f}m)")
+            print(f"[INFO] 杆间距 = {pole_sp:.2f}m (课程值={get_curriculum_pole_spacing(align_step):.2f}m)")
         else:
             pole_sp = get_curriculum_pole_spacing(align_step)
-            print(f"[SLALOM] 杆间距 = {pole_sp:.2f}m (自动从课程读取)")
+            print(f"[INFO] 杆间距 = {pole_sp:.2f}m (自动从课程读取)")
 
     # 初始化数据记录器
     data_recorder = None
@@ -434,7 +407,6 @@ def run_play(cfg: PlayConfig):
     if TRAINED_MODE and cfg.video:
         print("[INFO] 播放期间录制视频")
         assert log_dir is not None
-
         video_folder = log_dir / "videos"
         assert video_name is not None
         env = VideoRecorder(
@@ -492,11 +464,9 @@ def run_play(cfg: PlayConfig):
         import traceback
         traceback.print_exc()
     finally:
-        # 保存数据
         if data_recorder:
             data_recorder.save_to_csv()
         env.close()
-        print("[INFO] 环境已关闭")
 
 
 def main():
