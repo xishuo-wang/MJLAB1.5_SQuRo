@@ -19,7 +19,7 @@ POLE_SPACING_START = 0.20          # 间距下限起始值 (PHASE1_END_ITER)
 POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (PHASE2_MID_ITER)
 
 # 奖励权重阶段
-_STAGES = (0, 2000, 4000)
+_STAGES = (0, 2000, 4000, 6000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
@@ -35,7 +35,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_smooth_L2_leg":     (0.1, 0.5, 0.5),
     "weight_smooth_L2_spn":     (0.1, 0.5, 0.5),
     "weight_energy":            (0.1, 0.5, 0.5),
-    "weight_collision_body":    (0.0, 1.0, 3.0),   # Phase0=0, Phase1=1→3
+    "weight_collision_body":    (0.0, 0.0, 1.0, 3.0),
     "weight_collision_leg":     (0.0, 1.0, 3.0),
 
     "sigma_leg_pos":            (5.0,),
