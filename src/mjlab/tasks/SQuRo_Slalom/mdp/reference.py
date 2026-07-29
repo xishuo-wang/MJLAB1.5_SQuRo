@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # 步态配置
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
-STRIDE_MIN = 0.2                                            # 最小步幅
+STRIDE_MIN = 0.0                                            # 最小步幅
 
 
 # 离散曲率绝对值表（运行时在此范围内线性插值）
@@ -277,7 +277,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos[:, 0] = -0.6 * k_norm           # f_spine1 κ=-max → +0.6, κ=+max → -0.6
     ref_pos[:, 1] = -0.9 * k_norm           # f_body κ=-max → +0.9, κ=+max → -0.9
     ref_pos[:, 2] = 0.8 * k_norm            # neck_yaw
-    ref_pos[:, 3] = 0.3                     # neck_pitch
+    ref_pos[:, 3] = -0.3                    # neck_pitch
     ref_pos[:, 8] = -0.6 * abs_k_norm       # h_spine1 始终 ≤0, |κ|=max → -0.6
     ref_pos[:, 9] = -0.7 * k_norm           # h_body κ=-max → +0.7, κ=+max → -0.7
 
