@@ -27,7 +27,6 @@ from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
 
 
-
 # 任务配置
 TASK_NAME = "Mjlab-SQuRo-Slalom"
 
@@ -45,13 +44,12 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    # 转弯基元 (Phase 0) 命令固定值
+    # Slalom 任务相关配置
     fixed_velocity: float | None = 0.1
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 1.0
     fixed_curvature: float | None = -15
-    # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
     fixed_pole_spacing: float | None = 0.2
 
 
@@ -101,20 +99,15 @@ class JointDataRecorder:
             'HR_hip', 'HR_knee',
         ]
         self._joint_ids_resolved = False
-
         self.action_names = self.joint_names  # 与 joint_names 同序
-
-        # 足名称（与接触传感器 foot_names 顺序一致：FR, FL, HR, HL）
         self.foot_names = ['FR', 'FL', 'HR', 'HL']
-
-        # 足端 site 名称（与 foot_names 同序，配合 preserve_order=True）
         self.foot_site_names = ['FR_elbow_site', 'FL_elbow_site', 'HR_knee_site', 'HL_knee_site']
         self._foot_site_ids = None
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
         record = {'step': float(self.step_count)}
 
-        # 记录动作（保持不变）
+        # 记录动作
         if actions is not None:
             for action_idx in range(actions.shape[1]):
                 if action_idx < len(self.action_names):
@@ -127,7 +120,7 @@ class JointDataRecorder:
         asset = unwrapped.scene["robot"]
         env_idx = 0
 
-        # 足部接触力（保持不变）
+        # 足部接触力
         contact_sensor = unwrapped.scene["feet_ground_contact"]
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)
         for i, name in enumerate(self.foot_names):
@@ -137,7 +130,7 @@ class JointDataRecorder:
             force_mag = torch.norm(feet_contact[env_idx, i * 3: i * 3 + 3]).item()
             record[f'contact_{name}_mag'] = force_mag
 
-        # 足端位置（保持不变）
+        # 足端位置
         if self._foot_site_ids is None:
             self._foot_site_ids, _ = asset.find_sites(self.foot_site_names, preserve_order=True)
         foot_pos = asset.data.site_pos_w[env_idx, self._foot_site_ids]
@@ -164,38 +157,43 @@ class JointDataRecorder:
         joint_acc = ja[env_idx, joint_ids]  # type: ignore[call-overload]
         actuator_force = asset.data.actuator_force[env_idx]
 
-        # 基座位置（保持不变）
+        # 基座位置
         base_pos = asset.data.root_link_pos_w[env_idx]
         base_lin_vel_w = asset.data.root_link_lin_vel_w[env_idx]
         base_ang_vel_w = asset.data.root_link_ang_vel_w[env_idx]
 
-        # F_body 偏航角（find_bodies 返回 (ids, names)，取 ids 第一个元素）
-        f_body_id = self._f_body_id if hasattr(self, '_f_body_id') else None
-        if f_body_id is None:
-            try:
-                f_body_ids, _ = asset.find_bodies("F_body_Link", preserve_order=True)
-                if f_body_ids is not None and len(f_body_ids) > 0:
-                    self._f_body_id = f_body_ids[0]  # type: ignore[union-attr]
-                else:
-                    self._f_body_id = None
-            except Exception:
-                self._f_body_id = None
+        # F_body / H_body 偏航角
+        import math as _math
+        if not hasattr(self, '_f_body_id') or not hasattr(self, '_h_body_id'):
+            f_ids, _ = asset.find_bodies("F_body_Link", preserve_order=True)
+            h_ids, _ = asset.find_bodies("H_body_Link", preserve_order=True)
+            self._f_body_id = f_ids[0] if f_ids else None  # type: ignore[union-attr]
+            self._h_body_id = h_ids[0] if h_ids else None  # type: ignore[union-attr]
 
-        f_body_heading = 0.0
+        f_body_raw, h_body_raw = 0.0, 0.0
         if self._f_body_id is not None:
-            quat = asset.data.body_link_quat_w[env_idx, self._f_body_id]  # [w,x,y,z]
+            quat = asset.data.body_link_quat_w[env_idx, self._f_body_id]
             w, x, y, z = quat[0], quat[1], quat[2], quat[3]
-            sin_h = 2.0 * (w * z + x * y)
-            cos_h = 1.0 - 2.0 * (y * y + z * z)
-            f_body_heading = float(torch.atan2(sin_h, cos_h).item())
-        
-        record['f_body_heading'] = f_body_heading
+            f_body_raw = float(torch.atan2(2*(w*z+x*y), 1-2*(y*y+z*z)).item())
+        if self._h_body_id is not None:
+            quat = asset.data.body_link_quat_w[env_idx, self._h_body_id]
+            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+            h_body_raw = float(torch.atan2(2*(w*z+x*y), 1-2*(y*y+z*z)).item())
 
-        # 基座朝向（原有的 base heading，可保留供参考）
+        # body+X heading (raw)
+        record['f_body_raw_heading'] = f_body_raw
+        record['h_body_raw_heading'] = h_body_raw
+        # 物理前向 heading
+        record['f_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(f_body_raw - _math.pi/2)),
+                                                       torch.cos(torch.tensor(f_body_raw - _math.pi/2))).item())
+        record['h_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(h_body_raw + _math.pi/2)),
+                                                       torch.cos(torch.tensor(h_body_raw + _math.pi/2))).item())
+
+        # 基座朝向
         heading = asset.data.heading_w[env_idx]
         record['heading'] = float(heading.item())
 
-        # 控制命令等（保持不变）
+        # 控制命令等
         ref_joint_pos, ref_joint_vel = get_reference_joint_state(unwrapped)
         ref_joint_pos = ref_joint_pos[env_idx]
         ref_joint_vel = ref_joint_vel[env_idx]
