@@ -1,13 +1,3 @@
-"""SQuRo 模型索引 — 统一管理所有关节/身体/足端 ID
-
-顺序遵循 entity actuator 顺序（= MuJoCo XML actuator 顺序）:
-  F_spine1, F_body, Neck_yaw, Neck_pitch,
-  FL_shoulder, FL_elbow, FR_shoulder, FR_elbow,
-  H_spine1, H_body, HL_hip, HL_knee, HR_hip, HR_knee
-
-与 entity.find_joints_by_actuator_names 返回的顺序一致。
-"""
-
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 # 执行器关节名称 — 必须与 entity actuator 顺序一致
