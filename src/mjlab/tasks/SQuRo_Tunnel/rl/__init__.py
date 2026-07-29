@@ -1,3 +1,3 @@
-from mjlab.tasks.SQuRo_Hole.rl.runner import (
-    MouseOnPolicyRunner as MouseOnPolicyRunner,
+from mjlab.tasks.SQuRo_Tunnel.rl.runner import (
+    SQuRoTunnelOnPolicyRunner as SQuRoTunnelOnPolicyRunner,
 )

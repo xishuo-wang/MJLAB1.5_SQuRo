@@ -7,7 +7,7 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 
 
-class MouseOnPolicyRunner(MjlabOnPolicyRunner):
+class SQuRoTunnelOnPolicyRunner(MjlabOnPolicyRunner):
   env: RslRlVecEnvWrapper
 
   def save(self, path: str, infos=None):

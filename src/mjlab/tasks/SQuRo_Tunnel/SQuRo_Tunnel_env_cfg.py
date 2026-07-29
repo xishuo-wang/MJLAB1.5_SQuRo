@@ -1,5 +1,5 @@
-# uv run train Mjlab-Mouse
-# uv run play Mjlab-Mouse-Play --checkpoint_file
+# uv run train Mjlab-SQuRo-Tunnel
+# uv run play Mjlab-SQuRo-Tunnel-Play --checkpoint_file
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -13,16 +13,16 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.tasks.SQuRo_Hole import mdp
+from mjlab.tasks.SQuRo_Tunnel import mdp
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
-def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # 获取 mouse 机器人配置
-    MOUSE_ROBOT_CFG = get_squro_robot_cfg()
+def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    # SQuRo 机器人配置
+    SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
     # Mouse 特定配置
     foot_names = ("FR", "FL", "HR", "HL")
@@ -44,25 +44,14 @@ def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "mouse_cmd"}),
     }
 
-    critic_terms = {
-        **policy_terms,
-    }
+    critic_terms = {**policy_terms,}
 
     observations = {
-        "actor": ObservationGroupCfg(
-            terms=policy_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
-        "critic": ObservationGroupCfg(
-            terms=critic_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
+        "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
+        "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-
-    # 动作空间配置
+    # 动作空间 — 14个执行器位置控制
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -72,14 +61,12 @@ def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-
-    # 事件配置
+    # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-
-    # 奖励函数配置
+    # 奖励函数
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_velocity_reward, weight=1.0),
@@ -139,7 +126,7 @@ def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             )
         }
         entities={
-            "robot": MOUSE_ROBOT_CFG,
+            "robot": SQURO_ROBOT_CFG,
             "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
             "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005)),
             "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
@@ -153,7 +140,7 @@ def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             )
         }
         entities = {
-            "robot": MOUSE_ROBOT_CFG,
+            "robot": SQURO_ROBOT_CFG,
             "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
                                        contype=0, conaffinity=0),
             "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005),
@@ -191,11 +178,11 @@ def Mouse_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.001,  
+                timestep=0.005,  
                 iterations=10,
                 ls_iterations=20,
             ),
         ),
-        decimation=5,
+        decimation=4,
         episode_length_s=episode_length_s,
     )
