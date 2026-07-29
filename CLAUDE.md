@@ -99,6 +99,7 @@ src/mjlab/
 ## Git / GitHub
 
 - **每次代码修改完成后自动 commit 并 push**，无需等待用户确认，但需要告诉用户提交 GitHub 的内容，以及涉及到的文件。
+- **提交内容规范**：只提交相关的源代码、配置文件、文档。**禁止提交**大权重文件（>1MB）、日志文件、缓存、`.env` 等。
 - **Commit message 规范**（基于 Conventional Commits）：
   - 格式：`<type>(<scope>): <中文简述>`，例如：`feat(env): 新增抗扰动奖励项`
   - type 可选值：
@@ -115,70 +116,10 @@ src/mjlab/
     - `fix(env): 修正 F_body 坐标系朝向提取`
     - `refactor(rl): 抽取 CSC 辅助损失为独立模块`
     - `config(exp): 更新抗扰动实验参数`
+  - 禁止提交'Co-Authored-By: Claude <noreply@anthropic.com>'
 - **网络超时处理**：如果 `git push` 因网络超时或连接失败而无法完成，**不要反复重试**。直接跳过本次 push，并告知用户“⚠️ 网络超时，已跳过 git push，请手动推送”。本地的 commit 保留，待下次网络恢复时一并推送。
 
-## SQuRo 踩坑记录
 
-### 坐标系陷阱：body+X ≠ 物理前向
-
-SQuRo (Mouse) 模型的 body frame 与世界坐标系有 90° 旋转偏移：
-
-```
-世界坐标系:  前=+X, 左=+Y, 上=+Z
-SQuRo body frame (base_Link & F_body_Link):
-  body+X → world +Y (=物理左, heading=90°)
-  body+Y → world +X (base_Link 时=物理前, F_body 时=world -Z!)
-  body+Z → world -Z
-```
-
-**关键后果**: `atan2` 提取的 heading 是 body+X 在世界 XY 平面的方向(=90°)，不代表物理前向(0°)。
-
-**修复**: 所有依赖"前进方向"的投影必须减去 π/2:
-```python
-forward_heading = body_X_heading - torch.pi / 2  # body+X→world+Y → forward→world+X
-forward_speed = vel_x * cos(forward_heading) + vel_y * sin(forward_heading)
-```
-
-**教训**: 使用新机器人模型前，务必用诊断脚本验证 body frame 各轴在世界系的实际指向。诊断代码见 `SQuRo_constants.py` 的 `__main__` 块。
-
-### F_body vs base_Link 选择
-
-SQuRo 脊柱是万向节结构(F_spine1=侧摆, H_spine1=俯仰, F_body/H_body=扭转)。
-脊柱弯曲时 base_Link 处于中心会受两侧拉扯而震荡，因此**所有跟踪应以 F_body_Link 为准**:
-- 速度: `body_link_lin_vel_w[:, f_body_id]`
-- 角速度: `body_link_ang_vel_w[:, f_body_id, 2]`
-- 朝向: F_body 四元数提取 heading
-
-### F_body vs H_body heading 修正方向不同
-
-F_body_Link 和 H_body_Link 在 MuJoCo XML 中的局部四元数不同，导致 body+X 在世界系中指向相反方向：
-
-```
-初始状态（面朝 world +X, 脊柱角度=0）:
-  F_body_Link: body+X → world +Y (heading=+90°)
-  H_body_Link: body+X → world -Y (heading=-90°)
-```
-
-因此物理前向（world +X = 0°）的 heading 修正量**符号相反**：
-
-```python
-# F_body: body+X → +Y, 物理前向 = +X → 需减 π/2
-f_body_physical = get_body_heading(env, f_body_id) - (torch.pi / 2)
-
-# H_body: body+X → -Y, 物理前向 = +X → 需加 π/2
-h_body_physical = get_body_heading(env, h_body_id) + (torch.pi / 2)
-```
-
-**验证方法**：F_spine1=0 时，F_body 和 H_body 的物理前向 heading 应该都 ≈ 0°。
-F_spine1>0（右转）时，F_body 前向应偏右（负），H_body 前向应偏左（正），身体呈 C 形。
-
-**教训**：不要假设对称的身体环节有相同的局部坐标系朝向。使用新模型前必须对每个关键 body link 做诊断验证。
-
-### 曲率命令设计
-
-命令格式 `[vel, h_f, h_h, freq, curvature]`, ω_cmd = curvature × vel_cmd。
-曲率 κ = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行。
-每次 episode reset 时采样一次，episode 内保持不变——让 agent 针对固定转弯半径学习稳态步态。
-
-脊柱参考角: F_spine1 = clamp(-GAIN × ω_cmd, ±0.6), GAIN = L/v = 2.0。
-符号: 实测 F_body_heading = base_heading - F_spine1，左转需 F_spine1<0 → 取负号。
+## 知识库
+当需要了解项目技术细节、架构设计、踩坑记录、机器人模型坐标系说明时，必须主动读取根目录下的 `PROJECT.md` 文件（使用 `Read` 工具）。该文件是项目的唯一事实来源，不要在 `CLAUDE.md` 中冗余存储这些信息。
+- 若 `PROJECT.md` 不存在，请提醒用户创建该文件并将项目知识移入其中；若存在但未覆盖所需信息，告知用户补充。
