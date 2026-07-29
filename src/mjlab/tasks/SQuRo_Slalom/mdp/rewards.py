@@ -236,94 +236,70 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 # =========================================================================================
 # 走廊一致性奖励 — 身体包络不超出参考路径周围的允许走廊
-# e_i = |d_lat| + |L·sin(Δθ)| + |W·cos(Δθ)|, v_i = max(0, e_i - C)
-# 同时惩罚位置偏差和朝向偏差，死区 = 走廊半宽 C
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-
-    # 路径参考
+    # 获取参考路径
     x_ref, y_ref, _, _, path_heading = compute_path_ref(env)
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
-
-    # F_body/H_body 参考位置（偏移 ±6.5cm 沿切线）
     ref_f = ref_xy + BODY_REF_OFFSET * tangent
     ref_h = ref_xy - BODY_REF_OFFSET * tangent
-
-    # 当前身体 XY 位置
+    # 计算走廊超出量
     f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
     h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
-
-    # 当前物理前向 heading
     f_heading = get_f_body_physical_heading(env)
     h_heading = get_h_body_physical_heading(env)
-
-    # 走廊超额 e_i
-    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading,
-                                   F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
-    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading,
-                                   H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
-
-    # 超出走廊的量
+    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
+    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
     v_f = torch.clamp(e_f - CORRIDOR_HALF_WIDTH, min=0.0)
     v_h = torch.clamp(e_h - CORRIDOR_HALF_WIDTH, min=0.0)
-
-    # 课程权重
+    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")
+    # 计算奖励
     r_f = torch.exp(-sigma * v_f ** 2)
     r_h = torch.exp(-sigma * v_h ** 2)
     reward = (r_f + r_h) / 2
-
-    # 日志
+    # 记录日志
     env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
     env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
     env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
     return reward * weight
 
 
+
 # =========================================================================================
-# 虚拟碰撞惩罚 — 躯干(矩形 vs 杆圆) + 腿(线段 vs 杆圆)
-# 平滑指数惩罚: 碰撞区强惩罚, 接近区软梯度, 安全区零影响
-def compute_virtual_collision_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+# 虚拟碰撞惩罚 — 躯干(矩形 vs 杆圆) + 腿(线段 vs 杆圆) 平滑指数惩罚: 碰撞区强惩罚, 接近区软梯度, 安全区零影响
+def compute_collision_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
+    # 获取杆和躯干的位置
     cmd_term = env.command_manager._terms["slalom_cmd"]
     spacing = cmd_term.active_pole_spacing  # type: ignore[union-attr]
-
-    # 杆位: 6 根杆沿 +X, Y = POLE_Y
-    pole_pos = torch.stack([
-        torch.tensor([i * spacing, POLE_Y], device=env.device)
-        for i in range(6)
-    ])  # [6, 2]
-
+    pole_pos = torch.stack([torch.tensor([i * spacing, POLE_Y], device=env.device)for i in range(6)])  # [6, 2]
     # F_body / H_body XY
     f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
     h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
     f_heading = get_f_body_physical_heading(env)
     h_heading = get_h_body_physical_heading(env)
-
-    # 躯干碰撞距离 (到最近杆)
+    # 计算躯干和腿部碰撞距离
     d_body_f = compute_body_pole_dist(f_xy, f_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH, pole_pos)
     d_body_h = compute_body_pole_dist(h_xy, h_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH, pole_pos)
-
-    # 腿碰撞距离 (4条腿)
     foot_xy = asset.data.site_pos_w[:, _MODEL_INDICES.foot_site_ids, :2]  # [N, 4, 2]
-    # foot_site_ids order: FL_elbow, FR_elbow, HL_knee, HR_knee → 0=FL,1=FR,2=HL,3=HR
+    # 计算碰撞程度
     d_leg_fl = compute_leg_pole_dist(f_xy, f_heading, F_BODY_HALF_WIDTH, -1, foot_xy[:, 0, :], pole_pos)
     d_leg_fr = compute_leg_pole_dist(f_xy, f_heading, F_BODY_HALF_WIDTH, +1, foot_xy[:, 1, :], pole_pos)
     d_leg_hl = compute_leg_pole_dist(h_xy, h_heading, H_BODY_HALF_WIDTH, -1, foot_xy[:, 2, :], pole_pos)
     d_leg_hr = compute_leg_pole_dist(h_xy, h_heading, H_BODY_HALF_WIDTH, +1, foot_xy[:, 3, :], pole_pos)
-
-    # 渗透量: max(0, -dist) — 仅在碰撞时非零
     body_pen = torch.clamp(-d_body_f, min=0) + torch.clamp(-d_body_h, min=0)
     leg_pen = (torch.clamp(-d_leg_fl, min=0) + torch.clamp(-d_leg_fr, min=0) +
                torch.clamp(-d_leg_hl, min=0) + torch.clamp(-d_leg_hr, min=0))
-
+    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_collision")
     w_body = get_curriculum_reward_weight(env, "weight_collision_body")
     w_leg  = get_curriculum_reward_weight(env, "weight_collision_leg")
+    # 计算惩罚
     penalty = -w_body * torch.expm1(-sigma * body_pen) - w_leg * torch.expm1(-sigma * leg_pen)
-
+    # 记录日志
     env.extras["log"]["Data/coll_body"] = body_pen.mean().item()
     env.extras["log"]["Data/coll_leg"] = leg_pen.mean().item()
     return penalty
