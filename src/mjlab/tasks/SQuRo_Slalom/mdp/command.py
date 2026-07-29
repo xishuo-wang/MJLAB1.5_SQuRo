@@ -11,10 +11,6 @@ if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 阶段阈值（iterations）— 无纯直行阶段，从 iter 0 直接开始曲率线性增长
-STAGE2_END = 2000
-
-
 # 命令配置
 FIXED_VEL = 0.1
 FIXED_HEIGHT_F = 0.055
@@ -24,24 +20,15 @@ CURVATURE_TARGET_MAX = 20.0
 VEL_MIN = 0.25
 
 
-# 获取当前阶段（2=曲率线性增长, 3=全范围）
-def get_current_stage(step_counter: int) -> int:
-    iter_num = step_counter // 24
-    if iter_num < STAGE2_END:
-        return 2
-    else:
-        return 3
-
-
-# 获取曲率采样范围 — 从 iter 0 开始线性增长至 CURVATURE_TARGET_MAX
-def get_curvature_range(stage: int, step_counter: int) -> Tuple[float, float]:
-    if stage == 2:
-        iter_num = step_counter // 24
-        progress = iter_num / STAGE2_END  # 0 → 1
+# 获取曲率采样范围 — 曲率增长边界由 curriculums.PHASE1_MID_ITER 定义
+def get_curvature_range(step_counter: int) -> Tuple[float, float]:
+    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER
+    iter_num = step_counter // _STEPS_PER_ITER
+    if iter_num < PHASE1_MID_ITER:
+        progress = iter_num / PHASE1_MID_ITER  # 0 → 1
         kappa_max = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
         return (-kappa_max, kappa_max)
-    else:
-        return (-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX)
+    return (-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX)
 
 
 # 5D命令 [vel_x, height_f, height_h, gait_freq, curvature]
@@ -120,8 +107,7 @@ class SlalomCommand(CommandTerm):
     def _get_curvature(self, n: int, step_counter: int) -> torch.Tensor:
         if self.fixed_curvature is not None:
             return torch.full((n,), float(self.fixed_curvature), device=self.device)
-        stage = get_current_stage(step_counter)
-        kappa_range = get_curvature_range(stage, step_counter)
+        kappa_range = get_curvature_range(step_counter)
         return torch.rand(n, device=self.device) * (kappa_range[1] - kappa_range[0]) + kappa_range[0]
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变

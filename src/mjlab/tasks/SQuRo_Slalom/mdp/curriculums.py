@@ -4,8 +4,10 @@ from typing import Any
 _STEPS_PER_ITER = 24
 
 # 两阶段训练
-PHASE1_END_ITER = 4000       # iter 0-4000: 转弯基元
-PHASE2_END_ITER = 6000       # iter 4000-6000: 绕杆训练
+PHASE1_MID_ITER = 2000       # iter 0-2000: 转弯曲率增大
+PHASE1_END_ITER = 4000       # iter 2000-4000: 转弯基元
+PHASE2_MID_ITER = 6000       # iter 4000-6000: 绕杆间距缩小阶段
+PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程
 POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
@@ -51,7 +53,7 @@ def get_curriculum_pole_spacing(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_END_ITER:
         return POLE_SPACING_START
-    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_END_ITER - PHASE1_END_ITER))
+    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_MID_ITER - PHASE1_END_ITER))
     return POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
 
 
