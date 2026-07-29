@@ -238,3 +238,78 @@ def compute_corridor_excess(
     eff_hw = torch.abs(half_length * torch.sin(delta_theta)) + torch.abs(half_width * torch.cos(delta_theta))
 
     return torch.abs(d_lat) + eff_hw  # [N]
+
+
+# =========================================================================================
+# 虚拟碰撞检测 — 躯干 (矩形 vs 圆) + 腿 (线段 vs 圆)
+def _point_to_rect_dist(
+    px: torch.Tensor, py: torch.Tensor,        # [N] 杆心 XY
+    cx: torch.Tensor, cy: torch.Tensor,         # [N] 身体中心 XY
+    heading: torch.Tensor,                      # [N] 身体朝向
+    half_L: float, half_W: float,
+) -> torch.Tensor:
+    """点到旋转矩形的最短距离 [N]"""
+    dx = px - cx; dy = py - cy
+    local_x =  dx * torch.cos(-heading) + dy * torch.sin(-heading)
+    local_y = -dx * torch.sin(-heading) + dy * torch.cos(-heading)
+    cx_c = torch.clamp(local_x, -half_L, half_L)
+    cy_c = torch.clamp(local_y, -half_W, half_W)
+    return torch.sqrt((local_x - cx_c)**2 + (local_y - cy_c)**2)
+
+
+def _point_to_segment_dist(
+    px: torch.Tensor, py: torch.Tensor,        # [N] 杆心 XY
+    x1: torch.Tensor, y1: torch.Tensor,         # [N] 线段起点 (附着点)
+    x2: torch.Tensor, y2: torch.Tensor,         # [N] 线段终点 (足端)
+) -> torch.Tensor:
+    """点到线段的最短距离 [N]"""
+    dx = x2 - x1; dy = y2 - y1
+    t = ((px - x1)*dx + (py - y1)*dy) / (dx*dx + dy*dy + 1e-12)
+    t = torch.clamp(t, 0.0, 1.0)
+    near_x = x1 + t * dx; near_y = y1 + t * dy
+    return torch.sqrt((px - near_x)**2 + (py - near_y)**2)
+
+
+def compute_body_pole_dist(
+    body_center: torch.Tensor,        # [N, 2] 身体中心
+    body_heading: torch.Tensor,       # [N] 身体朝向
+    half_L: float, half_W: float,
+    pole_pos: torch.Tensor,           # [M, 2] 所有杆 XY
+) -> torch.Tensor:
+    """每个身体环节到最近杆的距离 [N]"""
+    pole_r = 0.005  # 杆半径
+    min_dist = torch.full((body_center.shape[0],), 1e9, device=body_center.device)
+    for j in range(pole_pos.shape[0]):
+        d = _point_to_rect_dist(
+            pole_pos[j, 0].expand(body_center.shape[0]),
+            pole_pos[j, 1].expand(body_center.shape[0]),
+            body_center[:, 0], body_center[:, 1],
+            body_heading, half_L, half_W,
+        )
+        min_dist = torch.minimum(min_dist, d - pole_r)
+    return min_dist  # [N], negative = collision
+
+
+def compute_leg_pole_dist(
+    body_center: torch.Tensor,        # [N, 2]
+    body_heading: torch.Tensor,       # [N]
+    half_W: float,                    # 半宽 (附着点在 (0, ±W))
+    sign: float,                      # +1=左侧(FR/HR), -1=右侧(FL/HL)
+    foot_pos: torch.Tensor,           # [N, 2] 足端 site XY
+    pole_pos: torch.Tensor,           # [M, 2]
+) -> torch.Tensor:
+    """单条腿到最近杆的距离 [N]"""
+    pole_r = 0.005
+    # 附着点: body_center + (0, sign*half_W) 旋转 body_heading
+    attach_x = body_center[:, 0] - sign * half_W * torch.sin(body_heading)
+    attach_y = body_center[:, 1] + sign * half_W * torch.cos(body_heading)
+    min_dist = torch.full((body_center.shape[0],), 1e9, device=body_center.device)
+    for j in range(pole_pos.shape[0]):
+        d = _point_to_segment_dist(
+            pole_pos[j, 0].expand(body_center.shape[0]),
+            pole_pos[j, 1].expand(body_center.shape[0]),
+            attach_x, attach_y,
+            foot_pos[:, 0], foot_pos[:, 1],
+        )
+        min_dist = torch.minimum(min_dist, d - pole_r)
+    return min_dist

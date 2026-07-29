@@ -10,11 +10,14 @@ from .path import (
     F_BODY_HALF_WIDTH,
     H_BODY_HALF_LENGTH,
     H_BODY_HALF_WIDTH,
+    compute_body_pole_dist,
     compute_corridor_excess,
+    compute_leg_pole_dist,
     compute_path_ref,
     get_f_body_physical_heading,
     get_h_body_physical_heading,
 )
+from .pole import POLE_Y
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
@@ -271,4 +274,51 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
     env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
     return reward * weight
+
+
+# =========================================================================================
+# 虚拟碰撞惩罚 — 躯干(矩形 vs 杆圆) + 腿(线段 vs 杆圆)
+# 平滑指数惩罚: 碰撞区强惩罚, 接近区软梯度, 安全区零影响
+def compute_virtual_collision_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    cmd_term = env.command_manager._terms["slalom_cmd"]
+    spacing = cmd_term.active_pole_spacing  # type: ignore[union-attr]
+
+    # 杆位: 6 根杆沿 +X, Y = POLE_Y
+    pole_pos = torch.stack([
+        torch.tensor([i * spacing, POLE_Y], device=env.device)
+        for i in range(6)
+    ])  # [6, 2]
+
+    # F_body / H_body XY
+    f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
+    h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
+    f_heading = get_f_body_physical_heading(env)
+    h_heading = get_h_body_physical_heading(env)
+
+    # 躯干碰撞距离 (到最近杆)
+    d_body_f = compute_body_pole_dist(f_xy, f_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH, pole_pos)
+    d_body_h = compute_body_pole_dist(h_xy, h_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH, pole_pos)
+
+    # 腿碰撞距离 (4条腿)
+    foot_xy = asset.data.site_pos_w[:, _MODEL_INDICES.foot_site_ids, :2]  # [N, 4, 2]
+    # foot_site_ids order: FL_elbow, FR_elbow, HL_knee, HR_knee → 0=FL,1=FR,2=HL,3=HR
+    d_leg_fl = compute_leg_pole_dist(f_xy, f_heading, F_BODY_HALF_WIDTH, -1, foot_xy[:, 0, :], pole_pos)
+    d_leg_fr = compute_leg_pole_dist(f_xy, f_heading, F_BODY_HALF_WIDTH, +1, foot_xy[:, 1, :], pole_pos)
+    d_leg_hl = compute_leg_pole_dist(h_xy, h_heading, H_BODY_HALF_WIDTH, -1, foot_xy[:, 2, :], pole_pos)
+    d_leg_hr = compute_leg_pole_dist(h_xy, h_heading, H_BODY_HALF_WIDTH, +1, foot_xy[:, 3, :], pole_pos)
+
+    # 渗透量: max(0, -dist) — 仅在碰撞时非零
+    body_pen = torch.clamp(-d_body_f, min=0) + torch.clamp(-d_body_h, min=0)
+    leg_pen = (torch.clamp(-d_leg_fl, min=0) + torch.clamp(-d_leg_fr, min=0) +
+               torch.clamp(-d_leg_hl, min=0) + torch.clamp(-d_leg_hr, min=0))
+
+    sigma = get_curriculum_reward_weight(env, "sigma_collision")
+    w_body = get_curriculum_reward_weight(env, "weight_collision_body")
+    w_leg  = get_curriculum_reward_weight(env, "weight_collision_leg")
+    penalty = -w_body * torch.expm1(-sigma * body_pen) - w_leg * torch.expm1(-sigma * leg_pen)
+
+    env.extras["log"]["Data/coll_body"] = body_pen.mean().item()
+    env.extras["log"]["Data/coll_leg"] = leg_pen.mean().item()
+    return penalty
 
