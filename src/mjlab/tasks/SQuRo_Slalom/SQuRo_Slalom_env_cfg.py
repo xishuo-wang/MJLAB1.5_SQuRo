@@ -143,11 +143,12 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.005,
-                iterations=10,
+                timestep=0.0025,
+                iterations=100,
                 ls_iterations=20,
+                cone="elliptic",
             ),
         ),
-        decimation=4,
+        decimation=8,
         episode_length_s=20.0,
     )

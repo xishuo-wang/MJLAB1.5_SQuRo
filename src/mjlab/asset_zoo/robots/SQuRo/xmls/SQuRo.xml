@@ -62,8 +62,8 @@
         <mesh name="HR_knee3_Link" file="HR_knee3_Link.STL"/>
     </asset>
 
-    <size nconmax="2000" njmax="500" nstack="100000"/>
-    <option gravity="0 0 -9.81" timestep="0.001" tolerance="1e-10" iterations="150" solver="Newton" cone="elliptic"/>
+    <size nconmax="35" njmax="300" nstack="100000"/>
+    <option gravity="0 0 -9.81" timestep="0.0025" tolerance="1e-8" iterations="100" solver="Newton" cone="elliptic"/>
     <default>
         <geom solimp="1 1 0.001" solref="0.002 1.0"/> 
     </default>
