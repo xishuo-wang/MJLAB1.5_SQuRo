@@ -31,12 +31,13 @@ SQURO_ARTICULATION = EntityArticulationInfoCfg(
     actuators=(
         XmlActuatorCfg(
             target_names_expr=(
+                "F_spine1_joint", "F_body_joint",
+                "Neck_yaw", "Neck_pitch",
                 "FL_shoulder_joint", "FL_elbow_joint",
                 "FR_shoulder_joint", "FR_elbow_joint", 
+                "H_spine1_joint", "H_body_joint"
                 "HL_hip_joint", "HL_knee_joint",
                 "HR_hip_joint", "HR_knee_joint",
-                "F_spine1_joint", "F_body_joint",
-                "H_spine1_joint", "H_body_joint"
             )
         ),
     ),
