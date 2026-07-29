@@ -12,9 +12,9 @@ PHASE2_END_ITER = 8000          # iter 6000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程 — Phase 1 每 episode 在范围内随机采样 (同 Phase 0 κ 机制)
 Rmin = 1/CURVATURE_TARGET_MAX      # 最小转弯半径
-POLE_SPACING_START = 0.20          # 间距下限起始值 (iter=4000)
-POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (iter=6000)
 POLE_SPACING_MAX   = 0.25          # 间距上限 (固定)
+POLE_SPACING_START = 0.20          # 间距下限起始值 (PHASE1_END_ITER)
+POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (PHASE2_MID_ITER)
 
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000)
