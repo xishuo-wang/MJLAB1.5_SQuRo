@@ -13,9 +13,8 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     _STEPS_PER_ITER,
-    PHASE1_END_ITER,
-    get_curriculum_pole_spacing,
     get_training_phase,
+    get_curriculum_pole_spacing,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
     POLE_Y,
