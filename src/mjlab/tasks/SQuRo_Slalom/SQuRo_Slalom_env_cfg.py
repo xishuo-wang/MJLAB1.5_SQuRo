@@ -25,7 +25,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
     # 足端碰撞体名称
-    foot_names = ("FR", "FL", "HR", "HL")
+    foot_names = ("FL", "FR", "HL", "HR")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
 
     # 观测空间
@@ -51,7 +51,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-    # 动作空间 — 12个执行器位置控制
+    # 动作空间 — 14个执行器位置控制
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",

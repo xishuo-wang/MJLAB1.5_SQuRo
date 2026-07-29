@@ -101,8 +101,8 @@ class JointDataRecorder:
         ]
         self._joint_ids_resolved = False
         self.action_names = self.joint_names  # 与 joint_names 同序
-        self.foot_names = ['FR', 'FL', 'HR', 'HL']
-        self.foot_site_names = ['FR_elbow_site', 'FL_elbow_site', 'HR_knee_site', 'HL_knee_site']
+        self.foot_names = ['FL', 'FR', 'HL', 'HR']
+        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
         self._foot_site_ids = None
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
