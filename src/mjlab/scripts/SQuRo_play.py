@@ -47,10 +47,10 @@ class PlayConfig:
     record_data: bool = True
     # 转弯基元 (Phase 0) 命令固定值
     fixed_velocity: float | None = 0.1
-    fixed_height_f: float | None = 0.06
-    fixed_height_h: float | None = 0.06
+    fixed_height_f: float | None = 0.055
+    fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = None
+    fixed_curvature: float | None = -15
     # 绕杆 (Phase 1) 杆间距 (None=从课程自动读取)
     fixed_pole_spacing: float | None = 0.2
 
@@ -368,8 +368,11 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
             print(f"[COMMAND] fixed_gait_freq = {cfg.fixed_gait_freq}")
         if is_slalom_phase:
-            # Phase 1: 绕杆 — curvature 由 LUT 弧决定(±1/Rmin), 不由命令控制
+            # Phase 1: 绕杆 — curvature 动态, 杆间距覆盖课程
             cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
+            if cfg.fixed_pole_spacing is not None:
+                cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing  # type: ignore
+                print(f"[COMMAND] fixed_pole_spacing = {cfg.fixed_pole_spacing} (覆盖课程)")
             print(f"[PHASE] 绕杆阶段 (align_iter={align_iter} >= {PHASE1_END_ITER})")
         else:
             # Phase 0: 转弯基元 — 使用 fixed_curvature

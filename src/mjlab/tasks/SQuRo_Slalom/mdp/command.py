@@ -88,9 +88,12 @@ class SlalomCommand(CommandTerm):
         from .curriculums import get_training_phase
         return get_training_phase(self._env.common_step_counter) == 1
 
-    # 当前杆间距 (由 curriculums.get_curriculum_pole_spacing 自动控制)
+    # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取)
     @property
     def active_pole_spacing(self) -> float:
+        override = getattr(self.cfg, "fixed_pole_spacing", None)
+        if override is not None:
+            return float(override)
         from .curriculums import get_curriculum_pole_spacing
         return get_curriculum_pole_spacing(self._env.common_step_counter)
 
@@ -162,6 +165,11 @@ class SlalomCommand(CommandTerm):
         return extras
 
     def _update_command(self) -> None:
+        # Phase 1: 每步动态更新曲率为路径瞬时值
+        if self.slalom_mode_active:
+            from .path import get_path_curvature
+            self.curvature_command[:] = get_path_curvature(self._env)
+
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:
             self._resample_command(env_ids)
@@ -277,6 +285,7 @@ class SlalomCommandCfg(CommandTermCfg):
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
     fixed_curvature: Optional[float] = None
+    fixed_pole_spacing: Optional[float] = None  # Phase 1 杆间距覆盖
 
     @dataclass
     class VizCfg:
