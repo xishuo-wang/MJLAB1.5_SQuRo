@@ -1,11 +1,11 @@
 """SQuRo 模型索引 — 统一管理所有关节/身体/足端 ID
 
-顺序遵循 entity actuator 顺序（= MuJoCo 关节树深度优先遍历）:
-  F_spine1, F_body, FL_shoulder, FL_elbow, FR_shoulder, FR_elbow,
+顺序遵循 entity actuator 顺序（= MuJoCo XML actuator 顺序）:
+  F_spine1, F_body, Neck_yaw, Neck_pitch,
+  FL_shoulder, FL_elbow, FR_shoulder, FR_elbow,
   H_spine1, H_body, HL_hip, HL_knee, HR_hip, HR_knee
 
 与 entity.find_joints_by_actuator_names 返回的顺序一致。
-_action_leg_ids / _action_spn_ids 用于索引 policy 输出的 action 张量。
 """
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -13,6 +13,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 # 执行器关节名称 — 必须与 entity actuator 顺序一致
 _ACTUATED_JOINT_NAMES = [
     "F_spine1_joint", "F_body_joint",
+    "Neck_yaw_joint", "Neck_pitch_joint",
     "FL_shoulder_joint", "FL_elbow_joint",
     "FR_shoulder_joint", "FR_elbow_joint",
     "H_spine1_joint", "H_body_joint",
@@ -23,24 +24,22 @@ _ACTUATED_JOINT_NAMES = [
 # 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACTUATED_JOINT_NAMES))
 
-# action 张量中的腿/脊柱列索引（与 entity actuator 顺序一致）
-_ACTION_LEG_IDS = (2, 3, 4, 5, 8, 9, 10, 11)
-_ACTION_SPN_IDS = (0, 1, 6, 7)
-_ACTION_SPN_LATERAL_ID = 0   # F_spine1
-_ACTION_SPN_BODY_IDS = (1, 7)  # F_body, H_body
+# action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
+_ACTION_LEG_IDS  = (4, 5, 6, 7, 10, 11, 12, 13)
+_ACTION_SPN_IDS  = (0, 1, 8, 9)
+_ACTION_NECK_IDS = (2, 3)           # Neck_yaw, Neck_pitch
+_ACTION_SPN_LATERAL_ID = 0          # F_spine1
+_ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
 
 
 class ModelIndices:
     __slots__ = (
         "f_body_id", "h_body_id",
         "foot_site_ids",
-        "joint_ids",             # entity 级别关节ID（按 _ACTUATED_JOINT_NAMES 序）
-        "joint_leg_ids",         # 腿关节 entity ID
-        "joint_spn_ids",         # 脊柱关节 entity ID
-        "actuator_leg_ids",      # action 张量腿列索引
-        "actuator_spn_ids",      # action 张量脊柱列索引
-        "actuator_spn_lateral_id",  # F_spine1 action 列索引
-        "actuator_spn_body_ids",    # F_body+H_body action 列索引
+        "joint_ids",
+        "joint_leg_ids", "joint_spn_ids", "joint_neck_ids",
+        "actuator_leg_ids", "actuator_spn_ids", "actuator_neck_ids",
+        "actuator_spn_lateral_id", "actuator_spn_body_ids",
     )
 
     def __init__(self):
@@ -50,8 +49,10 @@ class ModelIndices:
         self.joint_ids: tuple[int, ...] = ()
         self.joint_leg_ids: tuple[int, ...] = ()
         self.joint_spn_ids: tuple[int, ...] = ()
+        self.joint_neck_ids: tuple[int, ...] = ()
         self.actuator_leg_ids: tuple[int, ...] = _ACTION_LEG_IDS
         self.actuator_spn_ids: tuple[int, ...] = _ACTION_SPN_IDS
+        self.actuator_neck_ids: tuple[int, ...] = _ACTION_NECK_IDS
         self.actuator_spn_lateral_id: int = _ACTION_SPN_LATERAL_ID
         self.actuator_spn_body_ids: tuple[int, ...] = _ACTION_SPN_BODY_IDS
 
@@ -78,9 +79,10 @@ def resolve_model_indices(entity) -> None:
         _ACTUATED_JOINT_NAMES, preserve_order=True
     )
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
-    # 腿关节在 _ACTUATED_JOINT_NAMES 中的位置：2-5, 8-11
-    _MODEL_INDICES.joint_leg_ids = tuple(joint_ids[2:6]) + tuple(joint_ids[8:12])
-    _MODEL_INDICES.joint_spn_ids = tuple(joint_ids[0:2]) + tuple(joint_ids[6:8])
+    # 腿: 位置 4-7, 10-13; 脊柱: 0-1, 8-9; 颈: 2-3
+    _MODEL_INDICES.joint_leg_ids  = tuple(joint_ids[4:8]) + tuple(joint_ids[10:14])
+    _MODEL_INDICES.joint_spn_ids  = tuple(joint_ids[0:2]) + tuple(joint_ids[8:10])
+    _MODEL_INDICES.joint_neck_ids = tuple(joint_ids[2:4])
 
     print("\n[SQuRo] 模型索引解析完成:")
     print(f"  F_body_Link: {body_names[0]} -> ID {body_ids[0]}")
@@ -89,3 +91,4 @@ def resolve_model_indices(entity) -> None:
     print(f"  actuator 顺序: {list(joint_names)}")
     print(f"  leg action idx: {_ACTION_LEG_IDS}")
     print(f"  spn action idx: {_ACTION_SPN_IDS}")
+    print(f"  neck action idx: {_ACTION_NECK_IDS}")

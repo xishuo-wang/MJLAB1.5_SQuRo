@@ -49,7 +49,7 @@ class PlayConfig:
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 1.0
     fixed_curvature: float | None = -15
-    fixed_pole_spacing: float | None = 0.2
+    fixed_pole_spacing: float | None = 0.15
     enable_collision: bool = False
 
 
@@ -89,9 +89,10 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 12 个驱动关节 — 顺序必须与 entity actuator 顺序一致（关节树深度优先）
+        # 14 个驱动关节 — 顺序必须与 entity actuator 顺序一致
         self.joint_names = [
             'F_spine1', 'F_body',
+            'Neck_yaw', 'Neck_pitch',
             'FL_shoulder', 'FL_elbow',
             'FR_shoulder', 'FR_elbow',
             'H_spine1', 'H_body',

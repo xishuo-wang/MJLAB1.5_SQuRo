@@ -32,10 +32,10 @@ SQURO_ARTICULATION = EntityArticulationInfoCfg(
         XmlActuatorCfg(
             target_names_expr=(
                 "F_spine1_joint", "F_body_joint",
-                "Neck_yaw", "Neck_pitch",
+                "Neck_yaw_joint", "Neck_pitch_joint",
                 "FL_shoulder_joint", "FL_elbow_joint",
-                "FR_shoulder_joint", "FR_elbow_joint", 
-                "H_spine1_joint", "H_body_joint"
+                "FR_shoulder_joint", "FR_elbow_joint",
+                "H_spine1_joint", "H_body_joint",
                 "HL_hip_joint", "HL_knee_joint",
                 "HR_hip_joint", "HR_knee_joint",
             )
@@ -51,7 +51,9 @@ INIT_STATE = EntityCfg.InitialStateCfg(
     lin_vel=(0.0, 0.0, 0.0),
     ang_vel=(0.0, 0.0, 0.0),
     joint_pos={
-        # 12个执行器对应的关节
+        # 14个执行器对应的关节
+        "Neck_yaw_joint": 0.0,
+        "Neck_pitch_joint": 0.0,
         "FL_shoulder_joint": 0.1,
         "FL_elbow_joint": -0.3,
         "FR_shoulder_joint": 0.1,
