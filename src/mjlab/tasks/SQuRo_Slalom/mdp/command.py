@@ -53,6 +53,9 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
 
+        # 杆间距 (Phase 1 每 episode 随机采样, 共享值)
+        self._shared_pole_spacing = 0.20
+
         # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -75,12 +78,14 @@ class SlalomCommand(CommandTerm):
         from .curriculums import get_training_phase
         return get_training_phase(self._env.common_step_counter) == 1
 
-    # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取)
+    # 当前杆间距 (cfg.fixed_pole_spacing 优先 → Phase 1 采样值 → 课程默认)
     @property
     def active_pole_spacing(self) -> float:
         override = getattr(self.cfg, "fixed_pole_spacing", None)
         if override is not None:
             return float(override)
+        if self.slalom_mode_active:
+            return self._shared_pole_spacing
         from .curriculums import get_curriculum_pole_spacing
         return get_curriculum_pole_spacing(self._env.common_step_counter)
 
@@ -128,7 +133,10 @@ class SlalomCommand(CommandTerm):
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * scale
         else:
-            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 速度按曲率缩放
+            # Phase 1: 绕杆训练 — 曲率 ±15, 杆间距每 episode 随机采样
+            from .curriculums import get_pole_spacing_range
+            sp_range = get_pole_spacing_range(current_step)
+            self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
             self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
