@@ -51,6 +51,7 @@ class PlayConfig:
     fixed_gait_freq: float | None = 1.0
     fixed_curvature: float | None = -15
     fixed_pole_spacing: float | None = 0.2
+    enable_collision: bool = False
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -370,9 +371,10 @@ def run_play(cfg: PlayConfig):
     if is_slalom_phase and TRAINED_MODE:
         pole_sp = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
         positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=POLE_Y)
+        col_type = 1 if cfg.enable_collision else 0
         pole_dict = {}
         for i, pos in enumerate(positions):
-            pole_dict[f"pole{i}"] = PoleEntityCfg(name=f"pole{i}", position=pos, contype=0, conaffinity=0,)
+            pole_dict[f"pole{i}"] = PoleEntityCfg(name=f"pole{i}", position=pos, contype=col_type, conaffinity=col_type,)
         env_cfg.scene.entities = {"robot": env_cfg.scene.entities["robot"], **pole_dict}  # type: ignore[index]
 
     # 创建环境
