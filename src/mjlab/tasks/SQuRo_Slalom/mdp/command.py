@@ -157,10 +157,15 @@ class SlalomCommand(CommandTerm):
         return extras
 
     def _update_command(self) -> None:
-        # Phase 1: 每步动态更新曲率为路径瞬时值
+        # Phase 1: 每步动态更新曲率 + 速度跟随瞬时曲率缩放 (同 Phase 0 公式)
         if self.slalom_mode_active:
             from .path import get_path_curvature
-            self.curvature_command[:] = get_path_curvature(self._env)
+            from .curriculums import CURVATURE_TARGET_MAX
+            kappa = get_path_curvature(self._env)
+            self.curvature_command[:] = kappa
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+            scale = 1.0 - (1.0 - VEL_MIN) * kappa.abs() / CURVATURE_TARGET_MAX
+            self.vel_command[:] = base_vel * scale
 
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:
