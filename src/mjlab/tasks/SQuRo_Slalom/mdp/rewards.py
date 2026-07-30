@@ -94,7 +94,7 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 期望前进速度
     cmd_term = env.command_manager._terms["slalom_cmd"]
     v_cmd = cmd_term.command[:, 0]
-    # 误差
+    # 计算速度跟踪误差
     error_vx = forward_speed - v_cmd
     error_vy = lateral_speed
     error_vz = vertical_speed
