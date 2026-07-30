@@ -6,240 +6,235 @@ from matplotlib.patches import Circle
 # ========== 参数 ==========
 Rmin = 0.10          # 最小转弯半径 (m)
 pole_radius = 0.005  # 杆的显示半径 (m)
-X = 0.30             # 杆间距 (m)，需 >= 2*Rmin
-num_periods = 3      # 周期数
-
-# 平滑转弯的回旋线长度 (m)，必须 <= (pi/2)*Rmin ≈ 0.157
-Lc = 0.04            # 过渡段长度，可根据需要调整
-
-# 速度参数
-v_max = 0.1          # 直线最大速度 (m/s)
+X = 0.20             # 杆间距，可设为 0.2, 0.3 等
+num_periods = 3
+v_max = 0.1          # 最大速度 (m/s)
 v_min = 0.025        # 最大曲率时的最小速度 (m/s)
+steps = 100
 
-# 数值离散点数（每段）
-steps = 50
+# 期望过渡段长度（空间不足时会自动缩减）
+Ls_des = 0.04
+L_rev_des = 0.10
 
-# ========== 辅助函数 ==========
-def clothoid_segment(start_xy, start_theta, kappa0, kappa1, L, steps=50):
-    """
-    生成曲率从 kappa0 线性变化到 kappa1 的回旋线段
-    返回: x, y, 终点切线角, 曲率序列
-    """
-    s = np.linspace(0, L, steps)
-    alpha = (kappa1 - kappa0) / L
-    theta = start_theta + kappa0 * s + 0.5 * alpha * s**2
-    # 数值积分求坐标
+# ========== 基础几何函数 ==========
+def sine_rise(start_xy, start_theta, k_target, Ls, steps=50):
+    s = np.linspace(0, Ls, steps)
+    kappa = k_target * np.sin(np.pi * s / (2 * Ls))
+    theta = start_theta + (2 * Ls / np.pi) * k_target * (1 - np.cos(np.pi * s / (2 * Ls)))
     x = start_xy[0] + cumulative_trapezoid(np.cos(theta), s, initial=0)
     y = start_xy[1] + cumulative_trapezoid(np.sin(theta), s, initial=0)
-    kappa = kappa0 + alpha * s
     return x, y, theta[-1], kappa
 
-def smooth_turn(start_xy, start_theta, clockwise, Rmin, Lc, steps=50):
-    """
-    生成一个 90° 平滑转弯（回旋线 + 定曲率圆弧 + 回旋线）
-    转弯方向: clockwise=True 为顺时针
-    返回: x, y, 终点切线角, 曲率序列
-    """
-    k_max = 1.0 / Rmin
-    sign = -1 if clockwise else 1   # 曲率正负约定：逆时针为正
-    k_peak = sign * k_max
+def sine_fall(start_xy, start_theta, k_start, Ls, steps=50):
+    s = np.linspace(0, Ls, steps)
+    kappa = k_start * np.cos(np.pi * s / (2 * Ls))
+    theta = start_theta + (2 * Ls / np.pi) * k_start * np.sin(np.pi * s / (2 * Ls))
+    x = start_xy[0] + cumulative_trapezoid(np.cos(theta), s, initial=0)
+    y = start_xy[1] + cumulative_trapezoid(np.sin(theta), s, initial=0)
+    return x, y, theta[-1], kappa
 
-    # 第1段回旋线: 0 -> k_peak
-    x1, y1, theta1, kap1 = clothoid_segment(start_xy, start_theta, 0, k_peak, Lc, steps)
-    # 圆弧段：剩余角度 = pi/2 - Lc/Rmin (因为回旋线总转角 = Lc/(2Rmin) * 2 = Lc/Rmin)
-    theta_arc = np.pi/2 - Lc / Rmin
-    if theta_arc < 0:
-        raise ValueError("Lc too large, arc angle negative. Reduce Lc.")
-    La = Rmin * theta_arc
-    # 圆弧中心坐标
-    # 从回旋线终点出发，半径方向垂直于切线方向
-    # 顺时针时，圆心在切线右侧；逆时针时在左侧
-    # 切线方向单位向量: (cos(theta1), sin(theta1))
-    # 顺时针: 圆心 = 起点 + Rmin * (sin(theta1), -cos(theta1))   # 右侧法向量
-    # 逆时针: 圆心 = 起点 + Rmin * (-sin(theta1), cos(theta1))  # 左侧法向量
+def pure_arc(start_xy, start_theta, clockwise, Rmin, angle, steps=50):
+    sign = -1 if clockwise else 1
     if clockwise:
-        center_x = x1[-1] + Rmin * np.sin(theta1)
-        center_y = y1[-1] - Rmin * np.cos(theta1)
+        cx = start_xy[0] + Rmin * np.sin(start_theta)
+        cy = start_xy[1] - Rmin * np.cos(start_theta)
     else:
-        center_x = x1[-1] - Rmin * np.sin(theta1)
-        center_y = y1[-1] + Rmin * np.cos(theta1)
-
-    # 圆弧起止角度
-    v_start = (x1[-1] - center_x, y1[-1] - center_y)
+        cx = start_xy[0] - Rmin * np.sin(start_theta)
+        cy = start_xy[1] + Rmin * np.cos(start_theta)
+    v_start = np.array([start_xy[0] - cx, start_xy[1] - cy])
     ang_start = np.arctan2(v_start[1], v_start[0])
-    if clockwise:
-        ang_end = ang_start - theta_arc
-    else:
-        ang_end = ang_start + theta_arc
-
-    # 圆弧离散点（至少要2个点，避免 linspace 出错）
-    n_arc = max(2, int(steps * theta_arc / (np.pi/2)))
-    theta_arr = np.linspace(ang_start, ang_end, n_arc)
-    arc_x = center_x + Rmin * np.cos(theta_arr)
-    arc_y = center_y + Rmin * np.sin(theta_arr)
-    # 圆弧段曲率恒定
-    kap_arc = np.full_like(theta_arr, k_peak)
-
-    # 圆弧终点切线方向
-    theta2 = theta1 + sign * theta_arc
-
-    # 第2段回旋线: k_peak -> 0
-    x3, y3, theta_end, kap3 = clothoid_segment((arc_x[-1], arc_y[-1]), theta2, k_peak, 0, Lc, steps)
-
-    # 拼接坐标和曲率（去除重复连接点）
-    x = np.concatenate([x1, arc_x[1:], x3])
-    y = np.concatenate([y1, arc_y[1:], y3])
-    kappa = np.concatenate([kap1, kap_arc[1:], kap3])
-
+    ang_end = ang_start - angle if clockwise else ang_start + angle
+    n = max(2, int(steps * angle / (np.pi/2)))
+    th = np.linspace(ang_start, ang_end, n)
+    x = cx + Rmin * np.cos(th)
+    y = cy + Rmin * np.sin(th)
+    kappa = np.full_like(th, sign / Rmin)
+    theta_end = start_theta + sign * angle
     return x, y, theta_end, kappa
 
-def generate_one_period(start_xy, start_theta, X, Rmin, Lc):
+def reverse_transition(start_xy, start_theta, k_start, L_rev, steps=80):
+    L = L_rev
+    s = np.linspace(0, L, steps)
+    t = s / L
+    H = 6*t**5 - 15*t**4 + 10*t**3
+    kappa = k_start * (1 - 2*H)
+    theta = start_theta + cumulative_trapezoid(kappa, s, initial=0)
+    x = start_xy[0] + cumulative_trapezoid(np.cos(theta), s, initial=0)
+    y = start_xy[1] + cumulative_trapezoid(np.sin(theta), s, initial=0)
+    return x, y, theta[-1], kappa
+
+# ========== 复合转弯函数（根据曲率符号自动选择）==========
+def turn_from_straight(start_xy, start_theta, clockwise, Rmin, Ls):
+    """直线 → 圆弧（90°）"""
+    k_max = 1.0 / Rmin
+    sign = -1 if clockwise else 1
+    k_peak = sign * k_max
+    x1, y1, th1, kap1 = sine_rise(start_xy, start_theta, k_peak, Ls)
+    theta_sine = 2 * k_max * Ls / np.pi
+    theta_arc = np.pi/2 - theta_sine
+    x2, y2, th2, kap2 = pure_arc((x1[-1], y1[-1]), th1, clockwise, Rmin, theta_arc)
+    x = np.concatenate([x1, x2[1:]])
+    y = np.concatenate([y1, y2[1:]])
+    kappa = np.concatenate([kap1, kap2[1:]])
+    return x, y, th2, kappa
+
+def turn_to_straight(start_xy, start_theta, clockwise, Rmin, Ls):
+    """圆弧 → 直线（90°）"""
+    k_max = 1.0 / Rmin
+    sign = -1 if clockwise else 1
+    k_peak = sign * k_max
+    theta_sine = 2 * k_max * Ls / np.pi
+    theta_arc = np.pi/2 - theta_sine
+    x1, y1, th1, kap1 = pure_arc(start_xy, start_theta, clockwise, Rmin, theta_arc)
+    x2, y2, th2, kap2 = sine_fall((x1[-1], y1[-1]), th1, k_peak, Ls)
+    x = np.concatenate([x1, x2[1:]])
+    y = np.concatenate([y1, y2[1:]])
+    kappa = np.concatenate([kap1, kap2[1:]])
+    return x, y, th2, kappa
+
+def turn_reverse_arc(start_xy, start_theta, k_start, Rmin, L_rev):
+    """异号圆弧连接（90°）: k_start → -k_start"""
+    x1, y1, th1, kap1 = reverse_transition(start_xy, start_theta, k_start, L_rev)
+    clockwise_after = (k_start > 0)
+    x2, y2, th2, kap2 = pure_arc((x1[-1], y1[-1]), th1, clockwise_after, Rmin, np.pi/2)
+    x = np.concatenate([x1, x2[1:]])
+    y = np.concatenate([y1, y2[1:]])
+    kappa = np.concatenate([kap1, kap2[1:]])
+    return x, y, th2, kappa
+
+# ========== 智能转弯函数（根据当前曲率与目标曲率自动选择）==========
+def smart_turn(state, target_k, angle, Rmin, Ls, L_rev):
     """
-    生成一个周期的平滑路径（绕过两根杆）
-    起点状态: (x, y, 切线角)
-    返回: 路径点 x, y, 曲率序列, 终点位姿 (x_end, y_end, theta_end)
+    state: (x, y, theta, k_cur)
+    target_k: 目标曲率（弧度长度后的恒定曲率，0表示直线）
+    angle: 总转角（弧度）
+    返回: x, y, theta_end, kappa
     """
-    x_all, y_all, kap_all = [], [], []
-    cur_x, cur_y = start_xy
-    cur_theta = start_theta
+    x, y, th, k_cur = state
+    # 情况1：直线 ↔ 圆弧
+    if k_cur == 0 and target_k != 0:
+        clockwise = (target_k < 0)
+        # 仅支持 90° 转弯，若 angle 不是 π/2 则需要调整，这里默认 90°
+        return turn_from_straight((x, y), th, clockwise, Rmin, Ls)
+    if k_cur != 0 and target_k == 0:
+        clockwise = (k_cur < 0)
+        return turn_to_straight((x, y), th, clockwise, Rmin, Ls)
+    # 情况2：同号非零 → 纯圆弧（无平滑）
+    if k_cur != 0 and target_k != 0 and np.sign(k_cur) == np.sign(target_k):
+        clockwise = (k_cur < 0)
+        return pure_arc((x, y), th, clockwise, Rmin, angle)
+    # 情况3：异号非零 → 反向平滑过渡
+    if k_cur != 0 and target_k != 0 and np.sign(k_cur) != np.sign(target_k):
+        return turn_reverse_arc((x, y), th, k_cur, Rmin, L_rev)
+    # 其他（如 target_k == 0 且 angle == 0）视为直线，返回空
+    return np.array([x]), np.array([y]), th, np.array([k_cur])
 
-    # 1. 顺时针 90° 转弯 (向右 -> 向下)
-    x, y, cur_theta, kap = smooth_turn((cur_x, cur_y), cur_theta, clockwise=True, Rmin=Rmin, Lc=Lc)
-    x_all.extend(x); y_all.extend(y); kap_all.extend(kap)
-    # 2. 逆时针 90° 转弯 (向下 -> 向右)
-    x, y, cur_theta, kap = smooth_turn((x_all[-1], y_all[-1]), cur_theta, clockwise=False, Rmin=Rmin, Lc=Lc)
-    x_all.extend(x); y_all.extend(y); kap_all.extend(kap)
-    # 3. 直线段 向右移动到 x = start_xy[0] + X （注意全局坐标）
-    target_x = start_xy[0] + X
-    if target_x - x_all[-1] > 1e-9:
-        x_line = np.linspace(x_all[-1], target_x, max(2, int((target_x - x_all[-1]) / 0.005)))
-        y_line = np.full_like(x_line, y_all[-1])
-        x_all.extend(x_line); y_all.extend(y_line)
-        kap_all.extend([0.0] * len(x_line))
-    # 4. 逆时针 90° 转弯 (向右 -> 向上)
-    x, y, cur_theta, kap = smooth_turn((x_all[-1], y_all[-1]), cur_theta, clockwise=False, Rmin=Rmin, Lc=Lc)
-    x_all.extend(x); y_all.extend(y); kap_all.extend(kap)
-    # 5. 顺时针 90° 转弯 (向上 -> 向右)
-    x, y, cur_theta, kap = smooth_turn((x_all[-1], y_all[-1]), cur_theta, clockwise=True, Rmin=Rmin, Lc=Lc)
-    x_all.extend(x); y_all.extend(y); kap_all.extend(kap)
-    # 6. 直线段 向右移动到 start_xy[0] + 2*X
-    target_x2 = start_xy[0] + 2*X
-    if target_x2 - x_all[-1] > 1e-9:
-        x_line = np.linspace(x_all[-1], target_x2, max(2, int((target_x2 - x_all[-1]) / 0.005)))
-        y_line = np.full_like(x_line, y_all[-1])
-        x_all.extend(x_line); y_all.extend(y_line)
-        kap_all.extend([0.0] * len(x_line))
+# ========== 生成无直线路径（X=2Rmin，完全由圆弧组成）==========
+def generate_path_no_straight(num_periods, X, Rmin, Ls, L_rev):
+    # 初始状态：位于 (0,0)，切线向右 (0)，曲率 0
+    state = (0.0, 0.0, 0.0, 0.0)
+    x_all, y_all, kap_all = [0.0], [0.0], [0.0]
+    
+    for _ in range(num_periods):
+        # 转弯1: 当前曲率 → -kmax (顺时针90°)
+        xs, ys, th, kaps = smart_turn(state, -1.0/Rmin, np.pi/2, Rmin, Ls, L_rev)
+        x_all.extend(xs[1:]); y_all.extend(ys[1:]); kap_all.extend(kaps[1:])
+        state = (x_all[-1], y_all[-1], th, -1.0/Rmin)
+        
+        # 转弯2: -kmax → +kmax (逆时针90°，异号)
+        xs, ys, th, kaps = smart_turn(state, 1.0/Rmin, np.pi/2, Rmin, Ls, L_rev)
+        x_all.extend(xs[1:]); y_all.extend(ys[1:]); kap_all.extend(kaps[1:])
+        state = (x_all[-1], y_all[-1], th, 1.0/Rmin)
+        
+        # 转弯3: +kmax → +kmax (逆时针90°，同号 → 纯圆弧)
+        xs, ys, th, kaps = smart_turn(state, 1.0/Rmin, np.pi/2, Rmin, Ls, L_rev)
+        x_all.extend(xs[1:]); y_all.extend(ys[1:]); kap_all.extend(kaps[1:])
+        state = (x_all[-1], y_all[-1], th, 1.0/Rmin)
+        
+        # 转弯4: +kmax → -kmax (顺时针90°，异号)
+        xs, ys, th, kaps = smart_turn(state, -1.0/Rmin, np.pi/2, Rmin, Ls, L_rev)
+        x_all.extend(xs[1:]); y_all.extend(ys[1:]); kap_all.extend(kaps[1:])
+        state = (x_all[-1], y_all[-1], th, -1.0/Rmin)
+        
+        # 注意：周期结束状态曲率为 -kmax，下一个周期转弯1目标也是 -kmax，同号，smart_turn 会自动使用纯圆弧
+        
+    return np.array(x_all), np.array(y_all), np.array(kap_all)
 
-    return (np.array(x_all), np.array(y_all), np.array(kap_all),
-            (x_all[-1], y_all[-1], cur_theta))
+# ========== 主程序（根据 X 选择模式，此处只演示 X=0.2 的无直线情况）==========
+if X <= 2*Rmin + 1e-9:
+    print("模式：无直线段，同号圆弧无平滑")
+    x_path, y_path, kappa_path = generate_path_no_straight(num_periods, X, Rmin, Ls_des, L_rev_des)
+else:
+    # 当 X > 2Rmin 时，可调用带直线的自适应版本（之前已实现，此处略）
+    print("当前仅支持 X=0.2 的演示，X>0.2 请使用之前的自适应代码")
+    exit()
 
-def generate_path(num_periods, X, Rmin, Lc):
-    """生成多个周期的全局路径，同时返回曲率"""
-    x_global, y_global, kap_global = [0.0], [0.0], [0.0]
-    cur_x, cur_y = 0.0, 0.0
-    cur_theta = 0.0
-    for i in range(num_periods):
-        xs, ys, kaps, end_pose = generate_one_period((cur_x, cur_y), cur_theta, X, Rmin, Lc)
-        if i == 0:
-            x_global = xs
-            y_global = ys
-            kap_global = kaps
-        else:
-            x_global = np.concatenate([x_global, xs[1:]])
-            y_global = np.concatenate([y_global, ys[1:]])
-            kap_global = np.concatenate([kap_global, kaps[1:]])
-        cur_x, cur_y, cur_theta = end_pose
-    return x_global, y_global, kap_global
+# 杆偏移计算
+pole_xs = np.arange(num_periods * 2 + 1) * X
+d0 = min(np.min(np.hypot(x_path - xp, y_path + Rmin)) for xp in pole_xs)
+y_pole = 2 * Rmin - d0
+print(f"杆调整至 y = -{y_pole:.4f} m")
 
-def compute_min_distance_to_poles(path_x, path_y, pole_x_positions, pole_y):
-    """计算所有杆到路径的最近距离，返回最小值"""
-    min_dist = np.inf
-    for px in pole_x_positions:
-        dists = np.sqrt((path_x - px)**2 + (path_y - pole_y)**2)
-        min_dist = min(min_dist, np.min(dists))
-    return min_dist
-
-# ========== 主程序 ==========
-# 1. 先用临时杆坐标 y = -Rmin 生成路径，计算最小距离
-x_path, y_path, kappa_path = generate_path(num_periods, X, Rmin, Lc)
-pole_x_coords = np.arange(num_periods * 2 + 1) * X  # 杆的x坐标 (包括最后一个周期后的杆)
-d0 = compute_min_distance_to_poles(x_path, y_path, pole_x_coords, pole_y=-Rmin)
-# 计算所需的杆偏移：使最小距离恰好为 Rmin
-y_pole = 2 * Rmin - d0   # 杆的新 y 坐标 = -y_pole
-print(f"初始最小距离 (杆在 y=-{Rmin}): {d0:.4f} m")
-print(f"调整后杆的 y 坐标: -{y_pole:.4f} m (向下移动 {y_pole - Rmin:.4f} m)")
-
-# 2. 计算弧长和速度曲线
-dx = np.diff(x_path)
-dy = np.diff(y_path)
-ds = np.sqrt(dx**2 + dy**2)
-s = np.insert(np.cumsum(ds), 0, 0)  # 弧长
-
+# 速度、时间
+dx = np.diff(x_path); dy = np.diff(y_path)
+ds = np.hypot(dx, dy)
+s = np.insert(np.cumsum(ds), 0, 0)
 k_max = 1.0 / Rmin
-# 速度与曲率绝对值成线性反比：曲率越大速度越小
 v = v_min + (v_max - v_min) * (k_max - np.abs(kappa_path)) / k_max
-v = np.clip(v, v_min, v_max)   # 数值安全
+v = np.clip(v, v_min, v_max)
+dt = ds / v[:-1]
+t = np.insert(np.cumsum(dt), 0, 0)
 
-# 3. 绘图
-fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+# ========== 绘图 ==========
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
-# 图1：轨迹与杆
-ax1 = axes[0, 0]
-# 绘制路径
-ax1.plot(x_path, y_path, 'b-', linewidth=2, label='Smooth reference path')
-# 标记起点
-ax1.plot(0, 0, 'go', markersize=10, label='Start')
-# 画杆（调整后的位置）
-for px in pole_x_coords:
-    ax1.add_patch(Circle((px, -y_pole), pole_radius, color='red', alpha=0.6))
-ax1.plot(pole_x_coords, np.full_like(pole_x_coords, -y_pole), 'rx', label='Pole centers')
+ax = axes[0, 0]
+ax.plot(x_path, y_path, 'b-', lw=2, label='Path')
+ax.plot(0, 0, 'go', ms=10, label='Start')
+for xp in pole_xs:
+    ax.add_patch(Circle((xp, -y_pole), pole_radius, color='red', alpha=0.6))
+ax.plot(pole_xs, np.full_like(pole_xs, -y_pole), 'rx', label='Poles')
+ax.axhline(0, color='gray', ls=':')
+ax.axhline(-y_pole, color='red', ls='--', alpha=0.3)
+ax.axhline(-y_pole - Rmin, color='blue', ls='--', alpha=0.3, label=f'y = -y_pole - Rmin')
+ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+ax.set_title('Trajectory (cross‑period same‑arc no smoothing)')
+ax.axis('equal'); ax.grid(True); ax.legend(fontsize=8)
 
-# 辅助线
-ax1.axhline(0, color='gray', linestyle=':')
-ax1.axhline(-y_pole, color='red', linestyle='--', alpha=0.3)
-ax1.axhline(-y_pole - Rmin, color='blue', linestyle='--', alpha=0.3, label=f'y = -y_pole - Rmin')
-ax1.set_xlabel('X (m)')
-ax1.set_ylabel('Y (m)')
-ax1.set_title('Trajectory with smooth curvature transitions')
-ax1.axis('equal')
-ax1.grid(True)
-ax1.legend(fontsize=8)
+ax = axes[0, 1]
+ax.plot(s, kappa_path, 'b-', lw=1.5)
+ax.axhline(k_max, color='red', ls='--', label=f'±{k_max:.1f}'); ax.axhline(-k_max, color='red', ls='--')
+ax.set_xlabel('Arc length (m)'); ax.set_ylabel('Curvature (1/m)')
+ax.set_title('Curvature vs arc length'); ax.grid(True); ax.legend()
 
-# 图2：曲率随弧长变化
-ax2 = axes[0, 1]
-ax2.plot(s, kappa_path, 'b-', linewidth=1.5)
-ax2.axhline(k_max, color='red', linestyle='--', label=f'+k_max = {k_max:.1f}')
-ax2.axhline(-k_max, color='red', linestyle='--', label=f'-k_max = {-k_max:.1f}')
-ax2.set_xlabel('Arc length (m)')
-ax2.set_ylabel('Curvature (1/m)')
-ax2.set_title('Curvature profile')
-ax2.grid(True)
-ax2.legend()
+ax = axes[0, 2]
+ax.plot(s, v, 'g-', lw=1.5)
+ax.axhline(v_max, color='gray', ls='--', label=f'v_max={v_max}'); ax.axhline(v_min, color='gray', ls='--', label=f'v_min={v_min}')
+ax.set_xlabel('Arc length (m)'); ax.set_ylabel('Velocity (m/s)')
+ax.set_title('Velocity vs arc length'); ax.grid(True); ax.legend()
 
-# 图3：速度随弧长变化
-ax3 = axes[1, 0]
-ax3.plot(s, v, 'g-', linewidth=1.5)
-ax3.axhline(v_max, color='gray', linestyle='--', label=f'v_max = {v_max}')
-ax3.axhline(v_min, color='gray', linestyle='--', label=f'v_min = {v_min}')
-ax3.set_xlabel('Arc length (m)')
-ax3.set_ylabel('Velocity (m/s)')
-ax3.set_title('Speed profile (curvature-adaptive)')
-ax3.grid(True)
-ax3.legend()
+ax = axes[1, 0]
+ax.plot(t, kappa_path, 'b-', lw=1.5)
+ax.axhline(k_max, color='red', ls='--'); ax.axhline(-k_max, color='red', ls='--')
+ax.set_xlabel('Time (s)'); ax.set_ylabel('Curvature (1/m)')
+ax.set_title('Curvature vs time'); ax.grid(True)
 
-# 图4：曲率与速度的关系（同一弧长）
-ax4 = axes[1, 1]
-ax4.plot(s, np.abs(kappa_path), 'b-', label='|curvature|')
-ax4_twin = ax4.twinx()
-ax4_twin.plot(s, v, 'g-', label='velocity')
-ax4.set_xlabel('Arc length (m)')
-ax4.set_ylabel('|Curvature| (1/m)', color='b')
-ax4_twin.set_ylabel('Velocity (m/s)', color='g')
-ax4.set_title('Curvature and velocity along the path')
-ax4.grid(True)
-lines1, labels1 = ax4.get_legend_handles_labels()
-lines2, labels2 = ax4_twin.get_legend_handles_labels()
-ax4.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+ax = axes[1, 1]
+ax.plot(t, v, 'g-', lw=1.5)
+ax.set_xlabel('Time (s)'); ax.set_ylabel('Velocity (m/s)')
+ax.set_title('Velocity vs time'); ax.grid(True)
+
+ax = axes[1, 2]
+ax.plot(t, np.abs(kappa_path), 'b-', label='|curvature|')
+axt = ax.twinx()
+axt.plot(t, v, 'g-', label='velocity')
+ax.set_xlabel('Time (s)'); ax.set_ylabel('|Curvature| (1/m)', color='b')
+axt.set_ylabel('Velocity (m/s)', color='g')
+ax.set_title('Curvature & velocity over time')
+ax.grid(True)
+lines1, labels1 = ax.get_legend_handles_labels()
+lines2, labels2 = axt.get_legend_handles_labels()
+ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
 
 plt.tight_layout()
 plt.show()
