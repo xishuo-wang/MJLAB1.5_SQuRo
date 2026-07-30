@@ -20,8 +20,7 @@ PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 STRIDE_MIN = 0.0                                            # 最小步幅
 
 
-# 离散曲率绝对值表（运行时在此范围内线性插值）
-# 由 CURVATURE_TARGET_MAX 动态生成：[0.0, 0.5, ..., 5.0] + (5, max] 步长 1.0
+# 离散曲率绝对值表
 def _generate_curvature_bins(max_k: float) -> list[float]:
     bins = [i * 0.5 for i in range(11)]  # [0.0, 0.5, ..., 5.0]
     if max_k > 5.0:
@@ -233,7 +232,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     k1 = _k_bins[idx + 1]
     t = (abs_k - k0) / (k1 - k0 + 1e-12)  # 插值因子，[0,1]
 
-    # 从表中取出对应相位的关节参考，两个曲率层
     # pos_table: [_NUM_CURV, 50, 12], phase_indices: [N]
     # 使用高级索引: pos_table[idx, phase_indices] -> [N,12]
     pos0 = _pos_table[idx, phase_indices]      # [N,12]
@@ -245,7 +243,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
     ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * gait_freq.unsqueeze(1)
 
-    # -----------------------------------------------------------------
     # 根据曲率符号交换左右腿关节（右转时内侧为右腿）
     swap_mask = curvature_cmd < 0  # [N] bool
     if swap_mask.any():
