@@ -154,7 +154,6 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     vel_cmd = cmd_term.command[:, 0]                # [N]
     pole_spacing = cmd_term.active_pole_spacing      # type: ignore[union-attr]
     dt = env.step_dt
-    t = env.episode_length_buf.float() * dt         # [N]
 
     # 首次调用或杆间距变化时重建 LUT
     cache = getattr(env, "_slalom_lut_cache", None)
@@ -178,8 +177,18 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     hd_lut = cache["heading"]
     s_period = cache["period"]
 
-    # 当前弧长 s = v·t mod period + 周期偏移(保证 x_ref 连续不跳变)
-    total_s = vel_cmd * t                        # [N]
+    # 累积弧长 (∫ vel dt) — 适配速度动态变化
+    if getattr(env, "_slalom_arc_len", None) is None:
+        env._slalom_arc_len = torch.zeros(env.num_envs, device=env.device)  # type: ignore[attr-defined]
+    env._slalom_arc_len += vel_cmd * dt  # type: ignore[attr-defined]
+    # 重置已终止环境
+    reset_ids = getattr(env, "reset_terminated", None)
+    if reset_ids is not None:
+        ids = reset_ids.nonzero(as_tuple=False).flatten()
+        if len(ids) > 0:
+            env._slalom_arc_len[ids] = 0.0  # type: ignore[attr-defined]
+
+    total_s = env._slalom_arc_len  # type: ignore[attr-defined]  # [N], = ∫vel dt
     num_periods = (total_s / s_period).floor().long()  # [N]
     s = total_s - num_periods * s_period          # [N], = total_s % period
 
