@@ -271,11 +271,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     abs_k_norm = curvature_cmd.abs() / kappa_norm
 
     # 各脊柱关节目标角度（弧度），在 |κ| = max_k 时达到极值
-    ref_pos[:, 0] = -0.6 * k_norm           # f_spine1 κ=-max → +0.6, κ=+max → -0.6
+    ref_pos[:, 0] = -0.7 * k_norm           # f_spine1 κ=-max → +0.6, κ=+max → -0.6
     ref_pos[:, 1] = -0.9 * k_norm           # f_body κ=-max → +0.9, κ=+max → -0.9
     ref_pos[:, 2] = 0.8 * k_norm            # neck_yaw
     ref_pos[:, 3] = -0.3                    # neck_pitch
-    ref_pos[:, 8] = -0.6 * abs_k_norm       # h_spine1 始终 ≤0, |κ|=max → -0.6
+    ref_pos[:, 8] = -0.7 * abs_k_norm       # h_spine1 始终 ≤0, |κ|=max → -0.6
     ref_pos[:, 9] = -0.7 * k_norm           # h_body κ=-max → +0.7, κ=+max → -0.7
 
     # 推进相位
