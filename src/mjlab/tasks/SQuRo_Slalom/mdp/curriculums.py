@@ -22,13 +22,13 @@ POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (PHASE2_MID_ITER)
 _STAGES = (0, 2000, 4000, 6000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (5.0, 5.0, 5.0),
-    "weight_mimic_vel":         (2.5, 2.5, 2.5),
-    "weight_height":            (2.5, 2.5, 2.5),
+    "weight_mimic_pos":         (4.0, 4.0, 4.0),
+    "weight_mimic_vel":         (2.0, 2.0, 2.0),
+    "weight_height":            (2.0, 2.0, 2.0),
     "weight_track_vel":         (4.0, 4.0, 4.0),
-    "weight_track_vyz":         (1.0, 1.0, 1.0),
+    "weight_track_vyz":         (0.5, 0.5, 0.5),
     "weight_track_omg":         (5.0, 5.0, 5.0),
-    "weight_corridor":          (5.0, 5.0, 8.0),
+    "weight_corridor":          (5.0, 8.0, 8.0),
     "weight_track_head":        (5.0, 5.0, 5.0),
     "weight_smooth_L1_leg":     (0.1, 0.5, 0.5),
     "weight_smooth_L1_spn":     (0.1, 0.5, 0.5),
@@ -39,10 +39,10 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_collision_leg":     (0.0, 1.0, 3.0),
 
     "sigma_leg_pos":            (5.0,),
-    "sigma_spn_pos":            (10.0, 10.0, 20.0),
+    "sigma_spn_pos":            (10.0, 20.0, 20.0),
     "sigma_leg_vel":            (0.1,),
     "sigma_spn_vel":            (0.1,),
-    "sigma_height":             (1000,),
+    "sigma_height":             (500,),
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
