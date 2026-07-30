@@ -14,11 +14,9 @@ PHASE1_END_ITER = 4000          # iter 2000-4000: 转弯基元
 PHASE2_MID_ITER = 6000          # iter 4000-6000: 绕杆间距缩小阶段
 PHASE2_END_ITER = 8000          # iter 6000-8000: 绕杆训练
 
-# 绕杆阶段杆间距课程 — Phase 1 每 episode 在范围内随机采样 (同 Phase 0 κ 机制)
+# 绕杆阶段杆间距 — Phase 1 固定使用 2×Rmin (无课程变化)
 Rmin = 1/CURVATURE_TARGET          # 最小转弯半径 (= 1/κ_arc)
-POLE_SPACING_MAX   = 0.25          # 间距上限 (固定)
-POLE_SPACING_START = 0.20          # 间距下限起始值 (PHASE1_END_ITER)
-POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (PHASE2_MID_ITER)
+POLE_SPACING = 2 * Rmin            # Phase 1 杆间距 (= 2Rmin, 纯弧无直行)
 
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000, 6000)
@@ -48,7 +46,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10, 20, 30),
+    "sigma_corridor":           (10, 20, 50),
     "sigma_collision":          (200,),
     "sigma_track_head":         (20,),
 }
@@ -59,20 +57,13 @@ def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
-# 获取杆间距采样范围 — 下限线性缩小到 POLE_SPACING_MIN, 上限固定 POLE_SPACING_MAX
+# 获取杆间距 — Phase 1 固定使用 POLE_SPACING (= 2×Rmin, 不再课程变化)
 def get_pole_spacing_range(step_counter: int) -> tuple[float, float]:
-    iter_num = step_counter // _STEPS_PER_ITER
-    if iter_num < PHASE1_END_ITER:
-        return (POLE_SPACING_START, POLE_SPACING_MAX)
-    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_MID_ITER - PHASE1_END_ITER))
-    low = POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
-    return (low, POLE_SPACING_MAX)
+    return (POLE_SPACING, POLE_SPACING)
 
 
-# 获取杆间距 (确定性中值, 用于回放/可视化的默认值)
 def get_curriculum_pole_spacing(step_counter: int) -> float:
-    low, high = get_pole_spacing_range(step_counter)
-    return (low + high) / 2
+    return POLE_SPACING
 
 
 # 奖励权重课程

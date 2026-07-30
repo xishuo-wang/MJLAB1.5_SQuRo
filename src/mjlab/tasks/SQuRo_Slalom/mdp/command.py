@@ -53,8 +53,8 @@ class SlalomCommand(CommandTerm):
         self.fixed_curvature = cfg.fixed_curvature
 
         # 杆间距 (Phase 1 每 episode 随机采样, 共享值)
-        from .curriculums import POLE_SPACING_START
-        self._shared_pole_spacing = POLE_SPACING_START
+        from .curriculums import POLE_SPACING
+        self._shared_pole_spacing = POLE_SPACING
 
         # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
