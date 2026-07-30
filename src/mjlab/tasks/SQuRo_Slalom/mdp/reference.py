@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
+from .path import get_path_curvature
 from .indices import resolve_model_indices
 from .curriculums import CURVATURE_TARGET_MAX, CURVATURE_TARGET
-from .path import get_path_curvature
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
