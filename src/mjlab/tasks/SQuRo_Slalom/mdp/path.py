@@ -4,7 +4,7 @@ import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .curriculums import CURVATURE_TARGET_MAX
+from .curriculums import CURVATURE_TARGET
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -17,7 +17,7 @@ H_BODY_HALF_WIDTH  = 0.035          # H_body_Link 在XoY平面左右方向半宽
 BODY_REF_OFFSET = 0.04              # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04          # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
 
-_RMIN = 1.0 / CURVATURE_TARGET_MAX  # 最小转弯半径
+_RMIN = 1.0 / CURVATURE_TARGET  # 最小转弯半径 (= 0.05m for κ=20)
 
 
 # 获取指定 body_link 的偏航角

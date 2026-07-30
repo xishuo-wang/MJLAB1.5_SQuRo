@@ -3,8 +3,9 @@ from typing import Any
 
 _STEPS_PER_ITER = 24
 
-# 最大曲率
-CURVATURE_TARGET_MAX = 20.0
+# 曲率常量 — CURVATURE_TARGET_MAX 用于 Phase0 采样范围, CURVATURE_TARGET 用于绕杆弧
+CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
+CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 
 # 两阶段训练
 PHASE1_MID_ITER = 2000          # iter 0-2000: 转弯曲率增大
@@ -13,7 +14,7 @@ PHASE2_MID_ITER = 6000          # iter 4000-6000: 绕杆间距缩小阶段
 PHASE2_END_ITER = 8000          # iter 6000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程 — Phase 1 每 episode 在范围内随机采样 (同 Phase 0 κ 机制)
-Rmin = 1/CURVATURE_TARGET_MAX      # 最小转弯半径
+Rmin = 1/CURVATURE_TARGET          # 最小转弯半径 (= 1/κ_arc)
 POLE_SPACING_MAX   = 0.25          # 间距上限 (固定)
 POLE_SPACING_START = 0.20          # 间距下限起始值 (PHASE1_END_ITER)
 POLE_SPACING_MIN   = 2 * Rmin      # 间距下限最小值 (PHASE2_MID_ITER)
@@ -46,7 +47,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10, 20),
+    "sigma_corridor":           (10, 20, 30),
     "sigma_collision":          (200,),
     "sigma_track_head":         (20,),
 }

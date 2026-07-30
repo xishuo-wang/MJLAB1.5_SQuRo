@@ -3,13 +3,13 @@ import torch
 import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
-from .curriculums import CURVATURE_TARGET_MAX
+from .curriculums import CURVATURE_TARGET
 
 
 # 杆几何常量
 POLE_RADIUS = 0.01                      # 直径 1cm
 POLE_HALF_HEIGHT = 0.05                 # 高 10cm（半高 5cm）
-POLE_Y = -1.0 / CURVATURE_TARGET_MAX    # 杆心 Y 坐标 (= -Rmin = -0.0667, 路径第一弧底部)
+POLE_Y = -1.0 / CURVATURE_TARGET        # 杆心 Y 坐标 (= -Rmin, 路径第一弧底部)
 
 
 @dataclass

@@ -116,7 +116,7 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        from .curriculums import get_training_phase, get_pole_spacing_range, CURVATURE_TARGET_MAX
+        from .curriculums import get_training_phase, get_pole_spacing_range, CURVATURE_TARGET, CURVATURE_TARGET_MAX
         from .pole import update_pole_visibility
         n = len(env_ids)
         current_step = self._env.common_step_counter
@@ -132,12 +132,12 @@ class SlalomCommand(CommandTerm):
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * scale
         else:
-            # Phase 1: 绕杆训练 — 曲率 ±15, 杆间距每 episode 随机采样
+            # Phase 1: 绕杆训练 — 弧曲率, 杆间距每 episode 随机采样
             sp_range = get_pole_spacing_range(current_step)
             self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
-            self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
+            self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
-            scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
+            scale = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = torch.full((n,), base_vel * scale, device=self.device)
 
         self._start_recorded[env_ids] = False

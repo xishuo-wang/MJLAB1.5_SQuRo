@@ -6,8 +6,8 @@ import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .indices import resolve_model_indices
-from .curriculums import CURVATURE_TARGET_MAX
-from .path import get_path_curvature, _RMIN as _SLALOM_RMIN
+from .curriculums import CURVATURE_TARGET_MAX, CURVATURE_TARGET
+from .path import get_path_curvature
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -217,7 +217,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     vel_cmd = cmd_tensor[:, 0]  # [N]
     gait_freq = cmd_tensor[:, 3]  # [N] — 动态步频
     slalom_mode = env.command_manager._terms["slalom_cmd"].slalom_mode_active  # type: ignore[union-attr]
-    kappa_norm = 1.0 / _SLALOM_RMIN if slalom_mode else CURVATURE_TARGET_MAX  # 15 or 20
+    kappa_norm = CURVATURE_TARGET if slalom_mode else CURVATURE_TARGET_MAX
 
     # 曲率绝对值及插值因子（k_bins 在 _init_tables 时缓存）
     abs_k = curvature_cmd.abs()  # [N]
