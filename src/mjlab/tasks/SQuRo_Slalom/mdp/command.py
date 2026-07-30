@@ -21,11 +21,11 @@ VEL_MIN = 0.25
 
 # 获取曲率采样范围
 def get_curvature_range(step_counter: int) -> Tuple[float, float]:
-    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER, CURVATURE_TARGET_MAX
+    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER, CURVATURE_TARGET_MAX, CURVATURE_MIN
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_MID_ITER:
         progress = iter_num / PHASE1_MID_ITER  # 0 → 1
-        kappa_max = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
+        kappa_max = CURVATURE_MIN + progress * (CURVATURE_TARGET_MAX - CURVATURE_MIN)
         return (-kappa_max, kappa_max)
     return (-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX)
 
@@ -53,7 +53,8 @@ class SlalomCommand(CommandTerm):
         self.fixed_curvature = cfg.fixed_curvature
 
         # 杆间距 (Phase 1 每 episode 随机采样, 共享值)
-        self._shared_pole_spacing = 0.20
+        from .curriculums import POLE_SPACING_START
+        self._shared_pole_spacing = POLE_SPACING_START
 
         # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -258,11 +259,11 @@ class SlalomCommand(CommandTerm):
                 )
 
         # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致=6）
-        from .pole import POLE_Y
+        from .pole import POLE_Y, POLE_HALF_HEIGHT
         for pi in range(6):
             px = start[0] + pi * spacing
             py = start[1] + POLE_Y
-            pt = np.array([px, py, start[2] + z_offset + 0.05])
+            pt = np.array([px, py, start[2] + z_offset + POLE_HALF_HEIGHT])
             visualizer.add_sphere(
                 center=pt, radius=0.007,
                 color=(0.9, 0.2, 0.2, 0.8),

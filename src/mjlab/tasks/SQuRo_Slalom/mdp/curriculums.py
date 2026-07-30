@@ -4,6 +4,7 @@ from typing import Any
 _STEPS_PER_ITER = 24
 
 # 曲率常量 — CURVATURE_TARGET_MAX 用于 Phase0 采样范围, CURVATURE_TARGET 用于绕杆弧
+CURVATURE_MIN = 0.5            # Phase 0 课程曲率起始值
 CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
 CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 

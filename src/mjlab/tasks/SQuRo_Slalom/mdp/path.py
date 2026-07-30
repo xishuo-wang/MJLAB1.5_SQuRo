@@ -5,6 +5,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
 from .curriculums import CURVATURE_TARGET
+from .pole import POLE_RADIUS
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -285,7 +286,7 @@ def compute_body_pole_dist(
     half_L: float, half_W: float,
     pole_pos: torch.Tensor,           # [M, 2] 所有杆 XY
 ) -> torch.Tensor:
-    pole_r = 0.005  # 杆半径
+    pole_r = POLE_RADIUS  # 杆半径
     min_dist = torch.full((body_center.shape[0],), 1e9, device=body_center.device)
     for j in range(pole_pos.shape[0]):
         d = _point_to_rect_dist(
