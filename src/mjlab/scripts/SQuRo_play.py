@@ -44,12 +44,12 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Slalom 任务相关配置
-    fixed_velocity: float | None = 0.1
+    fixed_velocity: float | None = 0.2
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 2.0
-    fixed_curvature: float | None = -15
-    fixed_pole_spacing: float | None = 0.15
+    fixed_curvature: float | None = -16
+    fixed_pole_spacing: float | None = 0.125
     enable_collision: bool = False
 
 
