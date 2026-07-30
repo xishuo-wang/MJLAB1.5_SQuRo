@@ -6,7 +6,7 @@ _STEPS_PER_ITER = 24
 # 曲率常量 — CURVATURE_TARGET_MAX 用于 Phase0 采样范围, CURVATURE_TARGET 用于绕杆弧
 CURVATURE_MIN = 0.5            # Phase 0 课程曲率起始值
 CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
-CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
+CURVATURE_TARGET = 16.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 
 # 两阶段训练
 PHASE1_MID_ITER = 2000          # iter 0-2000: 转弯曲率增大
@@ -19,11 +19,11 @@ Rmin = 1/CURVATURE_TARGET          # 最小转弯半径 (= 1/κ_arc)
 POLE_SPACING = 2 * Rmin            # Phase 1 杆间距 (= 2Rmin, 纯弧无直行)
 
 # 奖励权重阶段
-_STAGES = (0, 2000, 4000, 6000)
+_STAGES = (0, 2000, 4000, 5000, 6000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (4.0, 4.0, 4.0),
-    "weight_mimic_vel":         (2.0, 2.0, 2.0),
+    "weight_mimic_pos":         (4.0, 4.0, 5.0),
+    "weight_mimic_vel":         (2.0, 2.0, 2.5),
     "weight_height":            (2.0, 2.0, 2.0),
     "weight_track_vel":         (4.0, 4.0, 4.0),
     "weight_track_vyz":         (0.5, 0.5, 0.5),
@@ -35,8 +35,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_smooth_L2_leg":     (0.1, 0.5, 0.5),
     "weight_smooth_L2_spn":     (0.1, 0.5, 0.5),
     "weight_energy":            (0.1, 0.5, 0.5),
-    "weight_collision_body":    (0.0, 0.0, 1.0, 3.0),
-    "weight_collision_leg":     (0.0, 1.0, 3.0),
+    "weight_collision_body":    (0.0, 0.0, 0.0, 1.0),
+    "weight_collision_leg":     (0.0, 0.0, 0.0, 1.0),
 
     "sigma_leg_pos":            (5.0,),
     "sigma_spn_pos":            (10.0, 20.0, 20.0),
@@ -46,7 +46,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10, 20, 50),
+    "sigma_corridor":           (10, 20, 20, 50),
     "sigma_collision":          (200,),
     "sigma_track_head":         (20,),
 }
