@@ -23,7 +23,7 @@ PHASE2_END_ITER = 8000          # iter 6000-8000: 绕杆训练
 Rmin = 1/CURVATURE_TARGET          # 最小转弯半径 (= 1/κ_arc, 0.0625m)
 POLE_SPACING = 2 * Rmin            # 纯弧杆间距基准 (= 2Rmin, 直行段=0)
 POLE_SPACING_START = 0.20          # 间距下限起始值 (iter=4000, 直行段≈75mm)
-POLE_SPACING_MIN = 0.133           # 间距下限最终值 (iter=6000, ≈2/15, 略大于2Rmin 保留微直行段)
+POLE_SPACING_MIN = 2 * Rmin        # 间距下限最终值 (iter=6000, ≈2/15, 略大于2Rmin 保留微直行段)
 POLE_SPACING_MAX = 0.25            # 间距上限 (固定, 直行段≈125mm)
 
 # 奖励权重阶段
