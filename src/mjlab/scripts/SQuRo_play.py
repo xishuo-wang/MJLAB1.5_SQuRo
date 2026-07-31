@@ -44,11 +44,11 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Slalom 任务相关配置
-    fixed_velocity: float | None = 0.2
+    base_vel: float | None = 0.1
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 2.0
-    fixed_curvature: float | None = -18
+    fixed_curvature: float | None = -20
     fixed_pole_spacing: float | None = 2/15
     enable_collision: bool = False
 
@@ -338,14 +338,14 @@ def run_play(cfg: PlayConfig):
     # 命令固定值覆盖 — 按阶段互斥: Phase 0 用 curvature, Phase 1 用 pole_spacing
     cmd_cfg = env_cfg.commands.get("slalom_cmd")
     if cmd_cfg is not None and TRAINED_MODE:
-        if cfg.fixed_velocity is not None:
-            cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore
         if cfg.fixed_height_f is not None:
             cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore
         if cfg.fixed_height_h is not None:
             cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore
         if cfg.fixed_gait_freq is not None:
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
+        if cfg.base_vel is not None and cfg.fixed_gait_freq is not None:
+            cmd_cfg.fixed_velocity = cfg.base_vel * cfg.fixed_gait_freq  # type: ignore
         if is_slalom_phase:
             # Phase 1: 绕杆 — curvature 动态, 杆间距覆盖课程
             cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
