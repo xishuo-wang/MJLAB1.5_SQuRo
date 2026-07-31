@@ -165,10 +165,16 @@ class SlalomCommand(CommandTerm):
 
         else:
             # Phase 1: 绕杆训练
-            sp_range = get_pole_spacing_range(current_step)
-            self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
-            self._shared_gait_freq = GAIT_FREQ_PHASE1
-            self.gait_freq_command[env_ids] = GAIT_FREQ_PHASE1
+            if self.cfg.fixed_pole_spacing is not None:
+                self._shared_pole_spacing = float(self.cfg.fixed_pole_spacing)
+            else:
+                sp_range = get_pole_spacing_range(current_step)
+                self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
+            if self.fixed_gait_freq is not None:
+                self._shared_gait_freq = float(self.fixed_gait_freq)
+            else:
+                self._shared_gait_freq = GAIT_FREQ_PHASE1
+            self.gait_freq_command[env_ids] = self._shared_gait_freq
             self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
 
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
