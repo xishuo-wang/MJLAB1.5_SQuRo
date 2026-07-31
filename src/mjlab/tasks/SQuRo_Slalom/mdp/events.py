@@ -14,7 +14,7 @@ def reset_model(env, env_ids):
     # 重置基座状态
     root_state = torch.zeros(n, 13, device=env.device)
     root_state[:, 0] = 0.0        # x
-    root_state[:, 1] = 0.0        # y
+    root_state[:, 1] = -0.05      # y (后移, 更好进入轨迹)
     root_state[:, 2] = 0.06       # z
     root_state[:, 3] = 0          # quat w
     root_state[:, 4] = -0.707107  # quat x  

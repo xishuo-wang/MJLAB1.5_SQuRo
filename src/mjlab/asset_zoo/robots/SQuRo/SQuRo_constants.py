@@ -46,7 +46,7 @@ SQURO_ARTICULATION = EntityArticulationInfoCfg(
 
 # 初始状态配置
 INIT_STATE = EntityCfg.InitialStateCfg(
-    pos=(0.0, 0.0, 0.06),
+    pos=(0.0, -0.05, 0.06),   # Y 后移 5cm, 更好进入期望轨迹
     rot=(1.0, 0.0, 0.0, 0.0),
     lin_vel=(0.0, 0.0, 0.0),
     ang_vel=(0.0, 0.0, 0.0),
