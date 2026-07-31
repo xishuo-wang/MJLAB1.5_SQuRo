@@ -111,7 +111,7 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
     for i, abs_k in enumerate(_CURVATURE_BINS):
-        scale_inner = STRIDE_MIN + (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（|κ|=κ_max → scale=0）
+        scale_inner = 1.0 - (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（|κ|=κ_max → scale=0）
 
         # 左腿（FL, HL）为内侧，缩放其 Y_mean
         y_fL = y_f_t * scale_inner
