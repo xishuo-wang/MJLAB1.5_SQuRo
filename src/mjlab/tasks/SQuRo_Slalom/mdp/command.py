@@ -21,8 +21,8 @@ from .curriculums import (
     get_pole_spacing_range,
     get_curriculum_pole_spacing,
 )
-from .path import get_path_curvature, _generate_slalom_lut_one_period
 from .pole import POLE_Y, POLE_HALF_HEIGHT, POLE_RADIUS, update_pole_visibility
+from .path import _INIT_DIST, get_path_curvature, _generate_slalom_lut_one_period
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -239,16 +239,13 @@ class SlalomCommand(CommandTerm):
         curvature = self.curvature_command[batch].item()
         vel = self.vel_command[batch].item()
         start = self._start_positions[batch].cpu().numpy()
-
         radius = 0.008
-        APPROACH = 0.05
-        origin_x = -APPROACH
 
         # 接近段
         n_app = 5
         for i in range(n_app + 1):
             frac = i / n_app
-            pt = np.array([origin_x + frac * APPROACH, 0.0, start[2] + z_offset])
+            pt = np.array([-_INIT_DIST + frac * _INIT_DIST, 0.0, start[2] + z_offset])
             visualizer.add_sphere(center=pt, radius=radius, color=(0.5, 0.8, 0.5, 0.5), label=f"approach_{i}")
 
         # 圆弧段
@@ -268,8 +265,7 @@ class SlalomCommand(CommandTerm):
                 x_i = R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
                 y_i = -R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
             pt = np.array([x_i, y_i, start[2] + z_offset])
-            visualizer.add_sphere(center=pt, radius=radius,
-                                  color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
+            visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
 
     # 绘制绕杆路径：接近段 + LUT 周期性路径 + 杆柱
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
