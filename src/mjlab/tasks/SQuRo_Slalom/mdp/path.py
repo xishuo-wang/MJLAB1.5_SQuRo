@@ -18,7 +18,7 @@ H_BODY_HALF_WIDTH  = 0.035          # H_body_Link 在XoY平面左右方向半宽
 BODY_REF_OFFSET = 0.04              # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04          # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
 
-_RMIN = 1.0 / CURVATURE_TARGET  # 最小转弯半径 (= 0.05m for κ=20)
+_RMIN = 1.0 / CURVATURE_TARGET  # 最小转弯半径 (= 1/κ, Phase 1 κ=16 → 0.0625m)
 _INIT_DIST = 0.01                   # 初始直行段长度 (m)
 
 # 获取指定 body_link 的偏航角
@@ -60,7 +60,7 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     total_dist = vel_cmd * t                # [N], 已行驶距离
     in_approach = total_dist < _INIT_DIST
 
-    # 接近段: 直行 (-0.05, 0) → (0, 0)
+    # 接近段: 直行 (-_INIT_DIST, 0) → (0, 0)
     approach_x = -_INIT_DIST + total_dist
     approach_y = torch.zeros_like(t)
     approach_heading = torch.zeros_like(t)
@@ -185,7 +185,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     hd_lut = cache["heading"]
     s_period = cache["period"]
 
-    # 累积弧长 (∫ vel dt), 起始 -0.05m 作为接近段 (机器人 X=-0.05 → LUT 起点 X=0)
+    # 累积弧长 (∫ vel dt), 起始 -_INIT_DIST 作为接近段 (机器人 X=-_INIT_DIST → LUT 起点 X=0)
     if getattr(env, "_slalom_arc_len", None) is None:
         env._slalom_arc_len = torch.full((env.num_envs,), -_INIT_DIST, device=env.device)  # type: ignore[attr-defined]
     env._slalom_arc_len += vel_cmd * dt  # type: ignore[attr-defined]
@@ -199,9 +199,9 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     arc_len = env._slalom_arc_len  # type: ignore[attr-defined]  # [N], 负值=接近段
     in_approach = arc_len < 0.0
 
-    # 接近段: 直行 (-0.05,0) → (0,0), heading=0
-    approach_dist = arc_len + _INIT_DIST               # 0 → 0.05
-    approach_x = -_INIT_DIST + approach_dist            # -0.05 → 0
+    # 接近段: 直行 (-_INIT_DIST,0) → (0,0), heading=0
+    approach_dist = arc_len + _INIT_DIST               # 0 → _INIT_DIST
+    approach_x = -_INIT_DIST + approach_dist            # -_INIT_DIST → 0
     approach_y = torch.zeros_like(approach_dist)
     approach_h = torch.zeros_like(approach_dist)
     approach_k = torch.zeros_like(approach_dist)
@@ -218,7 +218,9 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
     lut_x = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
     lut_y = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
-    lut_h = hd_lut[idx_prev]
+    # heading 角度插值（需 wrap 到 [-π, π]）
+    d_h = torch.atan2(torch.sin(hd_lut[idx] - hd_lut[idx_prev]), torch.cos(hd_lut[idx] - hd_lut[idx_prev]))
+    lut_h = hd_lut[idx_prev] + frac * d_h
     kappa_lut = cache["kappa"]
     lut_k = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
 

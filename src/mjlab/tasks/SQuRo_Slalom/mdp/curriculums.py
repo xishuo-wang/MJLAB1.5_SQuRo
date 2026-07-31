@@ -40,8 +40,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_smooth_L2_leg":     (0.1, 0.5, 0.5),
     "weight_smooth_L2_spn":     (0.1, 0.5, 0.5),
     "weight_energy":            (0.1, 0.5, 0.5),
-    "weight_collision_body":    (0.0, 0.0, 0.0, 1.0),
-    "weight_collision_leg":     (0.0, 0.0, 0.0, 1.0),
+    "weight_collision_body":    (0.0, 0.0, 0.0, 0.0),
+    "weight_collision_leg":     (0.0, 0.0, 0.0, 0.0),
 
     "sigma_leg_pos":            (5.0,),
     "sigma_spn_pos":            (10.0, 20.0, 20.0),

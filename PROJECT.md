@@ -36,7 +36,7 @@ H_spine1_joint初始为俯仰自由度（初始旋转轴平行于世界坐标系
 
 ### 坐标系
 
-**世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-0.05, Y=0, 面朝 +X。
+**世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-_INIT_DIST(=0.01, path.py), Y=0, 面朝 +X。
 
 **局部**：body+X ≠ 物理前向，F/H body 的 body+X 指向 world ±Y：
 
@@ -129,7 +129,7 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 
 ## 期望轨迹 (mdp/path.py)
 
-机器人初始 `X=-0.05, Y=0`，面朝 `+X`。路径统一从世界原点 `(0,0)` 出发，前 0.05m 为直行接近段（`_APPROACH_DIST`）。
+机器人初始 `X=-_INIT_DIST(0.01), Y=0`，面朝 `+X`。路径统一从世界原点 `(0,0)` 出发，前 `_INIT_DIST`(0.01m, path.py) 为直行接近段。
 
 **Phase 0**：接近段(直行) → 圆弧(弦长公式, 从原点出发, 固定 κ)
 
@@ -226,7 +226,7 @@ CSV 记录 关节角度、速度、动作空间输出等信息，并保存视频
 1. **WarpBridge 不兼容 mj_name2id** → 改用 `geom_type==CYLINDER` 匹配
 2. **model.geom_rgba 是 torch tensor** → 赋值需 `torch.tensor`
 3. **entities 覆盖丢失实体** → 用 `{**orig, **pole}` merge
-4. **可视化用机器人位置做起点** → 改用固定世界原点 (-0.05, 0)
+4. **可视化用机器人位置做起点** → 改用固定世界原点 (-_INIT_DIST, 0)
 5. **杆标记载体从红球改为圆柱** → 与场景 PoleEntity 外观一致
 
 

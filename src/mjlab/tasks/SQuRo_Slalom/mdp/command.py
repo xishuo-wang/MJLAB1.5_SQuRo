@@ -277,7 +277,6 @@ class SlalomCommand(CommandTerm):
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
-        APPROACH = 0.05
         z = start[2] + z_offset
 
         _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
@@ -285,11 +284,11 @@ class SlalomCommand(CommandTerm):
         n_periods = 3
 
         radius = 0.006
-        # 接近段
+        # 接近段 (长度 = _INIT_DIST, 与 path.py / events.py 一致)
         n_app = 5
         for i in range(n_app + 1):
             frac = i / n_app
-            pt = np.array([-APPROACH + frac * APPROACH, 0.0, z])
+            pt = np.array([-_INIT_DIST + frac * _INIT_DIST, 0.0, z])
             visualizer.add_sphere(center=pt, radius=radius, color=(0.5, 0.8, 0.5, 0.5), label=f"sl_ap_{i}")
 
         # 周期路径
