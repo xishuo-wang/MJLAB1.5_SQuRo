@@ -344,8 +344,8 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore
         if cfg.fixed_gait_freq is not None:
             cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
-        if cfg.base_vel is not None and cfg.fixed_gait_freq is not None:
-            cmd_cfg.fixed_velocity = cfg.base_vel * cfg.fixed_gait_freq  # type: ignore
+        if cfg.base_vel is not None:
+            cmd_cfg.fixed_velocity = cfg.base_vel  # type: ignore  # 每Hz基准速度, 命令系统统一×gait_freq×scale
         if is_slalom_phase:
             # Phase 1: 绕杆 — curvature 动态, 杆间距覆盖课程
             cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
