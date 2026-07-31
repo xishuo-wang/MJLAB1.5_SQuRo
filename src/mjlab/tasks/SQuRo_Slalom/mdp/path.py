@@ -52,25 +52,36 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
     return compute_arc_path_ref(env)
 
 
-# 路径参考计算 — 基元阶段：恒定曲率圆弧
+# 路径参考计算 — 基元阶段：直行接近段(0.05m) + 圆弧
+_APPROACH_DIST = 0.05  # 接近段长度 (m), 匹配机器人初始 X=-0.05
+
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]      # [N]
     vel_cmd = cmd_term.command[:, 0]        # [N]
     t = env.episode_length_buf.float() * env.step_dt  # [N]
 
-    # 固定世界坐标系起点 — 与 reset_model 中的初始位置一致
-    start_heading = 0.0  # 物理前向 = world +X
+    total_dist = vel_cmd * t                # [N], 已行驶距离
+    in_approach = total_dist < _APPROACH_DIST
+
+    # 接近段: 直行 (-0.05, 0) → (0, 0)
+    approach_x = -_APPROACH_DIST + total_dist
+    approach_y = torch.zeros_like(t)
+    approach_heading = torch.zeros_like(t)
+
+    # 圆弧段: 从 (0,0) 出发, 时间 = t - approach_time
+    arc_t = torch.clamp(t - _APPROACH_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
     omega = curvature * vel_cmd
-    dtheta = omega * t
-    path_heading = start_heading + dtheta
+    dtheta = omega * arc_t
+    arc_heading = dtheta  # start_heading = 0
+    chord = vel_cmd * arc_t * torch.sinc(dtheta / (2 * torch.pi))
+    arc_x = chord * torch.cos(dtheta / 2)   # from (0,0)
+    arc_y = chord * torch.sin(dtheta / 2)
 
-    # 弦长公式：chord = v·t·sinc(dθ/2π)
-    chord = vel_cmd * t * torch.sinc(dtheta / (2 * torch.pi))
-    x_ref = chord * torch.cos(start_heading + dtheta / 2)   # start_x = 0
-    y_ref = chord * torch.sin(start_heading + dtheta / 2)   # start_y = 0
+    x_ref = torch.where(in_approach, approach_x, arc_x)
+    y_ref = torch.where(in_approach, approach_y, arc_y)
+    path_heading = torch.where(in_approach, approach_heading, arc_heading)
 
-    # 世界系期望速度（路径切线方向）
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
 
@@ -202,8 +213,8 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     frac = (s - s_prev) / (s_next - s_prev + 1e-12)  # [N]
     x_lut_val = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
     y_ref = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
-    # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing
-    x_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
+    # 叠加已完成周期偏移 + 接近段偏移: x_ref 从 -0.05 出发 (匹配机器人初始 X)
+    x_ref = x_lut_val + num_periods.float() * (2 * pole_spacing) - _APPROACH_DIST
     path_heading = hd_lut[idx_prev]  # 分段常值 heading
 
     vx_des = vel_cmd * torch.cos(path_heading)
