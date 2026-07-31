@@ -100,7 +100,7 @@ iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
-Phase 1: LUT 路径, 杆间距固定 2×Rmin, 步频固定 1Hz, 杆可见(无碰撞)
+Phase 1: LUT 路径, 杆间距每 episode 随机采样(下限 0.20→0.133 课程缩小, 上限 0.25), 步频固定 1Hz, 杆可见(无碰撞)
 ```
 
 | 常量 | 值 | 用途 |
@@ -110,7 +110,10 @@ Phase 1: LUT 路径, 杆间距固定 2×Rmin, 步频固定 1Hz, 杆可见(无碰
 | CURVATURE_TARGET | 16.0 | Phase 1 绕杆弧曲率 (= 1/Rmin) |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
 | GAIT_FREQ_PHASE1 | 1.0 | Phase 1 固定步频 |
-| POLE_SPACING | 2/CURVATURE_TARGET | Phase 1 杆间距 |
+| POLE_SPACING | 2/CURVATURE_TARGET | 纯弧杆间距基准 (= 2Rmin, 直行段=0) |
+| POLE_SPACING_START | 0.20 | Phase 1 间距下限起始值 (iter=4000) |
+| POLE_SPACING_MIN | 0.133 | Phase 1 间距下限最终值 (iter=6000, ≈2/15) |
+| POLE_SPACING_MAX | 0.25 | Phase 1 间距上限 (固定) |
 
 
 ## 命令系统 (mdp/command.py)
