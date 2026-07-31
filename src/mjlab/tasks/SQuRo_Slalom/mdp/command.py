@@ -264,12 +264,18 @@ class SlalomCommand(CommandTerm):
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
                 visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}")
 
-        # 杆位置标记 (世界坐标: 0, X, 2X, ...)
-        from .pole import POLE_Y, POLE_HALF_HEIGHT
+        # 杆标记 — 与场景一致的圆柱体 (世界坐标: 0, X, 2X, ...)
+        from .pole import POLE_Y, POLE_HALF_HEIGHT, POLE_RADIUS
+        pole_h = POLE_HALF_HEIGHT * 2
         for pi in range(6):
-            pt = np.array([pi * spacing, POLE_Y, z + POLE_HALF_HEIGHT])
-            visualizer.add_sphere(center=pt, radius=0.007,
-                                  color=(0.9, 0.2, 0.2, 0.8), label=f"pole_{pi}")
+            px, py = pi * spacing, POLE_Y
+            visualizer.add_cylinder(
+                start=np.array([px, py, 0.0]),
+                end=np.array([px, py, pole_h]),
+                radius=POLE_RADIUS,
+                color=(0.9, 0.35, 0.2, 0.6),
+                label=f"pole_{pi}",
+            )
 
 
 @dataclass(kw_only=True)
