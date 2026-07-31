@@ -153,7 +153,10 @@ class SlalomCommand(CommandTerm):
         if phase == 0:
             # Phase 0: 转弯基元
             self.curvature_command[env_ids] = self._get_curvature(n, current_step)
-            self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
+            if self.fixed_gait_freq is not None:
+                self._shared_gait_freq = float(self.fixed_gait_freq)
+            else:
+                self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
 
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
