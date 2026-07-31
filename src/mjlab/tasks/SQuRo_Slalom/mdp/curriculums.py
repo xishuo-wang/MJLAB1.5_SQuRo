@@ -30,7 +30,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (4.0, 4.0, 5.0),
     "weight_mimic_vel":         (2.0, 2.0, 2.5),
     "weight_height":            (2.0, 2.0, 2.0),
-    "weight_track_vel":         (4.0, 4.0, 4.0),
+    "weight_track_vel":         (4.0, 4.0, 2.0),
     "weight_track_vyz":         (0.5, 0.5, 0.5),
     "weight_track_omg":         (5.0, 5.0, 5.0),
     "weight_corridor":          (5.0, 8.0, 8.0),
