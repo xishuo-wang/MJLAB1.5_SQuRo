@@ -3,9 +3,9 @@ import torch
 import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
+from .pole import POLE_RADIUS
 from .indices import _MODEL_INDICES
 from .curriculums import CURVATURE_TARGET
-from .pole import POLE_RADIUS
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -19,7 +19,7 @@ BODY_REF_OFFSET = 0.04              # F_body/H_body 中心距 base 中心的X轴
 CORRIDOR_HALF_WIDTH = 0.04          # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
 
 _RMIN = 1.0 / CURVATURE_TARGET  # 最小转弯半径 (= 0.05m for κ=20)
-
+_INIT_DIST = 0.01                   # 初始直行段长度 (m)
 
 # 获取指定 body_link 的偏航角
 def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
@@ -51,10 +51,6 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
         return compute_slalom_path_ref(env)
     return compute_arc_path_ref(env)
 
-
-# 路径参考计算 — 基元阶段：直行接近段(0.05m) + 圆弧
-_APPROACH_DIST = 0.05  # 接近段长度 (m), 匹配机器人初始 X=-0.05
-
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
     curvature = cmd_term.command[:, 4]      # [N]
@@ -62,15 +58,15 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     t = env.episode_length_buf.float() * env.step_dt  # [N]
 
     total_dist = vel_cmd * t                # [N], 已行驶距离
-    in_approach = total_dist < _APPROACH_DIST
+    in_approach = total_dist < _INIT_DIST
 
     # 接近段: 直行 (-0.05, 0) → (0, 0)
-    approach_x = -_APPROACH_DIST + total_dist
+    approach_x = -_INIT_DIST + total_dist
     approach_y = torch.zeros_like(t)
     approach_heading = torch.zeros_like(t)
 
     # 圆弧段: 从 (0,0) 出发, 时间 = t - approach_time
-    arc_t = torch.clamp(t - _APPROACH_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
+    arc_t = torch.clamp(t - _INIT_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
     omega = curvature * vel_cmd
     dtheta = omega * arc_t
     arc_heading = dtheta  # start_heading = 0
@@ -191,21 +187,21 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
     # 累积弧长 (∫ vel dt), 起始 -0.05m 作为接近段 (机器人 X=-0.05 → LUT 起点 X=0)
     if getattr(env, "_slalom_arc_len", None) is None:
-        env._slalom_arc_len = torch.full((env.num_envs,), -_APPROACH_DIST, device=env.device)  # type: ignore[attr-defined]
+        env._slalom_arc_len = torch.full((env.num_envs,), -_INIT_DIST, device=env.device)  # type: ignore[attr-defined]
     env._slalom_arc_len += vel_cmd * dt  # type: ignore[attr-defined]
     # 重置已终止环境
     reset_ids = getattr(env, "reset_terminated", None)
     if reset_ids is not None:
         ids = reset_ids.nonzero(as_tuple=False).flatten()
         if len(ids) > 0:
-            env._slalom_arc_len[ids] = -_APPROACH_DIST  # type: ignore[attr-defined]
+            env._slalom_arc_len[ids] = -_INIT_DIST  # type: ignore[attr-defined]
 
     arc_len = env._slalom_arc_len  # type: ignore[attr-defined]  # [N], 负值=接近段
     in_approach = arc_len < 0.0
 
     # 接近段: 直行 (-0.05,0) → (0,0), heading=0
-    approach_dist = arc_len + _APPROACH_DIST               # 0 → 0.05
-    approach_x = -_APPROACH_DIST + approach_dist            # -0.05 → 0
+    approach_dist = arc_len + _INIT_DIST               # 0 → 0.05
+    approach_x = -_INIT_DIST + approach_dist            # -0.05 → 0
     approach_y = torch.zeros_like(approach_dist)
     approach_h = torch.zeros_like(approach_dist)
     approach_k = torch.zeros_like(approach_dist)
