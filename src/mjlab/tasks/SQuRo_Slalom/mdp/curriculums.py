@@ -8,6 +8,11 @@ CURVATURE_MIN = 0.5            # Phase 0 课程曲率起始值
 CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
 CURVATURE_TARGET = 16.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 
+# 步频常量 — Phase 0 每 episode 随机采样, Phase 1 固定
+GAIT_FREQ_MIN = 1.0            # Phase 0 步频采样下限
+GAIT_FREQ_MAX = 2.0            # Phase 0 步频采样上限
+GAIT_FREQ_PHASE1 = 1.0         # Phase 1 固定步频
+
 # 两阶段训练
 PHASE1_MID_ITER = 2000          # iter 0-2000: 转弯曲率增大
 PHASE1_END_ITER = 4000          # iter 2000-4000: 转弯基元
