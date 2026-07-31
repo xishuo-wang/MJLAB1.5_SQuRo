@@ -171,6 +171,18 @@ class JointDataRecorder:
             self._f_body_id = f_ids[0] if f_ids else None  # type: ignore[union-attr]
             self._h_body_id = h_ids[0] if h_ids else None  # type: ignore[union-attr]
 
+        # F_body / H_body 世界位置（供轨迹/圆拟合分析）
+        if self._f_body_id is not None:
+            f_pos = asset.data.body_link_pos_w[env_idx, self._f_body_id]
+            record['f_body_pos_x'] = float(f_pos[0].item())
+            record['f_body_pos_y'] = float(f_pos[1].item())
+            record['f_body_pos_z'] = float(f_pos[2].item())
+        if self._h_body_id is not None:
+            h_pos = asset.data.body_link_pos_w[env_idx, self._h_body_id]
+            record['h_body_pos_x'] = float(h_pos[0].item())
+            record['h_body_pos_y'] = float(h_pos[1].item())
+            record['h_body_pos_z'] = float(h_pos[2].item())
+
         f_body_raw, h_body_raw = 0.0, 0.0
         if self._f_body_id is not None:
             quat = asset.data.body_link_quat_w[env_idx, self._f_body_id]

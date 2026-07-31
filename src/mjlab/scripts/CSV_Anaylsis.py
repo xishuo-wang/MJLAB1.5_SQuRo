@@ -13,7 +13,7 @@ from scipy.signal import welch, savgol_filter, find_peaks
 # ==================================================================================================
 # 文件路径配置
 XML_PATH = r"D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\SQuRo\xmls\SQuRo.xml"
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\2026-07-30_14-56-44\videos\SQuRo_Slalom_3900-cu-18.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\=2026-07-29_13-50-56\videos\SQuRo_Slalom_7999-sp0.15.csv"
 
 # 控制时间配置
 TIMESTEP = 0.005
@@ -475,28 +475,163 @@ def precompute_foot_cycle_average(motion_df: pd.DataFrame) -> dict:
 
 
 
-# 页面0: 基座水平轨迹分析（适配转弯任务）
+# ==================================================================================================
+# 圆拟合工具 — Kåsa 最小二乘代数拟合
+def fit_circle_kasa(x: np.ndarray, y: np.ndarray) -> Optional[Tuple[float, float, float, float]]:
+    """最小二乘圆拟合 (Kåsa 方法), 返回 (cx, cy, R, rmse)；点数不足或几何退化返回 None"""
+    if len(x) < 5:
+        return None
+    A = np.column_stack([2.0 * x, 2.0 * y, np.ones_like(x)])
+    b = x ** 2 + y ** 2
+    try:
+        sol, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    cx, cy, c = sol
+    R2 = c + cx * cx + cy * cy
+    if R2 <= 0.0:
+        return None
+    R = float(np.sqrt(R2))
+    # 半径合理性约束（微小机器人尺度）
+    if not (0.005 < R < 2.0):
+        return None
+    dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    rmse = float(np.sqrt(np.mean((dist - R) ** 2)))
+    return float(cx), float(cy), R, rmse
+
+
+# 按 f_body_heading 单调方向分段（转弯方向一致的段），直行/噪声点不改变方向
+def segment_turns_by_heading(motion_df: pd.DataFrame, min_points: int = 20) -> List[Tuple[int, int]]:
+    """返回 (start_idx, end_idx) 列表，每段内转向方向一致"""
+    if 'f_body_heading' not in motion_df.columns:
+        return []
+    h = np.unwrap(motion_df['f_body_heading'].values.astype(np.float64))
+    dh = np.diff(h)
+    thresh = 0.01  # 噪声阈值 (rad/步)：低于此视为直行
+    sign = np.where(np.abs(dh) > thresh, np.sign(dh), 0.0)
+
+    segs: List[Tuple[int, int]] = []
+    start = 0
+    cur = 0.0      # 当前段方向符号 (0=直行/未定)
+    straight_run = 0
+    for i, s in enumerate(sign):
+        if s == 0.0:
+            straight_run += 1
+            # 直行段过长 → 结束当前段（转弯段与直行段分离）
+            if straight_run > 10 and i - start >= min_points:
+                segs.append((start, i + 1))
+                start = i + 1
+                cur = 0.0
+        else:
+            straight_run = 0
+            if cur == 0.0:
+                cur = s
+            elif s != cur:
+                if i - start >= min_points:
+                    segs.append((start, i + 1))
+                start = i + 1
+                cur = s
+    if len(h) - start >= min_points:
+        segs.append((start, len(h)))
+    return segs
+
+
+# 对三点平均轨迹做圆拟合：全局 + 分段，返回汇总信息
+def analyze_turn_radius(motion_df: pd.DataFrame, mean_x: np.ndarray, mean_y: np.ndarray) -> dict:
+    info: dict = {'seg_radii': [], 'global_fit': None, 'n_segments': 0}
+    info['global_fit'] = fit_circle_kasa(mean_x, mean_y)
+
+    segs = segment_turns_by_heading(motion_df)
+    radii = []
+    for (i0, i1) in segs:
+        if i1 - i0 < 20:
+            continue
+        fit = fit_circle_kasa(mean_x[i0:i1], mean_y[i0:i1])
+        if fit is None:
+            continue
+        cx, cy, R, rmse = fit
+        # 拟合质量约束：均方根误差需明显小于半径
+        if rmse < max(0.008, 0.2 * R):
+            radii.append(R)
+    info['seg_radii'] = radii
+    info['n_segments'] = len(segs)
+    return info
+
+
+
+# 页面0: 基座/F_body/H_body 三点轨迹分析 + 圆拟合（适配转弯任务）
 def plot_base_analysis(motion_df, ax, metrics: dict):
     ax.clear()
 
-    # 绘制 XY 轨迹
+    # 读取三点位置（新 CSV 含 F/H body 位置；旧 CSV 仅 base）
     x = motion_df['base_pos_x'].values
     y = motion_df['base_pos_y'].values
     time = motion_df['time'].values
 
-    # 用颜色表示时间进展
-    points = ax.scatter(x, y, c=time, cmap='plasma', s=10, alpha=0.7, edgecolors='none')
-    ax.plot(x, y, 'k-', linewidth=0.5, alpha=0.3)  # 淡淡连线
+    has_f = 'f_body_pos_x' in motion_df.columns
+    has_h = 'h_body_pos_x' in motion_df.columns
+
+    # 用颜色表示时间进展（base 点）
+    points = ax.scatter(x, y, c=time, cmap='plasma', s=8, alpha=0.5, edgecolors='none', zorder=1)
+
+    # 三条轨迹：base / F_body / H_body（连成弧线的三个节点）
+    ax.plot(x, y, '-', color='black', linewidth=1.0, alpha=0.6, label='base 轨迹', zorder=2)
+    mean_x, mean_y = x.copy().astype(float), y.copy().astype(float)
+    n_points = 1
+    if has_f:
+        fx = motion_df['f_body_pos_x'].values.astype(float)
+        fy = motion_df['f_body_pos_y'].values.astype(float)
+        ax.plot(fx, fy, '-', color='#377EB8', linewidth=1.0, alpha=0.6, label='F_body 轨迹', zorder=2)
+        mean_x += fx; mean_y += fy
+        n_points += 1
+    if has_h:
+        hx = motion_df['h_body_pos_x'].values.astype(float)
+        hy = motion_df['h_body_pos_y'].values.astype(float)
+        ax.plot(hx, hy, '-', color='#4DAF4A', linewidth=1.0, alpha=0.6, label='H_body 轨迹', zorder=2)
+        mean_x += hx; mean_y += hy
+        n_points += 1
+    mean_x /= n_points; mean_y /= n_points
+    ax.plot(mean_x, mean_y, '-', color='#E41A1C', linewidth=2.2, alpha=0.9, label='三点平均轨迹', zorder=3)
 
     # 标记起点和终点
-    ax.scatter(x[0], y[0], marker='o', color='green', s=100, zorder=5, label='起点')
-    ax.scatter(x[-1], y[-1], marker='s', color='red', s=100, zorder=5, label='终点')
+    ax.scatter(x[0], y[0], marker='o', color='green', s=120, zorder=6, label='起点')
+    ax.scatter(x[-1], y[-1], marker='s', color='red', s=120, zorder=6, label='终点')
+
+    # 圆拟合：全局圆 + 分段圆心
+    fit_lines: List[str] = []
+    turn_info = analyze_turn_radius(motion_df, mean_x, mean_y)
+    gfit = turn_info['global_fit']
+    if gfit is not None:
+        cx, cy, R, rmse = gfit
+        theta = np.linspace(0.0, 2.0 * np.pi, 200)
+        ax.plot(cx + R * np.cos(theta), cy + R * np.sin(theta), '--', color='gray',
+                linewidth=1.4, alpha=0.9, label=f'全局拟合圆 R={R:.3f}m', zorder=4)
+        ax.scatter([cx], [cy], marker='+', color='gray', s=120, zorder=5)
+        fit_lines.append(f"全局圆拟合: R={R:.3f} m, 圆心=({cx:.3f}, {cy:.3f}), RMSE={rmse:.4f} m")
+
+    radii = turn_info['seg_radii']
+    if len(radii) > 0:
+        radii_arr = np.array(radii)
+        fit_lines.append(
+            f"分段圆拟合({turn_info['n_segments']} 段, 有效 {len(radii)} 段): "
+            f"R 中位数={np.median(radii_arr):.3f} m, 范围=[{radii_arr.min():.3f}, {radii_arr.max():.3f}] m"
+        )
+
+    # 期望半径（来自曲率命令）
+    if 'curvature_command' in motion_df.columns:
+        kappa = motion_df['curvature_command'].abs().replace(0, np.nan)
+        exp_R = (1.0 / kappa).dropna()
+        if len(exp_R) > 0:
+            fit_lines.append(
+                f"期望半径: 中位数={exp_R.median():.3f} m "
+                f"(|κ| 中位数={motion_df['curvature_command'].abs().median():.2f} rad/m)"
+            )
 
     ax.set_xlabel('X 位置 (m)', fontsize=12)
     ax.set_ylabel('Y 位置 (m)', fontsize=12)
     ax.set_aspect('equal', adjustable='datalim')  # 保证X、Y轴同比例
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper left')
+    ax.legend(loc='upper left', fontsize=8)
     cbar = ax.figure.colorbar(points, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label('时间 (s)', fontsize=10)
 
@@ -511,7 +646,9 @@ def plot_base_analysis(motion_df, ax, metrics: dict):
         平均 COT: {metrics['cot_avg']:.6f}
         ─────────────
         平均曲率: {metrics['overall_curvature']:.4f} rad/m
-        瞬时平均: {metrics['mean_abs_curvature_instant']:.4f} rad/m)
+        瞬时平均: {metrics['mean_abs_curvature_instant']:.4f} rad/m
+        ─────────────
+        {chr(10).join(fit_lines) if fit_lines else '圆拟合: 数据不足'}
         ─────────────
         质量: {ROBOT_MASS} kg
         重力加速度: {GRAVITY} m/s^2""")
@@ -519,7 +656,7 @@ def plot_base_analysis(motion_df, ax, metrics: dict):
             fontsize=STATS_FONTSIZE+2, verticalalignment='top',
             bbox=dict(boxstyle='round,pad=1', facecolor=STATS_BGCOLOR, alpha=STATS_ALPHA))
 
-    ax.set_title(f'基座水平轨迹 ({START_TIME}-{END_TIME}s)', fontsize=13, fontweight='bold')
+    ax.set_title(f'基座 / F_body / H_body 轨迹与圆拟合 ({START_TIME}-{END_TIME}s)', fontsize=13, fontweight='bold')
 
 
 
