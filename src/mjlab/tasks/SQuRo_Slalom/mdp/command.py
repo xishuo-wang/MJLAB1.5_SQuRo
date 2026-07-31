@@ -233,7 +233,7 @@ class SlalomCommand(CommandTerm):
             visualizer.add_sphere(center=pt, radius=radius,
                                   color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
 
-    # 绘制绕杆轨迹：圆弧拼接路径 (世界固定原点, 与路径参考一致)
+    # 绘制绕杆轨迹：接近段 + LUT 路径 (世界固定原点, 与路径参考一致)
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         import numpy as np
         from .path import _generate_slalom_lut_one_period
@@ -241,30 +241,33 @@ class SlalomCommand(CommandTerm):
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
         APPROACH = 0.05
-        origin_x = -APPROACH  # 固定世界原点
+        z = start[2] + z_offset
 
         _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
         period_len = np.array(xs[-1])
         n_periods = 3
 
         radius = 0.006
+        # 接近段: 直行 (-0.05,0) → (0,0)
+        n_app = 5
+        for i in range(n_app + 1):
+            frac = i / n_app
+            pt = np.array([-APPROACH + frac * APPROACH, 0.0, z])
+            visualizer.add_sphere(center=pt, radius=radius,
+                                  color=(0.5, 0.8, 0.5, 0.5), label=f"sl_ap_{i}")
+
+        # LUT 周期路径 (从 0,0 开始)
         for k in range(n_periods):
             offset_x = k * period_len
             for i in range(len(xs)):
-                pt = np.array([
-                    origin_x + xs[i] + offset_x,
-                    ys[i],
-                    start[2] + z_offset,
-                ])
+                pt = np.array([xs[i] + offset_x, ys[i], z])
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
-                visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"slalom_{k}_{i}")
+                visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}")
 
-        # 杆位置标记
+        # 杆位置标记 (世界坐标: 0, X, 2X, ...)
         from .pole import POLE_Y, POLE_HALF_HEIGHT
         for pi in range(6):
-            px = origin_x + pi * spacing
-            py = POLE_Y
-            pt = np.array([px, py, start[2] + z_offset + POLE_HALF_HEIGHT])
+            pt = np.array([pi * spacing, POLE_Y, z + POLE_HALF_HEIGHT])
             visualizer.add_sphere(center=pt, radius=0.007,
                                   color=(0.9, 0.2, 0.2, 0.8), label=f"pole_{pi}")
 

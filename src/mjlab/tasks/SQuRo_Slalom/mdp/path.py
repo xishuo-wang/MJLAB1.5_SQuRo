@@ -189,40 +189,52 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     hd_lut = cache["heading"]
     s_period = cache["period"]
 
-    # 累积弧长 (∫ vel dt) — 适配速度动态变化
+    # 累积弧长 (∫ vel dt), 起始 -0.05m 作为接近段 (机器人 X=-0.05 → LUT 起点 X=0)
     if getattr(env, "_slalom_arc_len", None) is None:
-        env._slalom_arc_len = torch.zeros(env.num_envs, device=env.device)  # type: ignore[attr-defined]
+        env._slalom_arc_len = torch.full((env.num_envs,), -_APPROACH_DIST, device=env.device)  # type: ignore[attr-defined]
     env._slalom_arc_len += vel_cmd * dt  # type: ignore[attr-defined]
     # 重置已终止环境
     reset_ids = getattr(env, "reset_terminated", None)
     if reset_ids is not None:
         ids = reset_ids.nonzero(as_tuple=False).flatten()
         if len(ids) > 0:
-            env._slalom_arc_len[ids] = 0.0  # type: ignore[attr-defined]
+            env._slalom_arc_len[ids] = -_APPROACH_DIST  # type: ignore[attr-defined]
 
-    total_s = env._slalom_arc_len  # type: ignore[attr-defined]  # [N], = ∫vel dt
-    num_periods = (total_s / s_period).floor().long()  # [N]
-    s = total_s - num_periods * s_period          # [N], = total_s % period
+    arc_len = env._slalom_arc_len  # type: ignore[attr-defined]  # [N], 负值=接近段
+    in_approach = arc_len < 0.0
 
-    # searchsorted 查找索引 + 线性插值
-    idx = torch.searchsorted(arc_lut, s).clamp(1, len(arc_lut) - 1)  # [N]
+    # 接近段: 直行 (-0.05,0) → (0,0), heading=0
+    approach_dist = arc_len + _APPROACH_DIST               # 0 → 0.05
+    approach_x = -_APPROACH_DIST + approach_dist            # -0.05 → 0
+    approach_y = torch.zeros_like(approach_dist)
+    approach_h = torch.zeros_like(approach_dist)
+    approach_k = torch.zeros_like(approach_dist)
+
+    # LUT 段: 从 (0,0) 进入绕杆周期
+    total_s = torch.clamp(arc_len, min=0.0)  # [N], ≥0
+    num_periods = (total_s / s_period).floor().long()
+    s = total_s - num_periods * s_period
+
+    idx = torch.searchsorted(arc_lut, s).clamp(1, len(arc_lut) - 1)
     idx_prev = idx - 1
-    s_prev = arc_lut[idx_prev]
-    s_next = arc_lut[idx]
+    s_prev = arc_lut[idx_prev]; s_next = arc_lut[idx]
+    frac = (s - s_prev) / (s_next - s_prev + 1e-12)
 
-    frac = (s - s_prev) / (s_next - s_prev + 1e-12)  # [N]
-    x_lut_val = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
-    y_ref = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
-    # 叠加已完成周期偏移 + 接近段偏移: x_ref 从 -0.05 出发 (匹配机器人初始 X)
-    x_ref = x_lut_val + num_periods.float() * (2 * pole_spacing) - _APPROACH_DIST
-    path_heading = hd_lut[idx_prev]  # 分段常值 heading
+    lut_x = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
+    lut_y = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
+    lut_h = hd_lut[idx_prev]
+    kappa_lut = cache["kappa"]
+    lut_k = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
 
+    # 合成: 接近段用直线, LUT段用周期路径
+    x_ref = torch.where(in_approach, approach_x,
+                        lut_x + num_periods.float() * (2 * pole_spacing))
+    y_ref = torch.where(in_approach, approach_y, lut_y)
+    path_heading = torch.where(in_approach, approach_h, lut_h)
+    kappa_ref = torch.where(in_approach, approach_k, lut_k)
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
 
-    # 存储瞬时曲率供脊柱参考使用
-    kappa_lut = cache["kappa"]
-    kappa_ref = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
     env._path_kappa = kappa_ref  # type: ignore[attr-defined]
 
     return x_ref, y_ref, vx_des, vy_des, path_heading
