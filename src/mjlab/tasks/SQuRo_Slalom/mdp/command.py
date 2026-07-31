@@ -199,77 +199,74 @@ class SlalomCommand(CommandTerm):
         else:
             self._draw_arc_path(visualizer, batch, self.cfg.viz.z_offset)
 
-    # 绘制转弯基元轨迹：直行=射线, 转弯=圆弧
+    # 绘制转弯基元轨迹：直行接近段 + 圆弧 (与路径参考一致)
     def _draw_arc_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         curvature = self.curvature_command[batch].item()
         vel = self.vel_command[batch].item()
         start = self._start_positions[batch].cpu().numpy()
-        heading_0 = 0.0
-
-        n_pts = 50
-        t_max = 20.0
-        dt_path = t_max / n_pts
-        radius = 0.008
 
         import numpy as np
+        radius = 0.008
+        APPROACH = 0.05       # 接近段长度, 与 path.py _APPROACH_DIST 一致
+        origin_x = -APPROACH  # 世界原点 X = -0.05
+
+        # 接近段: 直行 (-0.05, 0) → (0, 0)
+        n_app = 5
+        for i in range(n_app + 1):
+            frac = i / n_app
+            pt = np.array([origin_x + frac * APPROACH, 0.0, start[2] + z_offset])
+            visualizer.add_sphere(center=pt, radius=radius,
+                                  color=(0.5, 0.8, 0.5, 0.5), label=f"approach_{i}")
+
+        # 圆弧段: 从 (0,0) 出发
+        n_pts = 50; t_max = 20.0; dt_path = t_max / n_pts; heading_0 = 0.0
         for i in range(n_pts + 1):
             t_i = i * dt_path
             if abs(curvature) < 1e-6:
-                x_i = start[0] + vel * t_i * math.cos(heading_0)
-                y_i = start[1] + vel * t_i * math.sin(heading_0)
+                x_i = vel * t_i * math.cos(heading_0)
+                y_i = vel * t_i * math.sin(heading_0)
             else:
-                R = 1.0 / curvature
-                omega = curvature * vel
-                dtheta = omega * t_i
-                x_i = start[0] + R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
-                y_i = start[1] - R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
+                R = 1.0 / curvature; omega = curvature * vel; dtheta = omega * t_i
+                x_i = R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
+                y_i = -R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
             pt = np.array([x_i, y_i, start[2] + z_offset])
-            visualizer.add_sphere(
-                center=pt, radius=radius,
-                color=(1.0, 0.6, 0.0, 0.6),
-                label=f"arc_{i}",
-            )
+            visualizer.add_sphere(center=pt, radius=radius,
+                                  color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
 
-    # 绘制绕杆轨迹：圆弧拼接路径
+    # 绘制绕杆轨迹：圆弧拼接路径 (世界固定原点, 与路径参考一致)
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         import numpy as np
         from .path import _generate_slalom_lut_one_period
 
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
+        APPROACH = 0.05
+        origin_x = -APPROACH  # 固定世界原点
 
         _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
-        period_len = np.array(xs[-1])  # 一个周期的 X 跨度 = 2*spacing
+        period_len = np.array(xs[-1])
         n_periods = 3
 
-        radius = 0.006   # 略小于弧线的轨迹点
+        radius = 0.006
         for k in range(n_periods):
             offset_x = k * period_len
             for i in range(len(xs)):
                 pt = np.array([
-                    start[0] + xs[i] + offset_x,
-                    start[1] + ys[i],
+                    origin_x + xs[i] + offset_x,
+                    ys[i],
                     start[2] + z_offset,
                 ])
-                # 交替颜色区分周期
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
-                visualizer.add_sphere(
-                    center=pt, radius=radius,
-                    color=color,
-                    label=f"slalom_{k}_{i}",
-                )
+                visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"slalom_{k}_{i}")
 
-        # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致=6）
+        # 杆位置标记
         from .pole import POLE_Y, POLE_HALF_HEIGHT
         for pi in range(6):
-            px = start[0] + pi * spacing
-            py = start[1] + POLE_Y
+            px = origin_x + pi * spacing
+            py = POLE_Y
             pt = np.array([px, py, start[2] + z_offset + POLE_HALF_HEIGHT])
-            visualizer.add_sphere(
-                center=pt, radius=0.007,
-                color=(0.9, 0.2, 0.2, 0.8),
-                label=f"pole_{pi}",
-            )
+            visualizer.add_sphere(center=pt, radius=0.007,
+                                  color=(0.9, 0.2, 0.2, 0.8), label=f"pole_{pi}")
 
 
 @dataclass(kw_only=True)
