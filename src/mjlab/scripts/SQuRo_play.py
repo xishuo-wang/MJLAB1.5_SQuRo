@@ -18,6 +18,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
     POLE_Y,
+    POLE_NUM,
     PoleEntityCfg,
     generate_pole_positions,
 )
@@ -48,7 +49,7 @@ class PlayConfig:
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -15
+    fixed_curvature: float | None = -20
     fixed_pole_spacing: float | None = 0.15
     enable_collision: bool = False
 
@@ -370,7 +371,7 @@ def run_play(cfg: PlayConfig):
     # 绕杆阶段：用正确的杆间距重建杆实体（覆盖 env_cfg 中的默认占位）
     if is_slalom_phase and TRAINED_MODE:
         pole_sp = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
-        positions = generate_pole_positions(spacing=pole_sp, num_poles=6, start_x=0.0, start_y=POLE_Y)
+        positions = generate_pole_positions(spacing=pole_sp, num_poles=POLE_NUM, start_x=0.0, start_y=POLE_Y)
         col_type = 1 if cfg.enable_collision else 0
         pole_dict = {}
         for i, pos in enumerate(positions):

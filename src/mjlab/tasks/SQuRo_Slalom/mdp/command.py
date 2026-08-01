@@ -115,8 +115,8 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        from .curriculums import get_training_phase, GAIT_FREQ_MIN, GAIT_FREQ_MAX, GAIT_FREQ_PHASE1
-        from .pole import update_pole_visibility
+        from .curriculums import get_training_phase, GAIT_FREQ_MIN, GAIT_FREQ_MAX
+        from .pole import update_pole_visibility, POLE_NUM
         n = len(env_ids)
         current_step = self._env.common_step_counter
         phase = get_training_phase(current_step)
@@ -136,12 +136,12 @@ class SlalomCommand(CommandTerm):
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
         else:
-            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频固定, 速度按曲率缩放
+            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
             self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
             else:
-                self._shared_gait_freq = GAIT_FREQ_PHASE1
+                self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
@@ -259,9 +259,9 @@ class SlalomCommand(CommandTerm):
                     label=f"slalom_{k}_{i}",
                 )
 
-        # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致=6）
+        # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致）
         from .pole import POLE_Y
-        for pi in range(6):
+        for pi in range(POLE_NUM):
             px = start[0] + pi * spacing
             py = start[1] + POLE_Y
             pt = np.array([px, py, start[2] + z_offset + 0.05])

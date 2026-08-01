@@ -9,6 +9,7 @@ from mjlab.entity import Entity, EntityCfg
 POLE_RADIUS = 0.01          # 直径 1cm
 POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
 POLE_Y = -1.0 / 15.0        # 杆心 Y 坐标 (= -Rmin = -0.0667, 路径第一弧底部)
+POLE_NUM = 12               # 杆数量 (覆盖 2Hz@20s 全程: 0.15m 间距 → 0~1.65m)
 
 
 @dataclass
@@ -64,7 +65,7 @@ def update_pole_visibility(env, phase: int) -> None:
 
 def generate_pole_positions(
     spacing: float = 0.35,
-    num_poles: int = 6,
+    num_poles: int = POLE_NUM,
     start_x: float = 0.0,
     start_y: float = POLE_Y,
 ) -> list[tuple[float, float, float]]:
