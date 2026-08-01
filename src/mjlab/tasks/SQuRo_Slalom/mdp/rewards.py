@@ -32,6 +32,7 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error = joint_pos - ref_pos
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
+    error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
@@ -39,9 +40,11 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
+    mse_neck = torch.mean(error_neck ** 2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward = (reward_leg + reward_spn) / 2
+    reward_neck = torch.exp(-sigma_spn * mse_neck)
+    reward = (reward_leg + reward_spn) / 2 + 0.2 * reward_neck
     return reward * weight
 
 
@@ -56,6 +59,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error = joint_vel - ref_vel
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
+    error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
@@ -63,9 +67,11 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
+    mse_neck = torch.mean(error_neck ** 2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward = (reward_leg + reward_spn) / 2
+    reward_neck = torch.exp(-sigma_spn * mse_neck)
+    reward = (reward_leg + reward_spn) / 2 + 0.2 * reward_neck
     return reward * weight
 
 
