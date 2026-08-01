@@ -53,6 +53,9 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
 
+        # 每 episode 共享步频 (Phase 0 随机采样, Phase 1 固定)
+        self._shared_gait_freq = FIXED_GAIT_FREQ
+
         # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -102,7 +105,7 @@ class SlalomCommand(CommandTerm):
     def _get_gait_freq(self, n: int) -> torch.Tensor:
         if self.fixed_gait_freq is not None:
             return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
-        return torch.full((n,), FIXED_GAIT_FREQ, device=self.device)
+        return torch.full((n,), self._shared_gait_freq, device=self.device)
 
     def _get_curvature(self, n: int, step_counter: int) -> torch.Tensor:
         if self.fixed_curvature is not None:
@@ -112,7 +115,7 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        from .curriculums import get_training_phase
+        from .curriculums import get_training_phase, GAIT_FREQ_MIN, GAIT_FREQ_MAX, GAIT_FREQ_PHASE1
         from .pole import update_pole_visibility
         n = len(env_ids)
         current_step = self._env.common_step_counter
@@ -122,17 +125,27 @@ class SlalomCommand(CommandTerm):
         update_pole_visibility(self._env, phase)
 
         if phase == 0:
-            # Phase 0: 转弯基元 — 采样曲率, 速度按曲率缩放
+            # Phase 0: 转弯基元 — 采样曲率 + 步频(1~2Hz 随机), 速度 = 基础速度×步频×曲率缩放
             self.curvature_command[env_ids] = self._get_curvature(n, current_step)
+            if self.fixed_gait_freq is not None:
+                self._shared_gait_freq = float(self.fixed_gait_freq)
+            else:
+                self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
+            self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
-            self.vel_command[env_ids] = base_vel * scale
+            self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
         else:
-            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 速度按曲率缩放
+            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频固定, 速度按曲率缩放
             self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
+            if self.fixed_gait_freq is not None:
+                self._shared_gait_freq = float(self.fixed_gait_freq)
+            else:
+                self._shared_gait_freq = GAIT_FREQ_PHASE1
+            self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
-            self.vel_command[env_ids] = torch.full((n,), base_vel * scale, device=self.device)
+            self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale, device=self.device)
 
         self._start_recorded[env_ids] = False
 

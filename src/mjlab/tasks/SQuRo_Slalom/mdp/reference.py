@@ -20,8 +20,7 @@ PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 STRIDE_MIN = 0.0                                            # 最小步幅
 
 
-# 离散曲率绝对值表（运行时在此范围内线性插值）
-# 由 CURVATURE_TARGET_MAX 动态生成：[0.0, 0.5, ..., 5.0] + (5, max] 步长 1.0
+# 离散曲率绝对值表
 def _generate_curvature_bins(max_k: float) -> list[float]:
     bins = [i * 0.5 for i in range(11)]  # [0.0, 0.5, ..., 5.0]
     if max_k > 5.0:
@@ -178,7 +177,7 @@ def _init_tables(device: torch.device | str) -> None:
     _table_device = str(device)
     _tables_initialized = True
 
-    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 曲率 × {_TABLE_RESOLUTION} bins × 12 joints")
+    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 曲率 × {_TABLE_RESOLUTION} bins × 14 joints")
 
 
 
@@ -217,8 +216,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     cmd_tensor = env.command_manager._terms["slalom_cmd"].command  # type: ignore[union-attr]
     vel_cmd = cmd_tensor[:, 0]  # [N]
     gait_freq = cmd_tensor[:, 3]  # [N] — 动态步频
-    slalom_mode = env.command_manager._terms["slalom_cmd"].slalom_mode_active  # type: ignore[union-attr]
-    kappa_norm = 1.0 / _SLALOM_RMIN if slalom_mode else CURVATURE_TARGET_MAX  # 15 or 20
+    kappa_norm = CURVATURE_TARGET_MAX
 
     # 曲率绝对值及插值因子（k_bins 在 _init_tables 时缓存）
     abs_k = curvature_cmd.abs()  # [N]
@@ -233,7 +231,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     k1 = _k_bins[idx + 1]
     t = (abs_k - k0) / (k1 - k0 + 1e-12)  # 插值因子，[0,1]
 
-    # 从表中取出对应相位的关节参考，两个曲率层
     # pos_table: [_NUM_CURV, 50, 12], phase_indices: [N]
     # 使用高级索引: pos_table[idx, phase_indices] -> [N,12]
     pos0 = _pos_table[idx, phase_indices]      # [N,12]
@@ -245,7 +242,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
     ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * gait_freq.unsqueeze(1)
 
-    # -----------------------------------------------------------------
     # 根据曲率符号交换左右腿关节（右转时内侧为右腿）
     swap_mask = curvature_cmd < 0  # [N] bool
     if swap_mask.any():
@@ -274,11 +270,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     abs_k_norm = curvature_cmd.abs() / kappa_norm
 
     # 各脊柱关节目标角度（弧度），在 |κ| = max_k 时达到极值
-    ref_pos[:, 0] = -0.6 * k_norm           # f_spine1 κ=-max → +0.6, κ=+max → -0.6
+    ref_pos[:, 0] = -0.65 * k_norm          # f_spine1 κ=-max → +0.6, κ=+max → -0.6
     ref_pos[:, 1] = -0.9 * k_norm           # f_body κ=-max → +0.9, κ=+max → -0.9
     ref_pos[:, 2] = 0.8 * k_norm            # neck_yaw
-    ref_pos[:, 3] = -0.3 * abs_k_norm       # neck_pitch
-    ref_pos[:, 8] = -0.6 * abs_k_norm       # h_spine1 始终 ≤0, |κ|=max → -0.6
+    ref_pos[:, 3] = -0.3                    # neck_pitch
+    ref_pos[:, 8] = -0.65 * abs_k_norm      # h_spine1 始终 ≤0, |κ|=max → -0.6
     ref_pos[:, 9] = -0.7 * k_norm           # h_body κ=-max → +0.7, κ=+max → -0.7
 
     # 推进相位

@@ -13,6 +13,11 @@ PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
 POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
 POLE_SPACING_MIN = 0.15      # 绕杆最小杆间距 (= 2.5×Rmin)
 
+# 步频常量 — Phase 0 每 episode 随机采样, Phase 1 固定
+GAIT_FREQ_MIN = 1.0          # Phase 0 步频采样下限
+GAIT_FREQ_MAX = 2.0          # Phase 0 步频采样上限
+GAIT_FREQ_PHASE1 = 1.0       # Phase 1 固定步频
+
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000)
 
