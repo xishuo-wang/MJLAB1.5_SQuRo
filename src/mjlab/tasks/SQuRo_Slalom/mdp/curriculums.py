@@ -31,7 +31,7 @@ _STAGES = (0, 2000, 4000, 5000, 6000)
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (4.0, 4.0, 5.0),
-    "weight_mimic_vel":         (2.0, 2.0, 2.5),
+    "weight_mimic_vel":         (2.0, 2.0, 1.0),    # Phase1 降权: 削弱"位置偏移+速度匹配"局部最优
     "weight_height":            (2.0, 2.0, 2.0),
     "weight_track_vel":         (4.0, 4.0, 2.0),
     "weight_track_vyz":         (0.5, 0.5, 0.5),
@@ -48,8 +48,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
     "sigma_leg_pos":            (5.0,),
     "sigma_spn_pos":            (10.0, 20.0, 20.0),
-    "sigma_leg_vel":            (0.1,),
-    "sigma_spn_vel":            (0.1,),
+    "sigma_leg_vel":            (0.1, 0.1, 0.5),    # Phase1 收紧: 速度误差敏感度提高 (0.1→0.5)
+    "sigma_spn_vel":            (0.1, 0.1, 0.5),
     "sigma_height":             (500,),
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
