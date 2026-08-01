@@ -40,12 +40,12 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="SQuRo_Slalom",
     save_interval=100,
     num_steps_per_env=_STEPS_PER_ITER,
-    max_iterations=8_000,
+    max_iterations=5_000,
     
     clip_actions=3.14,
     seed=42,
     
-    # resume=True,
-    # load_run="2026-07-28_15-04-49",
-    # load_checkpoint="model_3800.pt",
+    resume=True,
+    load_run="2026-08-01_16-35-27",
+    load_checkpoint="model_3000.pt",
   )
