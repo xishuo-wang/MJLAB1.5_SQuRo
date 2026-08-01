@@ -91,7 +91,7 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 期望前进速度
     cmd_term = env.command_manager._terms["slalom_cmd"]
     v_cmd = cmd_term.command[:, 0]
-    # 误差
+    # 计算速度跟踪误差
     error_vx = forward_speed - v_cmd
     error_vy = lateral_speed
     error_vz = vertical_speed
@@ -233,46 +233,31 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 # =========================================================================================
 # 走廊一致性奖励 — 身体包络不超出参考路径周围的允许走廊
-# e_i = |d_lat| + |L·sin(Δθ)| + |W·cos(Δθ)|, v_i = max(0, e_i - C)
-# 同时惩罚位置偏差和朝向偏差，死区 = 走廊半宽 C
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-
-    # 路径参考
+    # 获取参考路径
     x_ref, y_ref, _, _, path_heading = compute_path_ref(env)
     ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
     tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
-
-    # F_body/H_body 参考位置（偏移 ±6.5cm 沿切线）
     ref_f = ref_xy + BODY_REF_OFFSET * tangent
     ref_h = ref_xy - BODY_REF_OFFSET * tangent
-
-    # 当前身体 XY 位置
+    # 计算走廊超出量
     f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
     h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
-
-    # 当前物理前向 heading
     f_heading = get_f_body_physical_heading(env)
     h_heading = get_h_body_physical_heading(env)
-
-    # 走廊超额 e_i
-    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading,
-                                   F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
-    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading,
-                                   H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
-
-    # 超出走廊的量
+    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
+    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
     v_f = torch.clamp(e_f - CORRIDOR_HALF_WIDTH, min=0.0)
     v_h = torch.clamp(e_h - CORRIDOR_HALF_WIDTH, min=0.0)
-
-    # 课程权重
+    # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")
+    # 计算奖励
     r_f = torch.exp(-sigma * v_f ** 2)
     r_h = torch.exp(-sigma * v_h ** 2)
     reward = (r_f + r_h) / 2
-
-    # 日志
+    # 记录日志
     env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
     env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
     env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
