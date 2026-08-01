@@ -201,12 +201,11 @@ class SlalomCommand(CommandTerm):
     
     def _update_command(self) -> None:
         if self.slalom_mode_active:
+            # Phase 1: 仅每步动态更新曲率 (LUT 瞬时值)
+            # 速度固定为 reset 时按弧段曲率计算的常量 (不再随 κ 动态缩放)
+            # 原因: 变速命令 × 固定步幅步态表会导致参考轨迹超前于实际执行能力 (7/31 崩溃分析)
             kappa = get_path_curvature(self._env)
             self.curvature_command[:] = kappa
-
-            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
-            scale_kappa = 1.0 - (1.0 - VEL_MIN) * kappa.abs() / CURVATURE_TARGET_MAX
-            self.vel_command[:] = base_vel * self.gait_freq_command * scale_kappa
 
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:
