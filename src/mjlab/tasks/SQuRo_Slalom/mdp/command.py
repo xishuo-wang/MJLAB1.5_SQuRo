@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
+from .pole import POLE_NUM
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
