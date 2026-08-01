@@ -44,7 +44,7 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.2 * reward_neck
+    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
     return reward * weight
 
 
@@ -71,7 +71,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.2 * reward_neck
+    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
     return reward * weight
 
 
