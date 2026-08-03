@@ -9,8 +9,16 @@ from .curriculums import CURVATURE_TARGET
 # 杆几何常量
 POLE_RADIUS = 0.01          # 直径 1cm
 POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
-POLE_Y = -1.0 / CURVATURE_TARGET        # 杆心 Y 坐标 (= -Rmin, 路径第一弧底部)
 POLE_NUM = 12               # 杆数量 (覆盖 2Hz@20s 全程: 0.15m 间距 → 0~1.65m)
+
+
+def _smooth_pole_y() -> float:
+    """杆心 Y = -平滑后弧段 x 位移 (平滑路径的等效圆心, 即路径第一弧底部)"""
+    from .path import get_smooth_x_sw   # 延迟导入避免循环
+    return -get_smooth_x_sw()
+
+
+POLE_Y = _smooth_pole_y()   # 杆心 Y 坐标 (= -x_sw, 平滑路径等效圆心)
 
 
 @dataclass

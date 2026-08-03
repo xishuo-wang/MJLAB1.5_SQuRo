@@ -4,7 +4,7 @@ import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .curriculums import CURVATURE_TARGET
+from .curriculums import CURVATURE_TARGET, SMOOTH_TIME, SMOOTH_VEL
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -161,6 +161,87 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
     return arc, pts_x, pts_y, headings, kappa_vals
 
 
+# =========================================================================================
+# 平滑 LUT 生成 — κ 曲线 (弧段 = 进过渡 + 平台 + 出过渡) 数值积分重建路径
+def _generate_slalom_lut_smooth_period(X: float, smooth_time: float = None,
+                                       vel: float = None):
+    """平滑绕杆周期: 所有曲率跳变线性过渡 (时长 smooth_time, 弧长 vel×smooth_time)。
+    无直行 (X ≤ 2×x_sw) 时同向弧段 (S2→S4, S5→S1) 直接连续, 不做 +20→0→+20 的 V 形过渡。
+    返回 (arc, pts_x, pts_y, headings, kappa), 与原始 LUT 格式一致。
+    """
+    t = SMOOTH_TIME if smooth_time is None else smooth_time
+    v = SMOOTH_VEL if vel is None else vel
+    K = CURVATURE_TARGET
+    tr = v * t
+    L90 = np.pi / 2 * _RMIN
+    platform = L90 - tr             # 全过渡弧段平台 (含进出过渡各 tr)
+    platform_half = L90 - tr / 2    # 半过渡弧段平台 (仅单侧过渡)
+
+    def integrate(segs, ds=1e-4):
+        s_pts, k_pts, s = [], [], 0.0
+        for L, k0, k1 in segs:
+            n = max(2, int(L / ds))
+            s_pts.extend(np.linspace(s, s + L, n, endpoint=False))
+            k_pts.extend(np.linspace(k0, k1, n, endpoint=False))
+            s += L
+        s_pts.append(s)
+        k_pts.append(k_pts[-1])
+        s_g = np.array(s_pts)
+        k_g = np.array(k_pts)
+        h = np.cumsum(k_g) * ds
+        x = np.cumsum(np.cos(h)) * ds
+        y = np.cumsum(np.sin(h)) * ds
+        return s_g, x, y, h, k_g
+
+    def measure_xsw(segs_s1):
+        _, x, _, _, _ = integrate(segs_s1)
+        return float(x[-1])
+
+    # 模式选择: 无直行 (同向连续) vs 有直行 (全过渡)
+    x_sw_half = measure_xsw([(platform_half, -K, -K), (tr, -K, 0.0)])
+    x_sw_full = measure_xsw([(tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0)])
+    if X >= 2 * x_sw_full - 1e-6:
+        straight = X - 2 * x_sw_full
+        segs = [
+            (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S1
+            (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S2
+            (straight, 0.0, 0.0),                                # S3 直行
+            (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S4
+            (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S5
+            (straight, 0.0, 0.0),                                # S6 直行
+        ]
+    else:
+        if X > 2 * x_sw_half + 1e-6:
+            print(f"[WARN] spacing={X:.4f} 处于平滑不兼容区间 "
+                  f"({2*x_sw_half:.4f}, {2*x_sw_full:.4f}), 采用无直行模式")
+        segs = [
+            (platform_half, -K, -K), (tr, -K, 0.0),   # S1 (起点直接 -20)
+            (tr, 0.0, K), (platform_half, K, K),      # S2 (无出, 同向接 S4)
+            (platform_half, K, K), (tr, K, 0.0),      # S4 (无进, 同向接 S2)
+            (tr, 0.0, -K), (platform_half, -K, -K),   # S5 (无出, 同向接 S1')
+        ]
+    return integrate(segs)
+
+
+# 平滑后名义弧段 x 位移 (有直行模式 S1: 进+平台+出), 用于杆 Y 定位
+def get_smooth_x_sw(smooth_time: float = None, vel: float = None) -> float:
+    t = SMOOTH_TIME if smooth_time is None else smooth_time
+    v = SMOOTH_VEL if vel is None else vel
+    K = CURVATURE_TARGET
+    tr = v * t
+    platform = np.pi / 2 * _RMIN - tr
+    ds = 1e-4
+    segs = [(tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0)]
+    x, h = 0.0, 0.0
+    for L, k0, k1 in segs:
+        n = max(2, int(L / ds))
+        kg = np.linspace(k0, k1, n, endpoint=False)
+        h_arr = h + np.cumsum(kg) * ds   # 段内 heading 从全局 h 继续累积
+        x += np.sum(np.cos(h_arr)) * ds
+        h = h_arr[-1]
+    return float(x)
+
+
 # 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
 def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
@@ -169,13 +250,15 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     dt = env.step_dt
     t = env.episode_length_buf.float() * dt         # [N]
 
-    # 首次调用或杆间距变化时重建 LUT
+    # 首次调用或杆间距/速度变化时重建 LUT (平滑弧长依赖速度)
     cache = getattr(env, "_slalom_lut_cache", None)
-    if cache is None or abs(cache["spacing"] - pole_spacing) > 1e-6:
-        arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_one_period(pole_spacing)
+    vel0 = float(vel_cmd[0].item()) if vel_cmd.numel() > 0 else SMOOTH_VEL
+    if (cache is None or cache["spacing"] != pole_spacing or cache["vel"] != vel0):
+        arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_smooth_period(pole_spacing, vel=vel0)
         dev = env.device
         cache = {
             "spacing": pole_spacing,
+            "vel": vel0,
             "arc": torch.tensor(arc_np, device=dev, dtype=torch.float32),
             "x": torch.tensor(xs_np, device=dev, dtype=torch.float32),
             "y": torch.tensor(ys_np, device=dev, dtype=torch.float32),

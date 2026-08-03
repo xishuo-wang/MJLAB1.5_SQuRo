@@ -8,6 +8,10 @@ CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
 CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 Rmin = 1.0 / CURVATURE_TARGET  # 最小转弯半径
 
+# Phase1 曲率平滑常量 — 弧段间曲率线性过渡, 平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
+SMOOTH_TIME = 1.0              # 单段过渡时间 (s)
+SMOOTH_VEL = 0.025             # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
+
 # 两阶段训练
 PHASE1_MID_ITER = 2000       # iter 0-2000: 转弯曲率增大
 PHASE1_END_ITER = 4000       # iter 2000-4000: 转弯基元
