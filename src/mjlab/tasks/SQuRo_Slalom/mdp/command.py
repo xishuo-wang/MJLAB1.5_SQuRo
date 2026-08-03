@@ -273,7 +273,6 @@ class SlalomCommand(CommandTerm):
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         import numpy as np
         from .path import _INIT_DIST, _generate_slalom_lut_one_period
-        from .pole import POLE_Y, POLE_RADIUS, POLE_HALF_HEIGHT
 
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
@@ -298,23 +297,9 @@ class SlalomCommand(CommandTerm):
                 pt = np.array([xs[i] + offset_x, ys[i], z])
                 # 交替颜色区分周期
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
-                visualizer.add_sphere(
-                    center=pt, radius=radius,
-                    color=color,
-                    label=f"sl_{k}_{i}",
-                )
+                visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}",)
 
-        # 杆柱 (圆柱, 与场景 PoleEntity 外观一致, 世界坐标)
-        pole_h = POLE_HALF_HEIGHT * 2
-        for pi in range(POLE_NUM):
-            px, py = pi * spacing, POLE_Y
-            visualizer.add_cylinder(
-                start=np.array([px, py, 0.0]),
-                end=np.array([px, py, pole_h]),
-                radius=POLE_RADIUS,
-                color=(0.9, 0.35, 0.2, 0.6),
-                label=f"pole_{pi}",
-            )
+        # 杆不再由可视化绘制: 场景 PoleEntity 提供 (play 时由 SQuRo_play 按正确间距重建)
 
 
 

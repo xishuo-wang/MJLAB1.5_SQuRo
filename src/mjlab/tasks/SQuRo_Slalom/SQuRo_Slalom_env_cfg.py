@@ -110,8 +110,8 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     pole_entities: dict = {}
     for i in range(mdp.POLE_NUM):
         pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
-            name=f"pole{i}", position=(i * 0.2, mdp.POLE_Y, 0.0),
-            rgba=(0.9, 0.35, 0.2, 0.0),  # alpha=0, 默认透明
+                name=f"pole{i}", position=(i * mdp.POLE_SPACING_START, mdp.POLE_Y, 0.0),
+                rgba=(0.9, 0.35, 0.2, 0.0),  # alpha=0, 默认透明
             contype=0, conaffinity=0,
         )
 
