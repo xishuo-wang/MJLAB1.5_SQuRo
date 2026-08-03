@@ -23,7 +23,7 @@ BODY_L = 0.04       # body 半长 (F/H_BODY_HALF_LENGTH)
 BODY_W = 0.035      # body 半宽 (F/H_BODY_HALF_WIDTH)
 OFFSET = 0.04       # F/H 中心距 base 偏移 (BODY_REF_OFFSET)
 
-THETA_RANGE = (-1.5, 1.5)   # 路径弧角范围 (rad, 约 ±86°)
+THETA_RANGE = (-1.0, 1.0)   # 路径弧角范围 (rad, 约 ±86°)
 N_SAMPLE = 60               # 阴影采样密度 (每边)
 
 
@@ -119,53 +119,74 @@ def main():
         r = np.hypot(px, py)
         return (r >= R - CORRIDOR_C) & (r <= R + CORRIDOR_C)
 
-    # ---- 绘图 ----
-    fig, ax = plt.subplots(figsize=(8.5, 8.5))
+        # ---- 绘图 (黄-紫-蓝 + 渐变惩罚) ----
+    # ========== 绘图（黄→紫渐变，虚线路径，无坐标轴/网格） ==========
+    from matplotlib.patches import Circle
+    from matplotlib.colors import Normalize
+    import matplotlib.cm as cm
 
-    # 走廊带填充 (无边框说明)
+    fig, ax = plt.subplots(figsize=(8.5, 8.5))
+    ax.set_facecolor('white')
+
+    # 1. 走廊带：浅灰填充 + 灰色虚线边界
     ax.fill(np.concatenate([outer_x, inner_x[::-1]]),
             np.concatenate([outer_y, inner_y[::-1]]),
-            color="lightsteelblue", alpha=0.45)
-    ax.plot(outer_x, outer_y, "--", color="steelblue", linewidth=1.0, alpha=0.7)
-    ax.plot(inner_x, inner_y, "--", color="steelblue", linewidth=1.0, alpha=0.7)
-    # 路径中心线
-    ax.plot(path_x, path_y, "-", color="navy", linewidth=2.5)
+            color='whitesmoke', alpha=0.7, zorder=0)
+    ax.plot(outer_x, outer_y, '--', color='gray', linewidth=1.2, alpha=0.8)
+    ax.plot(inner_x, inner_y, '--', color='gray', linewidth=1.2, alpha=0.8)
 
-    # 脊柱弧线 (H -> base -> F)
+    # 2. 路径中线：深灰色长虚线
+    ax.plot(path_x, path_y, '--', color='dimgrey', linewidth=2.2, dashes=(8, 4), alpha=0.9, zorder=2)
+
+    # 3. 脊柱弧线：中灰色实线
     spine_pts = arc_between(h_center, base, f_center)
-    ax.plot(spine_pts[:, 0], spine_pts[:, 1], "-", color="black", linewidth=1.8, alpha=0.8)
+    ax.plot(spine_pts[:, 0], spine_pts[:, 1], '-', color='#555555', linewidth=2.0, alpha=0.9, zorder=5)
 
-    # 机器人 (F_body / H_body 矩形, 各自朝向含脊柱弯曲)
+    # 4. 躯干矩形（0惩罚区域，淡金色）
+    body_color = '#FFD700'
+    body_edge  = '#B8860B'
     ax.add_patch(Polygon(rect_pts(f_center, BODY_L, BODY_W, beta + spine_angle),
-                         closed=True, facecolor="lightcoral", edgecolor="darkred",
-                         linewidth=1.6, alpha=0.55))
+                        closed=True, facecolor=body_color, edgecolor=body_edge,
+                        linewidth=1.6, alpha=0.4, zorder=4))
     ax.add_patch(Polygon(rect_pts(h_center, BODY_L, BODY_W, beta - spine_angle),
-                         closed=True, facecolor="lightcoral", edgecolor="darkred",
-                         linewidth=1.6, alpha=0.55))
-    ax.add_patch(Polygon(rect_pts(base, 0.008, 0.008, beta),
-                         closed=True, facecolor="gray", edgecolor="black", linewidth=1.2))
+                        closed=True, facecolor=body_color, edgecolor=body_edge,
+                        linewidth=1.6, alpha=0.4, zorder=4))
 
-    # 阴影: 身体超出走廊的采样点
+    # 5. 脊柱关节：深灰圆形
+    ax.add_patch(Circle(base, radius=0.012, facecolor='dimgrey', edgecolor='black',
+                        linewidth=1.5, zorder=6))
+
+    # 6. 收集超出点及超出距离
+    out_x, out_y, out_dist = [], [], []
     for c, ang in [(f_center, beta + spine_angle), (h_center, beta - spine_angle)]:
         ax_v = u(ang)
         ay_v = np.array([-ax_v[1], ax_v[0]])
-        xs, ys = [], []
         for du in np.linspace(-BODY_L, BODY_L, N_SAMPLE):
             for dv in np.linspace(-BODY_W, BODY_W, N_SAMPLE):
                 p = c + du * ax_v + dv * ay_v
-                if not in_corridor(p[0], p[1]):
-                    xs.append(p[0]); ys.append(p[1])
-        if xs:
-            ax.scatter(xs, ys, s=5, color="darkorange", alpha=0.85, zorder=5)
+                r = np.hypot(p[0], p[1])
+                exceed = max(r - (R + CORRIDOR_C), (R - CORRIDOR_C) - r)
+                if exceed > 0:
+                    out_x.append(p[0])
+                    out_y.append(p[1])
+                    out_dist.append(exceed)
 
+    # 7. 渐变色阴影（plasma_r）
+    if out_x:
+        max_exceed = max(out_dist)
+        norm = Normalize(0, max_exceed)
+        sc = ax.scatter(out_x, out_y, s=18, c=out_dist, cmap='plasma_r',
+                        edgecolors='none', alpha=0.95, norm=norm, zorder=7)
+        cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.04)
+        cbar.set_label('超出距离 (m)', fontsize=10)
+        cbar.ax.tick_params(labelsize=9)
+
+    # 8. 去除坐标轴、刻度、网格
     ax.set_aspect("equal")
-    ax.grid(True, alpha=0.3)
-    ax.set_xlabel("X (m)", fontsize=11)
-    ax.set_ylabel("Y (m)", fontsize=11)
-    ax.set_title("走廊一致性奖励示意 (含脊柱弯曲)", fontsize=13, fontweight="bold")
+    ax.set_axis_off()          # 隐藏所有坐标轴、刻度、标签、网格
 
-    plt.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    plt.tight_layout(pad=0.5)
+    fig.savefig(args.out, dpi=150, bbox_inches='tight')
     print(f"已保存: {args.out}")
     plt.close(fig)
 
