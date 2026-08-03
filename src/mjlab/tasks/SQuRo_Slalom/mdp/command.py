@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math
 import torch
+import numpy as np
 from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
@@ -15,6 +16,7 @@ from .curriculums import (
     get_training_phase,
 )
 from .pole import update_pole_visibility
+from .path import _INIT_DIST, _generate_slalom_lut_one_period
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -271,9 +273,6 @@ class SlalomCommand(CommandTerm):
 
     # 绘制绕杆轨迹：圆弧拼接路径
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
-        import numpy as np
-        from .path import _INIT_DIST, _generate_slalom_lut_one_period
-
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
         z = start[2] + z_offset
@@ -298,8 +297,6 @@ class SlalomCommand(CommandTerm):
                 # 交替颜色区分周期
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
                 visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}",)
-
-        # 杆不再由可视化绘制: 场景 PoleEntity 提供 (play 时由 SQuRo_play 按正确间距重建)
 
 
 
