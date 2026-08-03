@@ -50,7 +50,7 @@ class PlayConfig:
     fixed_height_h: float | None = 0.055
     fixed_gait_freq: float | None = 2.0
     fixed_curvature: float | None = -20
-    fixed_pole_spacing: float | None = 2/16
+    fixed_pole_spacing: float | None = 2/20
     enable_collision: bool = False
 
 
