@@ -293,7 +293,7 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
     # 模式选择: 无直行 (同向连续) vs 有直行 (全过渡)
     x_sw_half, x_sw_full = _get_smooth_xsw(tr)
     if X >= 2 * x_sw_full - 1e-6:
-        straight = X - 2 * x_sw_full
+        straight = max(0.0, X - 2 * x_sw_full)   # 边界浮点防御
         segs = [
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S1
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S2
