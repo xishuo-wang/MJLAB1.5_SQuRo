@@ -4,6 +4,7 @@ import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
+from .curriculums import CURVATURE_TARGET
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -75,7 +76,7 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
 
 # =========================================================================================
 # 绕杆路径查找表（LUT）— 使用圆弧拼接方式，与 slalom_path_viz.py 逻辑一致
-_RMIN = 1.0 / 15.0                  # 最小转弯半径 (曲率 κ=±15)
+_RMIN = 1.0 / CURVATURE_TARGET      # 最小转弯半径 (= 1/κ_arc)
 
 
 def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):

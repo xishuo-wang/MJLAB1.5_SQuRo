@@ -6,7 +6,15 @@ from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
-from .pole import POLE_NUM
+from .curriculums import (
+    CURVATURE_TARGET,
+    CURVATURE_TARGET_MAX,
+    GAIT_FREQ_MIN,
+    GAIT_FREQ_MAX,
+    GAIT_FREQ_PHASE1,
+    get_training_phase,
+)
+from .pole import POLE_NUM, update_pole_visibility
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -16,8 +24,6 @@ if TYPE_CHECKING:
 FIXED_VEL = 0.1
 FIXED_HEIGHT_F = 0.055
 FIXED_HEIGHT_H = 0.055
-FIXED_GAIT_FREQ = 1.0
-CURVATURE_TARGET_MAX = 20.0
 VEL_MIN = 0.25
 
 
@@ -55,7 +61,7 @@ class SlalomCommand(CommandTerm):
         self.fixed_curvature = cfg.fixed_curvature
 
         # 每 episode 共享步频 (Phase 0 随机采样, Phase 1 固定)
-        self._shared_gait_freq = FIXED_GAIT_FREQ
+        self._shared_gait_freq = GAIT_FREQ_PHASE1
 
         # 可视化：episode 起始位置 + 是否已记录
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -76,7 +82,6 @@ class SlalomCommand(CommandTerm):
     # 绕杆模式 (由 curriculums.get_training_phase 自动控制)
     @property
     def slalom_mode_active(self) -> bool:
-        from .curriculums import get_training_phase
         return get_training_phase(self._env.common_step_counter) == 1
 
     # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取)
@@ -116,8 +121,6 @@ class SlalomCommand(CommandTerm):
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
-        from .curriculums import get_training_phase, GAIT_FREQ_MIN, GAIT_FREQ_MAX
-        from .pole import update_pole_visibility, POLE_NUM
         n = len(env_ids)
         current_step = self._env.common_step_counter
         phase = get_training_phase(current_step)
@@ -138,14 +141,14 @@ class SlalomCommand(CommandTerm):
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
         else:
             # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
-            self.curvature_command[env_ids] = torch.full((n,), -15.0, device=self.device)
+            self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
             else:
                 self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
-            scale = 1.0 - (1.0 - VEL_MIN) * 15.0 / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
+            scale = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
             self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale, device=self.device)
 
         self._start_recorded[env_ids] = False
