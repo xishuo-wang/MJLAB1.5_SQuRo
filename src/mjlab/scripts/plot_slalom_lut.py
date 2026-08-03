@@ -32,7 +32,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.command import FIXED_VEL, VEL_MIN
 
 
 EPISODE_LEN = 20.0          # episode 时长 (s, 与 env_cfg 一致)
-GAIT_LIST = [1.0, 1.5, 2.0]  # Phase1 步频采样范围展示
+GAIT_FREQ = 1.0             # Phase 1 使用的步频 (Hz, 文件开头统一定义)
 
 
 # 与 path.py 内部 _arc_np 相同的单段弧生成 (用于画辅助圆/圆心)
@@ -216,26 +216,38 @@ def main():
     ax_head.set_title("朝向沿弧长分布 (unwrapped)")
     ax_head.grid(True, alpha=0.3)
 
-    # ============ 子图: 弧长随时间推进 (期望速度驱动) ============
+    # ============ 子图: 曲率随时间变化 (期望速度驱动) ============
     scale_phase1 = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX
     s_period = float(arc[-1])
-    t_arr = np.linspace(0.0, EPISODE_LEN, 300)
-    for gait in GAIT_LIST:
-        vel = FIXED_VEL * gait * scale_phase1
-        s_arr = vel * t_arr - _INIT_DIST          # 起始偏移 = 接近段
-        ax_s.plot(t_arr, s_arr, linewidth=1.6,
-                  label=f"gait={gait:.1f}Hz  vel={vel:.4f}m/s")
-    # 周期边界
-    ax_s.axhline(0.0, color="green", linestyle="--", linewidth=0.8, label="路径起点 (s=0)")
+    vel = FIXED_VEL * GAIT_FREQ * scale_phase1     # 期望速度 (恒速)
+    t_arr = np.linspace(0.0, EPISODE_LEN, 800)
+    s_arr = vel * t_arr - _INIT_DIST               # 弧长: 接近段为负, 之后进入 LUT
+    kappa_t = np.zeros_like(s_arr)
+    pos_mask = s_arr >= 0.0
+    s_pos = s_arr[pos_mask]
+    s_mod = s_pos % s_period
+    idx = np.searchsorted(arc, s_mod).clip(1, len(arc) - 1)
+    frac = (s_mod - arc[idx - 1]) / (arc[idx] - arc[idx - 1] + 1e-12)
+    kappa_t[pos_mask] = kappa[idx - 1] + frac * (kappa[idx] - kappa[idx - 1])
+    ax_s.plot(t_arr, kappa_t, "-", color="crimson", linewidth=1.6,
+              label=f"κ(t), vel={vel:.4f}m/s (gait={GAIT_FREQ:.1f}Hz)")
+    ax_s.axhline(0.0, color="green", linestyle="--", linewidth=0.8)
+    # 周期边界时刻
     for k in (1, 2, 3):
-        ax_s.axhline(k * s_period, color="gray", linestyle=":", linewidth=0.8)
-    ax_s.annotate(f"1 周期弧长={s_period:.3f}m", xy=(0.02, s_period * 1.03),
-                  fontsize=8, color="gray")
+        t_k = (k * s_period + _INIT_DIST) / vel
+        if t_k <= EPISODE_LEN:
+            ax_s.axvline(t_k, color="gray", linestyle=":", linewidth=0.8)
+    # 接近段标注
+    t_app = _INIT_DIST / vel
+    ax_s.axvspan(0.0, t_app, color="green", alpha=0.12)
+    ax_s.annotate(f"接近段\n({t_app:.2f}s)", xy=(t_app / 2, -CURVATURE_TARGET * 0.9),
+                  ha="center", fontsize=8, color="green")
     ax_s.set_xlabel("时间 t (s)")
-    ax_s.set_ylabel("弧长 s (m)")
-    ax_s.set_title(f"弧长随时间推进  s(t)=∫vel·dt  (episode {EPISODE_LEN:.0f}s)")
+    ax_s.set_ylabel("κ (rad/m)")
+    ax_s.set_title(f"曲率随时间变化 (期望速度驱动, episode {EPISODE_LEN:.0f}s)")
     ax_s.grid(True, alpha=0.3)
     ax_s.legend(fontsize=8, loc="upper left")
+    ax_s.set_ylim(-CURVATURE_TARGET * 1.2, CURVATURE_TARGET * 1.2)
 
     # 先展示, 再保存
     if not args.no_show:
