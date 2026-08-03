@@ -44,57 +44,66 @@ def main():
     v = FIXED_VEL * GAIT_FREQ * (1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX)
     tr = v * t                          # 单段过渡弧长
     L90 = np.pi / 2 * RMIN              # 90° 弧长
-    straight = max(0.0, POLE_SPACING - 2 * RMIN)   # 直行段长度
-    platform_std = L90 - tr             # 标准弧段平台 (含进出过渡)
-    platform_s1 = L90 - tr / 2          # 第一周期 S1 平台 (无进入过渡)
 
-    # ---- 构造 κ(s) 分段 (所有跳变线性过渡) ----
+    # ---- 构造 κ(s) 分段: 所有弧段对称处理 (进过渡 + 平台 + 出过渡) ----
     K = CURVATURE_TARGET
-    segs = []   # (弧长, κ起点, κ终点)
-    for p in range(N_PERIODS):
-        if p == 0:
-            segs.append((platform_s1, -K, -K))   # S1 平台
-        else:
-            segs.append((tr, 0.0, -K))           # 直行→S1 过渡
-            segs.append((platform_std, -K, -K))  # S1' 平台
-        segs.append((tr, -K, 0.0))               # S1→S2 过渡1
-        segs.append((tr, 0.0, K))                # S1→S2 过渡2
-        segs.append((platform_std, K, K))        # S2 平台
-        segs.append((tr, K, 0.0))                # S2→S3 过渡
-        segs.append((straight, 0.0, 0.0))        # S3 直行
-        segs.append((tr, 0.0, K))                # S3→S4 过渡
-        segs.append((platform_std, K, K))        # S4 平台
-        segs.append((tr, K, 0.0))                # S4→S5 过渡1
-        segs.append((tr, 0.0, -K))               # S4→S5 过渡2
-        segs.append((platform_std, -K, -K))      # S5 平台
-        segs.append((tr, -K, 0.0))               # S5→S6 过渡
-        segs.append((straight, 0.0, 0.0))        # S6 直行
+    platform = L90 - tr            # 对称弧段平台 (含进出过渡各 tr)
 
-    # 逐段生成 (s, κ) 密集网格
+    def arc_seg(k):
+        return [(tr, 0.0, k), (platform, k, k), (tr, k, 0.0)]
+
+    def build(straight_len):
+        segs = []
+        for _ in range(N_PERIODS):
+            segs += arc_seg(-K)          # S1
+            segs += arc_seg(K)           # S2
+            segs.append((straight_len, 0.0, 0.0))   # S3 直行
+            segs += arc_seg(K)           # S4
+            segs += arc_seg(-K)          # S5
+            segs.append((straight_len, 0.0, 0.0))   # S6 直行
+        # 逐段生成 (s, κ)
+        s_pts, k_pts, s = [], [], 0.0
+        for L, k0, k1 in segs:
+            n = max(2, int(L / ds))
+            s_pts.extend(np.linspace(s, s + L, n, endpoint=False))
+            k_pts.extend(np.linspace(k0, k1, n, endpoint=False))
+            s += L
+        s_pts.append(s)
+        k_pts.append(k_pts[-1])
+        return np.array(s_pts), np.array(k_pts)
+
     ds = 1e-4
-    s_pts, k_pts = [], []
-    s = 0.0
-    for L, k0, k1 in segs:
-        n = max(2, int(L / ds))
-        s_pts.extend(np.linspace(s, s + L, n, endpoint=False))
-        k_pts.extend(np.linspace(k0, k1, n, endpoint=False))
-        s += L
-    s_pts.append(s)
-    k_pts.append(k_pts[-1])
-    s_grid = np.array(s_pts)
-    kappa = np.array(k_pts)
+    # 阶段1: 无直行积分 → 测弧段 x 位移 x_sw
+    s_grid, kappa = build(0.0)
+    h = np.cumsum(kappa) * ds
+    x_int = np.cumsum(np.cos(h)) * ds
+    y_int = np.cumsum(np.sin(h)) * ds
+    s_arc = tr + platform + tr                     # 单弧段总弧长
+    i_sw = np.searchsorted(s_grid, s_arc) - 1      # S1 结束 (κ 首次到 0)
+    x_sw = x_int[i_sw]
+    straight = max(0.0, POLE_SPACING - 2 * x_sw)   # 直行段 = spacing - 2×x_sw
+
+    # 阶段2: 含直行的完整路径
+    s_grid, kappa = build(straight)
+    h = np.cumsum(kappa) * ds
+    x_int = np.cumsum(np.cos(h)) * ds
+    y_int = np.cumsum(np.sin(h)) * ds
 
     # ---- 积分重建路径 (起点朝 +X, 从 (0,0) 出发) ----
     h = np.cumsum(kappa) * ds
     x_int = np.cumsum(np.cos(h)) * ds
     y_int = np.cumsum(np.sin(h)) * ds
 
-    # 第一切换点 (κ 第一次到达 0): 第一个 tr 过渡结束
-    i_sw = np.searchsorted(s_grid, platform_s1 + tr) - 1
-    x_sw, y_sw = x_int[i_sw], y_int[i_sw]
+    # 第一切换点 (κ 第一次到达 0): S1 结束处
+    y_sw = y_int[i_sw]
     y_off = -RMIN - y_sw
     y0 = y_off
     y_path = y_int + y_off
+
+    # 周期 x 位移验证
+    per_len = s_grid[-1] / N_PERIODS
+    i_per = np.searchsorted(s_grid, per_len) - 1
+    per_dx = x_int[i_per]
 
     # ---- 原始 LUT (对比, 一个周期) ----
     arc_o, xs_o, ys_o, hd_o, kp_o = _generate_slalom_lut_one_period(POLE_SPACING)
@@ -108,7 +117,10 @@ def main():
     print(f"  原始: (0, 0) → 切换点 ({RMIN:.4f}, {-RMIN:.4f})")
     print(f"  平滑: (0, {y0:+.4f}) → 切换点 ({x_sw:.4f}, {-RMIN:.4f})")
     print(f"  Δy0 = {delta_y:+.4f} m, Δx = {delta_x*1000:+.2f} mm")
-    print(f"周期弧长: 原始 {arc_o[-1]:.4f}m, 平滑 {s_grid[-1]/N_PERIODS:.4f}m")
+    print(f"最小杆间距 = 2×x_sw = {2*x_sw*1000:.1f} mm")
+    print(f"实际杆间距 {POLE_SPACING*1000:.0f}mm → 直行段 = {straight*1000:.1f} mm")
+    print(f"周期 x 位移 = {per_dx*1000:.1f} mm (应 = 2×spacing = {2*POLE_SPACING*1000:.0f} mm)")
+    print(f"周期弧长: 原始 {arc_o[-1]:.4f}m, 平滑 {per_len:.4f}m")
     print("=" * 60)
 
     # ---- 绘图 ----
@@ -156,7 +168,8 @@ def main():
     ax_k.set_ylim(-K * 1.25, K * 1.25)
 
     fig.suptitle(f"曲率对称平滑 (Δy0={delta_y*1000:+.1f}mm, Δx={delta_x*1000:+.2f}mm, "
-                 f"每周期弧长 {s_grid[-1]/N_PERIODS*1000:.0f}mm)",
+                 f"最小间距={2*x_sw*1000:.0f}mm, 直行段={straight*1000:.0f}mm, "
+                 f"周期位移={per_dx*1000:.0f}mm)",
                  fontsize=12, fontweight="bold")
 
     if not args.no_show:
