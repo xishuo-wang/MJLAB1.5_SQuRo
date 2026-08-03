@@ -20,14 +20,16 @@ if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
+
 # 命令配置
-FIXED_VEL = 0.1
-FIXED_HEIGHT_F = 0.055
-FIXED_HEIGHT_H = 0.055
-VEL_MIN = 0.25
+BASE_VEL = 0.1              # 基础速度(1Hz 直行时速度)
+FIXED_HEIGHT_F = 0.055      # 前肢高度
+FIXED_HEIGHT_H = 0.055      # 后肢高度
+VEL_MIN = 0.25              # 最大步幅时速度缩放百分比
 
 
-# 获取曲率采样范围 — 曲率增长边界由 curriculums.PHASE1_MID_ITER 定义
+
+# 获取曲率采样范围
 def get_curvature_range(step_counter: int) -> Tuple[float, float]:
     from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER
     iter_num = step_counter // _STEPS_PER_ITER
@@ -36,6 +38,7 @@ def get_curvature_range(step_counter: int) -> Tuple[float, float]:
         kappa_max = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
         return (-kappa_max, kappa_max)
     return (-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX)
+
 
 
 # 5D命令 [vel_x, height_f, height_h, gait_freq, curvature]
@@ -75,14 +78,17 @@ class SlalomCommand(CommandTerm):
         t_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
 
+
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
+
 
     # 绕杆模式 (由 curriculums.get_training_phase 自动控制)
     @property
     def slalom_mode_active(self) -> bool:
         return get_training_phase(self._env.common_step_counter) == 1
+
 
     # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取)
     @property
@@ -93,31 +99,37 @@ class SlalomCommand(CommandTerm):
         from .curriculums import get_curriculum_pole_spacing
         return get_curriculum_pole_spacing(self._env.common_step_counter)
 
+
     def _get_velocity(self, n: int) -> torch.Tensor:
         if self.fixed_velocity is not None:
             return torch.full((n,), float(self.fixed_velocity), device=self.device)
-        return torch.full((n,), FIXED_VEL, device=self.device)
+        return torch.full((n,), BASE_VEL, device=self.device)
+
 
     def _get_height_f(self, n: int) -> torch.Tensor:
         if self.fixed_height_f is not None:
             return torch.full((n,), float(self.fixed_height_f), device=self.device)
         return torch.full((n,), FIXED_HEIGHT_F, device=self.device)
 
+
     def _get_height_h(self, n: int) -> torch.Tensor:
         if self.fixed_height_h is not None:
             return torch.full((n,), float(self.fixed_height_h), device=self.device)
         return torch.full((n,), FIXED_HEIGHT_H, device=self.device)
+
 
     def _get_gait_freq(self, n: int) -> torch.Tensor:
         if self.fixed_gait_freq is not None:
             return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
         return torch.full((n,), self._shared_gait_freq, device=self.device)
 
+
     def _get_curvature(self, n: int, step_counter: int) -> torch.Tensor:
         if self.fixed_curvature is not None:
             return torch.full((n,), float(self.fixed_curvature), device=self.device)
         kappa_range = get_curvature_range(step_counter)
         return torch.rand(n, device=self.device) * (kappa_range[1] - kappa_range[0]) + kappa_range[0]
+
 
     # 仅在 reset 时调用，每个 episode 固定曲率不变
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
@@ -136,7 +148,7 @@ class SlalomCommand(CommandTerm):
             else:
                 self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
-            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
             # 更新机器人初始位置/姿态: 接近段圆弧起点 (匹配本 episode 曲率)
@@ -160,7 +172,7 @@ class SlalomCommand(CommandTerm):
             else:
                 self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
-            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
             self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale, device=self.device)
 
@@ -169,6 +181,7 @@ class SlalomCommand(CommandTerm):
             self._env._slalom_vel_scalar = float(self.vel_command[env_ids][0].item())  # type: ignore[attr-defined]
         self._start_recorded[env_ids] = False
 
+
     # 定期重采样：仅更新固定值（速度由 _resample_curvature 按曲率缩放）
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -176,12 +189,14 @@ class SlalomCommand(CommandTerm):
         self.height_h_command[env_ids] = self._get_height_h(n)
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
 
+
     # 重置时额外采样曲率 + 记录轨迹起始位置
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_curvature(env_ids)
         return extras
+
 
     def _update_command(self) -> None:
         # Phase 1: 每步动态更新曲率为路径瞬时值
@@ -196,8 +211,10 @@ class SlalomCommand(CommandTerm):
             self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
         self.time_left -= self._env.step_dt
 
+
     def _update_metrics(self) -> None:
         pass
+
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:
@@ -218,6 +235,7 @@ class SlalomCommand(CommandTerm):
             self._draw_slalom_path(visualizer, batch, self.cfg.viz.z_offset)
         else:
             self._draw_arc_path(visualizer, batch, self.cfg.viz.z_offset)
+
 
     # 绘制转弯基元轨迹：直行=射线, 转弯=圆弧
     def _draw_arc_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
@@ -250,46 +268,54 @@ class SlalomCommand(CommandTerm):
                 label=f"arc_{i}",
             )
 
+
     # 绘制绕杆轨迹：圆弧拼接路径
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         import numpy as np
-        from .path import _generate_slalom_lut_one_period
+        from .path import _INIT_DIST, _generate_slalom_lut_one_period
+        from .pole import POLE_Y, POLE_RADIUS, POLE_HALF_HEIGHT
 
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
+        z = start[2] + z_offset
 
         _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
-        period_len = np.array(xs[-1])  # 一个周期的 X 跨度 = 2*spacing
+        period_len = np.array(xs[-1])
         n_periods = 3
 
-        radius = 0.006   # 略小于弧线的轨迹点
+        radius = 0.006
+        # 接近段 (长度 = _INIT_DIST, 与 path.py / events.py 一致)
+        n_app = 5
+        for i in range(n_app + 1):
+            frac = i / n_app
+            pt = np.array([-_INIT_DIST + frac * _INIT_DIST, 0.0, z])
+            visualizer.add_sphere(center=pt, radius=radius, color=(0.5, 0.8, 0.5, 0.5), label=f"sl_ap_{i}")
+
+        # 周期路径 (世界坐标, 与期望轨迹一致)
         for k in range(n_periods):
             offset_x = k * period_len
             for i in range(len(xs)):
-                pt = np.array([
-                    start[0] + xs[i] + offset_x,
-                    start[1] + ys[i],
-                    start[2] + z_offset,
-                ])
+                pt = np.array([xs[i] + offset_x, ys[i], z])
                 # 交替颜色区分周期
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
                 visualizer.add_sphere(
                     center=pt, radius=radius,
                     color=color,
-                    label=f"slalom_{k}_{i}",
+                    label=f"sl_{k}_{i}",
                 )
 
-        # 杆位置标记（红色小球，Y = POLE_Y，与 play 脚本杆数量一致）
-        from .pole import POLE_Y
+        # 杆柱 (圆柱, 与场景 PoleEntity 外观一致, 世界坐标)
+        pole_h = POLE_HALF_HEIGHT * 2
         for pi in range(POLE_NUM):
-            px = start[0] + pi * spacing
-            py = start[1] + POLE_Y
-            pt = np.array([px, py, start[2] + z_offset + 0.05])
-            visualizer.add_sphere(
-                center=pt, radius=0.007,
-                color=(0.9, 0.2, 0.2, 0.8),
+            px, py = pi * spacing, POLE_Y
+            visualizer.add_cylinder(
+                start=np.array([px, py, 0.0]),
+                end=np.array([px, py, pole_h]),
+                radius=POLE_RADIUS,
+                color=(0.9, 0.35, 0.2, 0.6),
                 label=f"pole_{pi}",
             )
+
 
 
 @dataclass(kw_only=True)
@@ -297,14 +323,12 @@ class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
     resampling_time_range: Tuple[float, float] = (20.0, 30.0)
     debug_vis: bool = False
-
-    # 固定值（None=使用课程采样，设值可覆盖）
     fixed_velocity: Optional[float] = None
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
     fixed_curvature: Optional[float] = None
-    fixed_pole_spacing: Optional[float] = None  # Phase 1 杆间距覆盖
+    fixed_pole_spacing: Optional[float] = None
 
     @dataclass
     class VizCfg:
