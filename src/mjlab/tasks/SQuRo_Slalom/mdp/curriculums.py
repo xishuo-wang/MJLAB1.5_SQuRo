@@ -1,34 +1,32 @@
 from __future__ import annotations
 from typing import Any
 
-_STEPS_PER_ITER = 24
 
-# 曲率常量 — CURVATURE_TARGET_MAX 用于 Phase 0 采样范围, CURVATURE_TARGET 用于绕杆弧
-CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
-CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
-Rmin = 1.0 / CURVATURE_TARGET  # 最小转弯半径
+_STEPS_PER_ITER = 24                # 强化学习算法相关
 
-# Phase1 曲率平滑常量 — 弧段间曲率线性过渡, 平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
-SMOOTH_TIME = 1.0              # 单段过渡时间 (s)
-SMOOTH_VEL = 0.025             # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
+PHASE1_MID_ITER = 2000              # iter 0-2000: 转弯曲率增大
+PHASE1_END_ITER = 4000              # iter 2000-4000: 转弯基元
+PHASE2_MID_ITER = 6000              # iter 4000-6000: 绕杆间距缩小阶段
+PHASE2_END_ITER = 8000              # iter 6000-8000: 绕杆训练
 
-# 两阶段训练
-PHASE1_MID_ITER = 2000       # iter 0-2000: 转弯曲率增大
-PHASE1_END_ITER = 4000       # iter 2000-4000: 转弯基元
-PHASE2_MID_ITER = 6000       # iter 4000-6000: 绕杆间距缩小阶段
-PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
+CURVATURE_TARGET_MAX = 20.0         # Phase 0 曲率最大值
+CURVATURE_TARGET = 20.0             # Phase 1 绕杆弧曲率
+Rmin = 1.0 / CURVATURE_TARGET       # 最小转弯半径
 
-# 绕杆阶段杆间距课程
-POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
-POLE_SPACING_MIN = 2 * Rmin      # 绕杆最小杆间距 (≈2.25×Rmin)
+SMOOTH_TIME = 1.0                   # 单段过渡时间 (s)，弧段间曲率线性过渡, 平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
+SMOOTH_VEL = 0.025                  # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
 
-# 步频常量 — Phase 0 每 episode 随机采样, Phase 1 固定
-GAIT_FREQ_MIN = 1.0          # Phase 0 步频采样下限
-GAIT_FREQ_MAX = 2.0          # Phase 0 步频采样上限
-GAIT_FREQ_PHASE1 = 1.0       # Phase 1 固定步频
+POLE_SPACING_START = 0.20           # 绕杆起始杆间距 (宽)
+POLE_SPACING_MIN = 2 * Rmin         # 绕杆最小杆间距 (≈2.25×Rmin)
+
+GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
+GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
+GAIT_FREQ_PHASE1 = 1.0              # Phase 1 固定步频
+
 
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000)
+
 
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (5.0, 5.0, 5.0),
