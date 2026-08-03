@@ -15,12 +15,12 @@ def reset_model(env, env_ids):
     # 重置基座状态
     root_state = torch.zeros(n, 13, device=env.device)
     root_state[:, 0] = -_INIT_DIST  # x (接近段起点, 之后直行进入路径原点)
-    root_state[:, 1] = 0.0        # y
-    root_state[:, 2] = 0.06       # z
-    root_state[:, 3] = 0          # quat w
-    root_state[:, 4] = -0.707107  # quat x  
-    root_state[:, 5] = -0.707107  # quat y
-    root_state[:, 6] = 0.0        # quat z
+    root_state[:, 1] = 0.0          # y
+    root_state[:, 2] = 0.06         # z
+    root_state[:, 3] = 0            # quat w
+    root_state[:, 4] = -0.707107    # quat x  
+    root_state[:, 5] = -0.707107    # quat y
+    root_state[:, 6] = 0.0          # quat z
     
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
     
