@@ -139,6 +139,19 @@ class SlalomCommand(CommandTerm):
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else FIXED_VEL
             scale = 1.0 - (1.0 - VEL_MIN) * self.curvature_command[env_ids].abs() / CURVATURE_TARGET_MAX
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
+            # 更新机器人初始位置/姿态: 接近段圆弧起点 (匹配本 episode 曲率)
+            if n > 0:
+                from .path import get_arc_approach_start_xyh
+                ax, ay, ah = get_arc_approach_start_xyh(self.curvature_command[env_ids])
+                root = torch.zeros(n, 13, device=self.device)
+                root[:, 0] = ax
+                root[:, 1] = ay
+                root[:, 2] = 0.06
+                c = torch.cos(ah / 2)
+                s = torch.sin(ah / 2)
+                root[:, 4] = 0.70710678 * (s - c)
+                root[:, 5] = -0.70710678 * (c + s)
+                self._env.scene.entities["robot"].write_root_state_to_sim(root, env_ids=env_ids)
         else:
             # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
             self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
@@ -151,6 +164,9 @@ class SlalomCommand(CommandTerm):
             scale = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
             self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale, device=self.device)
 
+        # 缓存当前速度标量 (所有 env 共享), 供 path 模块避免每步 GPU-CPU 同步
+        if n > 0:
+            self._env._slalom_vel_scalar = float(self.vel_command[env_ids][0].item())  # type: ignore[attr-defined]
         self._start_recorded[env_ids] = False
 
     # 定期重采样：仅更新固定值（速度由 _resample_curvature 按曲率缩放）

@@ -54,6 +54,18 @@ def get_approach_start() -> tuple[float, float, float]:
     return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
 
 
+# Phase 0 圆弧接近段: 从 (0,0) 反推 s0, κ=curvature 恒定 (解析解, 向量化)
+#   x(u) = -sin(k·u)/k, y(u) = (1-cos(k·u))/k, h(u) = -k·u  (u=距(0,0)弧长)
+def get_arc_approach_start_xyh(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    s0 = _INIT_DIST
+    mask = torch.abs(k) > 1e-6
+    k_s = torch.where(mask, k, torch.ones_like(k))
+    x = torch.where(mask, -torch.sin(k * s0) / k_s, torch.full_like(k, -s0))
+    y = torch.where(mask, (1.0 - torch.cos(k * s0)) / k_s, torch.zeros_like(k))
+    h = torch.where(mask, -k * s0, torch.zeros_like(k))
+    return x, y, h
+
+
 # 获取指定 body_link 的偏航角
 def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -92,12 +104,15 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     vel_cmd = cmd_term.command[:, 0]        # [N]
     t = env.episode_length_buf.float() * env.step_dt  # [N]
 
-    # 接近段: 直行 (-_INIT_DIST, 0) → (0, 0), 之后圆弧从原点出发
+    # 接近段: 圆弧 (κ=curvature 反推), 距 (0,0) 弧长 u = _INIT_DIST - total_dist, 之后圆弧从原点出发
     total_dist = vel_cmd * t
     in_approach = total_dist < _INIT_DIST
-    approach_x = -_INIT_DIST + total_dist
-    approach_y = torch.zeros_like(t)
-    approach_heading = torch.zeros_like(t)
+    u = (_INIT_DIST - total_dist).clamp(min=0.0)
+    mask = torch.abs(curvature) > 1e-6
+    k_s = torch.where(mask, curvature, torch.ones_like(curvature))
+    approach_x = torch.where(mask, -torch.sin(curvature * u) / k_s, -u)
+    approach_y = torch.where(mask, (1.0 - torch.cos(curvature * u)) / k_s, torch.zeros_like(u))
+    approach_heading = torch.where(mask, -curvature * u, torch.zeros_like(u))
 
     arc_t = torch.clamp(t - _INIT_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
     start_heading = 0.0  # 物理前向 = world +X
@@ -287,7 +302,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
     # 首次调用或杆间距/速度变化时重建 LUT (平滑弧长依赖速度)
     cache = getattr(env, "_slalom_lut_cache", None)
-    vel0 = float(vel_cmd[0].item()) if vel_cmd.numel() > 0 else SMOOTH_VEL
+    vel0 = getattr(env, "_slalom_vel_scalar", SMOOTH_VEL)   # command 缓存的标量, 避免每步同步
     if (cache is None or cache["spacing"] != pole_spacing or cache["vel"] != vel0):
         arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_smooth_period(pole_spacing, vel=vel0)
         dev = env.device
@@ -315,12 +330,16 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     in_approach = total_s < 0.0
 
     # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 从起点正向走 s0=_INIT_DIST 到 (0,0)
-    app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
-    app_s = torch.tensor(app_tbl["s"], device=env.device, dtype=torch.float32)
-    app_x = torch.tensor(app_tbl["x"], device=env.device, dtype=torch.float32)
-    app_y = torch.tensor(app_tbl["y"], device=env.device, dtype=torch.float32)
-    app_h = torch.tensor(app_tbl["h"], device=env.device, dtype=torch.float32)
-    app_k = torch.tensor(app_tbl["k"], device=env.device, dtype=torch.float32)
+    # 效率: torch 表缓存到 env (避免每步 tensor 创建)
+    app_cache = getattr(env, "_slalom_app_tbl", None)
+    if app_cache is None:
+        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+        app_cache = {key: torch.tensor(val, device=env.device, dtype=torch.float32)
+                     for key, val in app_tbl.items()}
+        env._slalom_app_tbl = app_cache  # type: ignore[attr-defined]
+    app_s, app_x = app_cache["s"], app_cache["x"]
+    app_y, app_h = app_cache["y"], app_cache["h"]
+    app_k = app_cache["k"]
     u = (-total_s).clamp(min=0.0)                     # 机器人正向距 (0,0) 的弧长
     idx = torch.searchsorted(app_s, u).clamp(1, len(app_s) - 1)
     idx_p = idx - 1
