@@ -213,12 +213,59 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
 
 # =========================================================================================
 # 平滑 LUT 生成 — κ 曲线 (弧段 = 进过渡 + 平台 + 出过渡) 数值积分重建路径
-def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = None,
-                                       vel: Optional[float] = None):
-    """平滑绕杆周期: 所有曲率跳变线性过渡 (时长 smooth_time, 弧长 vel×smooth_time)。
-    无直行 (X ≤ 2×x_sw) 时同向弧段 (S2→S4, S5→S1) 直接连续, 不做 +20→0→+20 的 V 形过渡。
-    返回 (arc, pts_x, pts_y, headings, kappa), 与原始 LUT 格式一致。
-    """
+_SMOOTH_XSW_CACHE: dict = {}
+
+
+def _measure_s1_xsw(segs, ds=1e-4) -> float:
+    """积分 S1 弧段, 返回结束处 x 位移 (κ 首次到 0)"""
+    s_pts, k_pts, s = [], [], 0.0
+    for L, k0, k1 in segs:
+        n = max(2, int(L / ds))
+        s_pts.extend(np.linspace(s, s + L, n, endpoint=False))
+        k_pts.extend(np.linspace(k0, k1, n, endpoint=False))
+        s += L
+    s_pts.append(s)
+    k_pts.append(k_pts[-1])
+    k_g = np.array(k_pts)
+    h = np.cumsum(k_g) * ds
+    return float(np.sum(np.cos(h)) * ds)
+
+
+def _get_smooth_xsw(tr: float) -> tuple[float, float]:
+    """返回 (x_sw_half, x_sw_full) (按过渡弧长缓存):
+    x_sw_half = 无直行模式 S1 (平台half+出) 的 x 位移
+    x_sw_full = 有直行模式 S1 (进+平台+出) 的 x 位移"""
+    key = round(tr, 6)
+    if key in _SMOOTH_XSW_CACHE:
+        return _SMOOTH_XSW_CACHE[key]
+    K = CURVATURE_TARGET
+    L90 = np.pi / 2 * _RMIN
+    platform = L90 - tr
+    platform_half = L90 - tr / 2
+    x_sw_half = _measure_s1_xsw([(platform_half, -K, -K), (tr, -K, 0.0)])
+    x_sw_full = _measure_s1_xsw([(tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0)])
+    _SMOOTH_XSW_CACHE[key] = (x_sw_half, x_sw_full)
+    return x_sw_half, x_sw_full
+
+
+# 平滑模式下的有效杆间距: 不兼容区间 (2×x_sw_half, 2×x_sw_full) → 无直行最小间距
+def get_effective_pole_spacing(spacing: float, vel: float) -> float:
+    tr = vel * SMOOTH_TIME
+    x_sw_half, x_sw_full = _get_smooth_xsw(tr)
+    min_sp = 2 * x_sw_half
+    if spacing <= min_sp + 1e-6:
+        if spacing < min_sp - 1e-6:
+            print(f"[WARN] spacing={spacing:.4f} 低于平滑最小间距 {min_sp:.4f}, "
+                  f"采用无直行模式, 有效间距={min_sp:.4f}")
+        return min_sp                       # 无直行 (同向连续)
+    if spacing >= 2 * x_sw_full - 1e-6:
+        return spacing                      # 有直行 (含边界)
+    print(f"[WARN] spacing={spacing:.4f} 处于平滑不兼容区间 ({min_sp:.4f}, {2*x_sw_full:.4f}), "
+          f"采用无直行模式, 有效间距={min_sp:.4f}")
+    return min_sp
+
+
+def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = None, vel: Optional[float] = None):
     t = SMOOTH_TIME if smooth_time is None else smooth_time
     v = SMOOTH_VEL if vel is None else vel
     K = CURVATURE_TARGET
@@ -243,13 +290,8 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
         y = np.cumsum(np.sin(h)) * ds
         return s_g, x, y, h, k_g
 
-    def measure_xsw(segs_s1):
-        _, x, _, _, _ = integrate(segs_s1)
-        return float(x[-1])
-
     # 模式选择: 无直行 (同向连续) vs 有直行 (全过渡)
-    x_sw_half = measure_xsw([(platform_half, -K, -K), (tr, -K, 0.0)])
-    x_sw_full = measure_xsw([(tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0)])
+    x_sw_half, x_sw_full = _get_smooth_xsw(tr)
     if X >= 2 * x_sw_full - 1e-6:
         straight = X - 2 * x_sw_full
         segs = [
@@ -261,9 +303,6 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
             (straight, 0.0, 0.0),                                # S6 直行
         ]
     else:
-        if X > 2 * x_sw_half + 1e-6:
-            print(f"[WARN] spacing={X:.4f} 处于平滑不兼容区间 "
-                  f"({2*x_sw_half:.4f}, {2*x_sw_full:.4f}), 采用无直行模式")
         segs = [
             (platform_half, -K, -K), (tr, -K, 0.0),   # S1 (起点直接 -20)
             (tr, 0.0, K), (platform_half, K, K),      # S2 (无出, 同向接 S4)
@@ -277,19 +316,8 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
 def get_smooth_x_sw(smooth_time: Optional[float] = None, vel: Optional[float] = None) -> float:
     t = SMOOTH_TIME if smooth_time is None else smooth_time
     v = SMOOTH_VEL if vel is None else vel
-    K = CURVATURE_TARGET
-    tr = v * t
-    platform = np.pi / 2 * _RMIN - tr
-    ds = 1e-4
-    segs = [(tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0)]
-    x, h = 0.0, 0.0
-    for L, k0, k1 in segs:
-        n = max(2, int(L / ds))
-        kg = np.linspace(k0, k1, n, endpoint=False)
-        h_arr = h + np.cumsum(kg) * ds   # 段内 heading 从全局 h 继续累积
-        x += np.sum(np.cos(h_arr)) * ds
-        h = h_arr[-1]
-    return float(x)
+    _, x_sw_full = _get_smooth_xsw(v * t)
+    return float(x_sw_full)
 
 
 # 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
