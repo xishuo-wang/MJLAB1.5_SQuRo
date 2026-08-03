@@ -9,7 +9,7 @@
 
 用法:
   uv run python src/mjlab/scripts/plot_slalom_lut.py [--spacing 0.15]
-      [--n_periods 1] [--out xxx.png]
+      [--n_periods 1] [--out xxx.png] [--no-show]
 """
 import argparse
 import numpy as np
@@ -27,6 +27,12 @@ from mjlab.tasks.SQuRo_Slalom.mdp.path import (
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_Y, POLE_RADIUS, POLE_NUM
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX
+from mjlab.tasks.SQuRo_Slalom.mdp.command import FIXED_VEL, VEL_MIN
+
+
+EPISODE_LEN = 20.0          # episode 时长 (s, 与 env_cfg 一致)
+GAIT_LIST = [1.0, 1.5, 2.0]  # Phase1 步频采样范围展示
 
 
 # 与 path.py 内部 _arc_np 相同的单段弧生成 (用于画辅助圆/圆心)
@@ -104,6 +110,7 @@ def main():
     parser.add_argument("--spacing", type=float, default=0.15, help="杆间距 (m)")
     parser.add_argument("--n_periods", type=int, default=1, help="展示周期数")
     parser.add_argument("--out", type=str, default="slalom_lut_diagram.png", help="输出路径")
+    parser.add_argument("--no-show", action="store_true", help="不弹窗展示, 直接保存")
     args = parser.parse_args()
 
     spacing = args.spacing
@@ -117,11 +124,12 @@ def main():
     # 分段构造 (用于着色/圆心标注)
     segs = build_segments(spacing)
 
-    fig = plt.figure(figsize=(13, 9))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.6, 1.0], hspace=0.35, wspace=0.22)
+    fig = plt.figure(figsize=(15, 9))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1.6, 1.0], hspace=0.35, wspace=0.25)
     ax_path = fig.add_subplot(gs[0, :])
     ax_kappa = fig.add_subplot(gs[1, 0])
     ax_head = fig.add_subplot(gs[1, 1])
+    ax_s = fig.add_subplot(gs[1, 2])
 
     # ============ 主图: 路径构造 ============
     # 接近段
@@ -208,6 +216,30 @@ def main():
     ax_head.set_title("朝向沿弧长分布 (unwrapped)")
     ax_head.grid(True, alpha=0.3)
 
+    # ============ 子图: 弧长随时间推进 (期望速度驱动) ============
+    scale_phase1 = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX
+    s_period = float(arc[-1])
+    t_arr = np.linspace(0.0, EPISODE_LEN, 300)
+    for gait in GAIT_LIST:
+        vel = FIXED_VEL * gait * scale_phase1
+        s_arr = vel * t_arr - _INIT_DIST          # 起始偏移 = 接近段
+        ax_s.plot(t_arr, s_arr, linewidth=1.6,
+                  label=f"gait={gait:.1f}Hz  vel={vel:.4f}m/s")
+    # 周期边界
+    ax_s.axhline(0.0, color="green", linestyle="--", linewidth=0.8, label="路径起点 (s=0)")
+    for k in (1, 2, 3):
+        ax_s.axhline(k * s_period, color="gray", linestyle=":", linewidth=0.8)
+    ax_s.annotate(f"1 周期弧长={s_period:.3f}m", xy=(0.02, s_period * 1.03),
+                  fontsize=8, color="gray")
+    ax_s.set_xlabel("时间 t (s)")
+    ax_s.set_ylabel("弧长 s (m)")
+    ax_s.set_title(f"弧长随时间推进  s(t)=∫vel·dt  (episode {EPISODE_LEN:.0f}s)")
+    ax_s.grid(True, alpha=0.3)
+    ax_s.legend(fontsize=8, loc="upper left")
+
+    # 先展示, 再保存
+    if not args.no_show:
+        plt.show()
     plt.savefig(args.out, dpi=150, bbox_inches="tight")
     print(f"已保存: {args.out}")
     plt.close(fig)
