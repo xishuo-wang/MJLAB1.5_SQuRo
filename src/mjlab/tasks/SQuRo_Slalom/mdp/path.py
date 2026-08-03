@@ -16,6 +16,7 @@ H_BODY_HALF_LENGTH = 0.04       # H_body_Link 在XoY平面沿身体前后轴半�
 H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 在XoY平面左右方向半宽(m)
 BODY_REF_OFFSET = 0.04          # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
+_INIT_DIST = 0.05               # 初始直行接近段长度 (m): 机器人 X=-_INIT_DIST → 路径起点 (0,0)
 
 
 # 获取指定 body_link 的偏航角
@@ -56,16 +57,27 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     vel_cmd = cmd_term.command[:, 0]        # [N]
     t = env.episode_length_buf.float() * env.step_dt  # [N]
 
-    # 固定世界坐标系起点 — 与 reset_model 中的初始位置一致
+    # 接近段: 直行 (-_INIT_DIST, 0) → (0, 0), 之后圆弧从原点出发
+    total_dist = vel_cmd * t
+    in_approach = total_dist < _INIT_DIST
+    approach_x = -_INIT_DIST + total_dist
+    approach_y = torch.zeros_like(t)
+    approach_heading = torch.zeros_like(t)
+
+    arc_t = torch.clamp(t - _INIT_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
     start_heading = 0.0  # 物理前向 = world +X
     omega = curvature * vel_cmd
-    dtheta = omega * t
-    path_heading = start_heading + dtheta
+    dtheta = omega * arc_t
+    arc_heading = start_heading + dtheta
 
     # 弦长公式：chord = v·t·sinc(dθ/2π)
-    chord = vel_cmd * t * torch.sinc(dtheta / (2 * torch.pi))
-    x_ref = chord * torch.cos(start_heading + dtheta / 2)   # start_x = 0
-    y_ref = chord * torch.sin(start_heading + dtheta / 2)   # start_y = 0
+    chord = vel_cmd * arc_t * torch.sinc(dtheta / (2 * torch.pi))
+    arc_x = chord * torch.cos(start_heading + dtheta / 2)   # start_x = 0
+    arc_y = chord * torch.sin(start_heading + dtheta / 2)   # start_y = 0
+
+    x_ref = torch.where(in_approach, approach_x, arc_x)
+    y_ref = torch.where(in_approach, approach_y, arc_y)
+    path_heading = torch.where(in_approach, approach_heading, arc_heading)
 
     # 世界系期望速度（路径切线方向）
     vx_des = vel_cmd * torch.cos(path_heading)
@@ -180,9 +192,20 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     s_period = cache["period"]
 
     # 当前弧长 s = v·t mod period + 周期偏移(保证 x_ref 连续不跳变)
-    total_s = vel_cmd * t                        # [N]
-    num_periods = (total_s / s_period).floor().long()  # [N]
-    s = total_s - num_periods * s_period          # [N], = total_s % period
+    # 起始偏移 -_INIT_DIST: 前 _INIT_DIST 米为直行接近段 (机器人 X=-_INIT_DIST → LUT 起点 X=0)
+    total_s = vel_cmd * t - _INIT_DIST            # [N], 负值=接近段
+    in_approach = total_s < 0.0
+
+    # 接近段: 直行 (-_INIT_DIST, 0) → (0, 0), heading=0, κ=0
+    approach_dist = total_s + _INIT_DIST
+    approach_x = -_INIT_DIST + approach_dist
+    approach_y = torch.zeros_like(approach_dist)
+    approach_h = torch.zeros_like(approach_dist)
+    approach_k = torch.zeros_like(approach_dist)
+
+    s_pos = torch.clamp(total_s, min=0.0)         # [N], ≥0 进入 LUT
+    num_periods = (s_pos / s_period).floor().long()  # [N]
+    s = s_pos - num_periods * s_period            # [N], = s_pos % period
 
     # searchsorted 查找索引 + 线性插值
     idx = torch.searchsorted(arc_lut, s).clamp(1, len(arc_lut) - 1)  # [N]
@@ -192,17 +215,23 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
     frac = (s - s_prev) / (s_next - s_prev + 1e-12)  # [N]
     x_lut_val = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
-    y_ref = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
+    y_lut_val = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
+    h_lut_val = hd_lut[idx_prev]  # 分段常值 heading
+    kappa_lut = cache["kappa"]
+    k_lut_val = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
     # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing
-    x_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
-    path_heading = hd_lut[idx_prev]  # 分段常值 heading
+    x_lut_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
+
+    # 合成: 接近段用直线, LUT 段用周期路径
+    x_ref = torch.where(in_approach, approach_x, x_lut_ref)
+    y_ref = torch.where(in_approach, approach_y, y_lut_val)
+    path_heading = torch.where(in_approach, approach_h, h_lut_val)
+    kappa_ref = torch.where(in_approach, approach_k, k_lut_val)
 
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
 
     # 存储瞬时曲率供脊柱参考使用
-    kappa_lut = cache["kappa"]
-    kappa_ref = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
     env._path_kappa = kappa_ref  # type: ignore[attr-defined]
 
     return x_ref, y_ref, vx_des, vy_des, path_heading

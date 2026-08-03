@@ -1,5 +1,6 @@
 from __future__ import annotations
 import torch
+from .path import _INIT_DIST
 
 
 # 重置模型
@@ -13,7 +14,7 @@ def reset_model(env, env_ids):
     
     # 重置基座状态
     root_state = torch.zeros(n, 13, device=env.device)
-    root_state[:, 0] = 0.0        # x
+    root_state[:, 0] = -_INIT_DIST  # x (接近段起点, 之后直行进入路径原点)
     root_state[:, 1] = 0.0        # y
     root_state[:, 2] = 0.06       # z
     root_state[:, 3] = 0          # quat w
