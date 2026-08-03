@@ -8,8 +8,8 @@
   - κ(s) 与 heading(s) 沿弧长分布
 
 用法:
-  uv run python src/mjlab/scripts/plot_slalom_lut.py [--spacing 0.15]
-      [--n_periods 1] [--out xxx.png] [--no-show]
+  uv run python src/mjlab/scripts/plot_slalom_lut.py [--n_periods 1]
+      [--out xxx.png] [--no-show]
 """
 import argparse
 import numpy as np
@@ -33,6 +33,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.command import FIXED_VEL, VEL_MIN
 
 EPISODE_LEN = 20.0          # episode 时长 (s, 与 env_cfg 一致)
 GAIT_FREQ = 1.0             # Phase 1 使用的步频 (Hz, 文件开头统一定义)
+POLE_SPACING = 0.15         # 杆间距 (m, 文件开头统一定义; 课程范围 0.15~0.20)
 
 
 # 与 path.py 内部 _arc_np 相同的单段弧生成 (用于画辅助圆/圆心)
@@ -107,13 +108,12 @@ def build_segments(spacing, n_arc_pts=15):
 
 def main():
     parser = argparse.ArgumentParser(description="Phase1 绕杆 LUT 轨迹生成可视化")
-    parser.add_argument("--spacing", type=float, default=0.15, help="杆间距 (m)")
     parser.add_argument("--n_periods", type=int, default=1, help="展示周期数")
     parser.add_argument("--out", type=str, default="slalom_lut_diagram.png", help="输出路径")
     parser.add_argument("--no-show", action="store_true", help="不弹窗展示, 直接保存")
     args = parser.parse_args()
 
-    spacing = args.spacing
+    spacing = POLE_SPACING
     n_periods = args.n_periods
     r = _RMIN
 
