@@ -16,7 +16,42 @@ H_BODY_HALF_LENGTH = 0.04       # H_body_Link 在XoY平面沿身体前后轴半�
 H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 在XoY平面左右方向半宽(m)
 BODY_REF_OFFSET = 0.04          # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-_INIT_DIST = 0.02               # 初始直行接近段长度 (m): 机器人 X=-_INIT_DIST → 路径起点 (0,0)
+_INIT_DIST = 0.02               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
+
+
+# =========================================================================================
+# 接近段 (圆弧) — 从 LUT 起点 (0,0) 反推 s0=_INIT_DIST:
+#   正向接近段 = 平台(-K) + 过渡(-K→0), 终点 (0,0) κ=0 heading=0, 与 LUT 进过渡衔接
+_APPROACH_CACHE: dict = {}
+
+
+def _approach_rev_table(s0: float, tr: float) -> dict:
+    """反推接近段轨迹表: 从 (0,0) heading=0 反推 s0。
+    返回 {s, x, y, h, k}: 反推弧长 u∈[0,s0] 对应的路径 (反向)。
+    机器人正向接近段 = 反推表的正向 (从 u=s0 走向 u=0, 到 (0,0) heading=0)。
+    """
+    key = (round(s0, 6), round(tr, 6))
+    if key in _APPROACH_CACHE:
+        return _APPROACH_CACHE[key]
+    K = CURVATURE_TARGET
+    ds = 1e-4
+    n = max(2, int(s0 / ds))
+    u = np.linspace(0.0, s0, n, endpoint=False)
+    trp = min(s0, tr)
+    ku = np.where(u < trp, K * u / trp, K)     # 反向 κ: 过渡 0→+K, 平台 +K
+    h = np.cumsum(ku) * ds
+    x = -np.cumsum(np.cos(h)) * ds
+    y = -np.cumsum(np.sin(h)) * ds
+    tbl = {"s": u, "x": x, "y": y, "h": h, "k": ku}
+    _APPROACH_CACHE[key] = tbl
+    return tbl
+
+
+# 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
+def get_approach_start() -> tuple[float, float, float]:
+    tr = SMOOTH_VEL * SMOOTH_TIME
+    tbl = _approach_rev_table(_INIT_DIST, tr)
+    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
 
 
 # 获取指定 body_link 的偏航角
@@ -279,12 +314,21 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     total_s = vel_cmd * t - _INIT_DIST            # [N], 负值=接近段
     in_approach = total_s < 0.0
 
-    # 接近段: 直行 (-_INIT_DIST, 0) → (0, 0), heading=0, κ=0
-    approach_dist = total_s + _INIT_DIST
-    approach_x = -_INIT_DIST + approach_dist
-    approach_y = torch.zeros_like(approach_dist)
-    approach_h = torch.zeros_like(approach_dist)
-    approach_k = torch.zeros_like(approach_dist)
+    # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 从起点正向走 s0=_INIT_DIST 到 (0,0)
+    app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+    app_s = torch.tensor(app_tbl["s"], device=env.device, dtype=torch.float32)
+    app_x = torch.tensor(app_tbl["x"], device=env.device, dtype=torch.float32)
+    app_y = torch.tensor(app_tbl["y"], device=env.device, dtype=torch.float32)
+    app_h = torch.tensor(app_tbl["h"], device=env.device, dtype=torch.float32)
+    app_k = torch.tensor(app_tbl["k"], device=env.device, dtype=torch.float32)
+    u = (-total_s).clamp(min=0.0)                     # 机器人正向距 (0,0) 的弧长
+    idx = torch.searchsorted(app_s, u).clamp(1, len(app_s) - 1)
+    idx_p = idx - 1
+    frac = (u - app_s[idx_p]) / (app_s[idx] - app_s[idx_p] + 1e-12)
+    approach_x = app_x[idx_p] + frac * (app_x[idx] - app_x[idx_p])
+    approach_y = app_y[idx_p] + frac * (app_y[idx] - app_y[idx_p])
+    approach_h = app_h[idx_p] + frac * (app_h[idx] - app_h[idx_p])
+    approach_k = -(app_k[idx_p] + frac * (app_k[idx] - app_k[idx_p]))   # 正向 κ = -反推 κ
 
     s_pos = torch.clamp(total_s, min=0.0)         # [N], ≥0 进入 LUT
     num_periods = (s_pos / s_period).floor().long()  # [N]
@@ -305,7 +349,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing
     x_lut_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
 
-    # 合成: 接近段用直线, LUT 段用周期路径
+    # 合成: 接近段用圆弧 (反推表正向), LUT 段用周期路径
     x_ref = torch.where(in_approach, approach_x, x_lut_ref)
     y_ref = torch.where(in_approach, approach_y, y_lut_val)
     path_heading = torch.where(in_approach, approach_h, h_lut_val)

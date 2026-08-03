@@ -1,6 +1,8 @@
 from __future__ import annotations
+import math as _m
 import torch
-from .path import _INIT_DIST
+from .path import _INIT_DIST, get_approach_start
+from .curriculums import get_training_phase
 
 
 # 重置模型
@@ -12,14 +14,21 @@ def reset_model(env, env_ids):
     # 获取机器人实体
     robot_entity = env.scene.entities["robot"]
     
-    # 重置基座状态
+    # 重置基座状态: Phase 1 用接近段圆弧起点, Phase 0 用直行起点 (与期望轨迹一致)
     root_state = torch.zeros(n, 13, device=env.device)
-    root_state[:, 0] = -_INIT_DIST  # x (接近段起点, 之后直行进入路径原点)
-    root_state[:, 1] = 0.0          # y
-    root_state[:, 2] = 0.06         # z
-    root_state[:, 3] = 0            # quat w
-    root_state[:, 4] = -0.707107    # quat x  
-    root_state[:, 5] = -0.707107    # quat y
+    if get_training_phase(env.common_step_counter) == 1:
+        ax, ay, ah = get_approach_start()
+        c, s = _m.cos(ah / 2), _m.sin(ah / 2)
+        qx, qy = 0.70710678 * (s - c), -0.70710678 * (c + s)
+    else:
+        ax, ay = -_INIT_DIST, 0.0
+        qx, qy = -0.70710678, -0.70710678
+    root_state[:, 0] = ax         # x
+    root_state[:, 1] = ay         # y
+    root_state[:, 2] = 0.06       # z
+    root_state[:, 3] = 0          # quat w
+    root_state[:, 4] = qx        # quat x
+    root_state[:, 5] = qy        # quat y
     root_state[:, 6] = 0.0          # quat z
     
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
