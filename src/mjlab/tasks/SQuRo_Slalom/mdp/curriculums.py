@@ -5,7 +5,7 @@ _STEPS_PER_ITER = 24
 
 # 曲率常量 — CURVATURE_TARGET_MAX 用于 Phase 0 采样范围, CURVATURE_TARGET 用于绕杆弧
 CURVATURE_TARGET_MAX = 20.0    # Phase 0 课程曲率最大值
-CURVATURE_TARGET = 15.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
+CURVATURE_TARGET = 20.0        # Phase 1 绕杆弧曲率 (= 1/Rmin)
 Rmin = 1.0 / CURVATURE_TARGET  # 最小转弯半径
 
 # 两阶段训练
@@ -16,7 +16,7 @@ PHASE2_END_ITER = 8000       # iter 6000-8000: 绕杆训练
 
 # 绕杆阶段杆间距课程
 POLE_SPACING_START = 0.20    # 绕杆起始杆间距 (宽)
-POLE_SPACING_MIN = 0.15      # 绕杆最小杆间距 (≈2.25×Rmin)
+POLE_SPACING_MIN = 2 * Rmin      # 绕杆最小杆间距 (≈2.25×Rmin)
 
 # 步频常量 — Phase 0 每 episode 随机采样, Phase 1 固定
 GAIT_FREQ_MIN = 1.0          # Phase 0 步频采样下限
