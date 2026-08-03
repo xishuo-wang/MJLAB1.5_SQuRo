@@ -2,7 +2,7 @@ from __future__ import annotations
 import torch
 import numpy as np
 from mjlab.entity import Entity
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from .indices import _MODEL_INDICES
 from .curriculums import CURVATURE_TARGET, SMOOTH_TIME, SMOOTH_VEL
 if TYPE_CHECKING:
@@ -213,8 +213,8 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
 
 # =========================================================================================
 # 平滑 LUT 生成 — κ 曲线 (弧段 = 进过渡 + 平台 + 出过渡) 数值积分重建路径
-def _generate_slalom_lut_smooth_period(X: float, smooth_time: float = None,
-                                       vel: float = None):
+def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = None,
+                                       vel: Optional[float] = None):
     """平滑绕杆周期: 所有曲率跳变线性过渡 (时长 smooth_time, 弧长 vel×smooth_time)。
     无直行 (X ≤ 2×x_sw) 时同向弧段 (S2→S4, S5→S1) 直接连续, 不做 +20→0→+20 的 V 形过渡。
     返回 (arc, pts_x, pts_y, headings, kappa), 与原始 LUT 格式一致。
@@ -274,7 +274,7 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: float = None,
 
 
 # 平滑后名义弧段 x 位移 (有直行模式 S1: 进+平台+出), 用于杆 Y 定位
-def get_smooth_x_sw(smooth_time: float = None, vel: float = None) -> float:
+def get_smooth_x_sw(smooth_time: Optional[float] = None, vel: Optional[float] = None) -> float:
     t = SMOOTH_TIME if smooth_time is None else smooth_time
     v = SMOOTH_VEL if vel is None else vel
     K = CURVATURE_TARGET
