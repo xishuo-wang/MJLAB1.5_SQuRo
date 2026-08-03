@@ -14,7 +14,7 @@ from .curriculums import (
     GAIT_FREQ_PHASE1,
     get_training_phase,
 )
-from .pole import POLE_NUM, update_pole_visibility
+from .pole import update_pole_visibility
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
