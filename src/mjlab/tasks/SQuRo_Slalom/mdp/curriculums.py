@@ -25,7 +25,7 @@ GAIT_FREQ_PHASE1 = 1.0              # Phase 1 固定步频
 
 
 # 奖励权重阶段
-_STAGES = (0, 2000, 4000)
+_STAGES = (0, 2000, 4000, 6000)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
@@ -51,7 +51,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10, 20),
+    "sigma_corridor":           (10, 20, 20, 50),
     "sigma_track_head":         (20,),
 }
 
