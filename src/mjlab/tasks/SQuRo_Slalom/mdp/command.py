@@ -74,6 +74,7 @@ class SlalomCommand(CommandTerm):
         self.fixed_height_h = cfg.fixed_height_h
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
+        self.fixed_pole_spacing = cfg.fixed_pole_spacing
 
         # Phase 1 每 episode 采样的杆间距 (共享值, 与 Phase 0 κ 机制一致)
         self._shared_pole_spacing = POLE_SPACING_START
