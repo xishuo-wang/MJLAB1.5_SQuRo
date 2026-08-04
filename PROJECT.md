@@ -38,7 +38,7 @@ H_spine1_joint初始为俯仰自由度（初始旋转轴平行于世界坐标系
 
 **世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-_INIT_DIST(=0.02, path.py), 面朝 +X。
 
-**起点按阶段**：Phase 0 为直行接近段起点 `(-_INIT_DIST, 0)` 朝向 +X；Phase 1 为圆弧接近段起点 `(-0.0199, -0.0013)` 朝向 +11.4°（由平滑 LUT 反推确定）。
+**起点按阶段**：两阶段均为圆弧接近段起点。Phase 0 由 `get_phase0_approach` 按本 episode 曲率 κ 动态确定（events.py 先置直行起点，command.py reset 时按圆弧重写）；Phase 1 为固定圆弧接近段起点 `(-0.0199, -0.0013)` 朝向 +11.4°（由 `_approach_rev_table` 反推确定）。
 
 **局部**：body+X ≠ 物理前向，F/H body 的 body+X 指向 world ±Y：
 
@@ -151,7 +151,7 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 
 ### 接近段圆弧
 
-从 LUT 起点 `(0,0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(0,0)` κ=0、heading=0，与 LUT 进过渡衔接。机器人起点/姿态由 `get_approach_start`（Phase 1）或 `get_arc_approach_start_xyh`（Phase 0，随 κ 动态）确定。
+从 LUT 起点 `(0,0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(0,0)` κ=0、heading=0，与 LUT 进过渡衔接。机器人起点/姿态由 `get_approach_start` / `get_phase1_approach`（Phase 1）或 `get_phase0_approach`（Phase 0，随 κ 动态）确定。
 
 
 ## 预计算表 (mdp/reference.py)
@@ -170,18 +170,17 @@ Phase 0: κ=静态命令值; Phase 1: κ=`get_path_curvature()` 动态读取 LUT
 腿部参考由 CSV (Trot_F/H) + 逆运动学生成，26 曲率×50 相位×14 关节预计算表，运行时按曲率插值。内侧腿 Y 轨迹按 `1-|κ|/κ_max` 缩放实现差速（κ=0 全步幅, κ=κ_max 全停）。
 
 
-## 奖励函数 (mdp/reward.py)
+## 奖励函数 (mdp/rewards.py)
 
 | 奖励项 | 功能 |
 |--------|------|
 | mimic_pos/vel | 关节位置/速度模仿 (腿+脊柱+颈分σ) |
 | height | 身体高度跟踪 |
-| track_vel | body-frame 前进速度 |
-| track_omg/head | 角速度/朝向跟踪 |
+| track_vel | body-frame 前进速度 (含侧向/垂向 vyz) |
+| track_head | 朝向跟踪 (track_omg 已停用, 见 env_cfg) |
 | corridor | 身体包络走廊约束 (核心) |
 | action_L1/L2 | 动作平滑性 |
 | energy | 能耗惩罚 |
-| collision | 虚拟碰撞 (躯干+腿 vs 杆) |
 
 ### 走廊一致性奖励
 
