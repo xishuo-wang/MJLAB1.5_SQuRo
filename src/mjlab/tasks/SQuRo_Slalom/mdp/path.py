@@ -71,6 +71,13 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
     return tbl
 
 
+# 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
+def get_approach_start() -> tuple[float, float, float]:
+    tr = SMOOTH_VEL * SMOOTH_TIME
+    tbl = _approach_rev_table(_INIT_DIST, tr)
+    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
+
+
 
 # Phase 0 圆弧接近段
 def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

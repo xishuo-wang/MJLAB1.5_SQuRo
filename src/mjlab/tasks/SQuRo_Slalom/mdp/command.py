@@ -15,7 +15,9 @@ from .curriculums import (
     GAIT_FREQ_PHASE1,
     PHASE1_MID_ITER,
     _STEPS_PER_ITER,
+    POLE_SPACING_START,
     get_curriculum_pole_spacing,
+    get_pole_spacing_range,
     get_training_phase,
 )
 from .pole import update_pole_visibility
@@ -73,6 +75,9 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
 
+        # Phase 1 每 episode 采样的杆间距 (共享值, 与 Phase 0 κ 机制一致)
+        self._shared_pole_spacing = POLE_SPACING_START
+
         # 每 episode 共享步频 (Phase 0 随机采样, Phase 1 固定)
         self._shared_gait_freq = GAIT_FREQ_PHASE1
 
@@ -106,11 +111,10 @@ class SlalomCommand(CommandTerm):
         override = getattr(self.cfg, "fixed_pole_spacing", None)
         if override is not None:
             return float(override)
-        raw = get_curriculum_pole_spacing(self._env.common_step_counter)
-        # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 与 vel 解耦, 保证周期位移匹配)
         if self.slalom_mode_active:
-            return get_effective_pole_spacing(raw)
-        return raw
+            # Phase 1: 每 episode 采样值 + 平滑有效间距 (不兼容区间 → 无直行最小间距)
+            return get_effective_pole_spacing(self._shared_pole_spacing)
+        return get_curriculum_pole_spacing(self._env.common_step_counter)
 
 
     def _get_velocity(self, n: int) -> torch.Tensor:
@@ -179,6 +183,12 @@ class SlalomCommand(CommandTerm):
         else:
             # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
             self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
+            # 杆间距每 episode 在 [下限, POLE_SPACING_MAX] 内随机采样 (与 Phase 0 κ 机制一致)
+            if self.fixed_pole_spacing is not None:
+                self._shared_pole_spacing = float(self.fixed_pole_spacing)
+            else:
+                sp_range = get_pole_spacing_range(current_step)
+                self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
             else:
