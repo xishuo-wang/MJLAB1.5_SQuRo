@@ -3,7 +3,6 @@ import torch
 import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
-from .curriculums import CURVATURE_TARGET
 from .path import get_smooth_x_sw
 
 
@@ -13,8 +12,8 @@ POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
 POLE_NUM = 12               # 杆数量 (覆盖 2Hz@20s 全程: 0.15m 间距 → 0~1.65m)
 
 
+# 平滑后的杆心 Y 坐标
 def _smooth_pole_y() -> float:
-    """杆心 Y = -平滑后弧段 x 位移 (平滑路径的等效圆心, 即路径第一弧底部)"""
     return -get_smooth_x_sw()
 
 
@@ -43,10 +42,7 @@ class PoleEntity(Entity):
         self._build_geometry()
 
     def _build_geometry(self):
-        body = self._spec.worldbody.add_body(
-            name=self.cfg.name,
-            pos=self.cfg.position,
-        )
+        body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position,)
         self._geom_ref = body.add_geom(
             name=f"{self.cfg.name}_geom",
             pos=(0, 0, self.cfg.half_height),  # 圆柱中心离地半个高度
