@@ -15,18 +15,19 @@ from .curriculums import (
     GAIT_FREQ_PHASE1,
     PHASE1_MID_ITER,
     _STEPS_PER_ITER,
-    POLE_SPACING_START,
+    SMOOTH_TIME,
+    SMOOTH_VEL,
     get_curriculum_pole_spacing,
-    get_pole_spacing_range,
     get_training_phase,
 )
 from .pole import update_pole_visibility
 from .path import (
     _INIT_DIST,
+    _approach_rev_table,
     get_path_curvature,
     get_phase0_approach,
     get_effective_pole_spacing,
-    _generate_slalom_lut_one_period,
+    _generate_slalom_lut_smooth_period,
 )
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -76,9 +77,6 @@ class SlalomCommand(CommandTerm):
         self.fixed_curvature = cfg.fixed_curvature
         self.fixed_pole_spacing = cfg.fixed_pole_spacing
 
-        # Phase 1 每 episode 采样的杆间距 (共享值, 与 Phase 0 κ 机制一致)
-        self._shared_pole_spacing = POLE_SPACING_START
-
         # 每 episode 共享步频 (Phase 0 随机采样, Phase 1 固定)
         self._shared_gait_freq = GAIT_FREQ_PHASE1
 
@@ -112,10 +110,11 @@ class SlalomCommand(CommandTerm):
         override = getattr(self.cfg, "fixed_pole_spacing", None)
         if override is not None:
             return float(override)
+        raw = get_curriculum_pole_spacing(self._env.common_step_counter)
+        # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 与 vel 解耦, 保证周期位移匹配)
         if self.slalom_mode_active:
-            # Phase 1: 每 episode 采样值 + 平滑有效间距 (不兼容区间 → 无直行最小间距)
-            return get_effective_pole_spacing(self._shared_pole_spacing)
-        return get_curriculum_pole_spacing(self._env.common_step_counter)
+            return get_effective_pole_spacing(raw)
+        return raw
 
 
     def _get_velocity(self, n: int) -> torch.Tensor:
@@ -184,12 +183,6 @@ class SlalomCommand(CommandTerm):
         else:
             # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
             self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
-            # 杆间距每 episode 在 [下限, POLE_SPACING_MAX] 内随机采样 (与 Phase 0 κ 机制一致)
-            if self.fixed_pole_spacing is not None:
-                self._shared_pole_spacing = float(self.fixed_pole_spacing)
-            else:
-                sp_range = get_pole_spacing_range(current_step)
-                self._shared_pole_spacing = float(sp_range[0] + torch.rand(1).item() * (sp_range[1] - sp_range[0]))
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
             else:
@@ -286,22 +279,23 @@ class SlalomCommand(CommandTerm):
             visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}",)
 
 
-    # 绘制绕杆轨迹：圆弧拼接路径
+    # 绘制绕杆轨迹：平滑 LUT 路径 (与实际期望轨迹一致)
     def _draw_slalom_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         spacing = self.active_pole_spacing
         start = self._start_positions[batch].cpu().numpy()
         z = start[2] + z_offset
 
-        _, xs, ys, _, _ = _generate_slalom_lut_one_period(spacing, n_arc_pts=15)
+        _, xs, ys, _, _ = _generate_slalom_lut_smooth_period(spacing)
         period_len = np.array(xs[-1])
         n_periods = 3
 
         radius = 0.006
-        # 接近段 (长度 = _INIT_DIST, 与 path.py / events.py 一致)
-        n_app = 5
-        for i in range(n_app + 1):
-            frac = i / n_app
-            pt = np.array([-_INIT_DIST + frac * _INIT_DIST, 0.0, z])
+        # 接近段 (圆弧: 平台-K + 过渡-K→0, 与实际期望轨迹一致)
+        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+        n_app = len(app_tbl["x"])
+        step = max(1, n_app // 5)
+        for i in range(0, n_app, step):
+            pt = np.array([app_tbl["x"][i], app_tbl["y"][i], z])
             visualizer.add_sphere(center=pt, radius=radius, color=(0.5, 0.8, 0.5, 0.5), label=f"sl_ap_{i}")
 
         # 周期路径 (世界坐标, 与期望轨迹一致)

@@ -102,7 +102,7 @@ iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
-Phase 1: 平滑 LUT 路径, 杆间距每 episode 随机采样(下限 0.20→平滑无直行最小间距 0.1009 课程缩小, 上限 0.25 固定), 步频 1~2Hz 随机, 杆可见(无碰撞)
+Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 0.10 线性缩小, iter 4000→6000), 步频 1~2Hz 随机, 杆可见(无碰撞)
 ```
 
 | 常量 | 值 | 用途 |
@@ -112,8 +112,8 @@ Phase 1: 平滑 LUT 路径, 杆间距每 episode 随机采样(下限 0.20→平�
 | CURVATURE_TARGET | 20.0 | Phase 1 绕杆弧曲率 (= 1/Rmin, 与 CURVATURE_TARGET_MAX 相同) |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
 | GAIT_FREQ_PHASE1 | 1.0 | 默认步频 (Phase 1 实际也用 1~2Hz 随机采样) |
-| POLE_SPACING_START | 0.20 | Phase 1 间距下限起始值 (iter=4000) |
-| POLE_SPACING_MAX | 0.25 | Phase 1 间距上限 (固定) |
+| POLE_SPACING_START | 0.20 | Phase 1 起始杆间距 (iter 4000 前固定) |
+| POLE_SPACING_MIN | 0.10 | Phase 1 最小杆间距 (= 2Rmin, iter 6000) |
 | SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
 | SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
 

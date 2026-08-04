@@ -17,7 +17,7 @@ SMOOTH_TIME = 1.0                   # 单段过渡时间 (s)，弧段间曲率�
 SMOOTH_VEL = 0.025                  # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
 
 POLE_SPACING_START = 0.20           # 绕杆起始杆间距 (宽)
-POLE_SPACING_MAX = 0.25             # 绕杆杆间距采样上限 (固定)
+POLE_SPACING_MIN = 2 * Rmin         # 绕杆最小杆间距 (= 2Rmin = 0.10)
 
 GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
 GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
@@ -61,31 +61,13 @@ def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
-# 平滑无直行最小间距 = 2×x_sw_half (依赖平滑参数, 动态计算避免循环导入)
-def _smooth_min_spacing() -> float:
-    from .path import _get_smooth_xsw   # 函数内导入避免循环 (curriculums ← path)
-    tr = SMOOTH_VEL * SMOOTH_TIME
-    x_sw_half, _ = _get_smooth_xsw(tr)
-    return 2 * x_sw_half
-
-
-# 获取杆间距采样范围 — 上限固定 POLE_SPACING_MAX, 下限 0.20 → 平滑无直行最小间距 (iter 4000→6000)
-def get_pole_spacing_range(step_counter: int) -> tuple[float, float]:
-    iter_num = step_counter // _STEPS_PER_ITER
-    min_sp = _smooth_min_spacing()
-    if iter_num < PHASE1_END_ITER:
-        low = POLE_SPACING_START
-    else:
-        progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_MID_ITER - PHASE1_END_ITER))
-        low = POLE_SPACING_START - progress * (POLE_SPACING_START - min_sp)
-        low = max(low, min_sp)
-    return (low, POLE_SPACING_MAX)
-
-
-# 获取杆间距 (确定性中值, 用于回放/可视化默认)
+# 获取杆间距 (确定性课程: iter 4000 前固定 0.20, 之后线性缩小至最小间距)
 def get_curriculum_pole_spacing(step_counter: int) -> float:
-    low, high = get_pole_spacing_range(step_counter)
-    return (low + high) / 2
+    iter_num = step_counter // _STEPS_PER_ITER
+    if iter_num < PHASE1_END_ITER:
+        return POLE_SPACING_START
+    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_MID_ITER - PHASE1_END_ITER))
+    return POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
 
 
 # 奖励权重课程
