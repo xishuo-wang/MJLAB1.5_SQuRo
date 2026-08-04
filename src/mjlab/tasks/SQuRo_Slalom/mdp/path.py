@@ -249,8 +249,9 @@ def _get_smooth_xsw(tr: float) -> tuple[float, float]:
 
 
 # 平滑模式下的有效杆间距: 不兼容区间 (2×x_sw_half, 2×x_sw_full) → 无直行最小间距
-def get_effective_pole_spacing(spacing: float, vel: float) -> float:
-    tr = vel * SMOOTH_TIME
+# 平滑弧长固定 (与 vel 解耦): tr = SMOOTH_VEL × SMOOTH_TIME, 保证任意步频下几何一致
+def get_effective_pole_spacing(spacing: float) -> float:
+    tr = SMOOTH_VEL * SMOOTH_TIME
     x_sw_half, x_sw_full = _get_smooth_xsw(tr)
     min_sp = 2 * x_sw_half
     if spacing <= min_sp + 1e-6:
@@ -328,15 +329,13 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     dt = env.step_dt
     t = env.episode_length_buf.float() * dt         # [N]
 
-    # 首次调用或杆间距/速度变化时重建 LUT (平滑弧长依赖速度)
+    # 首次调用或杆间距变化时重建 LUT (平滑弧长固定, 与 vel 解耦)
     cache = getattr(env, "_slalom_lut_cache", None)
-    vel0 = getattr(env, "_slalom_vel_scalar", SMOOTH_VEL)   # command 缓存的标量, 避免每步同步
-    if (cache is None or cache["spacing"] != pole_spacing or cache["vel"] != vel0):
-        arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_smooth_period(pole_spacing, vel=vel0)
+    if cache is None or cache["spacing"] != pole_spacing:
+        arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_smooth_period(pole_spacing)
         dev = env.device
         cache = {
             "spacing": pole_spacing,
-            "vel": vel0,
             "arc": torch.tensor(arc_np, device=dev, dtype=torch.float32),
             "x": torch.tensor(xs_np, device=dev, dtype=torch.float32),
             "y": torch.tensor(ys_np, device=dev, dtype=torch.float32),

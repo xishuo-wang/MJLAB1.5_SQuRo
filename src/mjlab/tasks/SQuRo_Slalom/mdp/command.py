@@ -13,7 +13,6 @@ from .curriculums import (
     GAIT_FREQ_MIN,
     GAIT_FREQ_MAX,
     GAIT_FREQ_PHASE1,
-    SMOOTH_VEL,
     get_training_phase,
 )
 from .pole import update_pole_visibility
@@ -101,11 +100,10 @@ class SlalomCommand(CommandTerm):
             return float(override)
         from .curriculums import get_curriculum_pole_spacing
         raw = get_curriculum_pole_spacing(self._env.common_step_counter)
-        # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 保证周期位移匹配)
+        # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 与 vel 解耦, 保证周期位移匹配)
         if self.slalom_mode_active:
             from .path import get_effective_pole_spacing
-            vel = float(getattr(self._env, "_slalom_vel_scalar", SMOOTH_VEL))
-            return get_effective_pole_spacing(raw, vel)
+            return get_effective_pole_spacing(raw)
         return raw
 
 
