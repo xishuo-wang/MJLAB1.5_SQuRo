@@ -21,10 +21,10 @@ from .curriculums import (
 from .pole import update_pole_visibility
 from .path import (
     _INIT_DIST,
-    _generate_slalom_lut_one_period,
+    get_path_curvature,
     get_arc_approach_start_xyh,
     get_effective_pole_spacing,
-    get_path_curvature,
+    _generate_slalom_lut_one_period,
 )
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -272,11 +272,7 @@ class SlalomCommand(CommandTerm):
                 x_i = start[0] + R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
                 y_i = start[1] - R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
             pt = np.array([x_i, y_i, start[2] + z_offset])
-            visualizer.add_sphere(
-                center=pt, radius=radius,
-                color=(1.0, 0.6, 0.0, 0.6),
-                label=f"arc_{i}",
-            )
+            visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}",)
 
 
     # 绘制绕杆轨迹：圆弧拼接路径
@@ -302,7 +298,6 @@ class SlalomCommand(CommandTerm):
             offset_x = k * period_len
             for i in range(len(xs)):
                 pt = np.array([xs[i] + offset_x, ys[i], z])
-                # 交替颜色区分周期
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
                 visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}",)
 
