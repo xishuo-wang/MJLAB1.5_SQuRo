@@ -6,8 +6,8 @@ import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .path import get_path_curvature
-from .curriculums import CURVATURE_TARGET_MAX
 from .indices import resolve_model_indices
+from .curriculums import CURVATURE_TARGET_MAX
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -111,7 +111,7 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
     for i, abs_k in enumerate(_CURVATURE_BINS):
-        scale_inner = 1.0 - (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX   # 内侧腿侧向缩放因子（κ=0 → scale=1 全步幅, |κ|=κ_max → scale=0）
+        scale_inner = 1.0 - (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX
 
         # 左腿（FL, HL）为内侧，缩放其 Y_mean
         y_fL = y_f_t * scale_inner
@@ -232,7 +232,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     t = (abs_k - k0) / (k1 - k0 + 1e-12)  # 插值因子，[0,1]
 
     # pos_table: [_NUM_CURV, 50, 12], phase_indices: [N]
-    # 使用高级索引: pos_table[idx, phase_indices] -> [N,12]
     pos0 = _pos_table[idx, phase_indices]      # [N,12]
     pos1 = _pos_table[idx + 1, phase_indices]  # [N,12]
     vel0 = _vel_table[idx, phase_indices]      # [N,12]
@@ -276,7 +275,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos[:, 3] = -0.3                    # neck_pitch
     ref_pos[:, 8] = -0.65 * abs_k_norm      # h_spine1 始终 ≤0, |κ|=max → -0.6
     ref_pos[:, 9] = -0.7 * k_norm           # h_body κ=-max → +0.7, κ=+max → -0.7
-
+    ref_vel[:, 3] = 0.0
     # 推进相位
     env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
 
