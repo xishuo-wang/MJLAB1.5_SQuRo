@@ -71,6 +71,7 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
     return tbl
 
 
+
 # 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
 def get_approach_start() -> tuple[float, float, float]:
     tr = SMOOTH_VEL * SMOOTH_TIME
@@ -262,6 +263,7 @@ def get_effective_pole_spacing(spacing: float) -> float:
     if spacing >= 2 * x_sw_full - 1e-6:
         return spacing                      # 有直行 (含边界)
     return min_sp
+
 
 
 def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = None, vel: Optional[float] = None):
