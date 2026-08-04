@@ -4,9 +4,10 @@ import numpy as np
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, Optional
 from .indices import _MODEL_INDICES
-from .curriculums import CURVATURE_TARGET, SMOOTH_TIME, SMOOTH_VEL
+from .curriculums import CURVATURE_TARGET, SMOOTH_TIME, SMOOTH_VEL, Rmin
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
 
 
 # SQuRo 身体尺寸参数
@@ -19,17 +20,40 @@ CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + �
 _INIT_DIST = 0.02               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
 
 
-# =========================================================================================
-# 接近段 (圆弧) — 从 LUT 起点 (0,0) 反推 s0=_INIT_DIST:
-#   正向接近段 = 平台(-K) + 过渡(-K→0), 终点 (0,0) κ=0 heading=0, 与 LUT 进过渡衔接
+
 _APPROACH_CACHE: dict = {}
+_SMOOTH_XSW_CACHE: dict = {}
 
 
+
+# 获取指定 body_link 的偏航角
+def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    if body_id is None:
+        quat = asset.data.root_link_quat_w
+    else:
+        quat = asset.data.body_link_quat_w[:, body_id]
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    sin_h = 2.0 * (w * z + x * y)
+    cos_h = 1.0 - 2.0 * (y * y + z * z)
+    return torch.atan2(sin_h, cos_h)
+
+
+
+# F_body_Link 物理前向 heading（body+X ≠ 物理前向，需减 π/2）
+def get_f_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    return get_body_heading(env, _MODEL_INDICES.f_body_id) - (torch.pi / 2)
+
+
+
+# H_body_Link 物理前向 heading（body+X → world -Y，需加 π/2 修正）
+def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
+
+
+
+# 反推接近段轨迹表
 def _approach_rev_table(s0: float, tr: float) -> dict:
-    """反推接近段轨迹表: 从 (0,0) heading=0 反推 s0。
-    返回 {s, x, y, h, k}: 反推弧长 u∈[0,s0] 对应的路径 (反向)。
-    机器人正向接近段 = 反推表的正向 (从 u=s0 走向 u=0, 到 (0,0) heading=0)。
-    """
     key = (round(s0, 6), round(tr, 6))
     if key in _APPROACH_CACHE:
         return _APPROACH_CACHE[key]
@@ -47,16 +71,9 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
     return tbl
 
 
-# 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
-def get_approach_start() -> tuple[float, float, float]:
-    tr = SMOOTH_VEL * SMOOTH_TIME
-    tbl = _approach_rev_table(_INIT_DIST, tr)
-    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
 
-
-# Phase 0 圆弧接近段: 从 (0,0) 反推 s0, κ=curvature 恒定 (解析解, 向量化)
-#   x(u) = -sin(k·u)/k, y(u) = (1-cos(k·u))/k, h(u) = -k·u  (u=距(0,0)弧长)
-def get_arc_approach_start_xyh(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+# Phase 0 圆弧接近段
+def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     s0 = _INIT_DIST
     mask = torch.abs(k) > 1e-6
     k_s = torch.where(mask, k, torch.ones_like(k))
@@ -66,27 +83,13 @@ def get_arc_approach_start_xyh(k: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
     return x, y, h
 
 
-# 获取指定 body_link 的偏航角
-def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    if body_id is None:
-        quat = asset.data.root_link_quat_w
-    else:
-        quat = asset.data.body_link_quat_w[:, body_id]
-    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    sin_h = 2.0 * (w * z + x * y)
-    cos_h = 1.0 - 2.0 * (y * y + z * z)
-    return torch.atan2(sin_h, cos_h)
 
+# 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
+def get_phase1_approach() -> tuple[float, float, float]:
+    tr = SMOOTH_VEL * SMOOTH_TIME
+    tbl = _approach_rev_table(_INIT_DIST, tr)
+    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
 
-# F_body_Link 物理前向 heading（body+X ≠ 物理前向，需减 π/2）
-def get_f_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_heading(env, _MODEL_INDICES.f_body_id) - (torch.pi / 2)
-
-
-# H_body_Link 物理前向 heading（body+X → world -Y，需加 π/2 修正）
-def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
 # 路径参考调度 — 根据训练阶段自动选择圆弧或绕杆路径
@@ -95,6 +98,7 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
     if cmd_term.slalom_mode_active:  # type: ignore[union-attr]
         return compute_slalom_path_ref(env)
     return compute_arc_path_ref(env)
+
 
 
 # 路径参考计算 — 基元阶段：恒定曲率圆弧
@@ -136,11 +140,8 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     return x_ref, y_ref, vx_des, vy_des, path_heading
 
 
-# =========================================================================================
+
 # 绕杆路径查找表（LUT）— 使用圆弧拼接方式，与 slalom_path_viz.py 逻辑一致
-_RMIN = 1.0 / CURVATURE_TARGET      # 最小转弯半径 (= 1/κ_arc)
-
-
 def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
     def _arc_np(start, end, r, clockwise, steps=n_arc_pts):
         start = np.asarray(start, dtype=np.float64)
@@ -161,7 +162,7 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
         theta = np.linspace(a_s, a_e, steps)
         return center[0] + r * np.cos(theta), center[1] + r * np.sin(theta)
 
-    r = _RMIN
+    r = Rmin
     x0, y0 = 0.0, 0.0
     pts_x, pts_y = [x0], [y0]
 
@@ -211,13 +212,9 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
     return arc, pts_x, pts_y, headings, kappa_vals
 
 
-# =========================================================================================
-# 平滑 LUT 生成 — κ 曲线 (弧段 = 进过渡 + 平台 + 出过渡) 数值积分重建路径
-_SMOOTH_XSW_CACHE: dict = {}
 
-
+# 积分 S1 弧段, 返回结束处 x 位移 (κ 首次到 0)
 def _measure_s1_xsw(segs, ds=1e-4) -> float:
-    """积分 S1 弧段, 返回结束处 x 位移 (κ 首次到 0)"""
     s_pts, k_pts, s = [], [], 0.0
     for L, k0, k1 in segs:
         n = max(2, int(L / ds))
@@ -231,15 +228,14 @@ def _measure_s1_xsw(segs, ds=1e-4) -> float:
     return float(np.sum(np.cos(h)) * ds)
 
 
+
+# 返回 (x_sw_half, x_sw_full) (按过渡弧长缓存)
 def _get_smooth_xsw(tr: float) -> tuple[float, float]:
-    """返回 (x_sw_half, x_sw_full) (按过渡弧长缓存):
-    x_sw_half = 无直行模式 S1 (平台half+出) 的 x 位移
-    x_sw_full = 有直行模式 S1 (进+平台+出) 的 x 位移"""
     key = round(tr, 6)
     if key in _SMOOTH_XSW_CACHE:
         return _SMOOTH_XSW_CACHE[key]
     K = CURVATURE_TARGET
-    L90 = np.pi / 2 * _RMIN
+    L90 = np.pi / 2 * Rmin
     platform = L90 - tr
     platform_half = L90 - tr / 2
     x_sw_half = _measure_s1_xsw([(platform_half, -K, -K), (tr, -K, 0.0)])
@@ -248,21 +244,16 @@ def _get_smooth_xsw(tr: float) -> tuple[float, float]:
     return x_sw_half, x_sw_full
 
 
+
 # 平滑模式下的有效杆间距: 不兼容区间 (2×x_sw_half, 2×x_sw_full) → 无直行最小间距
-# 平滑弧长固定 (与 vel 解耦): tr = SMOOTH_VEL × SMOOTH_TIME, 保证任意步频下几何一致
 def get_effective_pole_spacing(spacing: float) -> float:
     tr = SMOOTH_VEL * SMOOTH_TIME
     x_sw_half, x_sw_full = _get_smooth_xsw(tr)
     min_sp = 2 * x_sw_half
     if spacing <= min_sp + 1e-6:
-        if spacing < min_sp - 1e-6:
-            print(f"[WARN] spacing={spacing:.4f} 低于平滑最小间距 {min_sp:.4f}, "
-                  f"采用无直行模式, 有效间距={min_sp:.4f}")
         return min_sp                       # 无直行 (同向连续)
     if spacing >= 2 * x_sw_full - 1e-6:
         return spacing                      # 有直行 (含边界)
-    print(f"[WARN] spacing={spacing:.4f} 处于平滑不兼容区间 ({min_sp:.4f}, {2*x_sw_full:.4f}), "
-          f"采用无直行模式, 有效间距={min_sp:.4f}")
     return min_sp
 
 
@@ -271,7 +262,7 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
     v = SMOOTH_VEL if vel is None else vel
     K = CURVATURE_TARGET
     tr = v * t
-    L90 = np.pi / 2 * _RMIN
+    L90 = np.pi / 2 * Rmin
     platform = L90 - tr             # 全过渡弧段平台 (含进出过渡各 tr)
     platform_half = L90 - tr / 2    # 半过渡弧段平台 (仅单侧过渡)
 
@@ -313,12 +304,14 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
     return integrate(segs)
 
 
+
 # 平滑后名义弧段 x 位移 (有直行模式 S1: 进+平台+出), 用于杆 Y 定位
 def get_smooth_x_sw(smooth_time: Optional[float] = None, vel: Optional[float] = None) -> float:
     t = SMOOTH_TIME if smooth_time is None else smooth_time
     v = SMOOTH_VEL if vel is None else vel
     _, x_sw_full = _get_smooth_xsw(v * t)
     return float(x_sw_full)
+
 
 
 # 路径参考计算 — 绕杆阶段：圆弧拼接路径（LUT 查表）
@@ -410,6 +403,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     return x_ref, y_ref, vx_des, vy_des, path_heading
 
 
+
 # 获取当前路径瞬时曲率 κ(t) — Phase 0 返回静态命令值, Phase 1 返回 LUT 插值
 def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["slalom_cmd"]
@@ -418,7 +412,8 @@ def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return getattr(env, "_path_kappa", cmd_term.command[:, 4])  # type: ignore[union-attr]
 
 
-# 走廊超额计算 — 纯数学函数，不依赖 env
+
+# 走廊超额计算
 def compute_corridor_excess(
     body_pos_xy: torch.Tensor,     # [N, 2] 身体中心在投影平面上的位置
     body_heading: torch.Tensor,    # [N]    身体物理前向朝向

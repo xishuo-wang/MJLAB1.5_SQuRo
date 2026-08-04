@@ -22,7 +22,7 @@ from .pole import update_pole_visibility
 from .path import (
     _INIT_DIST,
     get_path_curvature,
-    get_arc_approach_start_xyh,
+    get_phase0_approach,
     get_effective_pole_spacing,
     _generate_slalom_lut_one_period,
 )
@@ -166,7 +166,7 @@ class SlalomCommand(CommandTerm):
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
             # 更新机器人初始位置/姿态: 接近段圆弧起点 (匹配本 episode 曲率)
             if n > 0:
-                ax, ay, ah = get_arc_approach_start_xyh(self.curvature_command[env_ids])
+                ax, ay, ah = get_phase0_approach(self.curvature_command[env_ids])
                 root = torch.zeros(n, 13, device=self.device)
                 root[:, 0] = ax
                 root[:, 1] = ay
