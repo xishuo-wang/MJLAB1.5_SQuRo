@@ -4,6 +4,7 @@ import mujoco
 from dataclasses import dataclass
 from mjlab.entity import Entity, EntityCfg
 from .curriculums import CURVATURE_TARGET
+from .path import get_smooth_x_sw
 
 
 # 杆几何常量
@@ -14,7 +15,6 @@ POLE_NUM = 12               # 杆数量 (覆盖 2Hz@20s 全程: 0.15m 间距 →
 
 def _smooth_pole_y() -> float:
     """杆心 Y = -平滑后弧段 x 位移 (平滑路径的等效圆心, 即路径第一弧底部)"""
-    from .path import get_smooth_x_sw   # 延迟导入避免循环
     return -get_smooth_x_sw()
 
 

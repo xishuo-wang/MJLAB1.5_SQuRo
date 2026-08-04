@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
 from .path import compute_path_ref, get_f_body_physical_heading
+from .reference import get_reference_joint_state
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -65,14 +66,12 @@ def base_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_
 
 # 参考关节位置
 def ref_joint_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    from .reference import get_reference_joint_state
     pos, _ = get_reference_joint_state(env)
     return pos
 
 
 # 参考关节速度
 def ref_joint_vel(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    from .reference import get_reference_joint_state
     _, vel = get_reference_joint_state(env)
     return vel
 

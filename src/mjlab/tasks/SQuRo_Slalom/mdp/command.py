@@ -13,10 +13,19 @@ from .curriculums import (
     GAIT_FREQ_MIN,
     GAIT_FREQ_MAX,
     GAIT_FREQ_PHASE1,
+    PHASE1_MID_ITER,
+    _STEPS_PER_ITER,
+    get_curriculum_pole_spacing,
     get_training_phase,
 )
 from .pole import update_pole_visibility
-from .path import _INIT_DIST, _generate_slalom_lut_one_period
+from .path import (
+    _INIT_DIST,
+    _generate_slalom_lut_one_period,
+    get_arc_approach_start_xyh,
+    get_effective_pole_spacing,
+    get_path_curvature,
+)
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -33,7 +42,6 @@ VEL_MIN = 0.25              # 最大步幅时速度缩放百分比
 
 # 获取曲率采样范围
 def get_curvature_range(step_counter: int) -> Tuple[float, float]:
-    from .curriculums import PHASE1_MID_ITER, _STEPS_PER_ITER
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_MID_ITER:
         progress = iter_num / PHASE1_MID_ITER  # 0 → 1
@@ -98,11 +106,9 @@ class SlalomCommand(CommandTerm):
         override = getattr(self.cfg, "fixed_pole_spacing", None)
         if override is not None:
             return float(override)
-        from .curriculums import get_curriculum_pole_spacing
         raw = get_curriculum_pole_spacing(self._env.common_step_counter)
         # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 与 vel 解耦, 保证周期位移匹配)
         if self.slalom_mode_active:
-            from .path import get_effective_pole_spacing
             return get_effective_pole_spacing(raw)
         return raw
 
@@ -160,7 +166,6 @@ class SlalomCommand(CommandTerm):
             self.vel_command[env_ids] = base_vel * self.gait_freq_command[env_ids] * scale
             # 更新机器人初始位置/姿态: 接近段圆弧起点 (匹配本 episode 曲率)
             if n > 0:
-                from .path import get_arc_approach_start_xyh
                 ax, ay, ah = get_arc_approach_start_xyh(self.curvature_command[env_ids])
                 root = torch.zeros(n, 13, device=self.device)
                 root[:, 0] = ax
@@ -208,7 +213,6 @@ class SlalomCommand(CommandTerm):
     def _update_command(self) -> None:
         # Phase 1: 每步动态更新曲率为路径瞬时值
         if self.slalom_mode_active:
-            from .path import get_path_curvature
             self.curvature_command[:] = get_path_curvature(self._env)
 
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
@@ -256,7 +260,6 @@ class SlalomCommand(CommandTerm):
         dt_path = t_max / n_pts
         radius = 0.008
 
-        import numpy as np
         for i in range(n_pts + 1):
             t_i = i * dt_path
             if abs(curvature) < 1e-6:
