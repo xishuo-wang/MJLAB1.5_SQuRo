@@ -36,7 +36,9 @@ H_spine1_joint初始为俯仰自由度（初始旋转轴平行于世界坐标系
 
 ### 坐标系
 
-**世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-_INIT_DIST(=0.01, path.py), Y=0, 面朝 +X。
+**世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-_INIT_DIST(=0.02, path.py), 面朝 +X。
+
+**起点按阶段**：Phase 0 为直行接近段起点 `(-_INIT_DIST, 0)` 朝向 +X；Phase 1 为圆弧接近段起点 `(-0.0199, -0.0013)` 朝向 +11.4°（由平滑 LUT 反推确定）。
 
 **局部**：body+X ≠ 物理前向，F/H body 的 body+X 指向 world ±Y：
 
@@ -100,20 +102,22 @@ iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
-Phase 1: LUT 路径, 杆间距每 episode 随机采样(下限 0.20→0.133 课程缩小, 上限 0.25), 步频固定 1Hz, 杆可见(无碰撞)
+Phase 1: 平滑 LUT 路径, 杆间距每 episode 随机采样(下限 0.20→平滑无直行最小间距 0.1009 课程缩小, 上限 0.25 固定), 步频 1~2Hz 随机, 杆可见(无碰撞)
 ```
 
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | CURVATURE_MIN | 0.5 | Phase 0 κ 起始值 |
 | CURVATURE_TARGET_MAX | 20.0 | Phase 0 κ 上限 |
-| CURVATURE_TARGET | 16.0 | Phase 1 绕杆弧曲率 (= 1/Rmin) |
+| CURVATURE_TARGET | 20.0 | Phase 1 绕杆弧曲率 (= 1/Rmin, 与 CURVATURE_TARGET_MAX 相同) |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
-| GAIT_FREQ_PHASE1 | 1.0 | Phase 1 固定步频 |
-| POLE_SPACING | 2/CURVATURE_TARGET | 纯弧杆间距基准 (= 2Rmin, 直行段=0) |
+| GAIT_FREQ_PHASE1 | 1.0 | 默认步频 (Phase 1 实际也用 1~2Hz 随机采样) |
 | POLE_SPACING_START | 0.20 | Phase 1 间距下限起始值 (iter=4000) |
-| POLE_SPACING_MIN | 0.133 | Phase 1 间距下限最终值 (iter=6000, ≈2/15) |
 | POLE_SPACING_MAX | 0.25 | Phase 1 间距上限 (固定) |
+| SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
+| SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
+
+平滑无直行最小间距 = 2×x_sw_half ≈ 0.1009 m（有直行下限 2×x_sw_full ≈ 0.1260 m，见 path.py `_get_smooth_xsw`）。
 
 
 ## 命令系统 (mdp/command.py)
@@ -122,21 +126,32 @@ Phase 1: LUT 路径, 杆间距每 episode 随机采样(下限 0.20→0.133 课�
 
 | 字段 | Phase 0 | Phase 1 | 更新 |
 |------|---------|---------|------|
-| vel_x | `base*gait*(1-0.75*|κ|/20)` | 同左, 每步动态缩放 | 每步 |
+| vel_x | `base*gait*(1-0.75*|κ|/20)` | `base*gait*scale(CURVATURE_TARGET)`, episode 内固定 | reset |
 | height_f/h | 固定 0.055 | 固定 0.055 | 周期性 |
-| gait_freq | U(1.0,2.0) 随机, ep内固定 | 固定 1.0 | Phase0: reset |
-| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±16↔0 | Phase0: reset; Phase1: 每步 |
+| gait_freq | U(1.0,2.0) 随机, ep内固定 | U(1.0,2.0) 随机, ep内固定 | reset |
+| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±20↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
 
-Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值、velocity 按曲率比例缩放。
+Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值（平滑 LUT 的过渡 κ）；**velocity 固定**（reset 时按 CURVATURE_TARGET 计算，episode 内不变，不再随 κ 动态缩放）。
 
 
 ## 期望轨迹 (mdp/path.py)
 
-机器人初始 `X=-_INIT_DIST(0.01), Y=0`，面朝 `+X`。路径统一从世界原点 `(0,0)` 出发，前 `_INIT_DIST`(0.01m, path.py) 为直行接近段。
+机器人初始接近段为**圆弧**（不再是直行），与主轨迹曲率一致；路径统一从世界原点 `(0,0)` 出发。
 
-**Phase 0**：接近段(直行) → 圆弧(弦长公式, 从原点出发, 固定 κ)
+**Phase 0**：接近段(圆弧, κ=curvature 反推 `_INIT_DIST`) → 圆弧(弦长公式, 从原点出发, 固定 κ)
 
-**Phase 1**：接近段(直行) → LUT 绕杆路径。LUT 一个周期 6 段 `(0,0)→(2X,0)`：CW弧→CCW弧→直行→CCW弧→CW弧→直行。弧曲率 = ±CURVATURE_TARGET。弧长累积积分 `∫vel dt` 适配变速，跨周期 x_ref 叠加偏移保证连续。
+**Phase 1**：接近段(圆弧, 平台-K+过渡-K→0 反推) → **平滑 LUT** 绕杆路径。LUT 一个周期 6 段：CW弧→CCW弧→直行→CCW弧→CW弧→直行，弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。弧长 = vel×t − _INIT_DIST（vel 固定），跨周期 x_ref 叠加偏移保证连续。
+
+### 平滑 LUT 的双模式
+
+- **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡
+- **无直行模式**：间距 ≤ 2×x_sw_half (0.1009)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +20→0→+20 的 V 形过渡）
+- **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动 clamp 到无直行最小间距（并打印警告）
+- 有效间距经 `active_pole_spacing` 统一处理，保证周期位移恒 = 2×有效间距（无累积误差）
+
+### 接近段圆弧
+
+从 LUT 起点 `(0,0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(0,0)` κ=0、heading=0，与 LUT 进过渡衔接。机器人起点/姿态由 `get_approach_start`（Phase 1）或 `get_arc_approach_start_xyh`（Phase 0，随 κ 动态）确定。
 
 
 ## 预计算表 (mdp/reference.py)
@@ -144,15 +159,15 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 脊柱关节角度由瞬时曲率 κ 驱动：
 
 ```
-f_spine1 = -0.6 × κ/κ_max     (κ=-max→+0.6, κ=+max→-0.6)
+f_spine1 = -0.65 × κ/κ_max     (κ=-max→+0.65, κ=+max→-0.65)
 f_body   = -0.9 × κ/κ_max
-h_spine1 = -0.6 × |κ|/κ_max   (始终≤0)
+h_spine1 = -0.65 × |κ|/κ_max   (始终≤0)
 h_body   = -0.7 × κ/κ_max
 ```
 
 Phase 0: κ=静态命令值; Phase 1: κ=`get_path_curvature()` 动态读取 LUT 瞬时值。
 
-腿部参考由 CSV (Trot_F/H) + 逆运动学生成，16 曲率×50 相位×14 关节预计算表，运行时按曲率插值。内侧腿 Y 轨迹按 `|κ|` 缩放实现差速。
+腿部参考由 CSV (Trot_F/H) + 逆运动学生成，26 曲率×50 相位×14 关节预计算表，运行时按曲率插值。内侧腿 Y 轨迹按 `1-|κ|/κ_max` 缩放实现差速（κ=0 全步幅, κ=κ_max 全停）。
 
 
 ## 奖励函数 (mdp/reward.py)
@@ -181,7 +196,7 @@ r = exp(-σ·v²)
 
 ## 杆模块 (mdp/pole.py)
 
-MuJoCo 圆柱体，`POLE_Y = -1/CURVATURE_TARGET`。训练全程 `contype=0` (无物理碰撞)。透明度由 `update_pole_visibility()` 按 `geom_type==CYLINDER` 匹配控制。
+MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.063**（平滑路径等效圆心，不再等于 -Rmin=-0.05）。训练全程 `contype=0` (无物理碰撞)。透明度由 `update_pole_visibility()` 按 `geom_type==CYLINDER` 匹配控制。杆数量 `POLE_NUM=12`。
 
 
 ## 回放脚本 (scripts/SQuRo_play.py)
@@ -212,8 +227,8 @@ CSV 记录 关节角度、速度、动作空间输出等信息，并保存视频
 2. **路径参考跟随机器人位置** → 改为固定世界原点
 3. **track_path 无朝向约束** → 替换为 corridor 奖励
 4. **脊柱参考静态 vs 绕杆动态** → Phase 1 用 `get_path_curvature()` 动态读取 LUT 瞬时 κ
-5. **vel 固定 vs 曲率动态** → Phase 1 速度每步随曲率缩放
-6. **路径弧长 vel×t 不适用变速** → 改为累积积分 `∫ vel dt`
+5. **vel 动态缩放导致参考超前** → Phase 1 速度改回固定（reset 时按 CURVATURE_TARGET 计算, episode 内不变）
+6. **变速时弧长需积分** → vel 固定后改用 `vel×t - _INIT_DIST`（无需积分）
 
 
 ## 训练
@@ -222,6 +237,10 @@ CSV 记录 关节角度、速度、动作空间输出等信息，并保存视频
 11. **Phase 1 step函数 κ 跳跃** → 改为 LUT 圆弧拼接 (CW/CCW 弧+直行)
 12. **杆间距硬编码 0.3** → 统一到 `POLE_SPACING = 2/CURVATURE_TARGET`
 13. **curvature ±15 硬编码** → 统一到 `CURVATURE_TARGET`
+14. **平滑 LUT 几何随 vel 变化**（平滑弧长 = vel×SMOOTH_TIME）→ 同一间距下不同步频轨迹几何不同, 训练局部最优 → **平滑弧长与 vel 解耦**（固定名义 vel, 几何稳定）
+15. **平滑不兼容区间** (0.1009, 0.1260) → 两种模式均周期错位 → `get_effective_pole_spacing` clamp 到无直行最小间距
+16. **无直行时同向弧段仍加 +20→0→+20 过渡** → 直行段不存在时 V 形过渡多余 → 无直行模式同向弧段直接连续
+17. **Phase 0 起点动态化**（随 κ 变化）→ 起始域扩大, 起步即转 → 需配合起始状态分布评估
 
 
 ## 可视化 / WarpBridge
@@ -230,7 +249,7 @@ CSV 记录 关节角度、速度、动作空间输出等信息，并保存视频
 2. **model.geom_rgba 是 torch tensor** → 赋值需 `torch.tensor`
 3. **entities 覆盖丢失实体** → 用 `{**orig, **pole}` merge
 4. **可视化用机器人位置做起点** → 改用固定世界原点 (-_INIT_DIST, 0)
-5. **杆标记载体从红球改为圆柱** → 与场景 PoleEntity 外观一致
+5. **可视化杆重复显示**（红球/圆柱 + 场景杆实体）→ 可视化不再绘制杆, 由场景 PoleEntity 提供（回放时按正确间距重建）
 
 
 ## 变量管理
