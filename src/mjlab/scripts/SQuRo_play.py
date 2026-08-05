@@ -1,7 +1,6 @@
 import re
 import tyro
 import torch
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Literal
@@ -54,13 +53,6 @@ class PlayConfig:
     fixed_curvature: float | None = -25
     fixed_pole_spacing: float | None = 0.15
     enable_collision: bool = False
-    # 渲染视角 (None = 使用 env_cfg 默认, 通常为俯视 elevation=-90)
-    render_elevation: float | None = None
-    render_azimuth: float | None = None
-    render_distance: float | None = None
-    # 回放中保存指定帧 (3D 实景图, 无需视频解码)
-    save_frame_step: int | None = None
-    save_frame_path: str | None = None
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -259,14 +251,10 @@ class JointDataRecorder:
 
 
 class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
-    def __init__(self, env, clip_actions=None, data_recorder=None, action_scale=1.0,
-                 save_frame_step=None, save_frame_path=None):
+    def __init__(self, env, clip_actions=None, data_recorder=None, action_scale=1.0):
         super().__init__(env, clip_actions)
         self.data_recorder = data_recorder
         self.action_scale = action_scale
-        self.save_frame_step = save_frame_step
-        self.save_frame_path = save_frame_path
-        self._step_count = 0
 
     def step(self, actions):
         scaled_actions = actions * self.action_scale
@@ -280,16 +268,6 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
                 rewards=rew,
                 dones=dones
             )
-
-        # 保存指定帧 (3D 实景图): self.env 为 VideoRecorder, render() 返回 rgb_array
-        if self.save_frame_step is not None and self._step_count == self.save_frame_step:
-            frame = self.env.render()
-            if frame is not None:
-                rgb = frame[0] if isinstance(frame, np.ndarray) and frame.ndim == 4 else frame
-                from PIL import Image
-                Image.fromarray(np.asarray(rgb)).save(self.save_frame_path)
-                print(f"[INFO] 已保存第 {self._step_count} 帧 → {self.save_frame_path}")
-        self._step_count += 1
 
         return obs_dict, rew, dones, extras
 
@@ -347,13 +325,6 @@ def run_play(cfg: PlayConfig):
         env_cfg.viewer.height = cfg.video_height
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
-    # 3D 斜视角覆盖 (用于生成 3D 实景帧, 与 2D 俯视示意图组合)
-    if cfg.render_elevation is not None:
-        env_cfg.viewer.elevation = cfg.render_elevation
-    if cfg.render_azimuth is not None:
-        env_cfg.viewer.azimuth = cfg.render_azimuth
-    if cfg.render_distance is not None:
-        env_cfg.viewer.distance = cfg.render_distance
 
     # 自动识别训练阶段，注意：train_iter 仅用于提取，实际阶段判断用 align_iter（与 env 内部一致）
     train_iter = 0
@@ -454,9 +425,7 @@ def run_play(cfg: PlayConfig):
         env,
         clip_actions=agent_cfg.clip_actions,
         data_recorder=data_recorder,
-        action_scale=1.0,
-        save_frame_step=cfg.save_frame_step,
-        save_frame_path=cfg.save_frame_path,
+        action_scale=1.0
     )
 
     # 创建策略
