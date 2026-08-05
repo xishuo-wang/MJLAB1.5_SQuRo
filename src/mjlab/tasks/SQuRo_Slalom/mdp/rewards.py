@@ -188,11 +188,12 @@ def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     abs_diff = torch.abs(current_action - prev_action)
     leg_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
     spn_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
+    error_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L1_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L1_spn")
     # 计算奖励
-    penalty = -w_leg * leg_cost - w_spn * spn_cost
+    penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
 
@@ -206,11 +207,12 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     sq_diff = torch.square(current_action - prev_action)
     leg_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
     spn_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
+    error_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L2_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L2_spn")
     # 计算奖励
-    penalty = -w_leg * leg_cost - w_spn * spn_cost
+    penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
 
