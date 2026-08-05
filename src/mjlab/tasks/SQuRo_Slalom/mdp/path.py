@@ -17,7 +17,7 @@ H_BODY_HALF_LENGTH = 0.04       # H_body_Link 在XoY平面沿身体前后轴半�
 H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 在XoY平面左右方向半宽(m)
 BODY_REF_OFFSET = 0.04          # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-_INIT_DIST = 0.02               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
+_INIT_DIST = 0.1               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
 
 
 
@@ -73,10 +73,11 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
 
 
 # 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
-def get_approach_start() -> tuple[float, float, float]:
+def get_approach_start(spacing: float = 0.0) -> tuple[float, float, float]:
     tr = SMOOTH_VEL * SMOOTH_TIME
     tbl = _approach_rev_table(_INIT_DIST, tr)
-    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
+    # spacing: 杆间距 (新几何起点右移, 接近段终点 = (spacing, 0))
+    return float(tbl["x"][-1]) + spacing, float(tbl["y"][-1]), float(tbl["h"][-1])
 
 
 
@@ -93,10 +94,10 @@ def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, to
 
 
 # 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
-def get_phase1_approach() -> tuple[float, float, float]:
+def get_phase1_approach(spacing: float = 0.0) -> tuple[float, float, float]:
     tr = SMOOTH_VEL * SMOOTH_TIME
     tbl = _approach_rev_table(_INIT_DIST, tr)
-    return float(tbl["x"][-1]), float(tbl["y"][-1]), float(tbl["h"][-1])
+    return float(tbl["x"][-1]) + spacing, float(tbl["y"][-1]), float(tbl["h"][-1])
 
 
 
@@ -298,10 +299,9 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
         segs = [
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S1
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S2
-            (straight, 0.0, 0.0),                                # S3 直行
+            (2 * straight, 0.0, 0.0),                            # S3 直行 (中点 = 杆2 x = X)
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S4
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S5
-            (straight, 0.0, 0.0),                                # S6 直行
         ]
     else:
         segs = [
@@ -353,12 +353,15 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     hd_lut = cache["heading"]
     s_period = cache["period"]
 
+    # 新几何: 周期起点 = 第一根杆 (x=pole_spacing) 正上方, 路径整体右移 pole_spacing
+    x_offset = pole_spacing
+
     # 当前弧长 s = v·t mod period + 周期偏移(保证 x_ref 连续不跳变)
-    # 起始偏移 -_INIT_DIST: 前 _INIT_DIST 米为直行接近段 (机器人 X=-_INIT_DIST → LUT 起点 X=0)
+    # 起始偏移 -_INIT_DIST: 前 _INIT_DIST 米为圆弧接近段 (机器人 X=-_INIT_DIST → 接近段终点 X=x_offset)
     total_s = vel_cmd * t - _INIT_DIST            # [N], 负值=接近段
     in_approach = total_s < 0.0
 
-    # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 从起点正向走 s0=_INIT_DIST 到 (0,0)
+    # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 从起点正向走 s0=_INIT_DIST 到 (x_offset, 0)
     # 效率: torch 表缓存到 env (避免每步 tensor 创建)
     app_cache = getattr(env, "_slalom_app_tbl", None)
     if app_cache is None:
@@ -373,7 +376,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     idx = torch.searchsorted(app_s, u).clamp(1, len(app_s) - 1)
     idx_p = idx - 1
     frac = (u - app_s[idx_p]) / (app_s[idx] - app_s[idx_p] + 1e-12)
-    approach_x = app_x[idx_p] + frac * (app_x[idx] - app_x[idx_p])
+    approach_x = app_x[idx_p] + frac * (app_x[idx] - app_x[idx_p]) + x_offset
     approach_y = app_y[idx_p] + frac * (app_y[idx] - app_y[idx_p])
     approach_h = app_h[idx_p] + frac * (app_h[idx] - app_h[idx_p])
     approach_k = -(app_k[idx_p] + frac * (app_k[idx] - app_k[idx_p]))   # 正向 κ = -反推 κ
@@ -394,8 +397,8 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     h_lut_val = hd_lut[idx_prev]  # 分段常值 heading
     kappa_lut = cache["kappa"]
     k_lut_val = kappa_lut[idx_prev] + frac * (kappa_lut[idx] - kappa_lut[idx_prev])
-    # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing
-    x_lut_ref = x_lut_val + num_periods.float() * (2 * pole_spacing)
+    # 叠加已完成周期偏移: 每周期 X 前进 2*pole_spacing (+ 整体右移 x_offset)
+    x_lut_ref = x_offset + x_lut_val + num_periods.float() * (2 * pole_spacing)
 
     # 合成: 接近段用圆弧 (反推表正向), LUT 段用周期路径
     x_ref = torch.where(in_approach, approach_x, x_lut_ref)

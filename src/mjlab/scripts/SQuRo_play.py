@@ -49,9 +49,9 @@ class PlayConfig:
     fixed_velocity: float | None = 0.1
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
-    fixed_gait_freq: float | None = 1.0
-    fixed_curvature: float | None = -20
-    fixed_pole_spacing: float | None = 0.11
+    fixed_gait_freq: float | None = 2.0
+    fixed_curvature: float | None = -25
+    fixed_pole_spacing: float | None = 0.15
     enable_collision: bool = False
 
 
@@ -373,7 +373,7 @@ def run_play(cfg: PlayConfig):
     if is_slalom_phase and TRAINED_MODE:
         pole_sp_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
         pole_sp = get_effective_pole_spacing(pole_sp_raw)   # 与期望轨迹一致 (不兼容区间 → 无直行最小间距)
-        positions = generate_pole_positions(spacing=pole_sp, num_poles=POLE_NUM, start_x=0.0, start_y=POLE_Y)
+        positions = generate_pole_positions(spacing=pole_sp, num_poles=POLE_NUM, start_x=pole_sp, start_y=POLE_Y)  # 杆1 在 x=spacing
         col_type = 1 if cfg.enable_collision else 0
         pole_dict = {}
         for i, pos in enumerate(positions):

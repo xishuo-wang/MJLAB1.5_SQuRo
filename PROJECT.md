@@ -38,7 +38,7 @@ H_spine1_joint初始为俯仰自由度（初始旋转轴平行于世界坐标系
 
 **世界**：+X=前, +Y=左, +Z=上。机器人初始 X=-_INIT_DIST(=0.02, path.py), 面朝 +X。
 
-**起点按阶段**：两阶段均为圆弧接近段起点。Phase 0 由 `get_phase0_approach` 按本 episode 曲率 κ 动态确定（events.py 先置直行起点，command.py reset 时按圆弧重写）；Phase 1 为固定圆弧接近段起点 `(-0.0199, -0.0013)` 朝向 +11.4°（由 `_approach_rev_table` 反推确定）。
+**起点按阶段**：两阶段均为圆弧接近段起点。Phase 0 由 `get_phase0_approach` 按本 episode 曲率 κ 动态确定（events.py 先置直行起点，command.py reset 时按圆弧重写）；Phase 1 为圆弧接近段起点 `(-0.0199+spacing, -0.0013)` 朝向 +11.4°（由 `_approach_rev_table` 反推，随杆间距 spacing 右移；接近段终点 = 第一根杆正上方 `(spacing, 0)`）。
 
 **局部**：body+X ≠ 物理前向，F/H body 的 body+X 指向 world ±Y：
 
@@ -136,22 +136,22 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 
 ## 期望轨迹 (mdp/path.py)
 
-机器人初始接近段为**圆弧**（不再是直行），与主轨迹曲率一致；路径统一从世界原点 `(0,0)` 出发。
+机器人初始接近段为**圆弧**（不再是直行），与主轨迹曲率一致。Phase 0 路径从世界原点 `(0,0)` 出发；Phase 1 周期起点 = 第一根杆正上方 `(spacing, 0)`（杆1 在 `(spacing, POLE_Y)`，杆2 在 `(2×spacing, POLE_Y)`）。
 
 **Phase 0**：接近段(圆弧, κ=curvature 反推 `_INIT_DIST`) → 圆弧(弦长公式, 从原点出发, 固定 κ)
 
-**Phase 1**：接近段(圆弧, 平台-K+过渡-K→0 反推) → **平滑 LUT** 绕杆路径。LUT 一个周期 6 段：CW弧→CCW弧→直行→CCW弧→CW弧→直行，弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。弧长 = vel×t − _INIT_DIST（vel 固定），跨周期 x_ref 叠加偏移保证连续。
+**Phase 1**：接近段(圆弧, 平台-K+过渡-K→0 反推) → **平滑 LUT** 绕杆路径。有直行模式一个周期 5 段：CW弧→CCW弧→**直行(2×straight)**→CCW弧→CW弧，其中**直行段中点 = 第二根杆的 x 坐标**（机器人从杆1 正上方出发 → 绕杆1 → 直行穿过杆2 正下方 → 绕杆2 → 到杆3 正上方）；无直行模式 4 段同向连续。弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。弧长 = vel×t − _INIT_DIST（vel 固定），跨周期 x_ref 叠加偏移保证连续。
 
 ### 平滑 LUT 的双模式
 
-- **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡
+- **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡；直行段合并为一段（两杆之间），长度 = 2×(spacing−2×x_sw_full)，中点对齐下一根杆
 - **无直行模式**：间距 ≤ 2×x_sw_half (0.1009)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +20→0→+20 的 V 形过渡）
 - **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动 clamp 到无直行最小间距（并打印警告）
 - 有效间距经 `active_pole_spacing` 统一处理，保证周期位移恒 = 2×有效间距（无累积误差）
 
 ### 接近段圆弧
 
-从 LUT 起点 `(0,0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(0,0)` κ=0、heading=0，与 LUT 进过渡衔接。机器人起点/姿态由 `get_approach_start` / `get_phase1_approach`（Phase 1）或 `get_phase0_approach`（Phase 0，随 κ 动态）确定。
+从 LUT 起点 `(spacing, 0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(spacing, 0)` κ=0、heading=0，与 LUT 进过渡衔接。机器人起点/姿态由 `get_approach_start(spacing)` / `get_phase1_approach(spacing)`（Phase 1）或 `get_phase0_approach`（Phase 0，随 κ 动态）确定。
 
 
 ## 预计算表 (mdp/reference.py)
