@@ -77,9 +77,9 @@ ELEVATION = 25.0                     # 仰角 (度): 90=正俯视, 0=水平
 AZIMUTH = -60.0                      # 方位角 (度): 绕 Z 轴旋转, 灵活调整视角
 GROUND_COLOR = (0.5, 0.5, 0.5, 1.0)  # 地面颜色 (有限长方形)
 GROUND_MARGIN = 0.12                 # 地面超出轨迹范围的边距 (m)
-GROUND_Z = -0.01                     # 地面 z 坐标 (略低于内容, 保证深度排序在最底层)
-BODY_Z = 0.06                        # 机器人躯干/脊柱高度 (m)
-POLE_HEIGHT = 0.20                   # 杆高度 (m) (立杆, 明显三维)
+GROUND_Z = -0.005                    # 地面 z 坐标 (略低于内容层 z=0, 深度排序最底层)
+GROUND_ALPHA = 0.6                   # 地面不透明度 (半透明, 防止遮挡内容)
+# 注意: 所有内容(杆/机器人/轨迹/走廊/阴影)均位于 XOY 平面 z=0, 3D 仅为旋转视角看图
 # ======================================================
 
 
@@ -293,7 +293,8 @@ def main():
     gy0, gy1 = path_y.min() - GROUND_MARGIN, path_y.max() + GROUND_MARGIN
     ax.add_collection3d(Poly3DCollection(
         [[[gx0, gy0, GROUND_Z], [gx1, gy0, GROUND_Z], [gx1, gy1, GROUND_Z], [gx0, gy1, GROUND_Z]]],
-        facecolor=GROUND_COLOR, edgecolor=(0.35, 0.35, 0.35), linewidth=0.8, zsort='min'))
+        facecolor=(GROUND_COLOR[0], GROUND_COLOR[1], GROUND_COLOR[2], GROUND_ALPHA),
+        edgecolor=(0.35, 0.35, 0.35), linewidth=0.8, zsort='min'))
 
     # 走廊边界 (z=0)
     ax.plot(outer_x, outer_y, np.zeros_like(outer_x), '--',
@@ -307,40 +308,33 @@ def main():
     ax.plot(path_x, path_y, np.zeros_like(path_x), '--', color=PATH_MIDLINE_COLOR,
             linewidth=PATH_MIDLINE_LINEWIDTH, dashes=(8, 4), alpha=PATH_MIDLINE_ALPHA)
 
-    # 三根杆 (3D 立杆: 圆柱侧壁 + 顶/底盖, 从 z=0 到 POLE_HEIGHT)
+    # 三根杆 (2D 实心圆盘, XOY 平面 z=0 — 与轨迹同为平面内容)
     pole_xs = [POLE_SPACING, 2 * POLE_SPACING, 3 * POLE_SPACING]
     n_theta = 24
     theta = np.linspace(0, 2 * np.pi, n_theta)
     for px in pole_xs:
-        verts = []
-        cx = [px + POLE_RADIUS * np.cos(t) for t in theta]
-        cy = [pole_y + POLE_RADIUS * np.sin(t) for t in theta]
-        for i in range(n_theta - 1):
-            verts.append([[cx[i], cy[i], 0], [cx[i + 1], cy[i + 1], 0],
-                          [cx[i + 1], cy[i + 1], POLE_HEIGHT], [cx[i], cy[i], POLE_HEIGHT]])
-        verts.append([[cx[i], cy[i], 0.0] for i in range(n_theta)])            # 底盖
-        verts.append([[cx[i], cy[i], POLE_HEIGHT] for i in range(n_theta)])    # 顶盖
-        ax.add_collection3d(Poly3DCollection(verts, facecolor=POLE_COLOR,
-                                             edgecolor=POLE_EDGE_COLOR, linewidth=0.3, zsort='min'))
+        disc = [[px + POLE_RADIUS * np.cos(t), pole_y + POLE_RADIUS * np.sin(t), 0.0] for t in theta]
+        ax.add_collection3d(Poly3DCollection([disc], facecolor=POLE_COLOR,
+                                             edgecolor=POLE_EDGE_COLOR, linewidth=POLE_EDGE_LINEWIDTH, zsort='min'))
 
-    # 机器人躯干 (z=BODY_Z) 及脊柱关节
-    f3d = np.column_stack([f_rect[:, 0], f_rect[:, 1], np.full(4, BODY_Z)])
-    h3d = np.column_stack([h_rect[:, 0], h_rect[:, 1], np.full(4, BODY_Z)])
+    # 机器人躯干 (XOY 平面 z=0) 及脊柱关节
+    f3d = np.column_stack([f_rect[:, 0], f_rect[:, 1], np.zeros(4)])
+    h3d = np.column_stack([h_rect[:, 0], h_rect[:, 1], np.zeros(4)])
     ax.add_collection3d(Poly3DCollection([f3d], facecolor=BODY_FILL_COLOR, edgecolor=BODY_EDGE_COLOR,
                                          linewidth=BODY_LINEWIDTH, alpha=BODY_ALPHA, zsort='min'))
     ax.add_collection3d(Poly3DCollection([h3d], facecolor=BODY_FILL_COLOR, edgecolor=BODY_EDGE_COLOR,
                                          linewidth=BODY_LINEWIDTH, alpha=BODY_ALPHA, zsort='min'))
-    ax.scatter([base[0]], [base[1]], [BODY_Z], s=80, color=JOINT_FILL_COLOR,
+    ax.scatter([base[0]], [base[1]], [0.0], s=80, color=JOINT_FILL_COLOR,
                edgecolors=JOINT_EDGE_COLOR, linewidth=JOINT_LINEWIDTH, zorder=6)
 
-    # 惩罚阴影 (3D 散点, 躯干高度处超出走廊)
+    # 惩罚阴影 (XOY 平面 z=0 散点)
     if out_x:
         out_x = np.array(out_x)
         out_y = np.array(out_y)
         out_dist = np.array(out_dist)
         max_exceed = out_dist.max() if len(out_dist) > 0 else 1.0
         norm = Normalize(0, max_exceed)
-        sc = ax.scatter(out_x, out_y, np.full_like(out_x, BODY_Z), s=PENALTY_POINT_SIZE,
+        sc = ax.scatter(out_x, out_y, np.zeros_like(out_x), s=PENALTY_POINT_SIZE,
                         c=out_dist, cmap=PENALTY_CMAP, edgecolors=PENALTY_EDGE_COLOR,
                         linewidth=PENALTY_EDGE_LINEWIDTH, alpha=PENALTY_ALPHA, norm=norm, zorder=7)
         cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.04)
@@ -353,7 +347,7 @@ def main():
     ax.set_box_aspect((1.0, 1.0, 0.6))
     ax.set_xlim(gx0, gx1)
     ax.set_ylim(gy0, gy1)
-    ax.set_zlim(GROUND_Z, POLE_HEIGHT * 1.1)
+    ax.set_zlim(GROUND_Z, 0.08)
     ax.set_axis_off()
 
     # 保存图片
