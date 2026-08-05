@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 BASE_VEL = 0.1              # 基础速度(1Hz 直行时速度)
 FIXED_HEIGHT_F = 0.055      # 前肢高度
 FIXED_HEIGHT_H = 0.055      # 后肢高度
-VEL_MIN = 0.25              # 最大步幅时速度缩放百分比
+VEL_MIN = 0.15              # 最大步幅时速度缩放百分比
 
 
 
