@@ -17,7 +17,7 @@ H_BODY_HALF_LENGTH = 0.04       # H_body_Link 在XoY平面沿身体前后轴半�
 H_BODY_HALF_WIDTH  = 0.035      # H_body_Link 在XoY平面左右方向半宽(m)
 BODY_REF_OFFSET = 0.04          # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
-_INIT_DIST = 0.1               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
+_INIT_DIST = 0.03               # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
 
 
 
