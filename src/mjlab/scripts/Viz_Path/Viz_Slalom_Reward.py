@@ -1,30 +1,27 @@
-"""绘制走廊一致性奖励示意图 (绕杆 slalom 路径 v5)
-变更 (v5):
-  - 杆按 (x,y),(2x,y),(3x,y) 摆放 (第一根杆在 x=POLE_SPACING 处)
-  - 有直行模式: 直行段合并为一段 (两杆之间), 中点对齐第二根杆的 x 坐标
-  - 轨迹整体右移, 起点 = 第一根杆正上方
-用法:
-  python plot_corridor_slalom.py [--delta_theta 28] [--d_lat 0.008] [--spine_angle 12] [--out test.png]
-"""
 import os
-import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.path import Path as MplPath
 from matplotlib.patches import Polygon, Circle
 
-plt.rcParams["font.sans-serif"] = ["SimHei"]
-plt.rcParams["axes.unicode_minus"] = False
 
-# ==================== 用户可配置项 ====================
-OUTPUT_DIR = r"D:\MuJoCoLab_1.5\src\mjlab\scripts\Viz_Path\Result"  # 输出目录，自动创建
+# ======================================================
+# 配置区 
+OUTPUT_DIR = r"D:\MuJoCoLab_1.5\src\mjlab\scripts\Viz_Path\Result"      # 输出目录
+OUTPUT_FILENAME = "corridor_slalom.png"                                 # 输出文件名
 
 # ----- 身体尺寸 -----
 CORRIDOR_C = 0.06               # 走廊半宽
 BODY_L = 0.10                   # 身体半长
 BODY_W = 0.055                  # 身体半宽
 OFFSET = BODY_L                 # F/H 中心距 base 偏移
+
+# ----- 机器人默认位姿参数 -----
+DELTA_THETA = 20              # 整体朝向偏差 (度)
+SPINE_ANGLE = 20              # 脊柱弯曲角 (度)
+D_LAT = 0.0                   # 横向偏移 (m)
+ROBO_POS = 0.55       # 机器人在一个周期路径上的位置比例 (0~1)
 
 # ----- 期望轨迹参数 -----
 POLE_SPACING = 0.2              # 杆间距 (m)
@@ -34,7 +31,7 @@ SMOOTH_TIME = 0.1               # 平滑过渡时间 (s)
 CURVATURE_TARGET = 1.0 / RMIN   # 目标曲率 (1/m)，由最小半径自动计算
 
 # ----- 杆显示参数 -----
-POLE_RADIUS = 0.01              # 杆半径 (m)
+POLE_RADIUS = 0.015             # 杆半径 (m)
 POLE_COLOR = (0.9, 0.35, 0.2)   # 橙红色 RGB
 POLE_ZORDER = 8                 # 绘图层级（高于机器人）
 
@@ -43,7 +40,6 @@ N_SAMPLE = 60                   # 身体阴影采样密度 (每边)
 # ======================================================
 
 
-# ========== 平滑绕杆 LUT 生成 ==========
 def _measure_s1_xsw(segs, ds=1e-4) -> float:
     s_pts, k_pts, s = [], [], 0.0
     for L, k0, k1 in segs:
@@ -69,7 +65,6 @@ def _get_smooth_xsw(tr: float) -> tuple[float, float]:
 
 
 def generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None):
-    """生成一个周期平滑绕杆路径的弧长、坐标、航向、曲率 LUT"""
     t = SMOOTH_TIME if smooth_time is None else smooth_time
     v = SMOOTH_VEL if vel is None else vel
     K = CURVATURE_TARGET
@@ -85,9 +80,10 @@ def generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None):
         segs = [
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),
-            (2 * straight, 0.0, 0.0),          # 直行段: 起点=2*x_sw, 终点=2X-2*x_sw, 中点=X (第二根杆)
+            (straight, 0.0, 0.0),              # S3 直行 (杆1→杆2, 结束于杆2 x)
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),
+            (straight, 0.0, 0.0),              # S6 直行 (杆2→杆3, 结束于杆3 x)
         ]
     else:
         segs = [
@@ -148,21 +144,10 @@ def arc_between(p1, p2, p3, n=60):
 
 # ========== 绘图主程序 ==========
 def main():
-    parser = argparse.ArgumentParser(description="走廊一致性奖励示意图 (slalom)")
-    parser.add_argument("--delta_theta", type=float, default=28.0,
-                        help="整体朝向偏差 (度)")
-    parser.add_argument("--d_lat", type=float, default=0.008,
-                        help="横向偏移 (m)")
-    parser.add_argument("--spine_angle", type=float, default=12.0,
-                        help="脊柱弯曲角 (度)")
-    parser.add_argument("--out", type=str, default="corridor_slalom.png",
-                        help="输出文件名（自动存入 OUTPUT_DIR）")
-    args = parser.parse_args()
-
+    delta_theta = np.deg2rad(DELTA_THETA)
+    spine_angle = np.deg2rad(SPINE_ANGLE)
+    d_lat = D_LAT
     X = POLE_SPACING
-    delta_theta = np.deg2rad(args.delta_theta)
-    spine_angle = np.deg2rad(args.spine_angle)
-    d_lat = args.d_lat
 
     # ---- 计算杆的 Y 坐标 ----
     tr = SMOOTH_VEL * SMOOTH_TIME
@@ -193,12 +178,12 @@ def main():
     corridor_path = MplPath(corridor_poly_pts)
 
     # ---- 机器人位姿（路径中点） ----
-    s_mid = period / 2.0
+    s_mid = period * ROBO_POS
     idx = np.searchsorted(s_lut, s_mid)
     idx = np.clip(idx, 1, len(s_lut) - 1)
     idx_prev = idx - 1
     frac = (s_mid - s_lut[idx_prev]) / (s_lut[idx] - s_lut[idx_prev] + 1e-12)
-    x0 = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev]) + X   # 与轨迹一致的整体右移 (杆1 在 x=X)
+    x0 = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev]) + X
     y0 = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
     h0 = hd_lut[idx_prev]
 
@@ -231,9 +216,9 @@ def main():
 
     spine_pts = arc_between(h_center, base, f_center)
 
-    # ---- 超出走廊采样点 ----
+    # ---- 超出走廊采样点 (path_pts 必须用平移后的轨迹, 与采样点坐标一致) ----
     out_x, out_y, out_dist = [], [], []
-    path_pts = np.column_stack([x_lut, y_lut])
+    path_pts = np.column_stack([path_x, path_y])
     for c, ang in [(f_center, beta + spine_angle), (h_center, beta - spine_angle)]:
         ax_v = u(ang)
         ay_v = np.array([-ax_v[1], ax_v[0]])
@@ -262,21 +247,17 @@ def main():
     # 三根杆 (用户几何: 杆1 在 (x,y), 杆2 在 (2x,y), 杆3 在 (3x,y))
     pole_xs = [POLE_SPACING, 2 * POLE_SPACING, 3 * POLE_SPACING]
     for px in pole_xs:
-        ax.add_patch(Circle((px, pole_y), radius=POLE_RADIUS,
-                                color=POLE_COLOR, zorder=POLE_ZORDER, ec='black', linewidth=0.5))
+        ax.add_patch(Circle((px, pole_y), radius=POLE_RADIUS, color=POLE_COLOR, zorder=POLE_ZORDER, ec='black', linewidth=0.5))
 
     # 脊柱弧线
     ax.plot(spine_pts[:, 0], spine_pts[:, 1], '-', color='#555555', linewidth=2.0, alpha=0.9, zorder=5)
 
     # 躯干
-    ax.add_patch(Polygon(f_rect, closed=True, facecolor='#FFD700', edgecolor='#B8860B',
-                         linewidth=1.6, alpha=0.4, zorder=4))
-    ax.add_patch(Polygon(h_rect, closed=True, facecolor='#FFD700', edgecolor='#B8860B',
-                         linewidth=1.6, alpha=0.4, zorder=4))
+    ax.add_patch(Polygon(f_rect, closed=True, facecolor='#FFD700', edgecolor='#B8860B', linewidth=1.6, alpha=0.4, zorder=4))
+    ax.add_patch(Polygon(h_rect, closed=True, facecolor='#FFD700', edgecolor='#B8860B', linewidth=1.6, alpha=0.4, zorder=4))
 
     # 脊柱关节
-    ax.add_patch(Circle(base, radius=0.012, facecolor='dimgrey', edgecolor='black',
-                        linewidth=1.5, zorder=6))
+    ax.add_patch(Circle(tuple(base), radius=0.012, facecolor='dimgrey', edgecolor='black', linewidth=1.5, zorder=6))
 
     # 惩罚阴影
     if out_x:
@@ -293,8 +274,9 @@ def main():
     ax.set_aspect('equal')
     ax.set_axis_off()
 
+    # 保存图片
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    save_path = os.path.join(OUTPUT_DIR, args.out)
+    save_path = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
     plt.tight_layout(pad=0.5)
     fig.savefig(save_path, dpi=150, bbox_inches='tight')
     print(f"已保存至: {save_path}")
@@ -302,4 +284,6 @@ def main():
 
 
 if __name__ == "__main__":
+    plt.rcParams["font.sans-serif"] = ["SimHei"]
+    plt.rcParams["axes.unicode_minus"] = False
     main()

@@ -299,9 +299,10 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time: Optional[float] = 
         segs = [
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S1
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S2
-            (2 * straight, 0.0, 0.0),                            # S3 直行 (中点 = 杆2 x = X)
+            (straight, 0.0, 0.0),                                # S3 直行 (杆1→杆2, 结束于杆2 x)
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),       # S4
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),   # S5
+            (straight, 0.0, 0.0),                                # S6 直行 (杆2→杆3, 结束于杆3 x)
         ]
     else:
         segs = [
