@@ -198,7 +198,7 @@ def main():
     idx = np.clip(idx, 1, len(s_lut) - 1)
     idx_prev = idx - 1
     frac = (s_mid - s_lut[idx_prev]) / (s_lut[idx] - s_lut[idx_prev] + 1e-12)
-    x0 = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
+    x0 = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev]) + X   # 与轨迹一致的整体右移 (杆1 在 x=X)
     y0 = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
     h0 = hd_lut[idx_prev]
 
