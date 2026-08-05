@@ -77,8 +77,9 @@ ELEVATION = 25.0                     # 仰角 (度): 90=正俯视, 0=水平
 AZIMUTH = -60.0                      # 方位角 (度): 绕 Z 轴旋转, 灵活调整视角
 GROUND_COLOR = (0.5, 0.5, 0.5, 1.0)  # 地面颜色 (有限长方形)
 GROUND_MARGIN = 0.12                 # 地面超出轨迹范围的边距 (m)
+GROUND_Z = -0.01                     # 地面 z 坐标 (略低于内容, 保证深度排序在最底层)
 BODY_Z = 0.06                        # 机器人躯干/脊柱高度 (m)
-POLE_HEIGHT = 0.10                   # 杆高度 (m)
+POLE_HEIGHT = 0.20                   # 杆高度 (m) (立杆, 明显三维)
 # ======================================================
 
 
@@ -287,11 +288,11 @@ def main():
     ax = fig.add_subplot(111, projection='3d')
     ax.set_facecolor('white')
 
-    # 地面 (XOY 平面, z=0, 有限长方形)
+    # 地面 (XOY 平面, z=GROUND_Z, 有限长方形, 深度排序最底层)
     gx0, gx1 = path_x.min() - GROUND_MARGIN, path_x.max() + GROUND_MARGIN
     gy0, gy1 = path_y.min() - GROUND_MARGIN, path_y.max() + GROUND_MARGIN
     ax.add_collection3d(Poly3DCollection(
-        [[[gx0, gy0, 0], [gx1, gy0, 0], [gx1, gy1, 0], [gx0, gy1, 0]]],
+        [[[gx0, gy0, GROUND_Z], [gx1, gy0, GROUND_Z], [gx1, gy1, GROUND_Z], [gx0, gy1, GROUND_Z]]],
         facecolor=GROUND_COLOR, edgecolor=(0.35, 0.35, 0.35), linewidth=0.8, zsort='min'))
 
     # 走廊边界 (z=0)
@@ -306,16 +307,19 @@ def main():
     ax.plot(path_x, path_y, np.zeros_like(path_x), '--', color=PATH_MIDLINE_COLOR,
             linewidth=PATH_MIDLINE_LINEWIDTH, dashes=(8, 4), alpha=PATH_MIDLINE_ALPHA)
 
-    # 三根杆 (3D 圆柱, 从地面到 POLE_HEIGHT)
+    # 三根杆 (3D 立杆: 圆柱侧壁 + 顶/底盖, 从 z=0 到 POLE_HEIGHT)
     pole_xs = [POLE_SPACING, 2 * POLE_SPACING, 3 * POLE_SPACING]
     n_theta = 24
     theta = np.linspace(0, 2 * np.pi, n_theta)
     for px in pole_xs:
         verts = []
+        cx = [px + POLE_RADIUS * np.cos(t) for t in theta]
+        cy = [pole_y + POLE_RADIUS * np.sin(t) for t in theta]
         for i in range(n_theta - 1):
-            ax1, ay1 = px + POLE_RADIUS * np.cos(theta[i]), pole_y + POLE_RADIUS * np.sin(theta[i])
-            ax2, ay2 = px + POLE_RADIUS * np.cos(theta[i + 1]), pole_y + POLE_RADIUS * np.sin(theta[i + 1])
-            verts.append([[ax1, ay1, 0], [ax2, ay2, 0], [ax2, ay2, POLE_HEIGHT], [ax1, ay1, POLE_HEIGHT]])
+            verts.append([[cx[i], cy[i], 0], [cx[i + 1], cy[i + 1], 0],
+                          [cx[i + 1], cy[i + 1], POLE_HEIGHT], [cx[i], cy[i], POLE_HEIGHT]])
+        verts.append([[cx[i], cy[i], 0.0] for i in range(n_theta)])            # 底盖
+        verts.append([[cx[i], cy[i], POLE_HEIGHT] for i in range(n_theta)])    # 顶盖
         ax.add_collection3d(Poly3DCollection(verts, facecolor=POLE_COLOR,
                                              edgecolor=POLE_EDGE_COLOR, linewidth=0.3, zsort='min'))
 
@@ -349,7 +353,7 @@ def main():
     ax.set_box_aspect((1.0, 1.0, 0.6))
     ax.set_xlim(gx0, gx1)
     ax.set_ylim(gy0, gy1)
-    ax.set_zlim(0, POLE_HEIGHT * 1.2)
+    ax.set_zlim(GROUND_Z, POLE_HEIGHT * 1.1)
     ax.set_axis_off()
 
     # 保存图片
