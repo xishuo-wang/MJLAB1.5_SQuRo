@@ -78,12 +78,13 @@ def generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None):
     if X >= 2 * x_sw_full - 1e-6:
         straight = max(0.0, X - 2 * x_sw_full)
         segs = [
+            (straight / 2, 0.0, 0.0),          # S_a 直行 y=0 (杆1 上方直行右半, 起点=杆1正上方)
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),
-            (straight, 0.0, 0.0),              # S3 直行 (杆1→杆2, 结束于杆2 x)
+            (straight, 0.0, 0.0),              # S_b 直行 y=-2*x_sw (杆2 下方, 中点=杆2 x)
             (tr, 0.0, K), (platform, K, K), (tr, K, 0.0),
             (tr, 0.0, -K), (platform, -K, -K), (tr, -K, 0.0),
-            (straight, 0.0, 0.0),              # S6 直行 (杆2→杆3, 结束于杆3 x)
+            (straight / 2, 0.0, 0.0),          # S_c 直行 y=0 (杆3 上方直行左半, 终点=杆3正上方)
         ]
     else:
         segs = [
@@ -158,11 +159,21 @@ def main():
     s_lut, x_lut, y_lut, hd_lut, k_lut = generate_slalom_lut_smooth_period(X)
     period = s_lut[-1]
 
-    # 轨迹整体右移 X: 起点 = 第一根杆 (x=X) 正上方, 周期覆盖杆1(x) 与杆2(2x)
-    path_x, path_y = x_lut + X, y_lut
+    # 轨迹整体右移 X + 前后各扩展半段直行 (L/2):
+    # 使杆1/2/3 的完整直行段均可见 (杆位于直行段正中间)
+    if X >= 2 * x_sw_full - 1e-6:
+        half = (X - 2 * x_sw_full) / 2.0
+        mask_tail = x_lut >= 2 * X - half - 1e-9
+        mask_head = x_lut <= half + 1e-9
+        x_ext = np.concatenate([x_lut[mask_tail] - 2 * X, x_lut, x_lut[mask_head] + 2 * X])
+        y_ext = np.concatenate([y_lut[mask_tail], y_lut, y_lut[mask_head]])
+        h_ext = np.concatenate([hd_lut[mask_tail], hd_lut, hd_lut[mask_head]])
+        path_x, path_y, hd_ext = x_ext + X, y_ext, h_ext
+    else:
+        path_x, path_y, hd_ext = x_lut + X, y_lut, hd_lut
 
-    cos_h = np.cos(hd_lut)
-    sin_h = np.sin(hd_lut)
+    cos_h = np.cos(hd_ext)
+    sin_h = np.sin(hd_ext)
     n_x = -sin_h
     n_y = cos_h
 
