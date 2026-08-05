@@ -9,8 +9,8 @@ PHASE1_END_ITER = 4000              # iter 2000-4000: 转弯基元
 PHASE2_MID_ITER = 6000              # iter 4000-6000: 绕杆间距缩小阶段
 PHASE2_END_ITER = 8000              # iter 6000-8000: 绕杆训练
 
-CURVATURE_TARGET_MAX = 20.0         # Phase 0 曲率最大值
-CURVATURE_TARGET = 20.0             # Phase 1 绕杆弧曲率
+CURVATURE_TARGET_MAX = 25.0         # Phase 0 曲率最大值
+CURVATURE_TARGET = 25.0             # Phase 1 绕杆弧曲率
 Rmin = 1.0 / CURVATURE_TARGET       # 最小转弯半径
 
 SMOOTH_TIME = 1.0                   # 单段过渡时间 (s)，弧段间曲率线性过渡, 平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
