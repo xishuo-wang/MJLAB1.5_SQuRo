@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.path import Path as MplPath
 from matplotlib.patches import Polygon, Circle
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 # ======================================================
@@ -33,7 +32,7 @@ CURVATURE_TARGET = 1.0 / RMIN   # 目标曲率 (1/m)，由最小半径自动计�
 
 # 杆
 POLE_RADIUS = 0.015             # 杆半径 (m)
-POLE_COLOR = '#404040'   # 橙红色 RGB
+POLE_COLOR = '#2E86C1'          # 杆颜色 (蓝色, 与灰色地面/橙黄机器人区分)
 POLE_ZORDER = 8                 # 绘图层级（高于机器人）
 
 # 绘图配置
@@ -44,14 +43,14 @@ CORRIDOR_BOUNDARY_LINEWIDTH = 1.2
 CORRIDOR_BOUNDARY_ALPHA = 0.9
 
 # 路径中线
-PATH_MIDLINE_COLOR = '#404040'
+PATH_MIDLINE_COLOR = '#FFFFFF'   # 路径中线 (白色, 灰色地面上更明显)
 PATH_MIDLINE_LINEWIDTH = 2.2
 PATH_MIDLINE_ALPHA = 0.9
 
 # 躯干（走廊内的安全区域）
 BODY_FILL_COLOR = '#F4D03F'
 BODY_EDGE_COLOR = '#B8860B'
-BODY_ALPHA = 0.5
+BODY_ALPHA = 1.0
 BODY_LINEWIDTH = 1.5
 
 # 脊柱关节
@@ -65,21 +64,20 @@ POLE_EDGE_COLOR = 'black'
 POLE_EDGE_LINEWIDTH = 0.8
 
 # 惩罚阴影（超出区域）
-PENALTY_CMAP = 'plasma_r'
+PENALTY_CMAP = 'coolwarm'       # 奖励色: 蓝(小)→红(大), 与躯干橙黄区分
 PENALTY_POINT_SIZE = 25
 PENALTY_EDGE_COLOR = '#2C3E50'
 PENALTY_EDGE_LINEWIDTH = 0.3
-PENALTY_ALPHA = 0.9
+PENALTY_ALPHA = 1.0
 PENALTY_CBAR_LABEL = 'Exceedance (m)'
 
-# 3D 视图 (XYZ 坐标系, 地面 = XOY 平面上的有限长方形)
+# 3D 视图 (自投影等距视图: 3D坐标→2D, zorder 控制层叠; 地面 zorder=1 最底层)
 ELEVATION = 25.0                     # 仰角 (度): 90=正俯视, 0=水平
-AZIMUTH = -60.0                      # 方位角 (度): 绕 Z 轴旋转, 灵活调整视角
+AZIMUTH = -45.0                      # 方位角 (度): 绕 Z 轴旋转, 灵活调整视角
 GROUND_COLOR = (0.5, 0.5, 0.5, 1.0)  # 地面颜色 (有限长方形)
 GROUND_MARGIN = 0.12                 # 地面超出轨迹范围的边距 (m)
-GROUND_Z = -0.005                    # 地面 z 坐标 (略低于内容层 z=0, 深度排序最底层)
-GROUND_ALPHA = 0.6                   # 地面不透明度 (半透明, 防止遮挡内容)
-# 注意: 所有内容(杆/机器人/轨迹/走廊/阴影)均位于 XOY 平面 z=0, 3D 仅为旋转视角看图
+# 注意: 所有内容(杆/机器人/轨迹/走廊/阴影)均位于 XOY 平面 z=0,
+#       采用自投影等距视图仅为旋转视角看图 (无 matplotlib 3D 层叠问题)
 # ======================================================
 
 
@@ -283,71 +281,76 @@ def main():
                     exceed = max(0.0, min_dist - CORRIDOR_C)
                     out_dist.append(exceed)
 
-    # ========== 绘图 (3D: XYZ 坐标系, 地面 = XOY 平面有限长方形) ==========
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
+    # ========== 绘图 (自投影等距视图: 3D坐标→2D, zorder 控制层叠) ==========
+    az_r = np.deg2rad(AZIMUTH)
+    el_r = np.deg2rad(ELEVATION)
+    _ca, _sa = np.cos(az_r), np.sin(az_r)
+    _ce, _se = np.cos(el_r), np.sin(el_r)
+
+    def proj(x, y, z=0.0):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        z = np.asarray(z, dtype=float)
+        return x * _ca - y * _sa, x * _sa * _se + y * _ca * _se + z * _ce
+
+    fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_facecolor('white')
 
-    # 地面 (XOY 平面, z=GROUND_Z, 有限长方形, 深度排序最底层)
+    # 地面 (XOY 平面有限长方形, 灰色填充, zorder=1 最底层)
     gx0, gx1 = path_x.min() - GROUND_MARGIN, path_x.max() + GROUND_MARGIN
     gy0, gy1 = path_y.min() - GROUND_MARGIN, path_y.max() + GROUND_MARGIN
-    ax.add_collection3d(Poly3DCollection(
-        [[[gx0, gy0, GROUND_Z], [gx1, gy0, GROUND_Z], [gx1, gy1, GROUND_Z], [gx0, gy1, GROUND_Z]]],
-        facecolor=(GROUND_COLOR[0], GROUND_COLOR[1], GROUND_COLOR[2], GROUND_ALPHA),
-        edgecolor=(0.35, 0.35, 0.35), linewidth=0.8, zsort='min'))
+    g_px, g_py = proj([gx0, gx1, gx1, gx0], [gy0, gy0, gy1, gy1], 0.0)
+    ax.add_patch(Polygon(np.column_stack([g_px, g_py]), closed=True,
+                         facecolor=GROUND_COLOR, edgecolor=(0.35, 0.35, 0.35),
+                         linewidth=0.8, zorder=1))
 
     # 走廊边界 (z=0)
-    ax.plot(outer_x, outer_y, np.zeros_like(outer_x), '--',
-            color=CORRIDOR_BOUNDARY_COLOR, linewidth=CORRIDOR_BOUNDARY_LINEWIDTH,
-            alpha=CORRIDOR_BOUNDARY_ALPHA)
-    ax.plot(inner_x, inner_y, np.zeros_like(inner_x), '--',
-            color=CORRIDOR_BOUNDARY_COLOR, linewidth=CORRIDOR_BOUNDARY_LINEWIDTH,
-            alpha=CORRIDOR_BOUNDARY_ALPHA)
+    o_px, o_py = proj(outer_x, outer_y)
+    i_px, i_py = proj(inner_x, inner_y)
+    ax.plot(o_px, o_py, '--', color=CORRIDOR_BOUNDARY_COLOR,
+            linewidth=CORRIDOR_BOUNDARY_LINEWIDTH, alpha=CORRIDOR_BOUNDARY_ALPHA, zorder=2)
+    ax.plot(i_px, i_py, '--', color=CORRIDOR_BOUNDARY_COLOR,
+            linewidth=CORRIDOR_BOUNDARY_LINEWIDTH, alpha=CORRIDOR_BOUNDARY_ALPHA, zorder=2)
 
     # 路径中线 (z=0)
-    ax.plot(path_x, path_y, np.zeros_like(path_x), '--', color=PATH_MIDLINE_COLOR,
-            linewidth=PATH_MIDLINE_LINEWIDTH, dashes=(8, 4), alpha=PATH_MIDLINE_ALPHA)
+    m_px, m_py = proj(path_x, path_y)
+    ax.plot(m_px, m_py, '--', color=PATH_MIDLINE_COLOR, linewidth=PATH_MIDLINE_LINEWIDTH,
+            dashes=(8, 4), alpha=PATH_MIDLINE_ALPHA, zorder=2)
 
-    # 三根杆 (2D 实心圆盘, XOY 平面 z=0 — 与轨迹同为平面内容)
+    # 三根杆 (2D 圆, z=0, zorder=3)
     pole_xs = [POLE_SPACING, 2 * POLE_SPACING, 3 * POLE_SPACING]
-    n_theta = 24
-    theta = np.linspace(0, 2 * np.pi, n_theta)
     for px in pole_xs:
-        disc = [[px + POLE_RADIUS * np.cos(t), pole_y + POLE_RADIUS * np.sin(t), 0.0] for t in theta]
-        ax.add_collection3d(Poly3DCollection([disc], facecolor=POLE_COLOR,
-                                             edgecolor=POLE_EDGE_COLOR, linewidth=POLE_EDGE_LINEWIDTH, zsort='min'))
+        c_px, c_py = proj(px, pole_y, 0.0)
+        ax.add_patch(Circle((c_px, c_py), radius=POLE_RADIUS, facecolor=POLE_COLOR,
+                            edgecolor=POLE_EDGE_COLOR, linewidth=POLE_EDGE_LINEWIDTH, zorder=3))
 
-    # 机器人躯干 (XOY 平面 z=0) 及脊柱关节
-    f3d = np.column_stack([f_rect[:, 0], f_rect[:, 1], np.zeros(4)])
-    h3d = np.column_stack([h_rect[:, 0], h_rect[:, 1], np.zeros(4)])
-    ax.add_collection3d(Poly3DCollection([f3d], facecolor=BODY_FILL_COLOR, edgecolor=BODY_EDGE_COLOR,
-                                         linewidth=BODY_LINEWIDTH, alpha=BODY_ALPHA, zsort='min'))
-    ax.add_collection3d(Poly3DCollection([h3d], facecolor=BODY_FILL_COLOR, edgecolor=BODY_EDGE_COLOR,
-                                         linewidth=BODY_LINEWIDTH, alpha=BODY_ALPHA, zsort='min'))
-    ax.scatter([base[0]], [base[1]], [0.0], s=80, color=JOINT_FILL_COLOR,
-               edgecolors=JOINT_EDGE_COLOR, linewidth=JOINT_LINEWIDTH, zorder=6)
+    # 机器人躯干 (z=0 矩形, zorder=4) 及脊柱关节
+    for rect in (f_rect, h_rect):
+        r_px, r_py = proj(rect[:, 0], rect[:, 1], 0.0)
+        ax.add_patch(Polygon(np.column_stack([r_px, r_py]), closed=True,
+                             facecolor=BODY_FILL_COLOR, edgecolor=BODY_EDGE_COLOR,
+                             linewidth=BODY_LINEWIDTH, alpha=BODY_ALPHA, zorder=4))
+    b_px, b_py = proj(base[0], base[1], 0.0)
+    ax.scatter([b_px], [b_py], s=80, color=JOINT_FILL_COLOR, edgecolors=JOINT_EDGE_COLOR,
+               linewidth=JOINT_LINEWIDTH, zorder=5)
 
-    # 惩罚阴影 (XOY 平面 z=0 散点)
+    # 惩罚阴影 (z=0 散点, zorder=6)
     if out_x:
         out_x = np.array(out_x)
         out_y = np.array(out_y)
         out_dist = np.array(out_dist)
         max_exceed = out_dist.max() if len(out_dist) > 0 else 1.0
         norm = Normalize(0, max_exceed)
-        sc = ax.scatter(out_x, out_y, np.zeros_like(out_x), s=PENALTY_POINT_SIZE,
-                        c=out_dist, cmap=PENALTY_CMAP, edgecolors=PENALTY_EDGE_COLOR,
-                        linewidth=PENALTY_EDGE_LINEWIDTH, alpha=PENALTY_ALPHA, norm=norm, zorder=7)
+        s_px, s_py = proj(out_x, out_y, 0.0)
+        sc = ax.scatter(s_px, s_py, s=PENALTY_POINT_SIZE, c=out_dist, cmap=PENALTY_CMAP,
+                        edgecolors=PENALTY_EDGE_COLOR, linewidth=PENALTY_EDGE_LINEWIDTH,
+                        alpha=PENALTY_ALPHA, norm=norm, zorder=6)
         cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.04)
         cbar.set_label(PENALTY_CBAR_LABEL, fontsize=10, labelpad=8)
         cbar.ax.tick_params(labelsize=9, width=0.8)
         cbar.outline.set_linewidth(0.6)  # type: ignore
 
-    # 视角 (仰角/方位角可调) 与坐标范围
-    ax.view_init(elev=ELEVATION, azim=AZIMUTH)
-    ax.set_box_aspect((1.0, 1.0, 0.6))
-    ax.set_xlim(gx0, gx1)
-    ax.set_ylim(gy0, gy1)
-    ax.set_zlim(GROUND_Z, 0.08)
+    ax.set_aspect('equal')
     ax.set_axis_off()
 
     # 保存图片
