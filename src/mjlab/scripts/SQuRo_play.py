@@ -22,6 +22,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
     PoleEntityCfg,
     generate_pole_positions,
 )
+from mjlab.tasks.SQuRo_Slalom.mdp.path import get_effective_pole_spacing
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
@@ -48,9 +49,9 @@ class PlayConfig:
     fixed_velocity: float | None = 0.1
     fixed_height_f: float | None = 0.055
     fixed_height_h: float | None = 0.055
-    fixed_gait_freq: float | None = 2.0
+    fixed_gait_freq: float | None = 1.0
     fixed_curvature: float | None = -20
-    fixed_pole_spacing: float | None = 2/15
+    fixed_pole_spacing: float | None = 0.11
     enable_collision: bool = False
 
 
@@ -360,8 +361,8 @@ def run_play(cfg: PlayConfig):
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
     if is_slalom_phase:
-        spacing = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
-        cmd_suffix_parts.append(f"sp{spacing:.2f}")
+        spacing_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        cmd_suffix_parts.append(f"sp{get_effective_pole_spacing(spacing_raw):.2f}")
     elif cfg.fixed_curvature is not None:
         cmd_suffix_parts.append(f"cu{cfg.fixed_curvature}")
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
@@ -370,7 +371,8 @@ def run_play(cfg: PlayConfig):
 
     # 绕杆阶段：用正确的杆间距重建杆实体（覆盖 env_cfg 中的默认占位）
     if is_slalom_phase and TRAINED_MODE:
-        pole_sp = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        pole_sp_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        pole_sp = get_effective_pole_spacing(pole_sp_raw)   # 与期望轨迹一致 (不兼容区间 → 无直行最小间距)
         positions = generate_pole_positions(spacing=pole_sp, num_poles=POLE_NUM, start_x=0.0, start_y=POLE_Y)
         col_type = 1 if cfg.enable_collision else 0
         pole_dict = {}
@@ -391,14 +393,11 @@ def run_play(cfg: PlayConfig):
         phase_name = "绕杆阶段" if is_slalom_phase else "基元阶段"
         print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{phase_name}]")
 
-    # 绕杆阶段：确认杆间距
+    # 绕杆阶段：确认杆间距 (有效间距, 与期望轨迹一致)
     if is_slalom_phase:
-        if cfg.fixed_pole_spacing is not None:
-            pole_sp = cfg.fixed_pole_spacing
-            print(f"[INFO] 杆间距 = {pole_sp:.2f}m (课程值={get_curriculum_pole_spacing(align_step):.2f}m)")
-        else:
-            pole_sp = get_curriculum_pole_spacing(align_step)
-            print(f"[INFO] 杆间距 = {pole_sp:.2f}m (自动从课程读取)")
+        pole_sp_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
+        pole_sp = get_effective_pole_spacing(pole_sp_raw)
+        print(f"[INFO] 杆间距 = {pole_sp:.4f}m (输入={pole_sp_raw:.4f}m, 课程值={get_curriculum_pole_spacing(align_step):.4f}m)")
 
     # 初始化数据记录器
     data_recorder = None

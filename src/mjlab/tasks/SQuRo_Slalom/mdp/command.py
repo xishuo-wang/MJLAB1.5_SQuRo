@@ -286,7 +286,7 @@ class SlalomCommand(CommandTerm):
         z = start[2] + z_offset
 
         _, xs, ys, _, _ = _generate_slalom_lut_smooth_period(spacing)
-        period_len = np.array(xs[-1])
+        period_len = float(xs[-1])
         n_periods = 3
 
         radius = 0.006
@@ -298,10 +298,12 @@ class SlalomCommand(CommandTerm):
             pt = np.array([app_tbl["x"][i], app_tbl["y"][i], z])
             visualizer.add_sphere(center=pt, radius=radius, color=(0.5, 0.8, 0.5, 0.5), label=f"sl_ap_{i}")
 
-        # 周期路径 (世界坐标, 与期望轨迹一致)
+        # 周期路径 (世界坐标, 与期望轨迹一致) — 平滑 LUT 逐点积分点数过多, 每周期降采样约 60 点
+        n_pts = len(xs)
+        draw_idx = np.unique(np.linspace(0, n_pts - 1, 60).astype(int))
         for k in range(n_periods):
             offset_x = k * period_len
-            for i in range(len(xs)):
+            for i in draw_idx:
                 pt = np.array([xs[i] + offset_x, ys[i], z])
                 color = (0.2, 0.7, 1.0, 0.5) if k % 2 == 0 else (1.0, 0.5, 0.2, 0.5)
                 visualizer.add_sphere(center=pt, radius=radius, color=color, label=f"sl_{k}_{i}",)
