@@ -1,6 +1,10 @@
 <mujoco model="Mouse">
     <compiler angle="radian" meshdir="D:/Code/model/Mouse/meshes/"/>
 
+    <visual>
+        <rgba fog="0 0 0 1"/>
+    </visual>
+
     <equality>
         <!-- 脊柱部分闭链链接 -->
         <connect body1="F_spine2_Link" body2="base_Link" anchor="0 0.0169 -0.018" solimp="1 1 0.001" solref="0.002 0.9"/>
@@ -20,8 +24,8 @@
     </equality> 
 
     <asset>
-        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
-        <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="256" height="256" mark="cross" markrgb=".8 .8 .8"/>
+        <texture type="skybox" builtin="gradient" rgb1="0 0 0" rgb2="0 0 0" width="512" height="512"/>
+        <texture name="texplane" type="2d" builtin="checker" rgb1="0.18 0.18 0.18" rgb2="0.09 0.09 0.09" width="256" height="256" mark="cross" markrgb="0.3 0.3 0.3"/>
         <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="10 10" texuniform="true"/> 
         <mesh name="base_Link" file="base_Link.STL"/>
         <mesh name="FU_spine_Link" file="FU_spine_Link.STL"/>
@@ -68,7 +72,7 @@
         <geom solimp="1 1 0.001" solref="0.002 1.0"/> 
     </default>
     <worldbody>
-        <geom name="floor" pos="0 0 0.0" size="1.5 1.5 .25" type="plane" material="matplane" condim="3" contype="1" conaffinity="1" friction="0.7 0.1 0.1" solimp="1 1 0.001" solref="0.002 0.9"/>              
+        <geom name="floor" pos="0 0 0.0" size="0.5 0.5 .25" type="plane" material="matplane" condim="3" contype="1" conaffinity="1" friction="0.7 0.1 0.1" solimp="1 1 0.001" solref="0.002 0.9"/>              
         <body name="base_Link" pos="0 0 0.06" quat="0 -0.707107 -0.707107 0">
         <camera name="follow_camera_left" mode='track' pos="-1.0 0 0" euler="1.57 -1.57 3.14" fovy="20"/>
         <camera name="follow_camera_front" mode='track' pos="0 1.0 0" euler="-1.57 0 0" fovy="20"/>
