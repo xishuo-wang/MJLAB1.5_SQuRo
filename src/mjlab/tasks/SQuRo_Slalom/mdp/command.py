@@ -252,31 +252,35 @@ class SlalomCommand(CommandTerm):
             self._draw_arc_path(visualizer, batch, self.cfg.viz.z_offset)
 
 
-    # 绘制转弯基元轨迹：直行=射线, 转弯=圆弧
+    # 绘制转弯基元轨迹：直行=射线, 转弯=圆弧 (与 compute_arc_path_ref 期望轨迹一致)
     def _draw_arc_path(self, visualizer: "DebugVisualizer", batch: int, z_offset: float) -> None:
         curvature = self.curvature_command[batch].item()
         vel = self.vel_command[batch].item()
         start = self._start_positions[batch].cpu().numpy()
-        heading_0 = 0.0
+        z = start[2] + z_offset
 
         n_pts = 50
         t_max = 20.0
         dt_path = t_max / n_pts
         radius = 0.008
 
-        for i in range(n_pts + 1):
-            t_i = i * dt_path
-            if abs(curvature) < 1e-6:
-                x_i = start[0] + vel * t_i * math.cos(heading_0)
-                y_i = start[1] + vel * t_i * math.sin(heading_0)
-            else:
-                R = 1.0 / curvature
-                omega = curvature * vel
-                dtheta = omega * t_i
-                x_i = start[0] + R * (math.sin(heading_0 + dtheta) - math.sin(heading_0))
-                y_i = start[1] - R * (math.cos(heading_0 + dtheta) - math.cos(heading_0))
-            pt = np.array([x_i, y_i, start[2] + z_offset])
-            visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}",)
+        if abs(curvature) < 1e-6:
+            # 直行: 从起点沿 +X (期望轨迹为直线)
+            for i in range(n_pts + 1):
+                t_i = i * dt_path
+                pt = np.array([start[0] + vel * t_i, start[1], z])
+                visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
+        else:
+            # 转弯: 期望轨迹 = 圆心 (0, 1/κ) 半径 |1/κ| 的固定圆弧 (与 _INIT_DIST 无关)
+            # θ = κ·(vel·t − _INIT_DIST), 起点 θ0 = −κ·_INIT_DIST (start 位于圆弧上)
+            theta0 = -curvature * _INIT_DIST
+            for i in range(n_pts + 1):
+                t_i = i * dt_path
+                theta = theta0 + curvature * vel * t_i
+                x_i = math.sin(theta) / curvature
+                y_i = (1.0 - math.cos(theta)) / curvature
+                pt = np.array([x_i, y_i, z])
+                visualizer.add_sphere(center=pt, radius=radius, color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
 
 
     # 绘制绕杆轨迹：平滑 LUT 路径 (与实际期望轨迹一致)
