@@ -1,142 +1,133 @@
 import numpy as np
+from pathlib import Path
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle   # 修复 pylance 警告
+from matplotlib.patches import Circle
 
-# ========== 参数 ==========
-Rmin = 0.10
-pole_radius = 0.005
+# 直接从 Slalom 任务导入 RL 实际使用的平滑 LUT 路径生成函数 (保证展示 = 训练使用)
+from mjlab.tasks.SQuRo_Slalom.mdp.path import (
+    _approach_rev_table,
+    _generate_slalom_lut_smooth_period,
+    BODY_REF_OFFSET,
+    CORRIDOR_HALF_WIDTH,
+    _INIT_DIST,
+)
+from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_Y, generate_pole_positions
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SMOOTH_TIME, SMOOTH_VEL
 
-# ========== 辅助函数：已知起终点、半径和旋转方向生成1/4圆弧 ==========
-def arc_from_start_end(start, end, r, clockwise, steps=30):
-    start = np.asarray(start)
-    end = np.asarray(end)
-    mid = (start + end) / 2
-    chord_vec = end - start
-    chord_len = np.linalg.norm(chord_vec)
-    if chord_len > 2 * r:
-        raise ValueError("No circle with this radius can connect the points")
-    d = np.sqrt(max(0, r**2 - (chord_len / 2)**2))
-    perp = np.array([-chord_vec[1], chord_vec[0]]) / chord_len
-    sign = -1 if clockwise else 1
-    center = mid + sign * d * perp
 
-    v_start = start - center
-    v_end = end - center
-    ang_start = np.arctan2(v_start[1], v_start[0])
-    ang_end = np.arctan2(v_end[1], v_end[0])
+# ==================== 配置 ====================
+POLE_SPACING = 0.15             # 杆间距 (m) — 与回放默认 fixed_pole_spacing 一致
+NUM_PERIODS = 3                 # 周期数
+NUM_POLES = 8                   # 显示杆数量
+CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽 (m) — 与 Slalom 任务 corridor 一致
+BODY_REF_OFFSET = 0.04          # F/H_body 中心沿路径切线偏移 (m) — 与 Slalom 任务一致
 
-    if clockwise:
-        if ang_end > ang_start:
-            ang_end -= 2 * np.pi
-    else:
-        if ang_end < ang_start:
-            ang_end += 2 * np.pi
+X_RANGE = (0.0, 1.10)           # 显示 x 范围 (m)
+Y_RANGE = (-0.20, 0.20)         # 显示 y 范围 (m)
+N_SAMPLES = 400                 # 采样点数 (路径由 LUT 直接给出, 仅用于重采样)
+SAVE_PATH = Path(__file__).parent / "Path" / "Viz_Slalom_Path.png"
 
-    theta = np.linspace(ang_start, ang_end, steps)
-    x = center[0] + r * np.cos(theta)
-    y = center[1] + r * np.sin(theta)
-    return x, y
 
-# ========== 生成一个周期的路径（起点在 (0,0)） ==========
-def generate_one_period(X, Rmin):
-    x0, y0 = 0.0, 0.0
-    path_x, path_y = [x0], [y0]
-
-    # 1. 顺时针1/4: (0,0) -> (Rmin, -Rmin)
-    ax, ay = arc_from_start_end((x0, y0), (x0 + Rmin, y0 - Rmin), Rmin, clockwise=True)
-    path_x.extend(ax); path_y.extend(ay)
-
-    # 2. 逆时针1/4: -> (2Rmin, -2Rmin)
-    ax, ay = arc_from_start_end((x0 + Rmin, y0 - Rmin), (x0 + 2*Rmin, y0 - 2*Rmin), Rmin, clockwise=False)
-    path_x.extend(ax); path_y.extend(ay)
-
-    # 3. 直线: -> (X, -2Rmin)  长度 X-2Rmin
-    if X - 2 * Rmin > 1e-9:
-        path_x.append(x0 + X)
-        path_y.append(y0 - 2 * Rmin)
-
-    # 4. 逆时针1/4: -> (X+Rmin, -Rmin)
-    ax, ay = arc_from_start_end((x0 + X, y0 - 2*Rmin), (x0 + X + Rmin, y0 - Rmin), Rmin, clockwise=False)
-    path_x.extend(ax); path_y.extend(ay)
-
-    # 5. 顺时针1/4: -> (X+2Rmin, 0)
-    ax, ay = arc_from_start_end((x0 + X + Rmin, y0 - Rmin), (x0 + X + 2*Rmin, y0), Rmin, clockwise=True)
-    path_x.extend(ax); path_y.extend(ay)
-
-    # 6. 直线: -> (2X, 0)  长度 X-2Rmin
-    if X - 2 * Rmin > 1e-9:
-        path_x.append(x0 + 2 * X)
-        path_y.append(y0)
-
-    return np.array(path_x), np.array(path_y)
-
-# ========== 生成多个周期 ==========
-def generate_path(X, Rmin, num_periods=3):
-    x_all, y_all = [0.0], [0.0]
+# 生成 RL 实际使用的 base 期望路径 (接近段 + 多周期平滑 LUT)
+def generate_base_path(spacing: float, num_periods: int):
+    # 一个周期的平滑 LUT (起点 (0,0), 周期 x 位移 = 2*spacing)
+    _, xs, ys, hd, _ = _generate_slalom_lut_smooth_period(spacing)
+    px, py, ph = [], [], []
     for k in range(num_periods):
-        px, py = generate_one_period(X, Rmin)
-        x_all.extend(px[1:])
-        y_all.extend(py[1:])
-        # 更新下一个周期的起点（当前终点）
-        # 注意 generate_one_period 已经是从 (0,0) 开始，我们需要全局坐标
-        # 简单做法：用累积位移
-    # 上面的循环不对，因为每个周期都从 (0,0) 开始。
-    # 正确做法：每个周期衔接前一个周期的终点。
-    x_all, y_all = [0.0], [0.0]
-    cur_x, cur_y = 0.0, 0.0
-    for k in range(num_periods):
-        # 移动起点到 (cur_x, cur_y)
-        px, py = generate_one_period(X, Rmin)
-        px += cur_x
-        py += cur_y
-        if k == 0:
-            x_all.extend(px[1:])
-            y_all.extend(py[1:])
-        else:
-            x_all.extend(px[1:])
-            y_all.extend(py[1:])
-        cur_x = x_all[-1]
-        cur_y = y_all[-1]
-    return np.array(x_all), np.array(y_all)
+        px.extend(xs + spacing + k * 2 * spacing)
+        py.extend(ys)
+        ph.extend(hd)
+    return np.array(px), np.array(py), np.array(ph)
 
-# ========== 绘图 ==========
-fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-for ax, X, title in zip(axes, [0.2, 0.3], ['X = 2Rmin (no straight)', 'X = 3Rmin (with straight)']):
-    # 生成杆位置（仅用于显示）
-    num_poles = 6
-    poles_x = np.arange(num_poles) * X
-    poles_y = np.full(num_poles, -Rmin)
+# 沿路径切线偏移 offset 得到前/后肢中心路径 (F +offset, H -offset)
+def offset_path(px, py, ph, offset: float):
+    tangent = np.column_stack([np.cos(ph), np.sin(ph)])
+    return px + offset * tangent[:, 0], py + offset * tangent[:, 1]
 
-    # 画杆
-    for px, py in zip(poles_x, poles_y):
-        ax.add_patch(Circle((px, py), pole_radius, color='red', alpha=0.6))
-    ax.plot(poles_x, poles_y, 'rx', label='Pole centers')
 
-    # 生成路径（多个周期）
-    path_x, path_y = generate_path(X, Rmin, num_periods=3)
+# 生成接近段 (圆弧: 平台 -K + 过渡 -K→0, 终点 = (spacing, 0), 与 RL 一致)
+def generate_approach(spacing: float):
+    tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+    return np.array(tbl["x"]) + spacing, np.array(tbl["y"])
 
-    # 画路径
-    ax.plot(path_x, path_y, 'b-', linewidth=2, label='Reference path')
 
-    # 标记直线段（y≈0 或 y≈-2Rmin 的部分用红色虚线标出）
-    straight = (np.abs(path_y) < 1e-6) | (np.abs(path_y + 2*Rmin) < 1e-6)
-    ax.plot(path_x[straight], path_y[straight], 'r--', linewidth=2, label='Straight segments')
+# 绘制单个子图: 路径 + 杆 + 走廊带 + 接近段
+def draw_path_subplot(ax, px, py, ph, title: str, desc: str, color: str,
+                      draw_corridor: bool, spacing: float) -> None:
+    # 杆 (仅显示)
+    poles = generate_pole_positions(spacing=spacing, num_poles=NUM_POLES,
+                                    start_x=spacing, start_y=POLE_Y)
+    for pole_x, pole_y, _ in poles:
+        ax.add_patch(Circle((pole_x, pole_y), 0.01, facecolor="red", edgecolor="darkred",
+                            alpha=0.6, zorder=4))
+        ax.plot(pole_x, pole_y, "rx", markersize=5, zorder=5)
 
-    # 起点
-    ax.plot(0, 0, 'go', markersize=10, label='Start')
+    # 走廊带 (沿路径法向 ± 半宽)
+    if draw_corridor:
+        n_x = -np.sin(ph)
+        n_y = np.cos(ph)
+        up_x = px + CORRIDOR_HALF_WIDTH * n_x
+        up_y = py + CORRIDOR_HALF_WIDTH * n_y
+        dn_x = px - CORRIDOR_HALF_WIDTH * n_x
+        dn_y = py - CORRIDOR_HALF_WIDTH * n_y
+        ax.fill(np.concatenate([up_x, dn_x[::-1]]), np.concatenate([up_y, dn_y[::-1]]),
+                color="skyblue", alpha=0.25, zorder=1,
+                label=f"走廊 (±{CORRIDOR_HALF_WIDTH:.2f})")
 
-    # 辅助线
-    ax.axhline(0, color='gray', linestyle=':')
-    ax.axhline(-Rmin, color='red', linestyle='--', alpha=0.3)
-    ax.axhline(-2*Rmin, color='blue', linestyle='--', alpha=0.3)
+    # 接近段 (RL 实际使用)
+    app_x, app_y = generate_approach(spacing)
+    ax.plot(app_x, app_y, "g--", linewidth=1.5, zorder=3, label="接近段 (圆弧)")
 
-    ax.set_xlabel('X (m)')
-    ax.set_ylabel('Y (m)')
-    ax.set_title(title)
-    ax.axis('equal')
-    ax.grid(True)
-    ax.legend(fontsize=8)
+    # 期望路径
+    ax.plot(px, py, color=color, linewidth=2.2, zorder=6, label="期望路径 (平滑 LUT)")
 
-plt.tight_layout()
-plt.show()
+    # 直行段参考线
+    ax.axhline(0.0, color="gray", linestyle=":", linewidth=1.0, zorder=2)
+    ax.axhline(2 * POLE_Y, color="gray", linestyle=":", linewidth=1.0, zorder=2)
+
+    ax.set_title(f"{title}  ( {desc} )", fontsize=10)
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_xlim(*X_RANGE)
+    ax.set_ylim(*Y_RANGE)
+    ax.grid(True, linestyle=":")
+    ax.legend(fontsize=8, loc="upper right")
+
+
+# 绘制三个子图 (前肢中心 / 基座 / 后肢中心), 展示 RL 实际使用的平滑 LUT 路径
+def plot_slalom_path() -> None:
+    spacing = POLE_SPACING
+    base_x, base_y, base_h = generate_base_path(spacing, NUM_PERIODS)
+    f_x, f_y = offset_path(base_x, base_y, base_h, +BODY_REF_OFFSET)
+    h_x, h_y = offset_path(base_x, base_y, base_h, -BODY_REF_OFFSET)
+
+    specs = [
+        ("前肢中心 (F_body)", f"路径沿切线 +{BODY_REF_OFFSET:.3f}m",
+         f_x, f_y, base_h, "#1f77b4", True),
+        ("基座 (base)", "RL 不对基座判走廊 (仅 F/H)",
+         base_x, base_y, base_h, "#2ca02c", False),
+        ("后肢中心 (H_body)", f"路径沿切线 -{BODY_REF_OFFSET:.3f}m",
+         h_x, h_y, base_h, "#d62728", True),
+    ]
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+    for ax, (title, desc, px, py, ph, color, draw_cor) in zip(axes, specs):
+        draw_path_subplot(ax, px, py, ph, title, desc, color, draw_cor, spacing)
+
+    axes[-1].set_xlabel("X (m)")
+    fig.suptitle(f"Slalom 三点期望路径 (XoY, 平滑 LUT, 杆间距 {spacing:.2f}m, 接近段+{NUM_PERIODS}周期)",
+                 fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+
+    if SAVE_PATH is not None:
+        SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(str(SAVE_PATH), dpi=150)
+        print(f"[Viz_Slalom_Path] 图片已保存: {SAVE_PATH}")
+    plt.show()
+
+
+if __name__ == "__main__":
+    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "PingFang SC"]
+    plt.rcParams["axes.unicode_minus"] = False
+    plot_slalom_path()
