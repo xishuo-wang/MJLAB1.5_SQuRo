@@ -1,8 +1,6 @@
-# uv run train Mjlab-Mouse
-# uv run play Mjlab-Mouse-Play --checkpoint_file
+# uv run train Mjlab-SQuRo-Tunnel
+# uv run play Mjlab-SQuRo-Tunnel-Play --checkpoint_file
 
-from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
     ActionTermCfg,
     CommandTermCfg,
@@ -13,56 +11,48 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.tasks.SQuRo_Tunnel import mdp
 from mjlab.viewer import ViewerConfig
+from mjlab.tasks.SQuRo_Tunnel import mdp
+from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
+from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
+from mjlab.tasks.SQuRo_Tunnel.mdp.path import OBSTACLE_X_LEFT, OBSTACLE_LENGTH, HOLE_BOTTOM
 
 
 def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # 获取 mouse 机器人配置
+    # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
-    # Mouse 特定配置
-    foot_names = ("FR", "FL", "HR", "HL")
+    # 足端碰撞体名称
+    foot_names = ("FL", "FR", "HL", "HR")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
-    
 
-    # 观测空间配置
+    # 观测空间
     policy_terms = {
-        "actions": ObservationTermCfg(func=mdp.last_action, history_length=3),
-        "joint_pos": ObservationTermCfg(func=mdp.joint_pos_rel),
-        "joint_vel": ObservationTermCfg(func=mdp.joint_vel_rel),
-        "joint_acc": ObservationTermCfg(func=mdp.joint_acc),
-        "base_pos": ObservationTermCfg(func=mdp.base_pos),
-        "base_lin_vel_w": ObservationTermCfg(func=mdp.base_lin_vel_w),
-        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),     
-        "heading": ObservationTermCfg(func=mdp.heading),
+        "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
         "ref_joint_vel": ObservationTermCfg(func=mdp.ref_joint_vel),
-        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "mouse_cmd"}),
+        "actuator_pos": ObservationTermCfg(func=mdp.actuator_pos),
+        "actuator_vel": ObservationTermCfg(func=mdp.actuator_vel),
+        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),
+        "base_ang_vel": ObservationTermCfg(func=mdp.base_ang_vel),
+        "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
+        "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
+        "heading": ObservationTermCfg(func=mdp.heading),
+        "path_ref": ObservationTermCfg(func=mdp.path_ref),
+        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "tunnel_cmd"}),
     }
 
-    critic_terms = {
-        **policy_terms,
-    }
+    critic_terms = {**policy_terms}
 
     observations = {
-        "actor": ObservationGroupCfg(
-            terms=policy_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
-        "critic": ObservationGroupCfg(
-            terms=critic_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
+        "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
+        "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-
-    # 动作空间配置
+    # 动作空间 — 14个执行器位置控制
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -72,39 +62,31 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-
-    # 事件配置
+    # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-
-    # 奖励函数配置
+    # 奖励函数
     rewards = {
-        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_reward, weight=1.0),
-        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_velocity_reward, weight=1.0),
-        "velocity": RewardTermCfg(func=mdp.compute_linear_velocity_reward, weight=1.0),
+        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
+        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
-        "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),
-        "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
-        "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
-        "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
-        "body_contact": RewardTermCfg(func=mdp.compute_body_contact_penalty, weight=1.0),
-        "update": RewardTermCfg(func=mdp.update_curriculum, weight=0.0),
-        "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
-        "reached": RewardTermCfg(func=mdp.compute_reached_reward, weight=1.0),
+        "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
+        "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=1.0),
+        "track_head": RewardTermCfg(func=mdp.compute_head_track_reward, weight=1.0),
+        "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
+        "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
+        "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
     }
 
-
-    # 终止条件配置
+    # 终止条件
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
-        # "reached": TerminationTermCfg(func=mdp.check_reach_goal, time_out=True),
     }
 
-
-    # 足部接触传感器
+    # 足端接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
@@ -115,60 +97,34 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
+    # 命令 — 5D [vel_x, height_f, height_h, gait_freq, curvature], 曲率固定 0
+    commands: dict[str, CommandTermCfg] = {
+        "tunnel_cmd": mdp.TunnelCommandCfg(
+            asset_name="robot",
+            resampling_time_range=(20.0, 30.0),
+            debug_vis=play,
+            viz=mdp.TunnelCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
+        )
+    }
 
-    # 播放模式配置
-    if play:
-        episode_length_s = 20.0 
-        commands: dict[str, CommandTermCfg] = {
-            "mouse_cmd": mdp.MouseCommandCfg(
-                asset_name="robot",
-                resampling_time_range=(2.0, 3.0),  
-                use_position_schedule=True,  # 启用位置表
-                position_schedule=[
-                    (0.0, 0.02, 0.05),
-                    (0.2, 0.06, 0.02),
-                    (0.32, 0.06, 0.06),
-                    (0.4, 0.04, 0.04),
-                    (0.8, 0.06, 0.06),
-                    (1.0, 0.02, 0.05),
-                    (1.2, 0.06, 0.02),
-                    (1.32, 0.06, 0.06),
-                ],
-                debug_vis=False, 
-                viz=mdp.MouseCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
-            )
-        }
-        entities={
-            "robot": SQURO_ROBOT_CFG,
-            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
-            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005)),
-            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
-        }
-    else:
-        episode_length_s = 20.0
-        commands: dict[str, CommandTermCfg] = {
-            "mouse_cmd": mdp.MouseCommandCfg(
-                asset_name="robot",
-                debug_vis=False, 
-            )
-        }
-        entities = {
-            "robot": SQURO_ROBOT_CFG,
-            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-        }
-
+    # 洞实体 (门洞限高板, 训练全程无碰撞)
+    hole_x_center = OBSTACLE_X_LEFT + OBSTACLE_LENGTH / 2
+    hole_entities: dict = {
+        "hole1": mdp.HoleEntityCfg(
+            name="hole1",
+            position=(hole_x_center, 0.0, HOLE_BOTTOM),
+            size=(OBSTACLE_LENGTH / 2, 0.1, 0.005),
+            contype=0,
+            conaffinity=0,
+        )
+    }
 
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities=entities,
+            entities={"robot": SQURO_ROBOT_CFG, **hole_entities},
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,
@@ -181,21 +137,21 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             origin_type=ViewerConfig.OriginType.ASSET_BODY,
             entity_name="robot",
             body_name="base_Link",
-            distance=0.3,     
-            elevation=0.0,
+            distance=0.5,
+            elevation=-30.0,
             azimuth=90.0,
             height=1080,
             width=1920,
         ),
         sim=SimulationCfg(
-            nconmax=35,
+            nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.001,  
+                timestep=0.005,
                 iterations=10,
                 ls_iterations=20,
             ),
         ),
-        decimation=5,
-        episode_length_s=episode_length_s,
+        decimation=4,
+        episode_length_s=20.0,
     )
