@@ -17,22 +17,25 @@ plt.rcParams["axes.unicode_minus"] = False
 HOLE_X_CENTER = 0.20      # 洞 x 中心 (m)
 HOLE_HALF_X = 0.015       # 洞 x 半宽 size[0] (m) → 洞 x 范围 [0.185, 0.215]
 HOLE_Y_HALF = 0.10        # 洞 y 半深 size[1] (m), 跨走廊宽度 (XoZ 平面不显示)
-HOLE_BOTTOM = 0.05        # 洞下沿高度 (m) = hole.py position[2]
+HOLE_BOTTOM = 0.055        # 洞下沿高度 (m) = hole.py position[2]
 HOLE_THICKNESS = 0.01     # 限高板厚度 (m) = 2*size[2] = 0.01
+X1 = HOLE_X_CENTER - HOLE_HALF_X   # 洞最左侧 X1 (m) = 0.185
+X2 = HOLE_X_CENTER + HOLE_HALF_X   # 洞最右侧 X2 (m) = 0.215
 
 # --- 期望高度规则 ---
 HEIGHT_NORMAL = 0.06      # 正常段期望高度 (m)
 HEIGHT_CLEARANCE = 0.02   # 过洞时相对洞下沿的下降余量 (m)
-HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE  # 洞内期望高度 = 0.05 - 0.02 = 0.03
+HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE  # 洞内期望高度 = 0.055 - 0.02 = 0.035
+TRANSITION_LENGTH = 0.04  # 线性过渡长度 (m): 正常↔低高度各 4cm
 
 # --- 走廊 (高度上下限) 配置 ---
 CORRIDOR_HALF_HEIGHT = 0.01   # 走廊半高 (m): 期望高度 ± 半高
 
 # --- 机器人简化建模 (参考 Slalom: 两个铰接矩形 F_body + H_body) ---
-BODY_REF_OFFSET = 0.04    # F/H_body 中心距基座的 X 向偏移 (m)
-BODY_HALF_LENGTH = 0.04   # 矩形半长 (沿 X 方向, m)
-BODY_HALF_HEIGHT = 0.01   # 矩形半高 (沿 Z 方向, m)
-ROBOT_BASE_X = 0.20       # 机器人快照的基座 X 位置 (m, 默认对准洞中心)
+BODY_REF_OFFSET = 0.038    # F/H_body 中心距基座的 X 向偏移 (m)
+BODY_HALF_LENGTH = 0.038   # 矩形半长 (沿 X 方向, m)
+BODY_HALF_HEIGHT = 0.021   # 矩形半高 (沿 Z 方向, m)
+ROBOT_BASE_X = 0.10       # 机器人快照的基座 X 位置 (m, 默认对准洞中心)
 
 # --- 轨迹范围与输出 ---
 X_RANGE = (0.0, 0.4)      # 轨迹 x 范围 (m)
@@ -40,12 +43,16 @@ N_SAMPLES = 400           # 采样点数
 SAVE_PATH = Path(__file__).parent / "Result" / "Viz_Tunnel_Path.png"  # 输出图片
 
 
-# 计算期望高度轨迹: 洞内 = 洞下沿 - 余量, 其余 = 正常高度
+# 计算期望高度轨迹 (梯形波): 洞内 [X1, X2] = 低高度, 边界外各 4cm 线性过渡
 def compute_height_trajectory(xs: np.ndarray) -> np.ndarray:
-    x_left = HOLE_X_CENTER - HOLE_HALF_X
-    x_right = HOLE_X_CENTER + HOLE_HALF_X
-    inside = (xs >= x_left) & (xs <= x_right)
-    return np.where(inside, HEIGHT_HOLE, HEIGHT_NORMAL)
+    breakpoints = [
+        X1 - TRANSITION_LENGTH,   # 左过渡起点 (正常)
+        X1,                       # 左过渡终点 (低)
+        X2,                       # 右过渡起点 (低)
+        X2 + TRANSITION_LENGTH,   # 右过渡终点 (正常)
+    ]
+    values = [HEIGHT_NORMAL, HEIGHT_HOLE, HEIGHT_HOLE, HEIGHT_NORMAL]
+    return np.interp(xs, breakpoints, values, left=HEIGHT_NORMAL, right=HEIGHT_NORMAL)
 
 
 # 在指定位置绘制简化机器人 (两个铰接矩形 + 基座), 共享同一期望高度 z_ref
@@ -116,9 +123,13 @@ def plot_tunnel_path() -> None:
         label=f"洞下沿 {HOLE_BOTTOM:.2f}",
     )
 
+    # 线性过渡带 (4cm, 正常↔低高度)
+    ax.axvspan(X1 - TRANSITION_LENGTH, X1, color="gray", alpha=0.15, zorder=1)
+    ax.axvspan(X2, X2 + TRANSITION_LENGTH, color="gray", alpha=0.15, zorder=1)
+
     # 期望高度轨迹 (单条, 三点共享)
     ax.plot(xs, z_ref, "b-", linewidth=2.4, zorder=7,
-            label=f"期望高度轨迹 (洞内 {HEIGHT_HOLE:.3f})")
+            label=f"期望高度轨迹 (洞内 {HEIGHT_HOLE:.3f}, 过渡 {TRANSITION_LENGTH*100:.0f}cm)")
 
     # 机器人简化模型 (快照, 基座对准洞中心)
     base_z = float(compute_height_trajectory(np.array([ROBOT_BASE_X]))[0])
