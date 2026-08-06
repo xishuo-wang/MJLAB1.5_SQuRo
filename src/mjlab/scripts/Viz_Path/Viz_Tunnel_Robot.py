@@ -22,10 +22,9 @@ FRONT_HEIGHT_MM = 50     # 前躯干及前脊柱高度 (mm)
 REAR_LENGTH_MM = 80      # 后躯干及后脊柱长度 (mm)
 REAR_HEIGHT_MM = 50      # 后躯干及后脊柱高度 (mm)
 
-# --- 俯仰关节配置 (rad, 绕相接边中点旋转; 0 = 水平) ---
-HEAD_PITCH = 0.0         # 头部绕关节1 俯仰角
-FRONT_PITCH = 0.0        # 前躯干绕关节2 俯仰角
-REAR_PITCH = 0.0         # 后躯干绕关节2 俯仰角
+# --- 俯仰关节控制角度 (单位: 度, 共 2 个关节各对应一个角度; 0 = 水平) ---
+JOINT1_PITCH_DEG = 0.0    # 关节1 (头部-前躯干): 头部绕关节1 俯仰
+JOINT2_PITCH_DEG = 20.0   # 关节2 (前-后躯干): 前躯干绕关节2 俯仰 (后躯干保持水平)
 
 # --- 布局 ---
 BASE_X = 0.0             # 关节2 X 位置 (前躯干与后躯干相接边, m)
@@ -72,15 +71,17 @@ def draw_tunnel_robot(ax) -> None:
     front_center = np.array([j2[0] + FRONT_LENGTH_MM * mm / 2, BASE_Z])
     rear_center = np.array([j2[0] - REAR_LENGTH_MM * mm / 2, BASE_Z])
 
-    # 铰接运动学: 前躯干绕 j2 → 关节1 新位置 → 头部绕关节1 新位置
-    j1_new = rotate_point(j1_init, j2, FRONT_PITCH)
+    # 铰接运动学: 前躯干绕 j2 (JOINT2) → 关节1 新位置 → 头部绕关节1 (JOINT1)
+    j1_pitch = np.deg2rad(JOINT1_PITCH_DEG)
+    j2_pitch = np.deg2rad(JOINT2_PITCH_DEG)
+    j1_new = rotate_point(j1_init, j2, j2_pitch)
 
     head_pts = rect_points(head_center, HEAD_LENGTH_MM * mm / 2, HEAD_HEIGHT_MM * mm / 2,
-                           HEAD_PITCH, j1_init, j1_new - j1_init)
+                           j1_pitch, j1_init, j1_new - j1_init)
     front_pts = rect_points(front_center, FRONT_LENGTH_MM * mm / 2, FRONT_HEIGHT_MM * mm / 2,
-                            FRONT_PITCH, j2)
+                            j2_pitch, j2)
     rear_pts = rect_points(rear_center, REAR_LENGTH_MM * mm / 2, REAR_HEIGHT_MM * mm / 2,
-                           REAR_PITCH, j2)
+                           0.0, j2)  # 后躯干保持水平
 
     # 三段长方形
     blocks = [
@@ -90,11 +91,11 @@ def draw_tunnel_robot(ax) -> None:
     ]
     for name, pts, len_mm, h_mm, color in blocks:
         ax.add_patch(
-            Polygon(pts, closed=True, facecolor=color, edgecolor="black",
+            Polygon(pts.tolist(), closed=True, facecolor=color, edgecolor="black",
                     linewidth=1.5, alpha=0.85, zorder=4)
         )
         ctr = pts.mean(axis=0)
-        ax.text(ctr[0], ctr[1] + h_mm * mm / 2 + 0.006,
+        ax.text(float(ctr[0]), float(ctr[1]) + h_mm * mm / 2 + 0.006,
                 f"{name}\n{int(len_mm)}×{int(h_mm)}mm",
                 ha="center", va="bottom", fontsize=9, zorder=5)
 
@@ -104,14 +105,14 @@ def draw_tunnel_robot(ax) -> None:
         (j1_new, "关节1\n(头部-前躯干)"),
     ]:
         ax.add_patch(
-            Circle(j, JOINT_RADIUS, facecolor="white", edgecolor=COLOR_BASE,
+            Circle((float(j[0]), float(j[1])), JOINT_RADIUS, facecolor="white", edgecolor=COLOR_BASE,
                    linewidth=1.5, zorder=6)
         )
-        ax.annotate(name, (j[0], j[1]), textcoords="offset points",
+        ax.annotate(name, (float(j[0]), float(j[1])), textcoords="offset points",
                     xytext=(-2, -14), ha="center", fontsize=8, color=COLOR_BASE)
 
     # base 标注 (关节2 即 base 位置)
-    ax.text(j2[0], j2[1] + JOINT_RADIUS + 0.002, "base", ha="center",
+    ax.text(float(j2[0]), float(j2[1]) + JOINT_RADIUS + 0.002, "base", ha="center",
             va="bottom", fontsize=8, color=COLOR_BASE)
 
     # 地面线
