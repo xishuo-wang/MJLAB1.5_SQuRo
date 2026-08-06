@@ -23,6 +23,11 @@ GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
 GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
 GAIT_FREQ_PHASE1 = 1.0              # Phase 1 固定步频
 
+# 速度剖面 (Phase 1 变速: 直行段快, 转弯段慢, 线性过渡)
+BASE_VEL = 0.1                      # 基础速度 (m/s, 1Hz 时)
+VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯低速)
+STRAIGHT_VEL_SCALE = 0.5            # 直行段速度缩放 (= 直行基础速度 0.05 / BASE_VEL)
+
 
 # 奖励权重阶段
 _STAGES = (0, 2000, 4000, 6000)

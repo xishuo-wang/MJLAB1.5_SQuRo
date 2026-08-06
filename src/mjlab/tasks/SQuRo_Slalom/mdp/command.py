@@ -8,12 +8,15 @@ from mjlab.managers import CommandTermCfg
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import (
+    BASE_VEL,
     CURVATURE_TARGET,
     CURVATURE_TARGET_MAX,
     GAIT_FREQ_MIN,
     GAIT_FREQ_MAX,
     GAIT_FREQ_PHASE1,
     PHASE1_MID_ITER,
+    STRAIGHT_VEL_SCALE,
+    VEL_MIN,
     _STEPS_PER_ITER,
     SMOOTH_TIME,
     SMOOTH_VEL,
@@ -36,10 +39,8 @@ if TYPE_CHECKING:
 
 
 # 命令配置
-BASE_VEL = 0.1              # 基础速度(1Hz 直行时速度)
 FIXED_HEIGHT_F = 0.055      # 前肢高度
 FIXED_HEIGHT_H = 0.055      # 后肢高度
-VEL_MIN = 0.15              # 最大步幅时速度缩放百分比
 
 
 
@@ -181,7 +182,8 @@ class SlalomCommand(CommandTerm):
                 root[:, 5] = -0.70710678 * (c + s)
                 self._env.scene.entities["robot"].write_root_state_to_sim(root, env_ids=env_ids)
         else:
-            # Phase 1: 绕杆训练 — 曲率 ±15 (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机 (与 Phase 0 一致), 速度按曲率缩放
+            # Phase 1: 绕杆训练 — 曲率 -CURVATURE_TARGET (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机
+            # 速度: 变速 (直行段 STRAIGHT_VEL_SCALE 快, 转弯段 VEL_MIN 慢), 每步由 _update_command 动态更新
             self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
@@ -189,12 +191,13 @@ class SlalomCommand(CommandTerm):
                 self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
-            scale = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX  # Phase 0 同款缩放
-            self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale, device=self.device)
+            # 接近段起点 κ=-CURVATURE_TARGET → 初始速度为弯道低速 (之后每步变速)
+            self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * VEL_MIN, device=self.device)
 
-        # 缓存当前速度标量 (所有 env 共享), 供 path 模块避免每步 GPU-CPU 同步
+        # 缓存步频/基础速度标量 (所有 env 共享), 供 path 模块生成变速 t(s) 表 (避免每步 GPU-CPU 同步)
         if n > 0:
-            self._env._slalom_vel_scalar = float(self.vel_command[env_ids][0].item())  # type: ignore[attr-defined]
+            self._env._slalom_gait_scalar = self._shared_gait_freq  # type: ignore[attr-defined]
+            self._env._slalom_base_vel_scalar = base_vel  # type: ignore[attr-defined]
         self._start_recorded[env_ids] = False
 
 
@@ -215,9 +218,13 @@ class SlalomCommand(CommandTerm):
 
 
     def _update_command(self) -> None:
-        # Phase 1: 每步动态更新曲率为路径瞬时值
+        # Phase 1: 每步动态更新曲率 + 期望速度 (变速: 直行快, 弯道慢; fixed_velocity 作为基础速度同样变速)
         if self.slalom_mode_active:
-            self.curvature_command[:] = get_path_curvature(self._env)
+            kappa = get_path_curvature(self._env)
+            self.curvature_command[:] = kappa
+            base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
+            scale = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * kappa.abs() / CURVATURE_TARGET
+            self.vel_command[:] = base_vel * self.gait_freq_command * scale
 
         env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0:

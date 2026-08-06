@@ -116,6 +116,9 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 0.10 �
 | POLE_SPACING_MIN | 0.10 | Phase 1 最小杆间距 (= 2Rmin, iter 6000) |
 | SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
 | SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
+| BASE_VEL | 0.1 | 基础速度 (m/s, 1Hz 时) |
+| VEL_MIN | 0.15 | 最大曲率下速度缩放 (转弯低速) |
+| STRAIGHT_VEL_SCALE | 0.5 | 直行段速度缩放 (= 直行基础速度 0.05 / BASE_VEL) |
 
 平滑无直行最小间距 = 2×x_sw_half ≈ 0.1009 m（有直行下限 2×x_sw_full ≈ 0.1260 m，见 path.py `_get_smooth_xsw`）。
 
@@ -126,12 +129,12 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 0.10 �
 
 | 字段 | Phase 0 | Phase 1 | 更新 |
 |------|---------|---------|------|
-| vel_x | `base*gait*(1-0.75*|κ|/20)` | `base*gait*scale(CURVATURE_TARGET)`, episode 内固定 | reset |
+| vel_x | `base*gait*(1-0.75*|κ|/20)` | **变速**: `base*gait*(STRAIGHT_VEL_SCALE−(STRAIGHT_VEL_SCALE−VEL_MIN)·|κ|/25)`, 直行 0.05×gait / 弯道 0.015×gait, 每步更新 | Phase0: reset; Phase1: 每步 |
 | height_f/h | 固定 0.055 | 固定 0.055 | 周期性 |
 | gait_freq | U(1.0,2.0) 随机, ep内固定 | U(1.0,2.0) 随机, ep内固定 | reset |
 | curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±20↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
 
-Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值（平滑 LUT 的过渡 κ）；**velocity 固定**（reset 时按 CURVATURE_TARGET 计算，episode 内不变，不再随 κ 动态缩放）。
+Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值（平滑 LUT 的过渡 κ）；**velocity 变速**——直行段（κ=0）scale=STRAIGHT_VEL_SCALE(0.5)、弯道（κ=±25）scale=VEL_MIN(0.15)，线性过渡，每步随 κ 更新。回放 `fixed_velocity` 作为基础速度同样变速。
 
 
 ## 期望轨迹 (mdp/path.py)
@@ -140,7 +143,7 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 
 **Phase 0**：接近段(圆弧, κ=curvature 反推 `_INIT_DIST`) → 圆弧(弦长公式, 从原点出发, 固定 κ)
 
-**Phase 1**：接近段(圆弧, 平台-K+过渡-K→0 反推) → **平滑 LUT** 绕杆路径。有直行模式一个周期：直行(杆1 上方, L/2) → CW弧→CCW弧(绕杆1) → 直行(杆2 下方, L) → CCW弧→CW弧(绕杆2) → 直行(杆3 上方, L/2)，其中**每根杆均位于其直行段正中间**（直行段长度 L = spacing−2×x_sw_full，杆1/杆3 的直行段横跨周期边界）；无直行模式 4 段同向连续。弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。弧长 = vel×t − _INIT_DIST（vel 固定），跨周期 x_ref 叠加偏移保证连续。
+**Phase 1**：接近段(圆弧, 平台-K+过渡-K→0 反推) → **平滑 LUT** 绕杆路径。有直行模式一个周期：直行(杆1 上方, L/2) → CW弧→CCW弧(绕杆1) → 直行(杆2 下方, L) → CCW弧→CW弧(绕杆2) → 直行(杆3 上方, L/2)，其中**每根杆均位于其直行段正中间**（直行段长度 L = spacing−2×x_sw_full，杆1/杆3 的直行段横跨周期边界）；无直行模式 4 段同向连续。弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。**变速弧长推进**：期望速度 v=base×gait×scale(κ) 随曲率变化，预计算 t(s) 表（t_i += Δs_i/v_i）精确积分，运行时 t→s 查表（直行段快、弯道慢），跨周期按周期时间 t_period 推进，x_ref 叠加偏移保证连续。
 
 ### 平滑 LUT 的双模式
 
@@ -227,7 +230,7 @@ CSV 记录 关节角度、速度、动作空间输出等信息，并保存视频
 3. **track_path 无朝向约束** → 替换为 corridor 奖励
 4. **脊柱参考静态 vs 绕杆动态** → Phase 1 用 `get_path_curvature()` 动态读取 LUT 瞬时 κ
 5. **vel 动态缩放导致参考超前** → Phase 1 速度改回固定（reset 时按 CURVATURE_TARGET 计算, episode 内不变）
-6. **变速时弧长需积分** → vel 固定后改用 `vel×t - _INIT_DIST`（无需积分）
+6. **变速时弧长需积分** → 现 Phase 1 重新启用变速（直行快/弯道慢），改用**预计算 t(s) 表**精确积分（t_i += Δs_i/v_i），避免 `vel×t` 参考超前
 
 
 ## 训练
