@@ -1,6 +1,9 @@
 # Viz_Tunnel_Robot: Tunnel 任务简化机器人模型 (XoZ 侧视)
 # 结构 (三块长方形, 从前往后): 头部 → 前躯干及前脊柱 → 后躯干及后脊柱
-# 每块高度中间有一个俯仰关节 (绕 Y 轴, 侧视表现为矩形绕自身中心旋转)
+# 俯仰关节共 2 个, 位于两两相接的边的中点:
+#   关节1: 头部与前躯干相接边中点
+#   关节2: 前躯干与后躯干相接边中点 (= base 位置)
+# 运动学: 后躯干绕关节2, 前躯干绕关节2, 头部绕关节1 (随前躯干联动)
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon, Circle
@@ -19,69 +22,97 @@ FRONT_HEIGHT_MM = 50     # 前躯干及前脊柱高度 (mm)
 REAR_LENGTH_MM = 80      # 后躯干及后脊柱长度 (mm)
 REAR_HEIGHT_MM = 50      # 后躯干及后脊柱高度 (mm)
 
-# --- 俯仰关节配置 (rad, 绕块中心 Y 轴旋转; 0 = 水平) ---
-HEAD_PITCH = 0.0         # 头部俯仰角
-FRONT_PITCH = 0.0        # 前躯干俯仰角
-REAR_PITCH = 0.0         # 后躯干俯仰角
+# --- 俯仰关节配置 (rad, 绕相接边中点旋转; 0 = 水平) ---
+HEAD_PITCH = 0.0         # 头部绕关节1 俯仰角
+FRONT_PITCH = 0.0        # 前躯干绕关节2 俯仰角
+REAR_PITCH = 0.0         # 后躯干绕关节2 俯仰角
 
 # --- 布局 ---
-BASE_X = 0.0             # 基准点 X (前躯干与后躯干交界处, m)
-BASE_Z = 0.05            # 机身中心高度 (m), 三块中心 Z
-JOINT_RADIUS = 0.004     # 关节圆点半径 (m)
+BASE_X = 0.0             # 关节2 X 位置 (前躯干与后躯干相接边, m)
+BASE_Z = 0.05            # 机身中心高度 (m), 关节位于高度中点
+JOINT_RADIUS = 0.005     # 关节圆点半径 (m)
 
 # --- 外观 (参考 GUI_Spine_Kinematics 配色) ---
 COLOR_HEAD = "#9ECAE1"   # 头部 浅蓝
 COLOR_FRONT = "#70B070"  # 前躯干 绿
 COLOR_REAR = "#E0A060"   # 后躯干 橙
-COLOR_BASE = "#808080"   # base 交界点 灰
+COLOR_BASE = "#808080"   # 关节/base 灰
 
 # --- 输出 ---
 SAVE_PATH = Path(__file__).parent / "Result" / "Viz_Tunnel_Robot.png"
 
 
-# 计算绕中心旋转后的矩形角点 (XoZ 平面, 绕 Y 轴俯仰)
-def rotated_rect_corners(cx: float, cz: float, half_l: float, half_h: float, pitch: float) -> np.ndarray:
-    c, s = np.cos(pitch), np.sin(pitch)
-    local = np.array([[-half_l, -half_h], [half_l, -half_h], [half_l, half_h], [-half_l, half_h]])
-    return local @ np.array([[c, -s], [s, c]]).T + np.array([cx, cz])
+# 2D 点绕旋转中心旋转 (XoZ 平面, 绕 Y 轴俯仰)
+def rotate_point(p, center, angle: float) -> np.ndarray:
+    d = np.asarray(p, dtype=float) - np.asarray(center, dtype=float)
+    c, s = np.cos(angle), np.sin(angle)
+    return np.asarray(center, dtype=float) + np.array([d[0] * c - d[1] * s, d[0] * s + d[1] * c])
 
 
-# 绘制 Tunnel 简化机器人 (三段长方形 + 俯仰关节)
+# 生成矩形角点并绕指定旋转中心旋转, 可附加平移
+def rect_points(center, half_l: float, half_h: float, pitch: float,
+                rot_center, extra_shift=(0.0, 0.0)) -> np.ndarray:
+    corners = np.array(
+        [[-half_l, -half_h], [half_l, -half_h], [half_l, half_h], [-half_l, half_h]]
+    ) + np.asarray(center)
+    out = np.array([rotate_point(p, rot_center, pitch) for p in corners])
+    return out + np.asarray(extra_shift)
+
+
+# 绘制 Tunnel 简化机器人 (三段长方形 + 两两相接边中点俯仰关节 ×2)
 def draw_tunnel_robot(ax) -> None:
-    mm = 1e-3  # mm → m
-    half_h = 0.5 * mm  # 通用半高占位 (按各段实际高度重算)
+    mm = 1e-3
 
-    # 各段几何 (中心 x, 半长, 半高)
+    # 关节2 (前-后躯干相接边中点, 固定) / 关节1 初始 (头-前躯干相接边中点)
+    j2 = np.array([BASE_X, BASE_Z])
+    j1_init = np.array([BASE_X + FRONT_LENGTH_MM * mm, BASE_Z])
+
+    # 各段初始中心 (直行水平时)
+    head_center = np.array([j1_init[0] + HEAD_LENGTH_MM * mm / 2, BASE_Z])
+    front_center = np.array([j2[0] + FRONT_LENGTH_MM * mm / 2, BASE_Z])
+    rear_center = np.array([j2[0] - REAR_LENGTH_MM * mm / 2, BASE_Z])
+
+    # 铰接运动学: 前躯干绕 j2 → 关节1 新位置 → 头部绕关节1 新位置
+    j1_new = rotate_point(j1_init, j2, FRONT_PITCH)
+
+    head_pts = rect_points(head_center, HEAD_LENGTH_MM * mm / 2, HEAD_HEIGHT_MM * mm / 2,
+                           HEAD_PITCH, j1_init, j1_new - j1_init)
+    front_pts = rect_points(front_center, FRONT_LENGTH_MM * mm / 2, FRONT_HEIGHT_MM * mm / 2,
+                            FRONT_PITCH, j2)
+    rear_pts = rect_points(rear_center, REAR_LENGTH_MM * mm / 2, REAR_HEIGHT_MM * mm / 2,
+                           REAR_PITCH, j2)
+
+    # 三段长方形
     blocks = [
-        # (名称, 中心 x, 半长, 半高, 俯仰角, 颜色)
-        ("头部", BASE_X + FRONT_LENGTH_MM * mm + HEAD_LENGTH_MM * mm / 2,
-         HEAD_LENGTH_MM * mm / 2, HEAD_HEIGHT_MM * mm / 2, HEAD_PITCH, COLOR_HEAD),
-        ("前躯干及前脊柱", BASE_X + FRONT_LENGTH_MM * mm / 2,
-         FRONT_LENGTH_MM * mm / 2, FRONT_HEIGHT_MM * mm / 2, FRONT_PITCH, COLOR_FRONT),
-        ("后躯干及后脊柱", BASE_X - REAR_LENGTH_MM * mm / 2,
-         REAR_LENGTH_MM * mm / 2, REAR_HEIGHT_MM * mm / 2, REAR_PITCH, COLOR_REAR),
+        ("头部", head_pts, HEAD_LENGTH_MM, HEAD_HEIGHT_MM, COLOR_HEAD),
+        ("前躯干及前脊柱", front_pts, FRONT_LENGTH_MM, FRONT_HEIGHT_MM, COLOR_FRONT),
+        ("后躯干及后脊柱", rear_pts, REAR_LENGTH_MM, REAR_HEIGHT_MM, COLOR_REAR),
     ]
-
-    for name, cx, half_l, half_h_i, pitch, color in blocks:
-        # 长方形
-        pts = rotated_rect_corners(cx, BASE_Z, half_l, half_h_i, pitch)
+    for name, pts, len_mm, h_mm, color in blocks:
         ax.add_patch(
             Polygon(pts, closed=True, facecolor=color, edgecolor="black",
                     linewidth=1.5, alpha=0.85, zorder=4)
         )
-        # 俯仰关节 (位于块高度中点 = 块中心)
-        ax.add_patch(
-            Circle((cx, BASE_Z), JOINT_RADIUS, facecolor="white", edgecolor=COLOR_BASE,
-                   linewidth=1.5, zorder=6)
-        )
-        # 标签: 名称 + 尺寸
-        ax.text(cx, BASE_Z + half_h_i + 0.006, f"{name}\n{int(half_l*2/mm)}×{int(half_h_i*2/mm)}mm",
+        ctr = pts.mean(axis=0)
+        ax.text(ctr[0], ctr[1] + h_mm * mm / 2 + 0.006,
+                f"{name}\n{int(len_mm)}×{int(h_mm)}mm",
                 ha="center", va="bottom", fontsize=9, zorder=5)
 
-    # base 交界点 (前/后躯干之间)
-    ax.plot(BASE_X, BASE_Z, "o", markersize=5, color=COLOR_BASE, zorder=6)
-    ax.annotate("base", (BASE_X, BASE_Z), textcoords="offset points",
-                xytext=(-4, -12), ha="right", fontsize=8, color=COLOR_BASE)
+    # 两个俯仰关节 (两两相接边中点)
+    for j, name in [
+        (j2, "关节2\n(前-后躯干)"),
+        (j1_new, "关节1\n(头部-前躯干)"),
+    ]:
+        ax.add_patch(
+            Circle(j, JOINT_RADIUS, facecolor="white", edgecolor=COLOR_BASE,
+                   linewidth=1.5, zorder=6)
+        )
+        ax.annotate(name, (j[0], j[1]), textcoords="offset points",
+                    xytext=(-2, -14), ha="center", fontsize=8, color=COLOR_BASE)
+
+    # base 标注 (关节2 即 base 位置)
+    ax.text(j2[0], j2[1] + JOINT_RADIUS + 0.002, "base", ha="center",
+            va="bottom", fontsize=8, color=COLOR_BASE)
 
     # 地面线
     ax.axhline(0.0, color="black", linestyle="-", linewidth=1.2, zorder=2)
@@ -94,14 +125,14 @@ def plot_tunnel_robot() -> None:
     total_len = (HEAD_LENGTH_MM + FRONT_LENGTH_MM + REAR_LENGTH_MM) * mm
     max_h = max(HEAD_HEIGHT_MM, FRONT_HEIGHT_MM, REAR_HEIGHT_MM) * mm
 
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig, ax = plt.subplots(figsize=(12, 4.5))
     draw_tunnel_robot(ax)
 
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Z (m)")
-    ax.set_title("Tunnel 简化机器人模型 (XoZ 侧视, 三段长方形 + 高度中点俯仰关节)")
-    ax.set_xlim(BASE_X - total_len * 0.2, BASE_X + total_len * 1.25)
-    ax.set_ylim(-0.03, BASE_Z + max_h + 0.04)
+    ax.set_title("Tunnel 简化机器人模型 (XoZ 侧视, 三段长方形 + 相接边中点俯仰关节×2)")
+    ax.set_xlim(BASE_X - total_len * 0.25, BASE_X + total_len * 1.25)
+    ax.set_ylim(-0.03, BASE_Z + max_h + 0.05)
     ax.grid(True, linestyle=":", alpha=0.5)
     ax.set_aspect("equal")
 
