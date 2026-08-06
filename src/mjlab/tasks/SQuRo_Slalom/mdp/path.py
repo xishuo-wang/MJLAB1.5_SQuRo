@@ -389,8 +389,8 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
         app_k_fwd = -app_tbl["k"]                  # 正向 κ: 起点 -K → 终点 0
         app_scale = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * np.abs(app_k_fwd) / CURVATURE_TARGET
         app_v = base_vel * gait * app_scale
-        u_desc = app_s_np[::-1]                    # _INIT_DIST → 0 (正向行进方向)
-        v_desc = app_v[::-1]
+        u_desc = app_s_np[::-1].copy()             # _INIT_DIST → 0 (正向行进方向; copy 避免负 stride)
+        v_desc = app_v[::-1].copy()
         v_mid = 0.5 * (v_desc[:-1] + v_desc[1:])
         t_desc_np = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(u_desc)) / np.maximum(v_mid, 1e-6))])
         app_cache = {key: torch.tensor(val, device=env.device, dtype=torch.float32)
