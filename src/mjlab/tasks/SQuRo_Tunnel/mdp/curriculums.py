@@ -5,6 +5,8 @@ from typing import Any
 _STEPS_PER_ITER = 24       # 每 iter 步数 (对齐 Slalom)
 CURVATURE_TARGET_MAX = 25.0   # 曲率归一化上界 (Tunnel 曲率恒 0, 仅供 reference 表接口)
 
+PHASE1_END_ITER = 4000     # iter < 4000: Phase0 (无障碍物随机高度); 之后: Phase1 (固定/采样障碍物)
+
 
 # 固定奖励权重 (Tunnel 暂不设阶段课程, 后续可按需扩展)
 _FIXED_WEIGHTS: dict[str, float] = {
@@ -32,9 +34,9 @@ _FIXED_WEIGHTS: dict[str, float] = {
 }
 
 
-# 获取训练阶段 — Tunnel 恒为 1 (直行钻洞, 无分阶段)
+# 获取训练阶段: 0 = Phase0 (无障碍物随机高度), 1 = Phase1 (障碍物高度轨迹)
 def get_training_phase(step_counter: int) -> int:
-    return 1
+    return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
 # 奖励权重课程 (固定)

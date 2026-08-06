@@ -18,7 +18,7 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
-from mjlab.tasks.SQuRo_Tunnel.mdp.path import OBSTACLE_X_LEFT, OBSTACLE_LENGTH, HOLE_BOTTOM
+from mjlab.tasks.SQuRo_Tunnel.mdp.path import OBSTACLE_LENGTH, HOLE_BOTTOM
 
 
 def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -107,8 +107,8 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 洞实体 (门洞限高板, 训练全程无碰撞)
-    hole_x_center = OBSTACLE_X_LEFT + OBSTACLE_LENGTH / 2
+    # 占位洞实体 (门洞限高板, 训练全程无碰撞; Phase1 洞位置动态采样, 实体仅作视觉示意)
+    hole_x_center = 0.30
     hole_entities: dict = {
         "hole1": mdp.HoleEntityCfg(
             name="hole1",
