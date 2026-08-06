@@ -18,7 +18,7 @@ FRONT_DOWN_CM = OBSTACLE_X_LEFT_CM - 9.0                            # 前肢中�
 FRONT_UP_CM = OBSTACLE_X_LEFT_CM + 5.0 + OBSTACLE_LENGTH_CM / 2     # 前肢中心 升起点 x+5+a/2
 BASE_DOWN_CM = OBSTACLE_X_LEFT_CM - 14.0                            # baselink 降起点 x-14
 BASE_UP_CM = OBSTACLE_X_LEFT_CM + 8.0 + OBSTACLE_LENGTH_CM          # baselink 升起点 x+8+a
-REAR_DOWN_CM = OBSTACLE_X_LEFT_CM - 4.0 - OBSTACLE_LENGTH_CM / 2    # 后肢中心 降起点 x-4-a/2
+REAR_DOWN_CM = OBSTACLE_X_LEFT_CM - 4.0 + OBSTACLE_LENGTH_CM / 2    # 后肢中心 降起点 x-4+a/2
 REAR_UP_CM = OBSTACLE_X_LEFT_CM + 4.0 + OBSTACLE_LENGTH_CM          # 后肢中心 升起点 x+4+a
 
 CORRIDOR_HALF_HEIGHT = 0.025                    # 走廊半高 (m):  期望高度 ± 半高
