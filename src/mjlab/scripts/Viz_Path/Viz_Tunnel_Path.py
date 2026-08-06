@@ -1,7 +1,10 @@
-# Viz_Tunnel_Path: 简化 Tunnel (门洞式洞) 任务的期望高度轨迹可视化
-# 建模平面: XoZ (高度走廊)
-# 期望高度由单一参考轨迹 z_ref(x) 表示, 前肢中心/基座/后肢中心共享同一条轨迹
-# 机器人简化建模参考 Slalom 任务: 两个铰接矩形 (F_body + H_body) + 基座
+# Viz_Tunnel_Path: Tunnel 任务期望高度轨迹可视化 (XoZ 平面, 三个子图)
+# 期望轨迹分为 3 条, 分别对应: 前肢中心 / baselink / 后肢中心
+# 障碍物: 左侧 = x, 长度 = a (单位 cm, 右侧 = x+a)
+# 各点轨迹规则 (下降起点 d0, 上升起点 u0, 过渡 4cm):
+#   前肢中心: d0 = x-9,          u0 = x+5+(a/2)
+#   baselink : d0 = x-14,         u0 = x+8+(a)
+#   后肢中心: d0 = x-4-(a/2),     u0 = x+4+(a)
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -12,154 +15,127 @@ plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "PingFang SC"]
 plt.rcParams["axes.unicode_minus"] = False
 
 # ==================== 配置 ====================
-# --- 洞配置 (参考 SQuRo_Tunnel/mdp/hole.py 的 HoleEntityCfg, BOX 几何) ---
-# 洞下沿 = position z (门洞净空, 用户确认 0.05m); 限高板以 position z 为中心, 厚度 = 2*size[2]
-HOLE_X_CENTER = 0.20      # 洞 x 中心 (m)
-HOLE_HALF_X = 0.015       # 洞 x 半宽 size[0] (m) → 洞 x 范围 [0.185, 0.215]
-HOLE_Y_HALF = 0.10        # 洞 y 半深 size[1] (m), 跨走廊宽度 (XoZ 平面不显示)
-HOLE_BOTTOM = 0.055        # 洞下沿高度 (m) = hole.py position[2]
-HOLE_THICKNESS = 0.01     # 限高板厚度 (m) = 2*size[2] = 0.01
-X1 = HOLE_X_CENTER - HOLE_HALF_X   # 洞最左侧 X1 (m) = 0.185
-X2 = HOLE_X_CENTER + HOLE_HALF_X   # 洞最右侧 X2 (m) = 0.215
-
-# --- 低高度区配置 ---
-# 低高度区 = [X1 - 0.11, X2] (洞左缘向左延伸 11cm, 右边界 = 洞右缘, 不对称)
-LOW_ZONE_LEFT_EXTEND = 0.11   # 低高度区相对洞左缘 X1 向左延伸 (m)
-LOW_X1 = X1 - LOW_ZONE_LEFT_EXTEND  # 低高度区左边界 (m) = 0.075
-LOW_X2 = X2                        # 低高度区右边界 (m) = 洞右缘 0.215
+# --- 障碍物 (门洞限高板) 配置, 单位 cm ---
+OBSTACLE_X_LEFT_CM = 18.5   # 障碍物左侧 x (cm)
+OBSTACLE_LENGTH_CM = 3.0    # 障碍物长度 a (cm) → 右侧 x+a = 21.5cm
+HOLE_BOTTOM = 0.055         # 洞下沿高度 (m) = hole.py position z
+HOLE_THICKNESS = 0.01       # 限高板厚度 (m) = 2*size[2]
 
 # --- 期望高度规则 ---
-HEIGHT_NORMAL = 0.06      # 正常段期望高度 (m)
-HEIGHT_CLEARANCE = 0.025  # 过洞时相对洞下沿的下降量 (m) = 走廊半高, 保证走廊上沿 ≤ 洞下沿
-HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE  # 洞内期望高度 = 0.055 - 0.025 = 0.03
-TRANSITION_LENGTH = 0.04  # 线性过渡长度 (m): 正常↔低高度各 4cm
+HEIGHT_NORMAL = 0.06        # 正常段期望高度 (m)
+HEIGHT_CLEARANCE = 0.025    # 低高度相对洞下沿的下降量 (m) = 走廊半高
+HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE   # 低高度期望 = 0.055 - 0.025 = 0.03
+TRANSITION_LENGTH_CM = 4.0  # 线性过渡长度 (cm): 正常↔低高度
+
+# --- 三点轨迹下降/上升起点 (cm, 按规则公式) ---
+FRONT_DOWN_CM = OBSTACLE_X_LEFT_CM - 9.0                 # 前肢中心 降起点 x-9
+FRONT_UP_CM = OBSTACLE_X_LEFT_CM + 5.0 + OBSTACLE_LENGTH_CM / 2  # 前肢中心 升起点 x+5+a/2
+BASE_DOWN_CM = OBSTACLE_X_LEFT_CM - 14.0                 # baselink 降起点 x-14
+BASE_UP_CM = OBSTACLE_X_LEFT_CM + 8.0 + OBSTACLE_LENGTH_CM       # baselink 升起点 x+8+a
+REAR_DOWN_CM = OBSTACLE_X_LEFT_CM - 4.0 - OBSTACLE_LENGTH_CM / 2 # 后肢中心 降起点 x-4-a/2
+REAR_UP_CM = OBSTACLE_X_LEFT_CM + 4.0 + OBSTACLE_LENGTH_CM       # 后肢中心 升起点 x+4+a
 
 # --- 走廊 (高度上下限) 配置 ---
-CORRIDOR_HALF_HEIGHT = 0.025  # 走廊半高 (m): 期望高度 ± 半高 (> BODY_HALF_HEIGHT 0.021, 能包住机器人矩形)
-
-# --- 机器人简化建模 (参考 Slalom: 两个铰接矩形 F_body + H_body) ---
-BODY_REF_OFFSET = 0.038    # F/H_body 中心距基座的 X 向偏移 (m)
-BODY_HALF_LENGTH = 0.038   # 矩形半长 (沿 X 方向, m)
-BODY_HALF_HEIGHT = 0.021   # 矩形半高 (沿 Z 方向, m)
-ROBOT_BASE_X = 0.10       # 机器人快照的基座 X 位置 (m, 默认对准洞中心)
+CORRIDOR_HALF_HEIGHT = 0.025  # 走廊半高 (m): 期望高度 ± 半高
 
 # --- 轨迹范围与输出 ---
-X_RANGE = (0.0, 0.4)      # 轨迹 x 范围 (m)
-N_SAMPLES = 400           # 采样点数
-SAVE_PATH = Path(__file__).parent / "Result" / "Viz_Tunnel_Path.png"  # 输出图片
+X_RANGE = (0.0, 0.42)     # 轨迹 x 范围 (m)
+N_SAMPLES = 600           # 采样点数
+SAVE_PATH = Path(__file__).parent / "Result" / "Viz_Tunnel_Path.png"
 
 
-# 计算期望高度轨迹 (梯形波): [LOW_X1, LOW_X2] = 低高度, 区间外侧各 4cm 线性过渡
-def compute_height_trajectory(xs: np.ndarray) -> np.ndarray:
+# 计算单条梯形波期望高度轨迹 (d0 处开始降, d0+过渡达到低; u0 处开始升, u0+过渡恢复)
+def compute_point_trajectory(xs: np.ndarray, down_start_m: float, up_start_m: float,
+                             trans_m: float) -> np.ndarray:
     breakpoints = [
-        LOW_X1 - TRANSITION_LENGTH,   # 左过渡起点 (正常)
-        LOW_X1,                       # 左过渡终点 (低)
-        LOW_X2,                       # 右过渡起点 (低)
-        LOW_X2 + TRANSITION_LENGTH,   # 右过渡终点 (正常)
+        down_start_m, down_start_m + trans_m,
+        up_start_m, up_start_m + trans_m,
     ]
     values = [HEIGHT_NORMAL, HEIGHT_HOLE, HEIGHT_HOLE, HEIGHT_NORMAL]
     return np.interp(xs, breakpoints, values, left=HEIGHT_NORMAL, right=HEIGHT_NORMAL)
 
 
-# 在指定位置绘制简化机器人 (两个铰接矩形 + 基座), 共享同一期望高度 z_ref
-def draw_robot(ax, base_x: float, z_ref: float) -> None:
-    # 基座点
-    ax.plot(base_x, z_ref, "ko", markersize=7, zorder=6, label="基座 base_Link")
-
-    # 前体 F_body 矩形 (中心 +BODY_REF_OFFSET)
-    f_x = base_x + BODY_REF_OFFSET
-    ax.add_patch(
-        Rectangle(
-            (f_x - BODY_HALF_LENGTH, z_ref - BODY_HALF_HEIGHT),
-            2 * BODY_HALF_LENGTH, 2 * BODY_HALF_HEIGHT,
-            facecolor="tab:blue", edgecolor="navy", alpha=0.75, zorder=5,
-            label="前体 F_body",
-        )
-    )
-    ax.plot(f_x, z_ref, "bo", markersize=4, zorder=6)
-
-    # 后体 H_body 矩形 (中心 -BODY_REF_OFFSET)
-    h_x = base_x - BODY_REF_OFFSET
-    ax.add_patch(
-        Rectangle(
-            (h_x - BODY_HALF_LENGTH, z_ref - BODY_HALF_HEIGHT),
-            2 * BODY_HALF_LENGTH, 2 * BODY_HALF_HEIGHT,
-            facecolor="tab:red", edgecolor="darkred", alpha=0.75, zorder=5,
-            label="后体 H_body",
-        )
-    )
-    ax.plot(h_x, z_ref, "ro", markersize=4, zorder=6)
-
-    # 三点标注 (前肢中心 / 基座 / 后肢中心, 共享同一 z_ref)
-    ax.annotate("前肢中心", (f_x, z_ref), textcoords="offset points",
-                xytext=(0, 10), ha="center", fontsize=8, color="navy")
-    ax.annotate("后肢中心", (h_x, z_ref), textcoords="offset points",
-                xytext=(0, 10), ha="center", fontsize=8, color="darkred")
-
-
-# 绘制 XoZ 平面期望高度轨迹 + 洞 + 走廊 + 机器人简化模型
-def plot_tunnel_path() -> None:
-    xs = np.linspace(*X_RANGE, N_SAMPLES)
-    z_ref = compute_height_trajectory(xs)
-    x_left = HOLE_X_CENTER - HOLE_HALF_X
-    x_right = HOLE_X_CENTER + HOLE_HALF_X
-
-    fig, ax = plt.subplots(figsize=(12, 5.5))
+# 绘制单个子图: 轨迹 + 走廊 + 洞 + 过渡带
+def draw_trajectory_subplot(ax, xs, z_ref, title: str, desc: str,
+                            down_cm: float, up_cm: float, color: str) -> None:
+    cm = 0.01
+    trans_m = TRANSITION_LENGTH_CM * cm
+    down_m, up_m = down_cm * cm, up_cm * cm
+    hole_left = OBSTACLE_X_LEFT_CM * cm
+    hole_right = (OBSTACLE_X_LEFT_CM + OBSTACLE_LENGTH_CM) * cm
 
     # 走廊带 (期望高度 ± 半高)
     ax.fill_between(
         xs, z_ref - CORRIDOR_HALF_HEIGHT, z_ref + CORRIDOR_HALF_HEIGHT,
         color="skyblue", alpha=0.25, zorder=1,
-        label=f"走廊 (高度 ±{CORRIDOR_HALF_HEIGHT:.2f})",
+        label=f"走廊 (±{CORRIDOR_HALF_HEIGHT:.2f})",
     )
 
-    # 洞 (门洞限高板剖面, 板中心 = 洞下沿)
+    # 洞 (门洞限高板剖面)
     ax.add_patch(
         Rectangle(
-            (x_left, HOLE_BOTTOM - HOLE_THICKNESS / 2),
-            x_right - x_left, HOLE_THICKNESS,
+            (hole_left, HOLE_BOTTOM - HOLE_THICKNESS / 2),
+            hole_right - hole_left, HOLE_THICKNESS,
             facecolor="orange", edgecolor="darkorange", alpha=0.85, zorder=4,
-            label=f"洞 (限高板, x∈[{x_left:.3f},{x_right:.3f}])",
+            label=f"洞 [{hole_left*100:.1f}, {hole_right*100:.1f}]cm",
         )
     )
+    ax.axhline(HOLE_BOTTOM, color="darkorange", linestyle="--", linewidth=1.2, zorder=3,
+               label=f"洞下沿 {HOLE_BOTTOM:.2f}")
 
-    # 洞下沿参考线
-    ax.axhline(
-        HOLE_BOTTOM, color="darkorange", linestyle="--", linewidth=1.2, zorder=3,
-        label=f"洞下沿 {HOLE_BOTTOM:.2f}",
-    )
+    # 低高度平台区 [d0+过渡, u0]
+    ax.axvspan(down_m + trans_m, up_m, color="gold", alpha=0.12, zorder=1,
+               label=f"低高度区 [{down_m+trans_m:.3f}, {up_m:.3f}]")
 
-    # 低高度区背景 ([LOW_X1, X2], 含洞前延伸段与洞)
-    ax.axvspan(LOW_X1, X2, color="gold", alpha=0.12, zorder=1,
-               label=f"低高度区 [{LOW_X1:.3f}, {X2:.3f}]")
+    # 线性过渡带 (4cm)
+    ax.axvspan(down_m, down_m + trans_m, color="gray", alpha=0.15, zorder=1)
+    ax.axvspan(up_m, up_m + trans_m, color="gray", alpha=0.15, zorder=1)
+    ax.text(down_m + trans_m / 2, 0.015, "降过渡", ha="center", fontsize=7, color="gray")
+    ax.text(up_m + trans_m / 2, 0.015, "升过渡", ha="center", fontsize=7, color="gray")
 
-    # 线性过渡带 (4cm, 正常↔低高度)
-    ax.axvspan(LOW_X1 - TRANSITION_LENGTH, LOW_X1, color="gray", alpha=0.15, zorder=1)
-    ax.axvspan(X2, X2 + TRANSITION_LENGTH, color="gray", alpha=0.15, zorder=1)
+    # 期望高度轨迹
+    ax.plot(xs, z_ref, color=color, linewidth=2.2, zorder=7,
+            label=f"期望高度 (低 {HEIGHT_HOLE:.3f})")
 
-    # 期望高度轨迹 (单条, 三点共享)
-    ax.plot(xs, z_ref, "b-", linewidth=2.4, zorder=7,
-            label=f"期望高度轨迹 (洞内 {HEIGHT_HOLE:.3f}, 过渡 {TRANSITION_LENGTH*100:.0f}cm)")
-
-    # 机器人简化模型 (快照, 基座对准洞中心)
-    base_z = float(compute_height_trajectory(np.array([ROBOT_BASE_X]))[0])
-    draw_robot(ax, ROBOT_BASE_X, base_z)
-
-    # 正常高度 / 洞内期望高度参考线
+    # 参考线
     ax.axhline(HEIGHT_NORMAL, color="gray", linestyle=":", linewidth=1.2, zorder=2,
-               label=f"正常高度 {HEIGHT_NORMAL:.2f}")
+               label=f"正常 {HEIGHT_NORMAL:.2f}")
     ax.axhline(HEIGHT_HOLE, color="red", linestyle=":", linewidth=1.2, zorder=2,
-               label=f"洞内期望高度 {HEIGHT_HOLE:.3f}")
+               label=f"低 {HEIGHT_HOLE:.3f}")
 
-    ax.set_xlabel("X (m)")
+    ax.set_title(f"{title}  ( {desc} )", fontsize=10)
     ax.set_ylabel("Z (m)")
-    ax.set_title("Tunnel 简化建模: 期望高度轨迹 + 机器人简化模型 (XoZ 平面)")
     ax.set_xlim(*X_RANGE)
     ax.set_ylim(0.0, 0.10)
     ax.grid(True, linestyle=":")
-    ax.legend(fontsize=8, loc="upper left")
+    ax.legend(fontsize=7, loc="upper left", ncol=2)
 
-    plt.tight_layout()
+
+# 绘制三个子图 (前肢中心 / baselink / 后肢中心), 不放机器人
+def plot_tunnel_path() -> None:
+    cm = 0.01
+    trans_m = TRANSITION_LENGTH_CM * cm
+    xs = np.linspace(*X_RANGE, N_SAMPLES)
+
+    # 三条轨迹
+    specs = [
+        ("前肢中心", f"降 x-9={FRONT_DOWN_CM:.1f}cm, 升 x+5+a/2={FRONT_UP_CM:.1f}cm",
+         FRONT_DOWN_CM, FRONT_UP_CM, "#1f77b4"),
+        ("baselink", f"降 x-14={BASE_DOWN_CM:.1f}cm, 升 x+8+a={BASE_UP_CM:.1f}cm",
+         BASE_DOWN_CM, BASE_UP_CM, "#2ca02c"),
+        ("后肢中心", f"降 x-4-a/2={REAR_DOWN_CM:.1f}cm, 升 x+4+a={REAR_UP_CM:.1f}cm",
+         REAR_DOWN_CM, REAR_UP_CM, "#d62728"),
+    ]
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 13), sharex=True)
+    for ax, (title, desc, down_cm, up_cm, color) in zip(axes, specs):
+        z_ref = compute_point_trajectory(xs, down_cm * cm, up_cm * cm, trans_m)
+        draw_trajectory_subplot(ax, xs, z_ref, title, desc, down_cm, up_cm, color)
+
+    axes[-1].set_xlabel("X (m)")
+    fig.suptitle("Tunnel 三点期望高度轨迹 (XoZ, 障碍物 x=18.5cm, a=3cm, 过渡4cm)", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+
     if SAVE_PATH is not None:
         SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(str(SAVE_PATH), dpi=150)
