@@ -23,8 +23,8 @@ REAR_LENGTH_MM = 80      # 后躯干及后脊柱长度 (mm)
 REAR_HEIGHT_MM = 50      # 后躯干及后脊柱高度 (mm)
 
 # --- 俯仰关节控制角度 (单位: 度, 共 2 个关节各对应一个角度; 0 = 水平) ---
-JOINT1_PITCH_DEG = 0.0    # 关节1 (头部-前躯干): 头部绕关节1 俯仰
-JOINT2_PITCH_DEG = 20.0   # 关节2 (前-后躯干): 前躯干绕关节2 俯仰 (后躯干保持水平)
+JOINT1_PITCH_DEG = 0.0    # 关节1 相对角: 头部相对前躯干的俯仰 (绕关节1)
+JOINT2_PITCH_DEG = 10.0   # 关节2 相对角: 前躯干相对后躯干的俯仰 (绕关节2, 后躯干水平)
 
 # --- 布局 ---
 BASE_X = 0.0             # 关节2 X 位置 (前躯干与后躯干相接边, m)
@@ -71,13 +71,15 @@ def draw_tunnel_robot(ax) -> None:
     front_center = np.array([j2[0] + FRONT_LENGTH_MM * mm / 2, BASE_Z])
     rear_center = np.array([j2[0] - REAR_LENGTH_MM * mm / 2, BASE_Z])
 
-    # 铰接运动学: 前躯干绕 j2 (JOINT2) → 关节1 新位置 → 头部绕关节1 (JOINT1)
+    # 铰接运动学 (相对角链式累积):
+    #   rear_world = 0; front_world = JOINT2; head_world = JOINT2 + JOINT1
+    # 前躯干绕 j2 转 JOINT2 → 关节1 新位置 → 头部绕关节1 转 head_world (随前躯干联动)
     j1_pitch = np.deg2rad(JOINT1_PITCH_DEG)
     j2_pitch = np.deg2rad(JOINT2_PITCH_DEG)
     j1_new = rotate_point(j1_init, j2, j2_pitch)
 
     head_pts = rect_points(head_center, HEAD_LENGTH_MM * mm / 2, HEAD_HEIGHT_MM * mm / 2,
-                           j1_pitch, j1_init, j1_new - j1_init)
+                           j1_pitch + j2_pitch, j1_init, j1_new - j1_init)
     front_pts = rect_points(front_center, FRONT_LENGTH_MM * mm / 2, FRONT_HEIGHT_MM * mm / 2,
                             j2_pitch, j2)
     rear_pts = rect_points(rear_center, REAR_LENGTH_MM * mm / 2, REAR_HEIGHT_MM * mm / 2,
