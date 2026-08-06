@@ -22,6 +22,12 @@ HOLE_THICKNESS = 0.01     # 限高板厚度 (m) = 2*size[2] = 0.01
 X1 = HOLE_X_CENTER - HOLE_HALF_X   # 洞最左侧 X1 (m) = 0.185
 X2 = HOLE_X_CENTER + HOLE_HALF_X   # 洞最右侧 X2 (m) = 0.215
 
+# --- 低高度区配置 ---
+# 低高度区 = [X1 - 0.11, X2] (洞左缘向左延伸 11cm, 右边界 = 洞右缘, 不对称)
+LOW_ZONE_LEFT_EXTEND = 0.11   # 低高度区相对洞左缘 X1 向左延伸 (m)
+LOW_X1 = X1 - LOW_ZONE_LEFT_EXTEND  # 低高度区左边界 (m) = 0.075
+LOW_X2 = X2                        # 低高度区右边界 (m) = 洞右缘 0.215
+
 # --- 期望高度规则 ---
 HEIGHT_NORMAL = 0.06      # 正常段期望高度 (m)
 HEIGHT_CLEARANCE = 0.025  # 过洞时相对洞下沿的下降量 (m) = 走廊半高, 保证走廊上沿 ≤ 洞下沿
@@ -43,13 +49,13 @@ N_SAMPLES = 400           # 采样点数
 SAVE_PATH = Path(__file__).parent / "Result" / "Viz_Tunnel_Path.png"  # 输出图片
 
 
-# 计算期望高度轨迹 (梯形波): 洞内 [X1, X2] = 低高度, 边界外各 4cm 线性过渡
+# 计算期望高度轨迹 (梯形波): [LOW_X1, LOW_X2] = 低高度, 区间外侧各 4cm 线性过渡
 def compute_height_trajectory(xs: np.ndarray) -> np.ndarray:
     breakpoints = [
-        X1 - TRANSITION_LENGTH,   # 左过渡起点 (正常)
-        X1,                       # 左过渡终点 (低)
-        X2,                       # 右过渡起点 (低)
-        X2 + TRANSITION_LENGTH,   # 右过渡终点 (正常)
+        LOW_X1 - TRANSITION_LENGTH,   # 左过渡起点 (正常)
+        LOW_X1,                       # 左过渡终点 (低)
+        LOW_X2,                       # 右过渡起点 (低)
+        LOW_X2 + TRANSITION_LENGTH,   # 右过渡终点 (正常)
     ]
     values = [HEIGHT_NORMAL, HEIGHT_HOLE, HEIGHT_HOLE, HEIGHT_NORMAL]
     return np.interp(xs, breakpoints, values, left=HEIGHT_NORMAL, right=HEIGHT_NORMAL)
@@ -123,8 +129,12 @@ def plot_tunnel_path() -> None:
         label=f"洞下沿 {HOLE_BOTTOM:.2f}",
     )
 
+    # 低高度区背景 ([LOW_X1, X2], 含洞前延伸段与洞)
+    ax.axvspan(LOW_X1, X2, color="gold", alpha=0.12, zorder=1,
+               label=f"低高度区 [{LOW_X1:.3f}, {X2:.3f}]")
+
     # 线性过渡带 (4cm, 正常↔低高度)
-    ax.axvspan(X1 - TRANSITION_LENGTH, X1, color="gray", alpha=0.15, zorder=1)
+    ax.axvspan(LOW_X1 - TRANSITION_LENGTH, LOW_X1, color="gray", alpha=0.15, zorder=1)
     ax.axvspan(X2, X2 + TRANSITION_LENGTH, color="gray", alpha=0.15, zorder=1)
 
     # 期望高度轨迹 (单条, 三点共享)
