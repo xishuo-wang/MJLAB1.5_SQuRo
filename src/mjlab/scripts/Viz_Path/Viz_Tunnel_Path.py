@@ -24,12 +24,12 @@ X2 = HOLE_X_CENTER + HOLE_HALF_X   # 洞最右侧 X2 (m) = 0.215
 
 # --- 期望高度规则 ---
 HEIGHT_NORMAL = 0.06      # 正常段期望高度 (m)
-HEIGHT_CLEARANCE = 0.02   # 过洞时相对洞下沿的下降余量 (m)
-HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE  # 洞内期望高度 = 0.055 - 0.02 = 0.035
+HEIGHT_CLEARANCE = 0.025  # 过洞时相对洞下沿的下降量 (m) = 走廊半高, 保证走廊上沿 ≤ 洞下沿
+HEIGHT_HOLE = HOLE_BOTTOM - HEIGHT_CLEARANCE  # 洞内期望高度 = 0.055 - 0.025 = 0.03
 TRANSITION_LENGTH = 0.04  # 线性过渡长度 (m): 正常↔低高度各 4cm
 
 # --- 走廊 (高度上下限) 配置 ---
-CORRIDOR_HALF_HEIGHT = 0.01   # 走廊半高 (m): 期望高度 ± 半高
+CORRIDOR_HALF_HEIGHT = 0.025  # 走廊半高 (m): 期望高度 ± 半高 (> BODY_HALF_HEIGHT 0.021, 能包住机器人矩形)
 
 # --- 机器人简化建模 (参考 Slalom: 两个铰接矩形 F_body + H_body) ---
 BODY_REF_OFFSET = 0.038    # F/H_body 中心距基座的 X 向偏移 (m)
