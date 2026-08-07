@@ -19,14 +19,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import mjlab.tasks  # noqa: F401  触发任务注册
 import tyro
 import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
+from mjlab.tasks.SQuRo_Backup.mdp.indices import (
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
 from mjlab.tasks.SQuRo_Backup.mdp.reference import (
     REF_TOTAL_TIME,
     get_reference_joint_state,
@@ -58,10 +61,17 @@ class ReferencePolicy:
     def __init__(self, env: ManagerBasedRlEnv, action_scale: float) -> None:
         self.unwrapped = env.unwrapped
         self.asset = self.unwrapped.scene.entities["robot"]
+        # 确保模型索引已解析 (viewer 模式在 env.reset() 之前构造, 索引可能为空)
+        resolve_model_indices(self.asset)
         self.default = self.asset.data.default_joint_pos[:, _MODEL_INDICES.joint_ids]
         self.action_scale = action_scale
 
-    def __call__(self, obs: torch.Tensor) -> torch.Tensor:
+    def __call__(self, obs: Any) -> torch.Tensor:
+        """忽略观测, 按 episode 时间输出参考动作。
+
+        BaseViewer 传入的 obs 是观测字典 (get_observations), 与训练时的
+        RslRlVecEnvWrapper 张量不同; 开环重放不需要观测。
+        """
         del obs
         ref_pos, _ = get_reference_joint_state(self.unwrapped)
         return (ref_pos - self.default) / self.action_scale
@@ -93,7 +103,8 @@ def main() -> None:
         if args.num_envs != 1:
             print("[WARN] viewer 模式建议 --num-envs 1 (查看器只显示单环境)")
         policy = ReferencePolicy(env, args.action_scale)
-        viewer = NativeMujocoViewer(env, policy, frame_rate=60)
+        # type: ignore[arg-type]  # 框架 EnvProtocol 与 ManagerBasedRlEnv.step 返回类型标注不完全匹配
+        viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
         viewer.run(num_steps=int(args.duration / env.step_dt))
         env.close()
         return
