@@ -46,8 +46,9 @@ class ReplayConfig:
     """计算设备, 默认 cuda:0 (无 GPU 时 cpu)。"""
     duration: float = REF_TOTAL_TIME
     """重放时长 (s), 默认覆盖整段参考轨迹。"""
-    action_scale: float = 0.5
-    """位置动作缩放 (需与 env_cfg 中 JointPositionActionCfg.scale 一致)。"""
+    action_scale: float | None = None
+    """位置动作缩放; 默认自动从 env_cfg.actions["joint_pos"].scale 读取,
+    必须与 env_cfg 一致, 否则开环重放的参考动作会被错误缩放。"""
     print_interval: float = 0.4
     """打印时间间隔 (s)。"""
     visualize: Literal["none", "video", "viewer"] = "viewer"
@@ -91,6 +92,11 @@ def main() -> None:
     device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     env_cfg = load_env_cfg("Mjlab-SQuRo-Backup")
     env_cfg.scene.num_envs = args.num_envs
+    # 动作缩放: 未显式指定时从 env_cfg 读取, 保证与训练/环境施加一致
+    # type: ignore[attr-defined]  # actions 实际是 JointPositionActionCfg(有 scale), 基类标注无该属性
+    cfg_scale = env_cfg.actions["joint_pos"].scale  # type: ignore[attr-defined]
+    action_scale = args.action_scale if args.action_scale is not None else float(cfg_scale)
+    print(f"[INFO] 动作缩放 action_scale={action_scale} (env_cfg scale={cfg_scale})")
 
     # 创建环境: video 模式需离屏渲染 (rgb_array), viewer 模式用原生渲染
     render_mode = "rgb_array" if args.visualize == "video" else None
@@ -105,7 +111,7 @@ def main() -> None:
         # BaseViewer 不会自动 reset 环境, 这里先重置为跌倒初始姿态
         # (否则 viewer 显示的是 env 构造后的站立姿态, 参考动作会把机器人"翻倒")
         env.reset()
-        policy = ReferencePolicy(env, args.action_scale)
+        policy = ReferencePolicy(env, action_scale)
         # type: ignore[arg-type]  # 框架 EnvProtocol 与 ManagerBasedRlEnv.step 返回类型标注不完全匹配
         viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
         viewer.run(num_steps=int(args.duration / env.step_dt))
@@ -138,7 +144,7 @@ def main() -> None:
     z_tail: list[float] = []
 
     for i in range(n_steps):
-        action = compute_ref_action(unwrapped, default, args.action_scale)
+        action = compute_ref_action(unwrapped, default, action_scale)
         obs, rew, dones, to, extras = env.step(action)
         base_z = asset.data.root_link_pos_w[:, 2]
         if i >= n_steps - int(1.0 / env.step_dt):
