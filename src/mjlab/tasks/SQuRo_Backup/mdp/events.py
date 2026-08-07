@@ -21,22 +21,33 @@ def reset_model(env, env_ids):
     if n == 0:
         return
 
+    # 获取机器人实体
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)
 
-    # 基座: identity (仰面跌倒), 位置 (0,0,0.06)
+    # 基座: identity (仰面跌倒), 位置 (0,0,0.03)
     root_state = torch.zeros(n, 13, device=env.device)
     root_state[:, 0] = 0.0
     root_state[:, 1] = 0.0
-    root_state[:, 2] = 0.06
+    root_state[:, 2] = 0.03
     root_state[:, 3] = 1.0  # quat w
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
 
-    # 驱动关节: 站立初始角; 其余(含闭链)关节保持 0
+    # 重置关节状态
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
-    joint_ids, _ = robot_entity.find_joints(_ACTUATED_JOINT_NAMES, preserve_order=True)
-    for i, jid in enumerate(joint_ids):
-        joint_pos[:, jid] = _INIT_JOINT_VALUES[i]
+
+    joint_indices = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23] + [
+        7, 9, 10, 11, 13, 15, 16, 17, 25, 27, 28, 29, 31, 33, 34, 35
+    ]
+    
+    joint_positions = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0] + [
+        -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
+        0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905
+    ]
+
+    for i, idx in enumerate(joint_indices):
+        if idx < robot_entity.num_joints:
+            joint_pos[:, idx] = joint_positions[i]
 
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)

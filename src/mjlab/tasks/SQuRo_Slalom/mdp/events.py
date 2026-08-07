@@ -25,12 +25,13 @@ def reset_model(env, env_ids):
     else:
         ax, ay = -_INIT_DIST, 0.0
         qx, qy = -0.70710678, -0.70710678
-    root_state[:, 0] = ax         # x
-    root_state[:, 1] = ay         # y
-    root_state[:, 2] = 0.06       # z
-    root_state[:, 3] = 0          # quat w
-    root_state[:, 4] = qx        # quat x
-    root_state[:, 5] = qy        # quat y
+
+    root_state[:, 0] = ax           # x
+    root_state[:, 1] = ay           # y
+    root_state[:, 2] = 0.06         # z
+    root_state[:, 3] = 0            # quat w
+    root_state[:, 4] = qx           # quat x
+    root_state[:, 5] = qy           # quat y
     root_state[:, 6] = 0.0          # quat z
     
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
