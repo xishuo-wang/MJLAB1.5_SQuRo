@@ -1,5 +1,6 @@
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
+
 # 执行器关节名称 — 必须与 entity actuator 顺序一致
 _ACTUATED_JOINT_NAMES = [
     "F_spine1_joint", "F_body_joint",
@@ -11,8 +12,10 @@ _ACTUATED_JOINT_NAMES = [
     "HR_hip_joint", "HR_knee_joint",
 ]
 
+
 # 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACTUATED_JOINT_NAMES))
+
 
 # action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
 _ACTION_LEG_IDS  = (4, 5, 6, 7, 10, 11, 12, 13)
@@ -54,9 +57,7 @@ def resolve_model_indices(entity) -> None:
     if _MODEL_INDICES.f_body_id >= 0:
         return
 
-    body_ids, body_names = entity.find_bodies(
-        ["F_body_Link", "H_body_Link"], preserve_order=True
-    )
+    body_ids, body_names = entity.find_bodies(["F_body_Link", "H_body_Link"], preserve_order=True)
     _MODEL_INDICES.f_body_id = body_ids[0]
     _MODEL_INDICES.h_body_id = body_ids[1]
 
