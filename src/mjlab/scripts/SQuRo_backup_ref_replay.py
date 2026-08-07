@@ -50,7 +50,7 @@ class ReplayConfig:
     """位置动作缩放 (需与 env_cfg 中 JointPositionActionCfg.scale 一致)。"""
     print_interval: float = 0.4
     """打印时间间隔 (s)。"""
-    visualize: Literal["none", "video", "viewer"] = "none"
+    visualize: Literal["none", "video", "viewer"] = "viewer"
     """可视化模式: none=无头打印, video=录制 mp4, viewer=交互式查看器。"""
     video_dir: str = "logs/rsl_rl/SQuRo_Backup/replay_videos"
     """视频输出目录 (--visualize video 时生效)。"""
