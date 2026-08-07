@@ -155,7 +155,7 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     cache = _get_ref_table(env.device)
     # 命令 time_scale λ (放慢倍数): λ=1.0 原始速度, λ=1.5 放慢 1.5 倍
     cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
-    lam = cmd[:, 0].clamp(min=0.1)  # [N]
+    lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale
     t_nom = (env.episode_length_buf.float() * env.step_dt) / lam  # [N]
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
