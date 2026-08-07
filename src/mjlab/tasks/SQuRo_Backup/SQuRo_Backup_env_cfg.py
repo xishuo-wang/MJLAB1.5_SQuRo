@@ -3,6 +3,7 @@
 
 from mjlab.managers import (
     ActionTermCfg,
+    CommandTermCfg,
     EventTermCfg,
     ObservationGroupCfg,
     ObservationTermCfg,
@@ -38,6 +39,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "base_ang_vel": ObservationTermCfg(func=mdp.base_ang_vel),
         "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
         "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
+        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "backup_cmd"}),
     }
 
     critic_terms = {**policy_terms}
@@ -68,11 +70,21 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "upright": RewardTermCfg(func=mdp.compute_upright_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
+        "stand": RewardTermCfg(func=mdp.compute_stand_reward, weight=1.0),
     }
 
     # 终止条件
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
+        "stand": TerminationTermCfg(func=mdp.check_stand_success, time_out=False),
+    }
+
+    # 命令系统 — 1D [time_scale λ]: 参考时间缩放 (λ=1.0 最快复位 ~1s, λ=1.5 慢速学习起点)
+    commands: dict[str, CommandTermCfg] = {
+        "backup_cmd": mdp.BackupCommandCfg(
+            asset_name="robot",
+            debug_vis=play,
+        )
     }
 
     # 足端接触传感器
@@ -96,6 +108,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         ),
         observations=observations,
         actions=actions,
+        commands=commands,
         events=events,
         rewards=rewards,
         terminations=terminations,
@@ -119,5 +132,5 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=4,
-        episode_length_s=8.0,
+        episode_length_s=3.0,
     )

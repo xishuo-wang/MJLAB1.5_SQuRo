@@ -1,4 +1,5 @@
 from __future__ import annotations
+import torch
 from typing import Any
 
 
@@ -13,15 +14,25 @@ STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊
 # 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
 _STAGES = (0, 1000, 2000, 4000)
 
+# 命令课程: time_scale λ (放慢倍数) 采样区间
+# iter 0-1000:   固定 λ=2.0 (慢速学习起点, warp 开环 1.9s 站起)
+# iter 1000-2000: λ_min 2.0 -> 1.4 (逐步加速)
+# iter 2000+:    λ ∈ [1.4, 2.0] (最快稳定 λ≈1.4, ~1.4s 复位)
+TIME_SCALE_MAX = 2.0
+TIME_SCALE_MIN_START = 2.0
+TIME_SCALE_MIN_END = 1.4
+
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
 _CURVES: dict[str, tuple[float, ...]] = {
     # 模仿 (核心, 全程保持较高权重)
     "weight_mimic_pos":   (5.0, 5.0, 5.0, 5.0),
     "weight_mimic_vel":   (2.5, 2.5, 2.5, 2.5),
-    # 竖直/高度 (先轻后重, 引导策略在模仿翻身之后稳定站直)
-    "weight_upright":     (2.0, 3.0, 5.0, 5.0),
-    "weight_height":      (2.0, 3.0, 5.0, 5.0),
+    # 竖直/高度 (与模仿平衡, 全程较强, 避免"躺平局部最优")
+    "weight_upright":     (5.0, 5.0, 5.0, 5.0),
+    "weight_height":      (5.0, 5.0, 5.0, 5.0),
+    # 站起成功奖励 (站稳 0.4s 即复位成功, 随阶段渐增, 激励快速复位)
+    "weight_stand":       (0.0, 2.0, 5.0, 8.0),
     # 关节位置/速度 σ
     "sigma_leg_pos":      (5.0, 5.0, 5.0, 5.0),
     "sigma_spn_pos":      (10.0, 10.0, 20.0, 20.0),
@@ -71,3 +82,11 @@ reward_weight_curriculum = RewardWeightCurriculum()
 # 获取课程奖励权重
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
+
+
+# 采样命令 time_scale λ (episode 内固定): 返回 [n] 张量
+def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.Tensor:
+    iter_num = step_counter // _STEPS_PER_ITER
+    progress = min(1.0, max(0.0, (iter_num - 1000) / (2000 - 1000)))
+    lam_min = TIME_SCALE_MIN_START - progress * (TIME_SCALE_MIN_START - TIME_SCALE_MIN_END)
+    return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)

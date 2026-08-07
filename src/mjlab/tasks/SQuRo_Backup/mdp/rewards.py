@@ -87,3 +87,17 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     r_h = torch.exp(-sigma * (h_h - _TARGET_HEIGHT) ** 2)
     env.extras["log"]["Data/height_actual"] = (0.5 * h_f + 0.5 * h_h).mean().item()
     return weight * (0.5 * r_f + 0.5 * r_h)
+
+
+# =========================================================================================
+# 站起成功奖励 — 身体竖直 (uprightness>0.9) 且高度达标 (height>0.05) 时每步 +1.0
+# 与站起成功终止配合, 直接激励"尽快完成复位"
+def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    up = asset.data.projected_gravity_b[:, 2]  # [N]
+    body_pos_w = asset.data.body_link_pos_w
+    h = 0.5 * (body_pos_w[:, _MODEL_INDICES.f_body_id, 2] + body_pos_w[:, _MODEL_INDICES.h_body_id, 2])
+    standing = (up > 0.9) & (h > 0.05)  # [N] bool
+    weight = get_curriculum_reward_weight(env, "weight_stand")
+    env.extras["log"]["Data/stand_success"] = standing.float().mean().item()
+    return standing.float() * weight

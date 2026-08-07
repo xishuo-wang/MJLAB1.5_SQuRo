@@ -13,11 +13,12 @@ def reset_model(env, env_ids):
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)
 
-    # 基座: identity (仰面跌倒), 位置 (0,0,0.03)
+    # 基座: identity (仰面跌倒), 位置 (0,0,0.024) — 贴地初始 (仰面稳定躺姿 base_z≈0.0236),
+    # 避免悬空落地阶段, 可直接开始翻身复位
     root_state = torch.zeros(n, 13, device=env.device)
     root_state[:, 0] = 0.0
     root_state[:, 1] = 0.0
-    root_state[:, 2] = 0.03
+    root_state[:, 2] = 0.024
     root_state[:, 3] = 1.0  # quat w
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
 
