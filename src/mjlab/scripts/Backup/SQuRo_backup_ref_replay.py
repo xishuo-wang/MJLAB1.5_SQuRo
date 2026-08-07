@@ -102,6 +102,9 @@ def main() -> None:
         # 交互式查看器: 开环参考策略实时驱动
         if args.num_envs != 1:
             print("[WARN] viewer 模式建议 --num-envs 1 (查看器只显示单环境)")
+        # BaseViewer 不会自动 reset 环境, 这里先重置为跌倒初始姿态
+        # (否则 viewer 显示的是 env 构造后的站立姿态, 参考动作会把机器人"翻倒")
+        env.reset()
         policy = ReferencePolicy(env, args.action_scale)
         # type: ignore[arg-type]  # 框架 EnvProtocol 与 ManagerBasedRlEnv.step 返回类型标注不完全匹配
         viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
