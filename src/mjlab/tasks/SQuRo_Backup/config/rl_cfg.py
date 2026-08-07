@@ -42,7 +42,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         num_steps_per_env=_STEPS_PER_ITER,
         max_iterations=3_000,
 
-        clip_actions=3.5,
+        clip_actions=3.14,
         seed=42,
 
         # resume=True,
