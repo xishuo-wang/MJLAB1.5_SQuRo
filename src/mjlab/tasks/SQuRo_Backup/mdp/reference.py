@@ -11,16 +11,19 @@ if TYPE_CHECKING:
 # =========================================================================================
 # 跌倒爬起参考轨迹
 # 来源: D:\Code\SQuRo-MuJoCo\Loco\Loco_Backup_fast2.py (右侧起身) 的分段位置控制,
-#       改进为"翻身 + 保持支撑 + 过渡站立"三段式, 使机器人能稳定站起。
+#       改进为"翻身 + 保持支撑 + 过渡站立"三段式。
+# 针对统一模型 SQuRo.xml (F_body 0.0906kg, 脊柱 range ±0.6) 调参:
+#   翻身段每小段 0.2s (原始 fast2 为 0.1s, 更重的身体需要更慢的翻转)
 # 时间轴:
-#   0.0 - 1.0s  躺地 (初始站立关节角, 仰面跌倒)
-#   1.0 - 1.7s  翻身动作 (fast2: 腿摆支撑位 + 脊柱大幅扭转)
-#   1.7 - 3.5s  保持支撑 (腿 IK 支撑位, 脊柱归零)
-#   3.5 - 4.5s  过渡到站立腿 (线性插值)
-#   4.5 - 6.0s  保持站立
+#   0.0 - 1.0s  躺地 (初始站立关节角, 仰面跌倒 identity quat)
+#   1.0 - 2.4s  翻身动作 (腿摆支撑位 + 脊柱大幅扭转)
+#   2.4 - 4.2s  保持支撑 (腿 IK 支撑位, 脊柱归零)
+#   4.2 - 5.4s  过渡到站立腿 (线性插值)
+#   5.4 - 7.0s  保持站立
+# 已在纯 MuJoCo 与 MJLAB warp 双环境验证: 最终 base_z≈0.056, 身体竖直稳定站立。
 # =========================================================================================
 
-REF_TOTAL_TIME = 6.0        # 参考轨迹总时长 (s)
+REF_TOTAL_TIME = 7.0        # 参考轨迹总时长 (s)
 _REF_DT = 0.005             # 参考表分辨率 (s)
 
 # 站立初始腿角 (FL_sh, FL_el, FR_sh, FR_el, HL_hip, HL_knee, HR_hip, HR_knee)
@@ -77,52 +80,52 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
 
         if t <= 1.0:
             pass  # 躺地
-        elif t <= 1.1:
+        elif t <= 1.2:
             # 腿伸向远处支撑 (FL0), H_spine1 上升
             leg[0], leg[1], leg[2], leg[3] = _FL_REACH[0], _FL_REACH[1], _FL_REACH[0], _FL_REACH[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            h_sp1 = (t - 1.0) * 8.0
-        elif t <= 1.2:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = -(t - 1.1) * 8.0
-            h_sp1 = 0.8
-            h_bd = -(t - 1.1) * 15.7
-        elif t <= 1.3:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = -0.8
-            f_bd = -(t - 1.3) * 15.7
-            h_sp1 = 0.8
-            h_bd = -1.57
+            h_sp1 = (t - 1.0) * 4.0
         elif t <= 1.4:
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = -0.8 + (t - 1.3) * 8.0
-            f_bd = 1.57
-            h_sp1 = 0.8 - (t - 1.3) * 8.0
-            h_bd = -1.57
-        elif t <= 1.5:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_bd = 1.57
-            h_bd = -1.57 + (t - 1.4) * 15.7
+            f_sp1 = -(t - 1.2) * 4.0
+            h_sp1 = 0.8
+            h_bd = -(t - 1.2) * 7.85
         elif t <= 1.6:
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = -(t - 1.5) * 8.0
-            f_bd = 1.57 - (t - 1.5) * 15.7
-        elif t <= 1.7:
+            f_sp1 = -0.8
+            f_bd = -(t - 1.4) * 7.85
+            h_sp1 = 0.8
+            h_bd = -1.57
+        elif t <= 1.8:
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = -0.8 + (t - 1.6) * 8.0
-        elif t <= 3.5:
+            f_sp1 = -0.8 + (t - 1.6) * 4.0
+            f_bd = 1.57
+            h_sp1 = 0.8 - (t - 1.6) * 4.0
+            h_bd = -1.57
+        elif t <= 2.0:
+            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
+            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
+            f_bd = 1.57
+            h_bd = -1.57 + (t - 1.8) * 7.85
+        elif t <= 2.2:
+            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
+            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
+            f_sp1 = -(t - 2.0) * 4.0
+            f_bd = 1.57 - (t - 2.0) * 7.85
+        elif t <= 2.4:
+            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
+            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
+            f_sp1 = -0.8 + (t - 2.2) * 4.0
+        elif t <= 4.2:
             # 保持支撑位
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
         else:
             # 过渡到站立腿
-            f = min(1.0, (t - 3.5) / 1.0)
+            f = min(1.0, (t - 4.2) / 1.2)
             # 前腿列 (0-3): FL/FR 共用 FL_HOLD 两个角; 后腿列 (4-7): HL/HR 共用 HL_HOLD 两个角
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + f * (_LEG_INIT[c] - _FL_HOLD[c % 2])

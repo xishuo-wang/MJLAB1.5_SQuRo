@@ -14,14 +14,13 @@ from mjlab.tasks.SQuRo_Backup import mdp
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
-from mjlab.asset_zoo.robots.SQuRo_Backup.SQuRo_Backup_constants import (
-    get_squro_backup_robot_cfg,
-)
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # SQuRo 跌倒爬起专用机器人配置
-    SQURO_ROBOT_CFG = get_squro_backup_robot_cfg()
+    # 统一使用 SQuRo 模型 — 跌倒初始姿态由 reset 时的 identity 四元数实现
+    # (与参考仿真 Mouse_Pos_Backup.xml 的 quat="0 0 0 0" 在 mujoco_py 中等价)
+    SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
     # 观测空间 — 关节状态 + 参考轨迹 + 机身状态（跌倒爬起不需要路径/命令）
     policy_terms = {
@@ -106,5 +105,5 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=4,
-        episode_length_s=6.0,
+        episode_length_s=7.0,
     )
