@@ -3,7 +3,7 @@ from mjlab.rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlPpoAlgorithmCfg,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _STEPS_PER_ITER
 
 
 def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:

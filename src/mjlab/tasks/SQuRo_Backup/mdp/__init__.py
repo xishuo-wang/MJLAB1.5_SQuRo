@@ -1,5 +1,6 @@
 from mjlab.envs.mdp import *
 
+from .curriculums import *
 from .events import *
 from .indices import *
 from .observations import *
