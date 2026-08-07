@@ -1,4 +1,5 @@
 # uv run train Mjlab-SQuRo-Backup
+# uv run play Mjlab-SQuRo-Backup-Play --checkpoint_file
 
 from mjlab.managers import (
     ActionTermCfg,
@@ -13,16 +14,20 @@ from mjlab.viewer import ViewerConfig
 from mjlab.tasks.SQuRo_Backup import mdp
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # 统一使用 SQuRo 模型 — 跌倒初始姿态由 reset 时的 identity 四元数实现
-    # (与参考仿真 Mouse_Pos_Backup.xml 的 quat="0 0 0 0" 在 mujoco_py 中等价)
+    # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
-    # 观测空间 — 关节状态 + 参考轨迹 + 机身状态（跌倒爬起不需要路径/命令）
+    # 足端碰撞体名称
+    foot_names = ("FL", "FR", "HL", "HR")
+    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+
+    # 观测空间
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
@@ -43,12 +48,11 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
     # 动作空间 — 14个执行器位置控制
-    # scale=0.5 + clip_actions=3.5 → 最大偏移 ±1.75 rad, 覆盖爬起动作幅度(脊柱 ±1.57)
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
             actuator_names=(".*",),
-            scale=0.5,
+            scale=0.3,
             use_default_offset=True,
         )
     }
@@ -58,7 +62,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励函数 — 第一阶段: 模仿 + 竖直/高度引导 (不加走廊等复杂奖励)
+    # 奖励函数
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
@@ -66,18 +70,29 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
     }
 
-    # 终止条件 — 仅超时（跌倒不是终止条件）
+    # 终止条件
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
     }
 
+    # 足端接触传感器
+    feet_ground_cfg = ContactSensorCfg(
+        name="feet_ground_contact",
+        primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
+        secondary=ContactMatch(mode="geom", pattern="floor", entity="robot"),
+        fields=("found", "force"),
+        reduce="netforce",
+        num_slots=1,
+        track_air_time=True,
+    )
+    
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
-            num_envs=512,
+            num_envs=1024,
             extent=1.0,
             entities={"robot": SQURO_ROBOT_CFG},
-            sensors=(),
+            sensors=(feet_ground_cfg,),
         ),
         observations=observations,
         actions=actions,
@@ -89,7 +104,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             entity_name="robot",
             body_name="base_Link",
             distance=0.5,
-            elevation=-30.0,
+            elevation=-45.0,
             azimuth=90.0,
             height=1080,
             width=1920,
@@ -100,10 +115,9 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             mujoco=MujocoCfg(
                 timestep=0.002,
                 iterations=50,
-                ls_iterations=50,
-                tolerance=1e-9,
+                ls_iterations=20,
             ),
         ),
         decimation=4,
-        episode_length_s=7.0,
+        episode_length_s=8.0,
     )
