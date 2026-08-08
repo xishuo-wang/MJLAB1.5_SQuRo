@@ -1,145 +1,431 @@
-"""SQuRo Backup 跌倒爬起策略回放脚本。
+"""SQuRo Backup 跌倒爬起策略回放脚本（与 SQuRo_Slalom_play.py 结构一致）。
 
-加载训练好的策略, 固定参考时间缩放 λ (demo 用 1.4), 统计复位时间并可选录制视频。
+交互查看器播放 + 视频录制 + 关节数据 CSV 保存；任务专有部分为命令固定
+(fixed_time_scale λ) 与复位相关数据 (uprightness/height) 记录。
 
 用法:
     uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt>
-    uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt> --time-scale 1.4 --video
-    uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt> --agent zero
-
-输出: 每 episode 的复位时间 (从跌倒到站稳 0.5s), 平均复位时间与成功率; 可选 mp4 视频。
+    uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt> --time-scale 1.4
+    uv run python src/mjlab/scripts/SQuRo_backup_play.py --agent zero
 """
 
-from __future__ import annotations
-
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Literal
-
+import re
 import tyro
 import torch
-
-import mjlab.tasks  # noqa: F401  触发任务注册
+import pandas as pd
+from pathlib import Path
+from typing import Literal
 from mjlab.envs import ManagerBasedRlEnv
+from dataclasses import asdict, dataclass
+from mjlab.viewer import NativeMujocoViewer
+from mjlab.utils.wrappers import VideoRecorder
+from mjlab.utils.os import get_wandb_checkpoint_path
+from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.utils.torch import configure_torch_backends
-from mjlab.utils.wrappers import VideoRecorder
+from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 
 
+# 任务配置
 TASK_NAME = "Mjlab-SQuRo-Backup"
 
 
 @dataclass(frozen=True)
-class BackupPlayConfig:
-    agent: Literal["trained", "zero", "random"] = "trained"
+class PlayConfig:
+    agent: Literal["zero", "random", "trained"] = "trained"
+    wandb_run_path: str | None = None
+    wandb_checkpoint_name: str | None = None
     checkpoint_file: str | None = None
-    """训练 checkpoint 路径 (trained 模式必填)。"""
-    time_scale: float | None = 1.4
-    """固定参考时间缩放 (demo 用 1.4, ~1.4s 复位); None=按课程采样。"""
-    num_envs: int = 1
+    num_envs: int | None = 1
     device: str | None = None
-    num_episodes: int = 5
-    """统计复位时间的 episode 数。"""
     video: bool = True
     video_length: int = 400
-    """单个视频最大帧数 (3s @ step_dt=0.008 ≈ 375)。"""
+    video_height: int | None = 1080
+    video_width: int | None = 1920
+    record_data: bool = True
+    # Backup 任务相关配置
+    fixed_time_scale: float | None = 1.4
+    """固定参考时间缩放 λ (demo 用 1.4, ~1.4s 复位); None=按课程采样"""
 
 
-def run_play(cfg: BackupPlayConfig) -> None:
+# 从 checkpoint 文件名提取训练轮次
+def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
+    m = re.search(r"model_(\d+)", checkpoint_path.name)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
+# 从检查点路径提取视频名称
+def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
+    checkpoint_name = checkpoint_path.stem
+    if '_' in checkpoint_name:
+        step = checkpoint_name.split('_')[-1]
+    else:
+        step = checkpoint_name
+
+    run_dir_name = checkpoint_path.parent.parent.name
+
+    if run_dir_name.startswith('run-'):
+        timestamp_part = run_dir_name[4:]
+        timestamp = timestamp_part.split('-')[0]
+    else:
+        timestamp = run_dir_name
+
+    video_name = f"{timestamp}_{step}"
+    return video_name
+
+
+class JointDataRecorder:
+    def __init__(self, log_dir, video_name, num_envs=1):
+        self.log_dir = log_dir
+        self.video_name = video_name
+        self.num_envs = num_envs
+        self.data_records = []
+        self.step_count = 0
+
+        # 14 个驱动关节 — 顺序必须与 entity actuator 顺序一致
+        self.joint_names = [
+            'F_spine1', 'F_body',
+            'Neck_yaw', 'Neck_pitch',
+            'FL_shoulder', 'FL_elbow',
+            'FR_shoulder', 'FR_elbow',
+            'H_spine1', 'H_body',
+            'HL_hip', 'HL_knee',
+            'HR_hip', 'HR_knee',
+        ]
+        self._joint_ids_resolved = False
+        self.action_names = self.joint_names  # 与 joint_names 同序
+        self.foot_names = ['FL', 'FR', 'HL', 'HR']
+        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
+        self._foot_site_ids = None
+
+    def record_step_data(self, env, actions=None, rewards=None, dones=None):
+        record = {'step': float(self.step_count)}
+
+        # 记录动作
+        if actions is not None:
+            for action_idx in range(actions.shape[1]):
+                if action_idx < len(self.action_names):
+                    joint_name = self.action_names[action_idx]
+                    record[f'{joint_name}_action'] = float(actions[0, action_idx].item())
+                else:
+                    record[f'action_{action_idx}'] = float(actions[0, action_idx].item())
+
+        unwrapped = env.unwrapped
+        asset = unwrapped.scene["robot"]
+        env_idx = 0
+
+        # 足部接触力
+        contact_sensor = unwrapped.scene["feet_ground_contact"]
+        feet_contact = contact_sensor.data.force.flatten(start_dim=1)
+        for i, name in enumerate(self.foot_names):
+            record[f'contact_{name}_x'] = float(feet_contact[env_idx, i * 3].item())
+            record[f'contact_{name}_y'] = float(feet_contact[env_idx, i * 3 + 1].item())
+            record[f'contact_{name}_z'] = float(feet_contact[env_idx, i * 3 + 2].item())
+            force_mag = torch.norm(feet_contact[env_idx, i * 3: i * 3 + 3]).item()
+            record[f'contact_{name}_mag'] = force_mag
+
+        # 足端位置
+        if self._foot_site_ids is None:
+            self._foot_site_ids, _ = asset.find_sites(self.foot_site_names, preserve_order=True)
+        foot_pos = asset.data.site_pos_w[env_idx, self._foot_site_ids]
+        for i, name in enumerate(self.foot_names):
+            record[f'foot_{name}_x'] = float(foot_pos[i, 0].item())
+            record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
+            record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
+
+        # 关节状态 — 使用 ModelIndices 解析后的实体级关节索引
+        if not self._joint_ids_resolved:
+            resolve_model_indices(asset)
+            self._joint_ids_resolved = True
+        joint_ids = _MODEL_INDICES.joint_ids
+        # 先减默认值再升维：[J] 或 [N,J] → 统一 [N,J]
+        djp = asset.data.default_joint_pos
+        djv = asset.data.default_joint_vel
+        jp = (asset.data.joint_pos - djp) if djp is not None else asset.data.joint_pos
+        jv = (asset.data.joint_vel - djv) if djv is not None else asset.data.joint_vel
+        ja = asset.data.joint_acc
+        if jp.dim() == 1:
+            jp, jv, ja = jp.unsqueeze(0), jv.unsqueeze(0), ja.unsqueeze(0)
+        joint_pos = jp[env_idx, joint_ids]  # type: ignore[call-overload]
+        joint_vel = jv[env_idx, joint_ids]  # type: ignore[call-overload]
+        joint_acc = ja[env_idx, joint_ids]  # type: ignore[call-overload]
+        actuator_force = asset.data.actuator_force[env_idx]
+
+        # 基座位置
+        base_pos = asset.data.root_link_pos_w[env_idx]
+        base_lin_vel_w = asset.data.root_link_lin_vel_w[env_idx]
+        base_ang_vel_w = asset.data.root_link_ang_vel_w[env_idx]
+
+        # F_body / H_body 偏航角
+        import math as _math
+        if not hasattr(self, '_f_body_id') or not hasattr(self, '_h_body_id'):
+            f_ids, _ = asset.find_bodies("F_body_Link", preserve_order=True)
+            h_ids, _ = asset.find_bodies("H_body_Link", preserve_order=True)
+            self._f_body_id = f_ids[0] if f_ids else None  # type: ignore[union-attr]
+            self._h_body_id = h_ids[0] if h_ids else None  # type: ignore[union-attr]
+
+        f_body_raw, h_body_raw = 0.0, 0.0
+        if self._f_body_id is not None:
+            quat = asset.data.body_link_quat_w[env_idx, self._f_body_id]
+            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+            f_body_raw = float(torch.atan2(2*(w*z+x*y), 1-2*(y*y+z*z)).item())
+        if self._h_body_id is not None:
+            quat = asset.data.body_link_quat_w[env_idx, self._h_body_id]
+            w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+            h_body_raw = float(torch.atan2(2*(w*z+x*y), 1-2*(y*y+z*z)).item())
+
+        # body+X heading (raw)
+        record['f_body_raw_heading'] = f_body_raw
+        record['h_body_raw_heading'] = h_body_raw
+        # 物理前向 heading
+        record['f_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(f_body_raw - _math.pi/2)),
+                                                       torch.cos(torch.tensor(f_body_raw - _math.pi/2))).item())
+        record['h_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(h_body_raw + _math.pi/2)),
+                                                       torch.cos(torch.tensor(h_body_raw + _math.pi/2))).item())
+
+        # 基座朝向
+        heading = asset.data.heading_w[env_idx]
+        record['heading'] = float(heading.item())
+
+        # 控制命令等
+        ref_joint_pos, ref_joint_vel = get_reference_joint_state(unwrapped)
+        ref_joint_pos = ref_joint_pos[env_idx]
+        ref_joint_vel = ref_joint_vel[env_idx]
+        command = unwrapped.command_manager.get_command("backup_cmd")[env_idx]
+
+        for i, name in enumerate(self.joint_names):
+            record[f'{name}_pos'] = float(joint_pos[i].item())
+            record[f'{name}_vel'] = float(joint_vel[i].item())
+            record[f'{name}_acc'] = float(joint_acc[i].item())
+            record[f'{name}_torque'] = float(actuator_force[i].item())
+            record[f'{name}_ref_pos'] = float(ref_joint_pos[i].item())
+            record[f'{name}_ref_vel'] = float(ref_joint_vel[i].item())
+
+        record['base_pos_x'] = float(base_pos[0].item())
+        record['base_pos_y'] = float(base_pos[1].item())
+        record['base_pos_z'] = float(base_pos[2].item())
+        record['base_lin_vel_x'] = float(base_lin_vel_w[0].item())
+        record['base_lin_vel_y'] = float(base_lin_vel_w[1].item())
+        record['base_lin_vel_z'] = float(base_lin_vel_w[2].item())
+        record['base_ang_vel_x'] = float(base_ang_vel_w[0].item())
+        record['base_ang_vel_y'] = float(base_ang_vel_w[1].item())
+        record['base_ang_vel_z'] = float(base_ang_vel_w[2].item())
+
+        # 6D 命令 [vel_x, height_f, height_h, gait_freq, curvature, time_scale]
+        command_names = [
+            'vel_command_x', 'height_f_command', 'height_h_command',
+            'gait_freq_command', 'curvature_command', 'time_scale_command',
+        ]
+        for i, name in enumerate(command_names):
+            record[name] = float(command[i].item())
+
+        # Backup 任务专有: 复位相关状态 (uprightness / F-H body 高度)
+        record['uprightness'] = float(asset.data.projected_gravity_b[env_idx, 2].item())
+        body_pos_w = asset.data.body_link_pos_w
+        record['height_actual'] = float(0.5 * (body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2]
+                                               + body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2]).item())
+
+        if rewards is not None:
+            record['reward'] = float(rewards[0].item()) if torch.is_tensor(rewards) else float(rewards[0])
+        if dones is not None:
+            record['done'] = float(dones[0].item() if torch.is_tensor(dones) else float(dones[0]))
+
+        self.data_records.append(record)
+        self.step_count += 1
+
+    def save_to_csv(self):
+        if not self.data_records:
+            print("[WARN] 没有数据可保存")
+            return
+
+        video_dir = self.log_dir / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = video_dir / f"{self.video_name}.csv"
+        df = pd.DataFrame(self.data_records)
+        df['step'] = df['step'].astype(int)
+        df.to_csv(csv_path, index=False)
+        print(f"[INFO] 关节数据已保存到: {csv_path}")
+        print(f"[INFO] 记录了 {len(self.data_records)} 步数据，{len(df.columns)} 列")
+
+
+class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
+    def __init__(self, env, clip_actions=None, data_recorder=None, action_scale=1.0):
+        super().__init__(env, clip_actions)
+        self.data_recorder = data_recorder
+        self.action_scale = action_scale
+
+    def step(self, actions):
+        scaled_actions = actions * self.action_scale
+
+        obs_dict, rew, dones, extras = super().step(scaled_actions)
+
+        if self.data_recorder:
+            self.data_recorder.record_step_data(
+                self.env,
+                actions=scaled_actions,
+                rewards=rew,
+                dones=dones
+            )
+
+        return obs_dict, rew, dones, extras
+
+
+def run_play(cfg: PlayConfig):
     configure_torch_backends()
+
     device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
 
     env_cfg = load_env_cfg(TASK_NAME, play=True)
     agent_cfg = load_rl_cfg(TASK_NAME)
 
-    DUMMY = cfg.agent in {"zero", "random"}
-    if not DUMMY and cfg.checkpoint_file is None:
-        raise ValueError("trained 模式需要 --checkpoint-file")
-    resume_path = Path(cfg.checkpoint_file) if cfg.checkpoint_file else None
-    if resume_path is not None and not resume_path.exists():
-        raise FileNotFoundError(f"checkpoint 不存在: {resume_path}")
+    DUMMY_MODE = cfg.agent in {"zero", "random"}
+    TRAINED_MODE = not DUMMY_MODE
 
-    # 固定参考时间缩放 (回放/demo): 与 Slalom fixed_curvature 风格一致
-    if cfg.time_scale is not None:
-        env_cfg.commands["backup_cmd"].fixed_time_scale = cfg.time_scale  # type: ignore[attr-defined]
-        print(f"[INFO] 固定 time_scale λ = {cfg.time_scale}")
+    log_dir: Path | None = None
+    resume_path: Path | None = None
+    video_name: str | None = None
 
-    env_cfg.scene.num_envs = cfg.num_envs
-    render_mode = "rgb_array" if (not DUMMY and cfg.video) else None
+    if TRAINED_MODE:
+        log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
+        if cfg.checkpoint_file is not None:
+            resume_path = Path(cfg.checkpoint_file)
+            if not resume_path.exists():
+                raise FileNotFoundError(f"未找到checkpoint文件: {resume_path}")
+            video_name = extract_video_name_from_checkpoint(resume_path)
+        else:
+            if cfg.wandb_run_path is None:
+                print("请输入 --checkpoint-file 路径:")
+                checkpoint_file = input().strip()
+                if checkpoint_file.startswith('"') and checkpoint_file.endswith('"'):
+                    checkpoint_file = checkpoint_file[1:-1]
+                elif checkpoint_file.startswith("'") and checkpoint_file.endswith("'"):
+                    checkpoint_file = checkpoint_file[1:-1]
+                if not checkpoint_file:
+                    raise ValueError("必须提供checkpoint文件路径")
+                resume_path = Path(checkpoint_file)
+                if not resume_path.exists():
+                    raise FileNotFoundError(f"未找到checkpoint文件: {resume_path}")
+                video_name = extract_video_name_from_checkpoint(resume_path)
+            else:
+                resume_path, was_cached = get_wandb_checkpoint_path(
+                    log_root_path,
+                    Path(cfg.wandb_run_path),
+                    cfg.wandb_checkpoint_name
+                )
+                video_name = extract_video_name_from_checkpoint(resume_path)
+
+        log_dir = resume_path.parent
+
+    # 设置环境参数
+    if cfg.num_envs is not None:
+        env_cfg.scene.num_envs = cfg.num_envs
+    if cfg.video_height is not None:
+        env_cfg.viewer.height = cfg.video_height
+    if cfg.video_width is not None:
+        env_cfg.viewer.width = cfg.video_width
+
+    # 命令固定值覆盖 — Backup: 固定参考时间缩放 λ (demo)
+    cmd_cfg = env_cfg.commands.get("backup_cmd")
+    if cmd_cfg is not None and TRAINED_MODE:
+        if cfg.fixed_time_scale is not None:
+            cmd_cfg.fixed_time_scale = cfg.fixed_time_scale  # type: ignore[attr-defined]
+
+    # 构建命令后缀（用于视频和CSV文件名）
+    cmd_suffix_parts = []
+    if cfg.fixed_time_scale is not None:
+        cmd_suffix_parts.append(f"ts{cfg.fixed_time_scale:.2f}")
+    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
+    if video_name is not None:
+        video_name = f"{video_name}{cmd_suffix}"
+
+    # 创建环境
+    render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
+    if cfg.video and DUMMY_MODE:
+        print("[WARN] 虚拟智能体的视频录制已禁用")
+
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
-    log_dir = resume_path.parent if resume_path is not None else Path("logs/rsl_rl/SQuRo_Backup")
-    if not DUMMY and cfg.video:
-        video_folder = log_dir / "videos" / "play"
+    if TRAINED_MODE and cfg.fixed_time_scale is not None:
+        print(f"[INFO] 固定 time_scale λ = {cfg.fixed_time_scale}")
+
+    # 初始化数据记录器
+    data_recorder = None
+    if cfg.record_data and TRAINED_MODE:
+        print("[INFO] 启用关节数据记录")
+        data_recorder = JointDataRecorder(log_dir, video_name, num_envs=env_cfg.scene.num_envs)
+
+    # 添加视频录制器（文件名与CSV统一，使用 video_name 作为前缀）
+    if TRAINED_MODE and cfg.video:
+        print("[INFO] 播放期间录制视频")
+        assert log_dir is not None
+        video_folder = log_dir / "videos"
+        assert video_name is not None
         env = VideoRecorder(
             env,
             video_folder=video_folder,
             step_trigger=lambda step: step == 0,
             video_length=cfg.video_length,
-            name_prefix=f"backup_play_ts{cfg.time_scale}",
+            name_prefix=video_name,
             disable_logger=False,
         )
 
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    # 使用数据记录包装器
+    env = DataRecordingEnvWrapper(
+        env,
+        clip_actions=agent_cfg.clip_actions,
+        data_recorder=data_recorder,
+        action_scale=1.0
+    )
 
-    if DUMMY:
-        action_shape = env.unwrapped.action_space.shape
+    # 创建策略
+    if DUMMY_MODE:
+        action_shape: tuple[int, ...] = env.unwrapped.action_space.shape
         if cfg.agent == "zero":
-            policy = lambda obs: torch.zeros(action_shape, device=env.unwrapped.device)  # noqa: E731
+            class PolicyZero:
+                def __call__(self, obs) -> torch.Tensor:
+                    del obs
+                    return torch.zeros(action_shape, device=env.unwrapped.device)
+            policy = PolicyZero()
         else:
-            policy = lambda obs: 2 * torch.rand(action_shape, device=env.unwrapped.device) - 1  # noqa: E731
+            class PolicyRandom:
+                def __call__(self, obs) -> torch.Tensor:
+                    del obs
+                    return 2 * torch.rand(action_shape, device=env.unwrapped.device) - 1
+            policy = PolicyRandom()
     else:
-        assert resume_path is not None
         runner_cls = load_runner_cls(TASK_NAME) or MjlabOnPolicyRunner
-        runner = runner_cls(env, asdict(agent_cfg), str(log_dir), device=device)
-        runner.load(str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device)
+        agent_cfg_dict = asdict(agent_cfg)
+        runner = runner_cls(env, agent_cfg_dict, str(log_dir), device=device)
+        runner.load(
+            str(resume_path),
+            load_cfg={"actor": True},
+            strict=True,
+            map_location=device
+        )
         policy = runner.get_inference_policy(device=device)
-        print(f"[INFO] 已加载 checkpoint: {resume_path.name}")
 
-    # 运行多 episode 统计复位时间
-    reset_times: list[float] = []
-    asset = env.unwrapped.scene.entities["robot"]
-    step_dt = env.unwrapped.step_dt
-    from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
-
-    for ep in range(cfg.num_episodes):
-        env.unwrapped.reset()
-        obs = env.get_observations()   # RslRlVecEnvWrapper 观测 (tensor)
-        stand_steps = 0
-        reset_time = None
-        for i in range(cfg.video_length):
-            with torch.no_grad():
-                action = policy(obs)
-            obs, rew, dones, infos = env.step(action)
-            up = asset.data.projected_gravity_b[:, 2]
-            h = 0.5 * (asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, 2]
-                       + asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, 2])
-            standing = (up > 0.9) & (h > 0.05)
-            if bool(standing.all()):
-                stand_steps += 1
-            else:
-                stand_steps = 0
-            if stand_steps >= int(0.5 / step_dt) and reset_time is None:
-                reset_time = float(i - stand_steps + 1) * step_dt
-                break
-        if reset_time is not None:
-            reset_times.append(reset_time)
-            print(f"[episode {ep}] 复位时间 = {reset_time:.3f}s")
-        else:
-            print(f"[episode {ep}] 未在 {cfg.video_length * step_dt:.2f}s 内稳定站起")
-
-    if reset_times:
-        print(f"\n[RESULT] {len(reset_times)}/{cfg.num_episodes} 成功, "
-              f"平均复位时间 = {sum(reset_times)/len(reset_times):.3f}s")
-    else:
-        print("\n[RESULT] 无成功复位")
-    env.close()
+    # 运行查看器
+    try:
+        viewer = NativeMujocoViewer(env, policy)
+        viewer.run()
+    except KeyboardInterrupt:
+        print("[INFO] 用户中断播放")
+    except Exception as e:
+        print(f"[ERROR] 播放过程中出错: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if data_recorder:
+            data_recorder.save_to_csv()
+        env.close()
 
 
-def main() -> None:
-    cfg = tyro.cli(BackupPlayConfig)
-    run_play(cfg)
+def main():
+    args = tyro.cli(PlayConfig, description="播放 SQuRo Backup 智能体")
+    run_play(args)
 
 
 if __name__ == "__main__":
