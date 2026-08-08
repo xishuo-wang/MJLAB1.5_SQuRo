@@ -120,9 +120,9 @@ def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return standing.float() * weight
 
 
+
 # =========================================================================================
-# 站立保持惩罚 — 检测到站立 (竖直且高度达标) 时, 惩罚关节运动 (平均关节速度超死区部分)
-# 抑制起身后的抖动, 促使策略站起后"冻结"关节保持稳定
+# 站立保持惩罚 — 检测到站立 (竖直且高度达标) 时, 惩罚关节运动 (平均关节速度超死区部分)制起身后的抖动, 
 def compute_stand_still_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     up = asset.data.projected_gravity_b[:, 2]  # [N]
@@ -135,4 +135,58 @@ def compute_stand_still_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_stand_still")
     penalty = -weight * standing.float() * excess
     env.extras["log"]["Data/stand_still_speed"] = (standing.float() * speed).mean().item()
+    return penalty
+
+
+
+# =========================================================================================
+# L1 动作平滑惩罚
+def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 计算动作变化
+    current_action = env.action_manager.action
+    prev_action = env.action_manager.prev_action
+    abs_diff = torch.abs(current_action - prev_action)
+    leg_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
+    spn_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
+    error_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
+    # 获取课程学习量
+    w_leg = get_curriculum_reward_weight(env, "weight_smooth_L1_leg")
+    w_spn = get_curriculum_reward_weight(env, "weight_smooth_L1_spn")
+    # 计算奖励
+    penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
+    return penalty
+
+
+
+# =========================================================================================
+# L2 动作平滑惩罚
+def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 计算动作变化
+    current_action = env.action_manager.action
+    prev_action = env.action_manager.prev_action
+    sq_diff = torch.square(current_action - prev_action)
+    leg_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
+    spn_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
+    error_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
+    # 获取课程学习量
+    w_leg = get_curriculum_reward_weight(env, "weight_smooth_L2_leg")
+    w_spn = get_curriculum_reward_weight(env, "weight_smooth_L2_spn")
+    # 计算奖励
+    penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
+    return penalty
+
+
+
+# =========================================================================================
+# 能耗惩罚
+def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    # 计算能量消耗
+    actuator_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
+    actuator_torque = asset.data.actuator_force
+    cost = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
+    # 获取课程学习量
+    weight = get_curriculum_reward_weight(env, "weight_energy")
+    # 计算奖励
+    penalty = -weight * cost
     return penalty

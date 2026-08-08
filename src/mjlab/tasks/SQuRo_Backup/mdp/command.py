@@ -1,23 +1,18 @@
 from __future__ import annotations
 import torch
+from typing import TYPE_CHECKING, Tuple
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
-from typing import TYPE_CHECKING, Tuple
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
-
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 命令系统 — 6D 命令 [vel_x, height_f, height_h, gait_freq, curvature, time_scale]
-# 前 5 维与 Slalom/Tunnel 对齐 (跌倒爬起中 vel/gait/curvature 占位, 高度命令与 height 奖励一致)
-# 第 6 维 time_scale λ: 参考轨迹时间缩放 (放慢倍数), 驱动爬起快慢
-#   λ=1.0 原始 fast1 速度 (~1s 复位), λ=2.0 放慢 2 倍 (学习起点); 由 curriculums 按课程采样
+
 class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
-
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
         self.fixed_time_scale = cfg.fixed_time_scale
