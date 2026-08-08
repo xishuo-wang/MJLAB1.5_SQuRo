@@ -1,14 +1,3 @@
-"""SQuRo Backup 跌倒爬起策略回放脚本（与 SQuRo_Slalom_play.py 结构一致）。
-
-交互查看器播放 + 视频录制 + 关节数据 CSV 保存；任务专有部分为命令固定
-(fixed_time_scale λ) 与复位相关数据 (uprightness/height) 记录。
-
-用法:
-    uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt>
-    uv run python src/mjlab/scripts/SQuRo_backup_play.py --checkpoint-file <model_XXX.pt> --time-scale 1.4
-    uv run python src/mjlab/scripts/SQuRo_backup_play.py --agent zero
-"""
-
 import re
 import tyro
 import torch
@@ -46,7 +35,6 @@ class PlayConfig:
     record_data: bool = True
     # Backup 任务相关配置
     fixed_time_scale: float | None = 1.4
-    """固定参考时间缩放 λ (demo 用 1.4, ~1.4s 复位); None=按课程采样"""
 
 
 # 从 checkpoint 文件名提取训练轮次
