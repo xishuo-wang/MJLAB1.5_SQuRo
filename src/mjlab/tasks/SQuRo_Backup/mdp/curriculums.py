@@ -5,6 +5,7 @@ from typing import Any
 
 _STEPS_PER_ITER = 24               # 每 iter 步数 (与 Slalom 一致)
 
+
 # 训练阶段边界 (iter)
 STAGE1_MID_ITER = 1000             # iter 0-1000:   纯模仿阶段
 STAGE2_MID_ITER = 2000             # iter 1000-2000: 强化竖直/高度引导
@@ -12,12 +13,10 @@ STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊
 
 
 # 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
-_STAGES = (0, STAGE1_MID_ITER, STAGE2_MID_ITER, STAGE2_END_ITER)
+_STAGES = (0, 1000, 2000, 4000)
+
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间
-# iter 0-1000:   固定 λ=2.0 (慢速学习起点, warp 开环 1.9s 站起)
-# iter 1000-2000: λ_min 2.0 -> 1.4 (逐步加速)
-# iter 2000+:    λ ∈ [1.4, 2.0] (最快稳定 λ≈1.4, ~1.4s 复位)
 TIME_SCALE_MAX = 2.0
 TIME_SCALE_MIN_START = 2.0
 TIME_SCALE_MIN_END = 1.4
@@ -25,18 +24,22 @@ TIME_SCALE_MIN_END = 1.4
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
 _CURVES: dict[str, tuple[float, ...]] = {
-    # 模仿 (核心, 全程保持较高权重)
-    "weight_mimic_pos":   (5.0, 5.0, 5.0, 5.0),
-    "weight_mimic_vel":   (2.5, 2.5, 2.5, 2.5),
-    # 竖直/高度 (与模仿平衡, 全程较强, 避免"躺平局部最优")
-    "weight_upright":     (5.0, 5.0, 5.0, 5.0),
-    "weight_height":      (5.0, 5.0, 5.0, 5.0),
-    # 站起成功奖励 (站稳 0.4s 即复位成功, 随阶段渐增, 激励快速复位)
-    "weight_stand":       (0.0, 2.0, 5.0, 8.0),
-    # 站立保持惩罚 (站立时抑制关节运动/抖动, 全程启用, 后期加强)
-    "weight_stand_still": (2.0, 2.0, 4.0, 5.0),
-    # 跌倒滞留惩罚 (贴地且不动时惩罚, 促进尽快复位; 翻身过程在运动不罚)
-    "weight_fallen":      (2.0, 2.0, 3.0, 5.0),
+    "weight_mimic_pos":         (10.0,),
+    "weight_mimic_vel":         (5.0,),
+    "weight_upright":           (5.0,),
+    "weight_height":            (5.0,),
+    "weight_stand":             (0.0, 2.0, 5.0, 8.0),
+    "weight_stand_still":       (2.0,),
+    "weight_fallen":            (2.0, 2.0, 3.0, 5.0),
+    
+    "weight_smooth_L1_leg":     (0.1,),
+    "weight_smooth_L1_spn":     (0.1,),
+    "weight_smooth_L2_leg":     (0.1,),
+    "weight_smooth_L2_spn":     (0.1,),
+    "weight_energy":            (0.1,),
+
+
+
     # 关节位置/速度 σ
     "sigma_leg_pos":      (5.0, 5.0, 5.0, 5.0),
     "sigma_spn_pos":      (10.0, 10.0, 20.0, 20.0),
