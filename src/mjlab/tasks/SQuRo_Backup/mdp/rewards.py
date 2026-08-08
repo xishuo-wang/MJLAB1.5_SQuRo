@@ -10,6 +10,10 @@ if TYPE_CHECKING:
 
 
 _STAND_STILL_DEADZONE = 0.2   # 站立保持: 平均关节速度死区 (rad/s), 微小抖动不惩罚
+# 跌倒滞留惩罚阈值
+_FALLEN_GROUND_H = 0.03       # F/H body 贴地高度阈值 (m, 贴地≈0.024)
+_FALLEN_LIN_THRESHOLD = 0.05  # 贴地时水平线速度低于此值视为"不动" (m/s)
+_FALLEN_ANG_THRESHOLD = 0.5   # 贴地时角速度低于此值视为"不动" (rad/s)
 
 
 
@@ -135,6 +139,25 @@ def compute_stand_still_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_stand_still")
     penalty = -weight * standing.float() * excess
     env.extras["log"]["Data/stand_still_speed"] = (standing.float() * speed).mean().item()
+    return penalty
+
+
+# =========================================================================================
+# 跌倒滞留惩罚 — 检测"贴地且不动"的跌倒状态 (翻身过程贴地但在运动, 不惩罚)
+# 抑制策略赖在地上不复位; 贴地判定用 F/H body 高度, 运动判定用 base 速度/角速度
+def compute_fallen_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    body_pos_w = asset.data.body_link_pos_w
+    h_f = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    h_h = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
+    ground = (h_f < _FALLEN_GROUND_H) & (h_h < _FALLEN_GROUND_H)  # [N] 身体贴地
+    lin = asset.data.root_link_lin_vel_w[:, :2].norm(dim=1)       # [N] 水平速度
+    ang = asset.data.root_link_ang_vel_w[:, 2].abs()              # [N] 偏航角速度
+    moving = (lin > _FALLEN_LIN_THRESHOLD) | (ang > _FALLEN_ANG_THRESHOLD)
+    fallen_idle = ground & ~moving
+    weight = get_curriculum_reward_weight(env, "weight_fallen")
+    penalty = -weight * fallen_idle.float()
+    env.extras["log"]["Data/fallen_idle"] = fallen_idle.float().mean().item()
     return penalty
 
 
