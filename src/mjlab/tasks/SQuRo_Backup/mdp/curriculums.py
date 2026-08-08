@@ -12,7 +12,7 @@ STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊
 
 
 # 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
-_STAGES = (0, 1000, 2000, 4000)
+_STAGES = (0, STAGE1_MID_ITER, STAGE2_MID_ITER, STAGE2_END_ITER)
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间
 # iter 0-1000:   固定 λ=2.0 (慢速学习起点, warp 开环 1.9s 站起)
@@ -91,6 +91,6 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
 # 采样命令 time_scale λ (episode 内固定): 返回 [n] 张量
 def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.Tensor:
     iter_num = step_counter // _STEPS_PER_ITER
-    progress = min(1.0, max(0.0, (iter_num - 1000) / (2000 - 1000)))
+    progress = min(1.0, max(0.0, (iter_num - STAGE1_MID_ITER) / (STAGE2_MID_ITER - STAGE1_MID_ITER)))
     lam_min = TIME_SCALE_MIN_START - progress * (TIME_SCALE_MIN_START - TIME_SCALE_MIN_END)
     return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)
