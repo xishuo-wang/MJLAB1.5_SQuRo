@@ -42,8 +42,6 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         num_steps_per_env=_STEPS_PER_ITER,
         max_iterations=3_000,
 
-        # 动作空间需覆盖参考翻身幅度: scale=0.3 × clip=6.0 = ±1.8 rad
-        # (参考 F_body/H_body 最大 ±1.57, 需 action ≈5.2; 3.14×0.3=0.94 会截断翻身动作)
         clip_actions=6.0,
         seed=42,
 
