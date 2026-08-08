@@ -29,14 +29,16 @@ from mjlab.tasks.SQuRo_Backup.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
+from mjlab.tasks.SQuRo_Backup.mdp.reference import (
+    _FL_HOLD,
+    _HL_HOLD,
+)
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer
 
 
 # ===== slow1 三段动作参数 (Loco_Backup_slow1.py) =====
 KP, KD, TORQUE_LIMIT = 2.5, 0.01, 0.2   # PD 参数
-_FL_HOLD = (-0.283, 0.562)              # IK(0.007,-0.02) 前腿支撑角 (参考脚本)
-_HL_HOLD = (-1.404, -0.252)             # IK(-0.07,-0.02) 后腿支撑角
 _LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
 
