@@ -9,25 +9,25 @@ if TYPE_CHECKING:
 
 
 # =========================================================================================
-# 跌倒爬起参考轨迹 — 真实复刻 D:\Code\SQuRo-MuJoCo\Loco\Loco_Backup_fast1.py (左侧起身)
-# 原始时间轴 tf∈[1.2,2.1] (动作 0.9s), 此处映射为名义时间 t_nom = tf-1.2 ∈ [0,0.9]
-#   0.0-0.1: H_spine1 0->0.8        (腿伸向远处 FL0/HL)
-#   0.1-0.3: F_spine1 0.8->1.6, H_spine1=0.8, H_body 1.6->3.2   (腿支撑 FL1/HL)
-#   0.3-0.4: F_spine1=0.8, F_body 1.0->0, H_spine1=0.8, H_body=1.57
-#   0.4-0.5: F_spine1=0.8, F_body=-1.57, H_spine1=0.8, H_body=1.57
-#   0.5-0.6: F_spine1=0,   F_body=-1.57, H_spine1=0,   H_body=1.57
-#   0.6-0.7: F_body=-1.57, H_body 1.57->0
-#   0.7-0.8: F_spine1=0.8, F_body -1.57->0, H_body=0
-#   0.8-0.9: F_spine1=0.8, F_body=0
-#   0.9 之后: 回站立角并保持
-# 命令系统: time_scale λ (放慢倍数), 查询 t_nom = t_episode / λ
-#   λ=1.0: 原始 fast1 速度 (贴地初始实测 ~0.98s 站起); λ=1.5: 放慢 1.5 倍学习起点
-# 已验证 (纯 MuJoCo, SQuRo.xml, 初始 base_z=0.024 贴地): λ=1.0 站起 ~0.98s, λ=1.5 站起 ~1.43s
+# 跌倒爬起参考轨迹 — 复刻 D:\Code\SQuRo-MuJoCo\Loco\Loco_Backup_slow1.py 三段式手调动作
+# 名义时间轴 (scale=1, 动作 0.95s):
+#   0.00-0.65: 段1 脊柱同时展开  F_spine1 0->0.8, F_body 0->-1.57, H_spine1 0->0.8, H_body 0->1.57
+#   0.65-0.80: 段2 F/H_spine1 0.8->0 (F/H_body 保持 ±1.57)
+#   0.80-0.95: 段3 F_spine1 0->0.8, F_body -1.57->0, H_body 1.57->0
+#   0.95-1.45: time5 平滑过渡 — 腿从支撑位线性转到站立角, F_spine1 0.8->0 (避免生硬切换)
+#   1.45 之后: 保持站立 (腿站立角, 脊柱 0)
+# 全程腿: 段1-3 支撑位 IK(0.007,-0.02)/(-0.07,-0.02), time5 平滑回站立角
+# 命令系统: time_scale λ (= scale), 查询 t_nom = t_episode / λ
+#   已验证: 纯 MuJoCo scale=1 站起 1.05s; MJLAB warp scale=2 站起 2.0s, scale=3 站起 2.9s
+#   注意: MJLAB 的 position 执行器直接输入期望角 (kp=2.5/kv=0.01), 无需手动 PD
 # =========================================================================================
 
-REF_TOTAL_TIME = 2.0        # 名义参考总时长 (s, λ=1 基准: 动作 0.9s + 保持 1.1s)
+REF_TOTAL_TIME = 2.5        # 名义参考总时长 (s, λ=1 基准: 动作 0.95s + 过渡 0.5s + 保持 1.05s)
 _REF_DT = 0.005             # 参考表分辨率 (s)
-_ACTION_END = 0.9           # 翻身动作结束的名义时间 (s)
+_ACTION_END = 0.95          # 三段动作结束的名义时间 (s)
+_SEG1_END = 0.65            # 段1 结束
+_SEG2_END = 0.80            # 段2 结束
+_TRANS_END = 1.45           # time5 平滑过渡结束 (0.95 + 0.5)
 
 # 站立初始腿角 (FL_sh, FL_el, FR_sh, FR_el, HL_hip, HL_knee, HR_hip, HR_knee)
 _LEG_INIT = np.array([0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3], dtype=np.float64)
@@ -55,8 +55,7 @@ def _ik(target: tuple[float, float], is_front: bool) -> tuple[float, float]:
         return (a1 + 4.325, -(a2 + 1.794))
 
 
-# 腿支撑 IK 目标 (参考脚本): 前腿伸远 (0.005,-0.05) / 支撑 (0.007,-0.02), 后腿 (-0.07,-0.02)
-_FL_REACH = _ik((0.005, -0.05), True)
+# 腿支撑 IK 目标 (slow1 set_legs): 前腿 (0.007,-0.02), 后腿 (-0.07,-0.02)
 _FL_HOLD = _ik((0.007, -0.02), True)
 _HL_HOLD = _ik((-0.07, -0.02), False)
 
@@ -75,52 +74,37 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
     for i, tn in enumerate(t_grid):
         leg = _LEG_INIT.copy()
         f_sp1, f_bd, h_sp1, h_bd = 0.0, 0.0, 0.0, 0.0
-        if tn < 0.1:
-            # 腿伸向远处 (FL0), H_spine1 上升
-            leg[0], leg[1], leg[2], leg[3] = _FL_REACH[0], _FL_REACH[1], _FL_REACH[0], _FL_REACH[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            h_sp1 = tn * 8.0
-        elif tn < 0.3:
+        if tn < _ACTION_END:
+            # 腿支撑位 (段1-3)
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = (tn + 0.1) * 4.0
-            h_sp1 = 0.8
-            h_bd = (tn + 0.1) * 8.0
-        elif tn < 0.4:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = 0.8
-            f_bd = (0.4 - tn) * 10.0   # F_body 1.0 -> 0
-            h_sp1 = 0.8
-            h_bd = 1.57
-        elif tn < 0.5:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = 0.8
-            f_bd = -1.57
-            h_sp1 = 0.8
-            h_bd = 1.57
-        elif tn < 0.6:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_bd = -1.57
-            h_bd = 1.57
-        elif tn < 0.7:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_bd = -1.57
-            h_bd = 1.57 - (tn - 0.6) * 15.7
-        elif tn < 0.8:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = 0.8
-            f_bd = -1.57 + (tn - 0.7) * 15.7
-            h_bd = 0.0
-        elif tn < _ACTION_END:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            f_sp1 = 0.8
-        # tn >= 0.9: 回站立角 (默认腿站立角, 脊柱 0)
+            if tn < _SEG1_END:
+                u = tn / _SEG1_END
+                f_sp1 = 0.8 * u
+                f_bd = -1.57 * u
+                h_sp1 = 0.8 * u
+                h_bd = 1.57 * u
+            elif tn < _SEG2_END:
+                u = (tn - _SEG1_END) / (_SEG2_END - _SEG1_END)
+                f_sp1 = 0.8 - 0.8 * u
+                f_bd = -1.57
+                h_sp1 = 0.8 - 0.8 * u
+                h_bd = 1.57
+            else:
+                u = (tn - _SEG2_END) / (_ACTION_END - _SEG2_END)
+                f_sp1 = 0.8 * u
+                f_bd = -1.57 + 1.57 * u
+                h_sp1 = 0.0
+                h_bd = 1.57 - 1.57 * u
+        elif tn < _TRANS_END:
+            # time5: 腿支撑位 -> 站立角, F_spine1 0.8 -> 0 (平滑过渡, 避免生硬切换)
+            u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
+            for c in range(4):
+                leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
+            for c in range(4, 8):
+                leg[c] = _HL_HOLD[c % 2] + u * (_LEG_INIT[c] - _HL_HOLD[c % 2])
+            f_sp1 = 0.8 * (1.0 - u)
+        # tn >= 1.45: 保持站立 (默认腿站立角, 脊柱 0)
 
         for c in range(8):
             ref[i, leg_col[c]] = leg[c]

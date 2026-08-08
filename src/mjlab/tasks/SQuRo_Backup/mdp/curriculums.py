@@ -17,26 +17,26 @@ _STAGES = (0, 1000, 2000, 4000)
 
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间
-TIME_SCALE_MAX = 2.0
-TIME_SCALE_MIN_START = 2.0
-TIME_SCALE_MIN_END = 1.4
+TIME_SCALE_MAX = 6.0
+TIME_SCALE_MIN_START = 6.0
+TIME_SCALE_MIN_END = 2.0
 
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (10.0,),
-    "weight_mimic_vel":         (5.0,),
+    "weight_mimic_pos":         (5.0,),
+    "weight_mimic_vel":         (2.5,),
     "weight_upright":           (5.0,),
     "weight_height":            (5.0,),
     "weight_stand":             (0.0, 2.0, 5.0, 8.0),
     "weight_stand_still":       (2.0,),
     "weight_fallen":            (2.0, 2.0, 3.0, 5.0),
     
-    "weight_smooth_L1_leg":     (0.1,),
-    "weight_smooth_L1_spn":     (0.1,),
-    "weight_smooth_L2_leg":     (0.1,),
-    "weight_smooth_L2_spn":     (0.1,),
-    "weight_energy":            (0.1,),
+    "weight_smooth_L1_leg":     (0.0, 0.1,),
+    "weight_smooth_L1_spn":     (0.0, 0.1,),
+    "weight_smooth_L2_leg":     (0.0, 0.1,),
+    "weight_smooth_L2_spn":     (0.0, 0.1,),
+    "weight_energy":            (0.0, 0.1,),
 
 
 
