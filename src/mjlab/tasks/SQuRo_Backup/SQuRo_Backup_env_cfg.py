@@ -71,6 +71,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "upright": RewardTermCfg(func=mdp.compute_upright_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "stand": RewardTermCfg(func=mdp.compute_stand_reward, weight=1.0),
+        "stand_still": RewardTermCfg(func=mdp.compute_stand_still_penalty, weight=1.0),
     }
 
     # 终止条件
