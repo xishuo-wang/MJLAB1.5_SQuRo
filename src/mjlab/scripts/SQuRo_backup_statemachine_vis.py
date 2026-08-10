@@ -42,26 +42,36 @@ LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 # 状态检测阈值
 _UP_TH = 0.5        # 背腹轴朝上/朝下判定阈值
 _GROUND_TH = 0.03   # 贴地高度阈值
+_GROUND_TH_S2 = 0.04  # S2(趴地) 高度阈值: 段3 末 H 后肢略翘(≈0.034), 放宽到 0.04
 
 
 # 完整名义参考 (MJLAB 顺序), 0-0.65 段1, 0.65-0.8 段2, 0.8-0.95 段3, 0.95-1.45 time5, 之后站立
 def slow1_target(tn: float) -> list[float]:
     r = [0.0, 0.0, 0.0, 0.0, 0.1, -0.3, 0.1, -0.3, 0.0, 0.0, -0.1, 0.3, -0.1, 0.3]
-    if tn < 0.95:
+    if tn < 1:
         r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
         r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
         if tn < 0.65:
             u = tn / 0.65
-            r[0] = 0.8*u; r[1] = -1.57*u; r[8] = 0.8*u; r[9] = 1.57*u
+            r[0] = 0.8*u; 
+            r[1] = -1.57*u; 
+            r[8] = 0.8*u; 
+            r[9] = 1.57*u
         elif tn < 0.8:
             u = (tn-0.65)/0.15
-            r[0] = 0.8-0.8*u; r[1] = -1.57; r[8] = 0.8-0.8*u; r[9] = 1.57
+            r[0] = 0.8-0.8*u; 
+            r[1] = -1.57; 
+            r[8] = 0.8-0.8*u; 
+            r[9] = 1.57
         else:
-            u = (tn-0.8)/0.15
-            r[0] = 0.8*u; r[1] = -1.57+1.57*u; r[8] = 0.0; r[9] = 1.57-1.57*u
+            u = (tn-0.8)/0.2
+            r[0] = 0.8*u; 
+            r[1] = -1.57+1.57*u; 
+            r[8] = 0.0; 
+            r[9] = 1.57-1.57*u
     else:
         # time5: 腿过渡到站立角, F_sp1 归零; 之后保持
-        u = min(1.0, (tn-0.95)/0.5)
+        u = min(1.0, (tn-1)/0.5)
         r[4] = FL_HOLD[0]+u*(LEG_INIT[0]-FL_HOLD[0]); r[5] = FL_HOLD[1]+u*(LEG_INIT[1]-FL_HOLD[1])
         r[6], r[7] = r[4], r[5]
         r[10] = HL_HOLD[0]+u*(LEG_INIT[4]-HL_HOLD[0]); r[11] = HL_HOLD[1]+u*(LEG_INIT[5]-HL_HOLD[1])
@@ -74,6 +84,7 @@ class StateMachinePolicy:
     """开环状态机策略: 按 phase 输出目标动作, 内部检测 S1/S2 并推进/重试。"""
 
     def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int,
+                 buffer: float = 0.3,
                  action_scale: float = 0.3, log_events: bool = True) -> None:
         self.env = env
         self.asset = env.unwrapped.scene.entities["robot"]
@@ -81,6 +92,7 @@ class StateMachinePolicy:
         self.default = self.asset.data.default_joint_pos[:, _MODEL_INDICES.joint_ids]
         self.lam = time_scale
         self.max_retry = max_retry
+        self.buffer = buffer       # 缓冲时间 (s): 超过预期时长后, 缓冲期内继续观察, 未达标才重试
         self.action_scale = action_scale
         self.log_events = log_events
         self.fb = _MODEL_INDICES.f_body_id
@@ -89,6 +101,8 @@ class StateMachinePolicy:
         self.t_phase = 0.0
         self.retry = {"P1": 0, "P2": 0}
         self.events: list[str] = []
+        self.stand_steps = 0
+        self.stand_t: float | None = None
 
     def _body_up(self, body_id: int, sign: float) -> float:
         q = self.asset.data.body_link_quat_w[0, body_id]
@@ -107,7 +121,7 @@ class StateMachinePolicy:
 
     def _is_S2(self) -> bool:
         fu, hu = self._state()
-        return fu < -_UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
+        return fu < -_UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH_S2 and self._fz(self.hb) < _GROUND_TH_S2
 
     def _log(self, msg: str) -> None:
         if self.log_events:
@@ -118,36 +132,56 @@ class StateMachinePolicy:
         del obs
         dt = self.env.step_dt
         if self.phase == "P1":
-            tn = self.t_phase / self.lam
-            target = slow1_target(min(0.799, tn))
+            expected = 0.8 * self.lam
+            if self.t_phase < expected:
+                tn = self.t_phase / self.lam
+                target = slow1_target(min(0.799, tn))
+            else:
+                # 缓冲期: 保持段末姿态, 持续检测 S1
+                target = slow1_target(0.8)
             self.t_phase += dt
-            if self.t_phase >= 0.8 * self.lam:
-                if self._is_S1():
-                    self.phase = "P2"; self.t_phase = 0.0
-                    self._log("S1 达成 -> 进入 P2")
-                else:
-                    self.retry["P1"] += 1; self.t_phase = 0.0
-                    self._log(f"S1 未达 (重试 {self.retry['P1']}/{self.max_retry})")
-                    if self.retry["P1"] >= self.max_retry:
-                        self._log("P1 重试超限, 放弃"); self.phase = "DONE"
+            if self.t_phase >= expected and self._is_S1():
+                self.phase = "P2"; self.t_phase = 0.0
+                self._log(f"S1 达成 (用时 {self.t_phase - dt:.2f}s) -> 进入 P2")
+            elif self.t_phase >= expected + self.buffer:
+                self.retry["P1"] += 1; self.t_phase = 0.0
+                self._log(f"S1 未达 (缓冲后, 重试 {self.retry['P1']}/{self.max_retry})")
+                if self.retry["P1"] >= self.max_retry:
+                    self._log("P1 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P2":
-            tn = 0.8 + min(1.0, self.t_phase / (0.15 * self.lam)) * 0.15
-            target = slow1_target(tn)
+            expected = 0.15 * self.lam
+            if self.t_phase < expected:
+                tn = 0.8 + (self.t_phase / expected) * 0.15
+                target = slow1_target(tn)
+            else:
+                # 缓冲期: 保持段3末姿态, 持续检测 S2
+                target = slow1_target(0.95)
             self.t_phase += dt
-            if self.t_phase >= 0.15 * self.lam:
-                if self._is_S2():
-                    self.phase = "P3"; self.t_phase = 0.0
-                    self._log("S2 达成 -> 进入 P3")
-                else:
-                    self.retry["P2"] += 1; self.t_phase = 0.0
-                    fu, hu = self._state()
-                    self._log(f"S2 未达 fu={fu:+.2f} hu={hu:+.2f} (重试 {self.retry['P2']}/{self.max_retry})")
-                    if self.retry["P2"] >= self.max_retry:
-                        self._log("P2 重试超限, 放弃"); self.phase = "DONE"
+            if self.t_phase >= expected and self._is_S2():
+                self.phase = "P3"; self.t_phase = 0.0
+                self._log(f"S2 达成 (用时 {self.t_phase - dt:.2f}s) -> 进入 P3")
+            elif self.t_phase >= expected + self.buffer:
+                self.retry["P2"] += 1; self.t_phase = 0.0
+                fu, hu = self._state()
+                fz, hz = self._fz(self.fb), self._fz(self.hb)
+                self._log(f"S2 未达 fu={fu:+.2f} hu={hu:+.2f} fz={fz:.3f} hz={hz:.3f} "
+                          f"(缓冲后, 重试 {self.retry['P2']}/{self.max_retry})")
+                if self.retry["P2"] >= self.max_retry:
+                    self._log("P2 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P3":
             tn = 0.95 + self.t_phase / self.lam
             target = slow1_target(tn)
             self.t_phase += dt
+            z = self.asset.data.root_link_pos_w[0, 2].item()
+            up = self.asset.data.projected_gravity_b[0, 2].item()
+            if z > 0.05 and up > 0.9:
+                self.stand_steps += 1
+            else:
+                self.stand_steps = 0
+            if self.stand_steps >= int(0.4 / dt):
+                self.stand_t = self.t_phase - (self.stand_steps - 1) * dt
+                self._log(f"稳定站起! stand_t≈{self.stand_t:.2f}s (P3 内)")
+                self.phase = "DONE"
         else:  # DONE
             target = slow1_target(100.0)  # 保持站立
 
@@ -158,10 +192,12 @@ class StateMachinePolicy:
 
 @dataclass(frozen=True)
 class VisConfig:
-    time_scale: float = 2.0
+    time_scale: float = 1.0
     """slow1 时间缩放 (λ)。"""
     max_retry: int = 5
     """每阶段最大重试次数。"""
+    buffer: float = 0.3
+    """缓冲时间 (s): 超过预期时长后, 缓冲期内持续检测, 未达标才重试。"""
     visualize: Literal["none", "viewer", "video"] = "viewer"
     num_envs: int = 1
     device: str | None = None
@@ -195,7 +231,7 @@ def main() -> None:
         )
 
     env.reset()
-    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry, args.buffer)
 
     if args.visualize in ("none", "video"):
         n = int(args.duration / env.step_dt)
@@ -210,7 +246,7 @@ def main() -> None:
         return
 
     env.reset()
-    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry, args.buffer)
     viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
     viewer.run(num_steps=int(args.duration / env.step_dt))
     env.close()
