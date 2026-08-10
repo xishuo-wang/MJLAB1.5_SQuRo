@@ -124,7 +124,7 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     cache = _get_body_traj(env.device)
     cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
     lam = cmd[:, 5].clamp(min=0.1)  # [N]
-    t_nom = (env.episode_length_buf.float() * env.step_dt) / lam
+    t_nom = _stage_t_nom(env)
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = ((t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)).clamp(0.0, 1.0)
@@ -136,12 +136,24 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 
 
 # 获取当前步的参考关节位置和速度 — 按 episode 时间 / λ 查参考表
+# ???? -> ??????: P1 t_phase/lam, P2 0.8+t_phase/lam, P3 0.95+t_phase/lam
+def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
+    lam = cmd_term.command[:, 5].clamp(min=0.1)
+    phase = cmd_term.phase  # type: ignore[attr-defined]
+    t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
+    z = torch.zeros_like(lam)
+    phase_start = torch.where(phase == 0, z,
+                   torch.where(phase == 1, torch.full_like(lam, 0.8), torch.full_like(lam, 0.95)))
+    return phase_start + t_phase / lam
+
+
 def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
     cache = _get_ref_table(env.device)
     # 命令 time_scale λ (放慢倍数): λ=1.0 原始速度, λ=1.5 放慢 1.5 倍
     cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
     lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale
-    t_nom = (env.episode_length_buf.float() * env.step_dt) / lam  # [N]
+    t_nom = _stage_t_nom(env)  # [N]
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = (t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)

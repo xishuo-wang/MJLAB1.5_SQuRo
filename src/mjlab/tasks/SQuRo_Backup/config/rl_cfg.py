@@ -28,8 +28,9 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
             use_clipped_value_loss=True,
             clip_param=0.2,
             entropy_coef=0.01,
-            num_learning_epochs=5,
-            num_mini_batches=4,
+            # step_dt 0.02->0.005 后 rollout 物理时间变短, 增大 epochs/minibatches 提高数据利用率
+            num_learning_epochs=10,
+            num_mini_batches=8,
             learning_rate=3.0e-4,
             schedule="adaptive",
             gamma=0.99,

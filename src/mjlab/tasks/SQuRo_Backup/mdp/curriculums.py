@@ -3,7 +3,7 @@ import torch
 from typing import Any
 
 
-_STEPS_PER_ITER = 24               # 每 iter 步数 (与 Slalom 一致)
+_STEPS_PER_ITER = 60               # 每 iter 步数 (timestep=0.001/decimation=5, step_dt=0.005; 60步=0.3s rollout)
 
 
 # 训练阶段边界 (iter)
@@ -26,9 +26,9 @@ TIME_SCALE_MIN_END = 1.0
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (10.0,),
     "weight_mimic_vel":         (5.0,),
-    "weight_upright":           (2.5,),
-    "weight_height":            (2.5,),
-    "weight_stand":             (2.0,),
+    "weight_upright":           (0.0,),
+    "weight_height":            (0.0,),
+    "weight_stand":             (0.0,),
     "weight_stand_still":       (0.0,),
     "weight_fallen":            (0.0,),
     
@@ -40,9 +40,9 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 
     # 关节位置/速度 σ
-    "sigma_leg_pos":      (10.0,),
-    "sigma_spn_pos":      (10.0,),
-    "sigma_neck_pos":     (10.0,),
+    "sigma_leg_pos":      (20.0,),
+    "sigma_spn_pos":      (20.0,),
+    "sigma_neck_pos":     (20.0,),
     "sigma_leg_vel":      (0.5,),
     "sigma_spn_vel":      (0.5,),
     "sigma_neck_vel":     (0.5,),
