@@ -48,30 +48,30 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
             if tn < _SEG1_END:
                 u = tn / _SEG1_END
-                f_sp1 = 0.8 * u
+                f_sp1 = 0.6 * u
                 f_bd = -1.57 * u
-                h_sp1 = 0.8 * u
+                h_sp1 = 0.6 * u
                 h_bd = 1.57 * u
             elif tn < _SEG2_END:
                 u = (tn - _SEG1_END) / (_SEG2_END - _SEG1_END)
-                f_sp1 = 0.8 - 0.8 * u
+                f_sp1 = 0.6 - 0.6 * u
                 f_bd = -1.57
-                h_sp1 = 0.8 - 0.8 * u
+                h_sp1 = 0.6 - 0.6 * u
                 h_bd = 1.57
             else:
                 u = (tn - _SEG2_END) / (_ACTION_END - _SEG2_END)
-                f_sp1 = 0.8 * u
+                f_sp1 = 0.6 * u
                 f_bd = -1.57 + 1.57 * u
                 h_sp1 = 0.0
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
-            # time5: 腿支撑位 -> 站立角, F_spine1 0.8 -> 0 (平滑过渡, 避免生硬切换)
+            # time5: 腿支撑位 -> 站立角, F_spine1 0.6 -> 0 (平滑过渡, 避免生硬切换)
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
             for c in range(4, 8):
                 leg[c] = _HL_HOLD[c % 2] + u * (_LEG_INIT[c] - _HL_HOLD[c % 2])
-            f_sp1 = 0.8 * (1.0 - u)
+            f_sp1 = 0.6 * (1.0 - u)
         # tn >= 1.45: 保持站立 (默认腿站立角, 脊柱 0)
 
         for c in range(8):

@@ -53,19 +53,19 @@ def slow1_target(tn: float) -> list[float]:
         r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
         if tn < 0.65:
             u = tn / 0.65
-            r[0] = 0.8*u; 
+            r[0] = 0.6*u; 
             r[1] = -1.57*u; 
-            r[8] = 0.8*u; 
+            r[8] = 0.6*u; 
             r[9] = 1.57*u
         elif tn < 0.8:
             u = (tn-0.65)/0.15
-            r[0] = 0.8-0.8*u; 
+            r[0] = 0.6-0.6*u; 
             r[1] = -1.57; 
-            r[8] = 0.8-0.8*u; 
+            r[8] = 0.6-0.6*u; 
             r[9] = 1.57
         else:
             u = (tn-0.8)/0.2
-            r[0] = 0.8*u; 
+            r[0] = 0.6*u; 
             r[1] = -1.57+1.57*u; 
             r[8] = 0.0; 
             r[9] = 1.57-1.57*u
@@ -76,7 +76,7 @@ def slow1_target(tn: float) -> list[float]:
         r[6], r[7] = r[4], r[5]
         r[10] = HL_HOLD[0]+u*(LEG_INIT[4]-HL_HOLD[0]); r[11] = HL_HOLD[1]+u*(LEG_INIT[5]-HL_HOLD[1])
         r[12], r[13] = r[10], r[11]
-        r[0] = 0.8*(1.0-u)
+        r[0] = 0.6*(1.0-u)
     return r
 
 

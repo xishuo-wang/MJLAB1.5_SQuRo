@@ -51,6 +51,10 @@ class BackupCommand(CommandTerm):
         self.phase = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.t_phase = torch.zeros(self.num_envs, device=self.device)
         self.retry = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # 状态机指标缓存 (供 _update_metrics 记录上一步检测结果)
+        self._last_s1_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_s2_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_retry_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._asset = self._env.scene.entities[cfg.asset_name]
         resolve_model_indices(self._asset)
 
@@ -141,9 +145,20 @@ class BackupCommand(CommandTerm):
         self.t_phase = torch.where(retry_mask, torch.zeros_like(self.t_phase), self.t_phase)
         self.retry = torch.where(retry_mask, self.retry + 1, self.retry)
         self.phase_command[:] = self.phase.float()
+        # 保存本步检测结果供 _update_metrics 记录 (metrics 在 command 前被调用, 记录上一步状态)
+        self._last_s1_ok = s1_ok
+        self._last_s2_ok = s2_ok
+        self._last_retry_mask = retry_mask
 
     def _update_metrics(self) -> None:
-        pass
+        # 状态机阶段/重试指标 -> wandb 日志 (env.step 中已初始化 extras['log'])
+        log = self._env.extras["log"]
+        log["Data/backup_phase"] = self.phase.float().mean().item()
+        log["Data/backup_t_phase"] = self.t_phase.mean().item()
+        log["Data/backup_retry_cum"] = self.retry.float().mean().item()
+        log["Data/backup_retry_rate"] = self._last_retry_mask.float().mean().item()
+        log["Data/backup_s1_ok"] = self._last_s1_ok.float().mean().item()
+        log["Data/backup_s2_ok"] = self._last_s2_ok.float().mean().item()
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         pass
