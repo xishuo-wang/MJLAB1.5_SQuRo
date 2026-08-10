@@ -1,0 +1,220 @@
+"""SQuRo Backup 开环状态机验证可视化脚本 (MJLAB / mujoco-warp)。
+
+复刻手调 slow1 分段动作 + 状态门控重试:
+  P1: 段1+2 (脊柱展开+回收)  -> 检测 S1 (F 朝上 / H 朝下 / 180°扭转 / 平躺)
+  P2: 段3 (前肢扭转向下)      -> 检测 S2 (F/H 都朝下 / 趴地)
+  P3: time5 过渡 + 站立保持   -> 检测稳定站立
+未达标时重试当前阶段 (--max-retry 上限)。
+
+用法:
+    # 本机 GUI 交互查看
+    uv run python src/mjlab/scripts/SQuRo_backup_statemachine_vis.py --time-scale 2 --visualize viewer
+    # 录制视频
+    uv run python src/mjlab/scripts/SQuRo_backup_statemachine_vis.py --time-scale 2 --visualize video
+    # 无头打印状态事件
+    uv run python src/mjlab/scripts/SQuRo_backup_statemachine_vis.py --time-scale 2 --visualize none
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
+
+import tyro
+import torch
+
+import mjlab.tasks  # noqa: F401  触发任务注册
+from mjlab.envs import ManagerBasedRlEnv
+from mjlab.tasks.registry import load_env_cfg
+from mjlab.tasks.SQuRo_Backup.mdp.indices import (
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
+from mjlab.utils.wrappers import VideoRecorder
+from mjlab.viewer import NativeMujocoViewer
+
+
+FL_HOLD = (-0.28, 0.55)     # 腿支撑角 (与手调/参考表一致)
+HL_HOLD = (-1.40, -0.25)
+LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
+
+# 状态检测阈值
+_UP_TH = 0.5        # 背腹轴朝上/朝下判定阈值
+_GROUND_TH = 0.03   # 贴地高度阈值
+
+
+# 完整名义参考 (MJLAB 顺序), 0-0.65 段1, 0.65-0.8 段2, 0.8-0.95 段3, 0.95-1.45 time5, 之后站立
+def slow1_target(tn: float) -> list[float]:
+    r = [0.0, 0.0, 0.0, 0.0, 0.1, -0.3, 0.1, -0.3, 0.0, 0.0, -0.1, 0.3, -0.1, 0.3]
+    if tn < 0.95:
+        r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
+        r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
+        if tn < 0.65:
+            u = tn / 0.65
+            r[0] = 0.8*u; r[1] = -1.57*u; r[8] = 0.8*u; r[9] = 1.57*u
+        elif tn < 0.8:
+            u = (tn-0.65)/0.15
+            r[0] = 0.8-0.8*u; r[1] = -1.57; r[8] = 0.8-0.8*u; r[9] = 1.57
+        else:
+            u = (tn-0.8)/0.15
+            r[0] = 0.8*u; r[1] = -1.57+1.57*u; r[8] = 0.0; r[9] = 1.57-1.57*u
+    else:
+        # time5: 腿过渡到站立角, F_sp1 归零; 之后保持
+        u = min(1.0, (tn-0.95)/0.5)
+        r[4] = FL_HOLD[0]+u*(LEG_INIT[0]-FL_HOLD[0]); r[5] = FL_HOLD[1]+u*(LEG_INIT[1]-FL_HOLD[1])
+        r[6], r[7] = r[4], r[5]
+        r[10] = HL_HOLD[0]+u*(LEG_INIT[4]-HL_HOLD[0]); r[11] = HL_HOLD[1]+u*(LEG_INIT[5]-HL_HOLD[1])
+        r[12], r[13] = r[10], r[11]
+        r[0] = 0.8*(1.0-u)
+    return r
+
+
+class StateMachinePolicy:
+    """开环状态机策略: 按 phase 输出目标动作, 内部检测 S1/S2 并推进/重试。"""
+
+    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int,
+                 action_scale: float = 0.3, log_events: bool = True) -> None:
+        self.env = env
+        self.asset = env.unwrapped.scene.entities["robot"]
+        resolve_model_indices(self.asset)
+        self.default = self.asset.data.default_joint_pos[:, _MODEL_INDICES.joint_ids]
+        self.lam = time_scale
+        self.max_retry = max_retry
+        self.action_scale = action_scale
+        self.log_events = log_events
+        self.fb = _MODEL_INDICES.f_body_id
+        self.hb = _MODEL_INDICES.h_body_id
+        self.phase = "P1"
+        self.t_phase = 0.0
+        self.retry = {"P1": 0, "P2": 0}
+        self.events: list[str] = []
+
+    def _body_up(self, body_id: int, sign: float) -> float:
+        q = self.asset.data.body_link_quat_w[0, body_id]
+        w, x, y, z = q[0].item(), q[1].item(), q[2].item(), q[3].item()
+        return sign * 2.0 * (y*z + w*x)   # body+Y 世界 Z 分量; H 用 sign=-1 修正
+
+    def _fz(self, body_id: int) -> float:
+        return self.asset.data.body_link_pos_w[0, body_id, 2].item()
+
+    def _state(self) -> tuple[float, float]:
+        return self._body_up(self.fb, +1.0), self._body_up(self.hb, -1.0)
+
+    def _is_S1(self) -> bool:
+        fu, hu = self._state()
+        return fu > _UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
+
+    def _is_S2(self) -> bool:
+        fu, hu = self._state()
+        return fu < -_UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
+
+    def _log(self, msg: str) -> None:
+        if self.log_events:
+            print(f"[SM] {msg}", flush=True)
+        self.events.append(msg)
+
+    def __call__(self, obs: Any) -> torch.Tensor:
+        del obs
+        dt = self.env.step_dt
+        if self.phase == "P1":
+            tn = self.t_phase / self.lam
+            target = slow1_target(min(0.799, tn))
+            self.t_phase += dt
+            if self.t_phase >= 0.8 * self.lam:
+                if self._is_S1():
+                    self.phase = "P2"; self.t_phase = 0.0
+                    self._log("S1 达成 -> 进入 P2")
+                else:
+                    self.retry["P1"] += 1; self.t_phase = 0.0
+                    self._log(f"S1 未达 (重试 {self.retry['P1']}/{self.max_retry})")
+                    if self.retry["P1"] >= self.max_retry:
+                        self._log("P1 重试超限, 放弃"); self.phase = "DONE"
+        elif self.phase == "P2":
+            tn = 0.8 + min(1.0, self.t_phase / (0.15 * self.lam)) * 0.15
+            target = slow1_target(tn)
+            self.t_phase += dt
+            if self.t_phase >= 0.15 * self.lam:
+                if self._is_S2():
+                    self.phase = "P3"; self.t_phase = 0.0
+                    self._log("S2 达成 -> 进入 P3")
+                else:
+                    self.retry["P2"] += 1; self.t_phase = 0.0
+                    fu, hu = self._state()
+                    self._log(f"S2 未达 fu={fu:+.2f} hu={hu:+.2f} (重试 {self.retry['P2']}/{self.max_retry})")
+                    if self.retry["P2"] >= self.max_retry:
+                        self._log("P2 重试超限, 放弃"); self.phase = "DONE"
+        elif self.phase == "P3":
+            tn = 0.95 + self.t_phase / self.lam
+            target = slow1_target(tn)
+            self.t_phase += dt
+        else:  # DONE
+            target = slow1_target(100.0)  # 保持站立
+
+        action = (torch.tensor(target, device=self.default.device, dtype=torch.float32)
+                  - self.default[0]) / self.action_scale
+        return action.unsqueeze(0)
+
+
+@dataclass(frozen=True)
+class VisConfig:
+    time_scale: float = 2.0
+    """slow1 时间缩放 (λ)。"""
+    max_retry: int = 5
+    """每阶段最大重试次数。"""
+    visualize: Literal["none", "viewer", "video"] = "viewer"
+    num_envs: int = 1
+    device: str | None = None
+    duration: float = 20.0
+    """最大回放时长 (s)。"""
+    video_dir: str = "logs/rsl_rl/SQuRo_Backup/replay_videos"
+
+
+def main() -> None:
+    args = tyro.cli(VisConfig)
+    device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    env_cfg = load_env_cfg("Mjlab-SQuRo-Backup")
+    env_cfg.scene.num_envs = args.num_envs
+    env_cfg.commands["backup_cmd"].fixed_time_scale = args.time_scale  # type: ignore[attr-defined]
+
+    render_mode = "rgb_array" if args.visualize == "video" else None
+    print(f"[INFO] 状态机可视化: λ={args.time_scale}, max_retry={args.max_retry}, "
+          f"visualize={args.visualize}")
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
+
+    if args.visualize == "video":
+        video_folder = Path(args.video_dir)
+        video_folder.mkdir(parents=True, exist_ok=True)
+        n_frames = int(args.duration / env.step_dt) + 1
+        env = VideoRecorder(
+            env, video_folder=video_folder,
+            step_trigger=lambda step: step == 0,
+            video_length=n_frames,
+            name_prefix=f"sm_ts{args.time_scale}",
+            disable_logger=False,
+        )
+
+    env.reset()
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
+
+    if args.visualize in ("none", "video"):
+        n = int(args.duration / env.step_dt)
+        for i in range(n):
+            with torch.no_grad():
+                action = policy(env.unwrapped.get_observations())
+            obs, rew, dones, to, extras = env.step(action)
+            if policy.phase == "DONE":
+                break
+        print(f"[RESULT] 最终 phase={policy.phase}, 重试 P1={policy.retry['P1']}, P2={policy.retry['P2']}")
+        env.close()
+        return
+
+    env.reset()
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
+    viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
+    viewer.run(num_steps=int(args.duration / env.step_dt))
+    env.close()
+
+
+if __name__ == "__main__":
+    main()
