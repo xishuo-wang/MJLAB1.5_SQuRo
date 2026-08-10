@@ -1,5 +1,4 @@
 from __future__ import annotations
-import math
 import numpy as np
 import torch
 from typing import TYPE_CHECKING
@@ -33,31 +32,10 @@ _TRANS_END = 1.45           # time5 平滑过渡结束 (0.95 + 0.5)
 _LEG_INIT = np.array([0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3], dtype=np.float64)
 
 
-# 逆运动学 — 与参考脚本 Import/Inverse_Kinematics.py inverse_kinematics_old 一致
-def _ik(target: tuple[float, float], is_front: bool) -> tuple[float, float]:
-    L1, L2 = (0.040, 0.040) if is_front else (0.040, 0.036)
-    x, y = target
-    R = math.sqrt(x * x + y * y)
-    K = (L2 * L2 - x * x - y * y - L1 * L1) / (2.0 * L1)
-    theta = math.atan2(y, x)
-    phi = math.acos(max(-1.0, min(1.0, K / R)))
-    if is_front:
-        a1 = theta + phi
-        a2 = math.atan2(y + L1 * math.sin(a1), -x - L1 * math.cos(a1))
-        if a2 > 2.0:
-            a2 -= 2.0 * math.pi
-        return (a1 - 0.888, -(a2 + 2.648))
-    else:
-        a1 = theta - phi
-        a2 = math.atan2(x + L1 * math.cos(a1), y + L1 * math.sin(a1))
-        if a2 > 2.0:
-            a2 -= 2.0 * math.pi
-        return (a1 + 4.325, -(a2 + 1.794))
-
-
-# 腿支撑 IK 目标 (slow1 set_legs): 前腿 (0.007,-0.02), 后腿 (-0.07,-0.02)
-_FL_HOLD = _ik((0.007, -0.02), True)
-_HL_HOLD = _ik((-0.07, -0.02), False)
+# 腿支撑期望角 — 直接使用手调 slow1/PD 实际值, 尽量减少与参考脚本的不一致
+# (IK 精确值 -0.2833/0.5622/-1.4041/-0.2523 vs PD 实际 -0.271/0.550/-1.388/-0.250)
+_FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
+_HL_HOLD = (-1.40, -0.25)  # HL/HR hip, knee
 
 
 # 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
