@@ -24,31 +24,31 @@ TIME_SCALE_MIN_END = 1.0
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
 _CURVES: dict[str, tuple[float, ...]] = {
-    "weight_mimic_pos":         (5.0,),
-    "weight_mimic_vel":         (2.5,),
-    "weight_upright":           (5.0,),
-    "weight_height":            (5.0,),
-    "weight_stand":             (0.0, 2.0),
-    "weight_stand_still":       (2.0,),
-    "weight_fallen":            (2.0, 2.0),
+    "weight_mimic_pos":         (10.0,),
+    "weight_mimic_vel":         (5.0,),
+    "weight_upright":           (2.5,),
+    "weight_height":            (2.5,),
+    "weight_stand":             (2.0,),
+    "weight_stand_still":       (0.0,),
+    "weight_fallen":            (0.0,),
     
-    "weight_smooth_L1_leg":     (0.0, 0.1,),
-    "weight_smooth_L1_spn":     (0.0, 0.1,),
-    "weight_smooth_L2_leg":     (0.0, 0.1,),
-    "weight_smooth_L2_spn":     (0.0, 0.1,),
-    "weight_energy":            (0.0, 0.1,),
-
+    "weight_smooth_L1_leg":     (0.1,),
+    "weight_smooth_L1_spn":     (0.1,),
+    "weight_smooth_L2_leg":     (0.1,),
+    "weight_smooth_L2_spn":     (0.1,),
+    "weight_energy":            (0.1,),
 
 
     # 关节位置/速度 σ
     "sigma_leg_pos":      (10.0,),
     "sigma_spn_pos":      (10.0,),
     "sigma_neck_pos":     (10.0,),
-    "sigma_leg_vel":      (0.2,),
-    "sigma_spn_vel":      (0.2,),
-    "sigma_neck_vel":     (0.2,),
-    "sigma_upright":      (5.0, 5.0, 10.0, 10.0),
-    "sigma_height":       (500.0, 500.0, 1000.0, 1000.0),
+    "sigma_leg_vel":      (0.5,),
+    "sigma_spn_vel":      (0.5,),
+    "sigma_neck_vel":     (0.5,),
+    "sigma_upright":      (5.0,),
+    "sigma_height":       (500,),
+
     # 预留: 走廊奖励课程 (后续加入走廊奖励后启用; 当前 rewards.py 未引用)
     "weight_corridor":    (0.0, 0.0, 4.0, 8.0),
     "sigma_corridor":     (50.0, 50.0, 50.0, 50.0),
