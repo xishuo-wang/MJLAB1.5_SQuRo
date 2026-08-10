@@ -29,12 +29,12 @@ class PlayConfig:
     num_envs: int | None = 1
     device: str | None = None
     video: bool = True
-    video_length: int = 400
+    video_length: int = 1000
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
     # Backup 任务相关配置
-    fixed_time_scale: float | None = 5
+    fixed_time_scale: float | None = 2
 
 
 # 从 checkpoint 文件名提取训练轮次
