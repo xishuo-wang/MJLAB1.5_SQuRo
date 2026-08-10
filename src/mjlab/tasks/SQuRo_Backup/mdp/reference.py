@@ -1,25 +1,13 @@
 from __future__ import annotations
-import numpy as np
 import torch
+import numpy as np
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-# =========================================================================================
-# 跌倒爬起参考轨迹 — 复刻 D:\Code\SQuRo-MuJoCo\Loco\Loco_Backup_slow1.py 三段式手调动作
-# 名义时间轴 (scale=1, 动作 0.95s):
-#   0.00-0.65: 段1 脊柱同时展开  F_spine1 0->0.8, F_body 0->-1.57, H_spine1 0->0.8, H_body 0->1.57
-#   0.65-0.80: 段2 F/H_spine1 0.8->0 (F/H_body 保持 ±1.57)
-#   0.80-0.95: 段3 F_spine1 0->0.8, F_body -1.57->0, H_body 1.57->0
-#   0.95-1.45: time5 平滑过渡 — 腿从支撑位线性转到站立角, F_spine1 0.8->0 (避免生硬切换)
-#   1.45 之后: 保持站立 (腿站立角, 脊柱 0)
-# 全程腿: 段1-3 支撑位 IK(0.007,-0.02)/(-0.07,-0.02), time5 平滑回站立角
-# 命令系统: time_scale λ (= scale), 查询 t_nom = t_episode / λ
-#   已验证: 纯 MuJoCo scale=1 站起 1.05s; MJLAB warp scale=2 站起 2.0s, scale=3 站起 2.9s
-#   注意: MJLAB 的 position 执行器直接输入期望角 (kp=2.5/kv=0.01), 无需手动 PD
-# =========================================================================================
 
 REF_TOTAL_TIME = 2.5        # 名义参考总时长 (s, λ=1 基准: 动作 0.95s + 过渡 0.5s + 保持 1.05s)
 _REF_DT = 0.005             # 参考表分辨率 (s)
@@ -27,6 +15,11 @@ _ACTION_END = 0.95          # 三段动作结束的名义时间 (s)
 _SEG1_END = 0.65            # 段1 结束
 _SEG2_END = 0.80            # 段2 结束
 _TRANS_END = 1.45           # time5 平滑过渡结束 (0.95 + 0.5)
+
+# 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
+# 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
+_BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
+_body_traj_cache: dict = {}
 
 # 站立初始腿角 (FL_sh, FL_el, FR_sh, FR_el, HL_hip, HL_knee, HR_hip, HR_knee)
 _LEG_INIT = np.array([0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3], dtype=np.float64)
@@ -39,9 +32,6 @@ _HL_HOLD = (-1.40, -0.25)  # HL/HR hip, knee
 
 
 # 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
-# 顺序: [F_spine1, F_body, Neck_yaw, Neck_pitch,
-#        FL_shoulder, FL_elbow, FR_shoulder, FR_elbow,
-#        H_spine1, H_body, HL_hip, HL_knee, HR_hip, HR_knee]
 def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)
@@ -110,6 +100,39 @@ def _get_ref_table(device: str) -> dict:
     cache = {"t": t_t, "pos": pos_t, "vel": vel_t}
     _table_cache[device] = cache
     return cache
+
+
+# 加载身体轨迹表 (按设备缓存)
+def _get_body_traj(device: str) -> dict:
+    if device in _body_traj_cache:
+        return _body_traj_cache[device]
+    arr = np.load(_BODY_TRAJ_PATH)  # [N,5]
+    cache = {
+        "t": torch.tensor(arr[:, 0], device=device, dtype=torch.float32),
+        "yF": torch.tensor(arr[:, 1], device=device, dtype=torch.float32),
+        "zF": torch.tensor(arr[:, 2], device=device, dtype=torch.float32),
+        "yH": torch.tensor(arr[:, 3], device=device, dtype=torch.float32),
+        "zH": torch.tensor(arr[:, 4], device=device, dtype=torch.float32),
+    }
+    _body_traj_cache[device] = cache
+    return cache
+
+
+# 获取身体参考轨迹 (时变期望高度 + 走廊中心): 返回 (yF, zF, yH, zH) [N]
+# 时间缩放与关节参考一致 (t_nom = t_episode / λ), 超出表范围取末值 (站起后理想值)
+def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    cache = _get_body_traj(env.device)
+    cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
+    lam = cmd[:, 5].clamp(min=0.1)  # [N]
+    t_nom = (env.episode_length_buf.float() * env.step_dt) / lam
+    idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
+    idx_p = idx - 1
+    frac = ((t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)).clamp(0.0, 1.0)
+    out = []
+    for key in ("yF", "zF", "yH", "zH"):
+        v = cache[key][idx_p] + frac * (cache[key][idx] - cache[key][idx_p])
+        out.append(v)
+    return out[0], out[1], out[2], out[3]
 
 
 # 获取当前步的参考关节位置和速度 — 按 episode 时间 / λ 查参考表

@@ -3,17 +3,22 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES
-from .reference import get_reference_joint_state
+from .reference import get_reference_joint_state, get_body_reference
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 _STAND_STILL_DEADZONE = 0.2   # 站立保持: 平均关节速度死区 (rad/s), 微小抖动不惩罚
+_STAND_UP_THRESHOLD = 0.8     # 站起奖励: 竖直度下限 (身体基本竖直才给站直奖励)
+_TARGET_HEIGHT = 0.055        # 站直目标高度 (m, 与命令 height_f/h 一致)
 # 跌倒滞留惩罚阈值
 _FALLEN_GROUND_H = 0.03       # F/H body 贴地高度阈值 (m, 贴地≈0.024)
 _FALLEN_LIN_THRESHOLD = 0.05  # 贴地时水平线速度低于此值视为"不动" (m/s)
 _FALLEN_ANG_THRESHOLD = 0.5   # 贴地时角速度低于此值视为"不动" (rad/s)
+# 走廊 (YoZ 平面) 参数
+_CORRIDOR_HALF = 0.05         # 走廊半宽/死区 (m), 前后肢共用
+_BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
 
@@ -85,43 +90,67 @@ def compute_upright_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 # =========================================================================================
-# 身体高度跟踪奖励 
+# 身体高度跟踪奖励 — 时变期望高度: 从身体轨迹表按参考时间查 F/H body 期望高度
+# (翻身期期望低匹配实际, 站起后期望 0.055), 避免"躺着被要求站高"的局部最优
 def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算高度跟踪误差
     body_pos_w = asset.data.body_link_pos_w
     F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
-    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]          
-    cmd_term = env.command_manager._terms["backup_cmd"]
-    desired_height_F = cmd_term.command[:, 1]    
-    desired_height_H = cmd_term.command[:, 2]    
-    height_F_error = torch.abs(desired_height_F - F_body_height)
-    height_H_error = torch.abs(desired_height_H - H_body_height)
-    # 获取课程学习量
+    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
+    _, z_ref_F, _, z_ref_H = get_body_reference(env)   # [N] 时变期望高度
+    height_F_error = torch.abs(z_ref_F - F_body_height)
+    height_H_error = torch.abs(z_ref_H - H_body_height)
     sigma_height = get_curriculum_reward_weight(env, "sigma_height")
     w_height = get_curriculum_reward_weight(env, "weight_height")
-    # 计算奖励
     r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
     r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
     Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
-    # 记录日志
     env.extras["log"]["Data/height_actual"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
     return Reward_height
 
 
+# =========================================================================================
+# 走廊一致性奖励 (YoZ 平面, 前/后肢独立) — 约束 F/H body 的 (y,z) 贴近手调参考轨迹走廊
+# e = |Δy| + |Δz| + 身体段半径 - 走廊半宽; 超出走廊半宽才惩罚, r = exp(-σ·v²)
+def compute_corridor_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    body_pos_w = asset.data.body_link_pos_w
+    f_y = body_pos_w[:, _MODEL_INDICES.f_body_id, 1]
+    f_z = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    h_y = body_pos_w[:, _MODEL_INDICES.h_body_id, 1]
+    h_z = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
+    y_ref_F, z_ref_F, y_ref_H, z_ref_H = get_body_reference(env)  # [N]
+    # 前肢/后肢走廊超额
+    e_f = torch.abs(f_y - y_ref_F) + torch.abs(f_z - z_ref_F) + _BODY_SEG_HALF
+    e_h = torch.abs(h_y - y_ref_H) + torch.abs(h_z - z_ref_H) + _BODY_SEG_HALF
+    v_f = (e_f - _CORRIDOR_HALF).clamp(min=0.0)
+    v_h = (e_h - _CORRIDOR_HALF).clamp(min=0.0)
+    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
+    weight = get_curriculum_reward_weight(env, "weight_corridor")
+    r_f = torch.exp(-sigma * v_f ** 2)
+    r_h = torch.exp(-sigma * v_h ** 2)
+    reward = (r_f + r_h) / 2
+    env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
+    return reward * weight
+
+
 
 # =========================================================================================
-# 站起成功奖励 — 身体竖直 (uprightness>0.9) 且高度达标 (height>0.05) 时每步 +1.0
-# 与站起成功终止配合, 直接激励"尽快完成复位"
+# 站起奖励（连续化）— 身体竖直 (uprightness>0.8) 时, 按 F/H body 高度接近站立目标连续给奖励
+# exp(-σ·(h-0.055)²): 侧立(h≈0.04) 给部分奖励, 完全站直(h≈0.055) 给满奖励,
+# 提供从"侧立"到"完全站直"的连续梯度 (替代原二值 0/1, 避免侧立局部最优)
+# 与站起成功终止配合 (终止仍要求 h>0.05 & up>0.9)
 def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     up = asset.data.projected_gravity_b[:, 2]  # [N]
     body_pos_w = asset.data.body_link_pos_w
     h = 0.5 * (body_pos_w[:, _MODEL_INDICES.f_body_id, 2] + body_pos_w[:, _MODEL_INDICES.h_body_id, 2])
-    standing = (up > 0.9) & (h > 0.05)  # [N] bool
+    standing = up > _STAND_UP_THRESHOLD  # [N] bool 身体基本竖直
     weight = get_curriculum_reward_weight(env, "weight_stand")
-    env.extras["log"]["Data/stand_success"] = standing.float().mean().item()
-    return standing.float() * weight
+    sigma = get_curriculum_reward_weight(env, "sigma_height")
+    reward = torch.exp(-sigma * (h - _TARGET_HEIGHT) ** 2)  # 连续: 侧立部分奖励, 站直满奖励
+    env.extras["log"]["Data/stand_success"] = ((up > 0.9) & (h > 0.05)).float().mean().item()
+    return standing.float() * reward * weight
 
 
 
