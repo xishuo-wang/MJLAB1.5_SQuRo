@@ -39,17 +39,22 @@ from mjlab.viewer import NativeMujocoViewer
 
 # ===== slow1 三段动作参数 (Loco_Backup_slow1.py) =====
 KP, KD, TORQUE_LIMIT = 2.5, 0.01, 0.2   # PD 参数
-_LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
 
-# slow1 目标轨迹 — 返回 MJLAB actuator 顺序 [F_spine1, F_body, Neck_yaw, Neck_pitch,
-#   FL_sh, FL_el, FR_sh, FR_el, H_spine1, H_body, HL_hip, HL_knee, HR_hip, HR_knee]
+# slow1 目标轨迹 — 返回 MJLAB actuator 顺序 (与任务 indices._ACTUATED_JOINT_NAMES 一致):
+#   [F_spine1, F_body, Neck_yaw, Neck_pitch,
+#    FL_sh, FL_el, FR_sh, FR_el,
+#    H_spine1, H_body, HL_hip, HL_knee, HR_hip, HR_knee]
 def slow1_target(t: float, scale: float) -> list[float]:
     t1, t2, t3, t4 = 0.0, 0.65 * scale, 0.8 * scale, 0.95 * scale
     d1, d2, d3 = t2 - t1, t3 - t2, t4 - t3
+    # MJLAB 顺序初始: 脊柱/颈 0, 腿站立角
+    r = [0.0, 0.0, 0.0, 0.0,
+         0.1, -0.3, 0.1, -0.3,
+         0.0, 0.0,
+         -0.1, 0.3, -0.1, 0.3]
     if t <= t1:
-        return _LEG_INIT + [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    r = _LEG_INIT + [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return r
     # 腿支撑位 (MJLAB 列: FL/FR 4-7, HL/HR 10-13)
     r[4], r[5] = _FL_HOLD; r[6], r[7] = _FL_HOLD
     r[10], r[11] = _HL_HOLD; r[12], r[13] = _HL_HOLD
@@ -63,7 +68,11 @@ def slow1_target(t: float, scale: float) -> list[float]:
     elif t < t4:
         u = (t - t3) / d3
         r[0] = 0.8 * u; r[1] = -1.57 + 1.57 * u; r[8] = 0.0; r[9] = 1.57 - 1.57 * u
-    # t >= t4: 回站立角 (默认)
+    else:
+        # t >= t4: 回站立角 (腿站立角, 脊柱 0) — 与 slow1 脚本 time4 后 target=initial 一致
+        r[4], r[5], r[6], r[7] = 0.1, -0.3, 0.1, -0.3
+        r[10], r[11], r[12], r[13] = -0.1, 0.3, -0.1, 0.3
+        r[0] = r[1] = r[8] = r[9] = 0.0
     return r
 
 
@@ -99,7 +108,7 @@ class Slow1OpenLoopPolicy:
 class VisConfig:
     scale: float = 2.0
     """slow1 时间缩放 (1-10, 最小 1 = 0.95s 动作)。"""
-    control: Literal["position", "pd"] = "pd"
+    control: Literal["position", "pd"] = "position"
     """position=位置控制跟踪目标; pd=复刻用户 PD 平滑控制。"""
     visualize: Literal["none", "viewer", "video"] = "viewer"
     """none=无头打印; viewer=交互查看(需 GUI); video=录制 mp4。"""

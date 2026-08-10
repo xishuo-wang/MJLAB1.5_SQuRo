@@ -34,7 +34,7 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Backup 任务相关配置
-    fixed_time_scale: float | None = 1.4
+    fixed_time_scale: float | None = 5
 
 
 # 从 checkpoint 文件名提取训练轮次
