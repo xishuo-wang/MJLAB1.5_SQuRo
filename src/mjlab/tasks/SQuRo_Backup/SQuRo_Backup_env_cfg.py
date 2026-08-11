@@ -74,7 +74,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # "stand_still": RewardTermCfg(func=mdp.compute_stand_still_penalty, weight=0.0),
         # "fallen": RewardTermCfg(func=mdp.compute_fallen_penalty, weight=1.0),
         # "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=0.0),
-        "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
+        "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=0.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
     }
