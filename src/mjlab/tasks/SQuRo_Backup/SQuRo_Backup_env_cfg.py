@@ -54,7 +54,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
             actuator_names=(".*",),
-            scale=0.3,
+            scale=0.5,
             use_default_offset=True,
         )
     }
