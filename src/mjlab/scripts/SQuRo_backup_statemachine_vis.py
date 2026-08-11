@@ -36,7 +36,7 @@ from mjlab.viewer import NativeMujocoViewer
 
 
 FL_HOLD = (-0.28, 0.55)     # 腿支撑角 (与手调/参考表一致)
-HL_HOLD = (-1.40, -0.25)
+HL_HOLD = (-1.50, -0.25)
 LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
 # 状态检测阈值
@@ -46,38 +46,56 @@ _GROUND_TH_S2 = 0.04  # S2(趴地) 高度阈值: 段3 末 H 后肢略翘(≈0.03
 
 
 # 完整名义参考 (MJLAB 顺序), 0-0.65 段1, 0.65-0.8 段2, 0.8-0.95 段3, 0.95-1.45 time5, 之后站立
-def slow1_target(tn: float) -> list[float]:
+def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
+    # 与 Loco_Backup_slow1.py 手调分段控制完全一致 (time1 等待结束 -> 段1/段2/段3),
+    # 并在 time4 之后加入 time5 平滑过渡 (腿从支撑角平滑回站立角, F_sp1 0.6 -> 0)
+    time1 = 1.0
+    time2 = time1 + 0.65 * scale
+    time3 = time2 + 0.15 * scale
+    time4 = time3 + 0.15 * scale
+    time5_end = time4 + 0.5 * scale
+    # MJLAB actuator 顺序: [F_sp1, F_body, Neck_yaw, Neck_pitch,
+    #                       FL_sh, FL_el, FR_sh, FR_el,
+    #                       H_sp1, H_body, HL_hip, HL_knee, HR_hip, HR_knee]
     r = [0.0, 0.0, 0.0, 0.0, 0.1, -0.3, 0.1, -0.3, 0.0, 0.0, -0.1, 0.3, -0.1, 0.3]
-    if tn < 1:
-        r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
-        r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
-        if tn < 0.65:
-            u = tn / 0.65
-            r[0] = 0.6*u; 
-            r[1] = -1.57*u; 
-            r[8] = 0.6*u; 
-            r[9] = 1.57*u
-        elif tn < 0.8:
-            u = (tn-0.65)/0.15
-            r[0] = 0.6-0.6*u; 
-            r[1] = -1.57; 
-            r[8] = 0.6-0.6*u; 
-            r[9] = 1.57
-        else:
-            u = (tn-0.8)/0.2
-            r[0] = 0.6*u; 
-            r[1] = -1.57+1.57*u; 
-            r[8] = 0.0; 
-            r[9] = 1.57-1.57*u
+    if current_time <= time1:
+        return r  # 等待段 (保持站立)
+    # 动作段: 腿切到支撑角
+    r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
+    r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
+    if current_time < time2:
+        # 段1: 脊柱展开扭转
+        u = (current_time - time1) / (time2 - time1)
+        r[0] = 0.6 * u
+        r[1] = -1.57 * u
+        r[8] = 0.6 * u
+        r[9] = 1.57 * u
+    elif current_time < time3:
+        # 段2: 保持扭转
+        u = (current_time - time2) / (time3 - time2)
+        r[0] = 0.6 - 0.6 * u
+        r[1] = -1.57
+        r[8] = 0.6 - 0.6 * u
+        r[9] = 1.57
+    elif current_time < time4:
+        # 段3: 前肢扭回朝下
+        u = (current_time - time3) / (time4 - time3)
+        r[0] = 0.6 * u
+        r[1] = -1.57 + 1.57 * u
+        r[8] = 0.0
+        r[9] = 1.57 - 1.57 * u
     else:
-        # time5: 腿过渡到站立角, F_sp1 归零; 之后保持
-        u = min(1.0, (tn-1)/0.5)
-        r[4] = FL_HOLD[0]+u*(LEG_INIT[0]-FL_HOLD[0]); r[5] = FL_HOLD[1]+u*(LEG_INIT[1]-FL_HOLD[1])
+        # time5: 腿从支撑角平滑回站立角, F_sp1 0.6 -> 0; 之后保持站立
+        u = min(1.0, (current_time - time4) / (time5_end - time4))
+        r[4] = FL_HOLD[0] + u * (LEG_INIT[0] - FL_HOLD[0])
+        r[5] = FL_HOLD[1] + u * (LEG_INIT[1] - FL_HOLD[1])
         r[6], r[7] = r[4], r[5]
-        r[10] = HL_HOLD[0]+u*(LEG_INIT[4]-HL_HOLD[0]); r[11] = HL_HOLD[1]+u*(LEG_INIT[5]-HL_HOLD[1])
+        r[10] = HL_HOLD[0] + u * (LEG_INIT[4] - HL_HOLD[0])
+        r[11] = HL_HOLD[1] + u * (LEG_INIT[5] - HL_HOLD[1])
         r[12], r[13] = r[10], r[11]
-        r[0] = 0.6*(1.0-u)
+        r[0] = 0.6 * (1.0 - u)
     return r
+
 
 
 class StateMachinePolicy:
@@ -135,14 +153,15 @@ class StateMachinePolicy:
             expected = 0.8 * self.lam
             if self.t_phase < expected:
                 tn = self.t_phase / self.lam
-                target = slow1_target(min(0.799, tn))
+                target = slow1_target(1.0 + tn * self.lam, self.lam)
             else:
                 # 缓冲期: 保持段末姿态, 持续检测 S1
-                target = slow1_target(0.8)
+                target = slow1_target(1.0 + 0.8 * self.lam, self.lam)
             self.t_phase += dt
             if self.t_phase >= expected and self._is_S1():
+                t_used = self.t_phase - dt
                 self.phase = "P2"; self.t_phase = 0.0
-                self._log(f"S1 达成 (用时 {self.t_phase - dt:.2f}s) -> 进入 P2")
+                self._log(f"S1 达成 (用时 {t_used:.2f}s) -> 进入 P2")
             elif self.t_phase >= expected + self.buffer:
                 self.retry["P1"] += 1; self.t_phase = 0.0
                 self._log(f"S1 未达 (缓冲后, 重试 {self.retry['P1']}/{self.max_retry})")
@@ -152,14 +171,15 @@ class StateMachinePolicy:
             expected = 0.15 * self.lam
             if self.t_phase < expected:
                 tn = 0.8 + (self.t_phase / expected) * 0.15
-                target = slow1_target(tn)
+                target = slow1_target(1.0 + tn * self.lam, self.lam)
             else:
                 # 缓冲期: 保持段3末姿态, 持续检测 S2
-                target = slow1_target(0.95)
+                target = slow1_target(1.0 + 0.95 * self.lam, self.lam)
             self.t_phase += dt
             if self.t_phase >= expected and self._is_S2():
+                t_used = self.t_phase - dt
                 self.phase = "P3"; self.t_phase = 0.0
-                self._log(f"S2 达成 (用时 {self.t_phase - dt:.2f}s) -> 进入 P3")
+                self._log(f"S2 达成 (用时 {t_used:.2f}s) -> 进入 P3")
             elif self.t_phase >= expected + self.buffer:
                 self.retry["P2"] += 1; self.t_phase = 0.0
                 fu, hu = self._state()
@@ -170,7 +190,7 @@ class StateMachinePolicy:
                     self._log("P2 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P3":
             tn = 0.95 + self.t_phase / self.lam
-            target = slow1_target(tn)
+            target = slow1_target(1.0 + tn * self.lam, self.lam)
             self.t_phase += dt
             z = self.asset.data.root_link_pos_w[0, 2].item()
             up = self.asset.data.projected_gravity_b[0, 2].item()
@@ -183,7 +203,7 @@ class StateMachinePolicy:
                 self._log(f"稳定站起! stand_t≈{self.stand_t:.2f}s (P3 内)")
                 self.phase = "DONE"
         else:  # DONE
-            target = slow1_target(100.0)  # 保持站立
+            target = slow1_target(1e6, self.lam)  # 保持站立
 
         action = (torch.tensor(target, device=self.default.device, dtype=torch.float32)
                   - self.default[0]) / self.action_scale
@@ -192,7 +212,7 @@ class StateMachinePolicy:
 
 @dataclass(frozen=True)
 class VisConfig:
-    time_scale: float = 1.0
+    time_scale: float = 3.0
     """slow1 时间缩放 (λ)。"""
     max_retry: int = 5
     """每阶段最大重试次数。"""
