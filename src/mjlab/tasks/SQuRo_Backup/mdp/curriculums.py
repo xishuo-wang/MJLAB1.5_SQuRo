@@ -38,18 +38,15 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_smooth_L2_spn":     (0.1,),
     "weight_energy":            (0.1,),
 
-
-    # 关节位置/速度 σ
-    "sigma_leg_pos":      (20.0,),
-    "sigma_spn_pos":      (20.0,),
-    "sigma_neck_pos":     (20.0,),
+    "sigma_leg_pos":      (10.0,),
+    "sigma_spn_pos":      (10.0,),
+    "sigma_neck_pos":     (10.0,),
     "sigma_leg_vel":      (0.5,),
     "sigma_spn_vel":      (0.5,),
     "sigma_neck_vel":     (0.5,),
     "sigma_upright":      (5.0,),
     "sigma_height":       (500,),
 
-    # 预留: 走廊奖励课程 (后续加入走廊奖励后启用; 当前 rewards.py 未引用)
     "weight_corridor":    (0.0, 0.0, 4.0, 8.0),
     "sigma_corridor":     (50.0, 50.0, 50.0, 50.0),
 }
