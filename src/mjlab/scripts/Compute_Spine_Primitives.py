@@ -12,16 +12,16 @@ except Exception:
 
 # ==================================================================================================
 # 文件路径配置
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Slalom\=2026-07-30_14-56-44\videos\SQuRo_Slalom_3900-cu-18.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Backup\replay_videos\spine_ts1.csv"
 
 # 控制时间配置（与仿真一致）
-TIMESTEP = 0.005          # 原始仿真步长 (s)
-DECIMATION = 4            # 策略控制周期倍数
+TIMESTEP = 0.002          # 原始仿真步长 (s)
+DECIMATION = 5            # 策略控制周期倍数
 DT = TIMESTEP * DECIMATION  # 实际数据采样间隔 (s)
 
 # 分析时间配置
-START_TIME = 0.5          # 分析区间起点 (s)
-END_TIME = 5.0            # 分析区间终点 (s)
+START_TIME = 0.0          # 分析区间起点 (s)
+END_TIME = 1.5            # 分析区间终点 (s)
 
 # 脊柱关节通道配置: (关节名, CSV列名, θ_max, 基元角色)
 JOINT_CHANNELS = [
@@ -93,29 +93,22 @@ def print_results(results: dict, T: float, n_points: int) -> None:
     print(f"分析区间: [{START_TIME:.3f}, {END_TIME:.3f}] s | T = {T:.3f} s | 采样点数 = {n_points} | dt = {DT:g} s")
     print("=" * 70)
 
-    # 激活面积
-    print("\n[1] 激活面积 S (rad·s)")
-    for joint_name, _, _, role in JOINT_CHANNELS:
-        r = results[joint_name]
-        print(f"  {joint_name:10s} ({role})  S = {r['S']:.4f}")
+    # 定义各指标块的打印逻辑
+    metrics = [
+        ("[1] 激活面积 S (rad·s)", "S"),
+        ("[2] 脊柱基元激活度 A = S / (θ_max · T)", "A"),
+        ("[3] 脊柱基元贡献系数 C = S_i / ΣS  (四通道之和 = 1)", "C"),
+        ("[4] 脊柱基元时序中心 τ  (0=任务起点, 1=任务终点)", "tau"),
+    ]
 
-    # 激活度
-    print("\n[2] 脊柱基元激活度 A = S / (θ_max · T)")
-    for joint_name, _, _, role in JOINT_CHANNELS:
-        r = results[joint_name]
-        print(f"  {joint_name:10s} ({role})  A = {r['A']:.4f}")
-
-    # 贡献系数
-    print("\n[3] 脊柱基元贡献系数 C = S_i / ΣS  (四通道之和 = 1)")
-    for joint_name, _, _, role in JOINT_CHANNELS:
-        r = results[joint_name]
-        print(f"  {joint_name:10s} ({role})  C = {r['C']:.4f}")
-
-    # 时序中心
-    print("\n[4] 脊柱基元时序中心 τ  (0=任务起点, 1=任务终点)")
-    for joint_name, _, _, role in JOINT_CHANNELS:
-        r = results[joint_name]
-        print(f"  {joint_name:10s} ({role})  τ = {r['tau']:.4f}")
+    for title, key in metrics:
+        # 收集该指标的所有值
+        values = [results[joint_name][key] for joint_name, _, _, _ in JOINT_CHANNELS]
+        
+        # 打印简洁数值列表（标题重复）
+        value_strs = [f"{v:.4f}" for v in values]
+        print(f"\n{title}")
+        print(f"[{', '.join(value_strs)}]")
 
     print("=" * 70)
 
