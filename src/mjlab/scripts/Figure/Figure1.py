@@ -1,91 +1,154 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-# =========================================
-# 1. 参数配置
-# =========================================
-categories = ['1/COT', 'Prink', 'Average line']
-n_groups = 3                     # 大类数量
-n_sub = 3                        # 每个大类中的子块数量
-n_per_sub = 4                    # 每个子块中的柱子数量
-total_bars = n_sub * n_per_sub   # 12
+# ==================================================================================================
+# 参数配置
+data = {
+    'Tunnel': [
+        [0.0369, 0.0145, 0.8889, 0.0318],
+        [0.0892, 0.0134, 0.8206, 0.0768],
+        [0.6195, 0.5082, 0.5026, 0.2902],
+    ],
+    'Slalom': [
+        [0.4003, 0.7480, 0.7030, 0.3162],
+        [0.3149, 0.2249, 0.2114, 0.2488],
+        [0.5221, 0.5219, 0.5233, 0.5248],
+    ],
+    'Righting': [
+        [0.4763, 0.6950, 0.3807, 0.4776],
+        [0.3489, 0.1946, 0.1066, 0.3499],
+        [0.3716, 0.5363, 0.3305, 0.3711],
+    ]
+}
 
-inner_radius = 0.4               # 内半径
-group_span = 2 * np.pi / n_groups  # 每个大类角度跨度（120°）
+n_groups = 3
+n_sub = 3
+n_per_sub = 4
 
-# 子块占大类角度的比例，剩余为间隙
+INNER_RADIUS = 0.4
+OUTER_RADIUS = 1.4
+group_span = 2 * np.pi / n_groups
+
 sub_frac = 0.8
-sub_span = (group_span / n_sub) * sub_frac   # 每个子块实际宽度
-gap = (group_span / n_sub) * (1 - sub_frac)  # 子块间间隙
+sub_span = (group_span / n_sub) * sub_frac
+gap = (group_span / n_sub) * (1 - sub_frac)
 
-# 每个子块内部柱子的角度步长
 step_sub = sub_span / n_per_sub
-bar_width = step_sub * 0.7       # 柱子宽度
+bar_width = step_sub * 0.65
 
-# ---------- 颜色配置 ----------
-# 大类背景色（浅色，透明度0.5）
-bg_colors = ['#FFD1D1', '#C5E8E0', '#FFF5C2']   # 浅红、浅青、浅黄
+categories = ['Tunnel', 'Slalom', 'Righting']
 
-# Nature 风格的 4 色（低饱和度，学术感）
-# sub_colors = ['#3F7FBF', '#E58B4C', '#6BB36B', '#C97C7C']
-# sub_colors = ['#8FA6B4', '#A3B693', '#E0A87C', '#2F6EB5']
-# sub_colors = ['#56B4E9', '#E69F00', '#009E73', '#D55E00']
-sub_colors = ['#E64B35', '#4DBBD5', '#8A8A8A', '#F39B7F']
-# 可选其他 Nature 配色：
-# sub_colors = ['#2E5A88', '#D55E00', '#56B4E9', '#CC79A7']
+# 大类背景色（浅色）
+bg_colors = ['#D9E8F5', '#F9E0DA', '#E8F0D8']
 
-# =========================================
-# 2. 创建极坐标子图
-# =========================================
+# 弧形箭头颜色（同色系深色，更醒目）
+arrow_colors = ['#5B9BD5', '#ED7D31', '#70AD47']
+
+JOINT_COLORS = [ '#108E4B', '#DF462E', '#267BBC', '#E0B82C']
+JOINT_NAMES = ['F_body', 'F_spine1', 'H_spine1', 'H_body']
+
+# ==================================================================================================
+# 绘图
 fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8, 8))
 
-# =========================================
-# 3. 绘制每个大类
-# =========================================
-np.random.seed(2026)  # 固定随机种子
+r_ticks = np.linspace(INNER_RADIUS, OUTER_RADIUS, 6)
 
-for g in range(n_groups):
-    start_angle = g * group_span   # 大类的起始角度
+for g, category in enumerate(categories):
+    start_angle = g * group_span
+    category_data = data[category]
 
-    # ---- 为该大类独立生成 12 个随机数值 ----
-    values = np.round(np.random.uniform(0.5, 1.5, total_bars), 2).tolist()
-    max_value = max(values)
-
-    # ---- 浅色背景扇形（整个大类） ----
+    # 背景扇形
     bg_width = group_span * 0.95
     bg_angle = start_angle + group_span / 2
-    ax.bar(bg_angle, max_value, width=bg_width, bottom=inner_radius,
+    bg_height = OUTER_RADIUS - INNER_RADIUS
+    ax.bar(bg_angle, bg_height, width=bg_width, bottom=INNER_RADIUS,
            color=bg_colors[g], edgecolor='none', alpha=0.5, zorder=1)
 
-    # ---- 绘制三个子块 ----
-    for k in range(n_sub):
-        # 子块的起始角度（带间隙）
-        sub_start = start_angle + k * (group_span / n_sub) + gap / 2
+    # 内部径向参考线
+    theta_start = start_angle + (group_span - bg_width) / 2
+    theta_end = start_angle + group_span - (group_span - bg_width) / 2
+    theta = np.linspace(theta_start, theta_end, 100)
+    for r in r_ticks:
+        ax.plot(theta, [r] * len(theta), color='gray', linestyle='--',
+                linewidth=0.5, alpha=0.5, zorder=1.5)
 
-        # 子块内部的 4 根柱子
-        for i in range(n_per_sub):
+    # 数据柱
+    for k, sub_values in enumerate(category_data):
+        sub_start = start_angle + k * (group_span / n_sub) + gap / 2
+        for i, value in enumerate(sub_values):
             angle = sub_start + (i + 0.5) * step_sub
-            idx = k * n_per_sub + i
-            # 柱子颜色按位置 i 选择（所有子块统一）
-            ax.bar(angle, values[idx], width=bar_width, bottom=inner_radius,
-                   color=sub_colors[i],          # 关键修改：按 i 取色
-                   edgecolor='white', linewidth=0.5,
+            ax.bar(angle, value, width=bar_width, bottom=INNER_RADIUS,
+                   color=JOINT_COLORS[i], edgecolor='white', linewidth=0.5,
                    alpha=0.9, zorder=2)
 
-# =========================================
-# 4. 美化与标签
-# =========================================
-# 大类标签
-group_ticks = [group_span/2 + g * group_span for g in range(n_groups)]
-ax.set_xticks(group_ticks)
-ax.set_xticklabels(categories, fontsize=14, fontweight='bold')
 
-ax.set_ylim(0, inner_radius + 1.7)
+# ---------- 大类间隙径向轴线（柱状+三角形箭头） ----------
+axis_angles = [g * group_span for g in range(n_groups)]
+AXIS_END_R = OUTER_RADIUS + 0.25  # 缩短轴线末端，避免与圆弧重叠
+wedge_half_angle = 0.03
+arrow_length = 0.15
+
+for angle in axis_angles:
+    shaft_end_r = AXIS_END_R - arrow_length
+
+    # 轴身
+    theta_shaft = [angle, angle - wedge_half_angle, angle + wedge_half_angle]
+    r_shaft = [0, shaft_end_r, shaft_end_r]
+    ax.fill(theta_shaft, r_shaft, color='gray', alpha=0.4,
+            edgecolor='none', zorder=1.8)
+
+    # 轴末端的三角形箭头
+    theta_arrow = [angle - 2*wedge_half_angle, angle + 2*wedge_half_angle, angle]
+    r_arrow = [shaft_end_r, shaft_end_r, AXIS_END_R]
+    ax.fill(theta_arrow, r_arrow, color='gray', alpha=0.4,
+            edgecolor='none', zorder=1.8)
+
+
+# ---------- 大类背景圆外的弧形箭头（细圆环+两端朝外箭头） ----------
+ARC_RADIUS = OUTER_RADIUS + 0.1          # 圆弧半径
+arc_span_frac = 0.9
+arc_half_width = 0.03                   # 箭头角度偏移量
+
+for g, category in enumerate(categories):
+    start_angle = g * group_span
+    arc_start = start_angle + (group_span * (1 - arc_span_frac)) / 2
+    arc_end   = start_angle + group_span - (group_span * (1 - arc_span_frac)) / 2
+
+    color = arrow_colors[g]   # 使用同色系深色
+
+    # 绘制圆弧
+    theta_arc = np.linspace(arc_start, arc_end, 100)
+    ax.plot(theta_arc, [ARC_RADIUS] * len(theta_arc),
+            color=color, linewidth=4.0, linestyle='-', alpha=0.9, zorder=2.5)
+
+    # 起始端箭头：指向角度减小方向（逆时针，朝外）
+    ax.annotate('', xy=(arc_start - arc_half_width, ARC_RADIUS),
+                xytext=(arc_start, ARC_RADIUS),
+                arrowprops=dict(arrowstyle='->', color=color, lw=2.5, shrinkA=0, shrinkB=0),
+                zorder=3)
+
+    # 终止端箭头：指向角度增大方向（顺时针，朝外）
+    ax.annotate('', xy=(arc_end + arc_half_width, ARC_RADIUS),
+                xytext=(arc_end, ARC_RADIUS),
+                arrowprops=dict(arrowstyle='->', color=color, lw=2.5, shrinkA=0, shrinkB=0),
+                zorder=3)
+
+# 清除角度刻度
+ax.set_xticks([])
+ax.set_xticklabels([])
+
+# 径向范围：包含弧形箭头最外端
+ax.set_ylim(0, ARC_RADIUS + 0.2)
 ax.set_yticklabels([])
-ax.set_theta_zero_location('N')
-ax.set_theta_direction(-1)
+
+# 关闭网格
 ax.grid(False)
 
-plt.title('3 Categories, Each with 3 Sub-groups of 4 Bars (Nature Colors)', 
-          pad=25, fontsize=14)
+# 透明背景
+fig.set_facecolor('none')
+ax.set_facecolor('none')
+ax.set_theta_zero_location('N') # type: ignore
+ax.set_theta_direction(-1) # type: ignore
+ax.spines['polar'].set_visible(False)
+
 plt.show()
