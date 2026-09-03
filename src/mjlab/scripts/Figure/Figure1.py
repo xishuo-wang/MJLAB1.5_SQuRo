@@ -39,13 +39,13 @@ bar_width = step_sub * 0.65
 categories = ['Tunnel', 'Slalom', 'Righting']
 
 # 大类背景色（浅色）
-bg_colors = ['#D9E8F5', '#F9E0DA', '#E8F0D8']
+bg_colors = ['#EAF2F8', '#FDEDEC', '#FEF9E7']   # 浅蓝、浅粉、浅黄
 
-# 弧形箭头颜色（同色系深色，更醒目）
-arrow_colors = ['#5B9BD5', '#ED7D31', '#70AD47']
+# 大类箭头/圆弧颜色（同色系深色）
+arrow_colors = ['#4A90E2', '#E74C3C', '#F1C40F']  # 亮蓝、亮红、金黄色
 
-JOINT_COLORS = [ '#108E4B', '#DF462E', '#267BBC', '#E0B82C']
-JOINT_NAMES = ['F_body', 'F_spine1', 'H_spine1', 'H_body']
+# 小类柱子颜色（三个子块统一使用，跨大类一致）
+sub_colors = ['#9575CD', '#F06292', '#4DB6AC']  # 淡紫、粉红、青绿
 
 # ==================================================================================================
 # 绘图
@@ -72,62 +72,61 @@ for g, category in enumerate(categories):
         ax.plot(theta, [r] * len(theta), color='gray', linestyle='--',
                 linewidth=0.5, alpha=0.5, zorder=1.5)
 
-    # 数据柱
+    # ---------- 独立缩放 ----------
+    all_values = [v for sub in category_data for v in sub]
+    max_val = max(all_values) * 1.1
+    scale = (OUTER_RADIUS - INNER_RADIUS) / max_val if max_val > 0 else 1.0
+
+    # 数据柱（使用小类颜色 sub_colors[k]）
     for k, sub_values in enumerate(category_data):
         sub_start = start_angle + k * (group_span / n_sub) + gap / 2
         for i, value in enumerate(sub_values):
+            scaled_value = value * scale
             angle = sub_start + (i + 0.5) * step_sub
-            ax.bar(angle, value, width=bar_width, bottom=INNER_RADIUS,
-                   color=JOINT_COLORS[i], edgecolor='white', linewidth=0.5,
+            ax.bar(angle, scaled_value, width=bar_width, bottom=INNER_RADIUS,
+                   color=sub_colors[k], edgecolor='white', linewidth=0.5,
                    alpha=0.9, zorder=2)
-
 
 # ---------- 大类间隙径向轴线（柱状+三角形箭头） ----------
 axis_angles = [g * group_span for g in range(n_groups)]
-AXIS_END_R = OUTER_RADIUS + 0.25  # 缩短轴线末端，避免与圆弧重叠
+AXIS_END_R = OUTER_RADIUS + 0.25
 wedge_half_angle = 0.03
 arrow_length = 0.15
 
 for angle in axis_angles:
     shaft_end_r = AXIS_END_R - arrow_length
 
-    # 轴身
     theta_shaft = [angle, angle - wedge_half_angle, angle + wedge_half_angle]
     r_shaft = [0, shaft_end_r, shaft_end_r]
     ax.fill(theta_shaft, r_shaft, color='gray', alpha=0.4,
             edgecolor='none', zorder=1.8)
 
-    # 轴末端的三角形箭头
     theta_arrow = [angle - 2*wedge_half_angle, angle + 2*wedge_half_angle, angle]
     r_arrow = [shaft_end_r, shaft_end_r, AXIS_END_R]
     ax.fill(theta_arrow, r_arrow, color='gray', alpha=0.4,
             edgecolor='none', zorder=1.8)
 
-
-# ---------- 大类背景圆外的弧形箭头（细圆环+两端朝外箭头） ----------
-ARC_RADIUS = OUTER_RADIUS + 0.1          # 圆弧半径
+# ---------- 弧形箭头 ----------
+ARC_RADIUS = OUTER_RADIUS + 0.1
 arc_span_frac = 0.9
-arc_half_width = 0.03                   # 箭头角度偏移量
+arc_half_width = 0.03
 
 for g, category in enumerate(categories):
     start_angle = g * group_span
     arc_start = start_angle + (group_span * (1 - arc_span_frac)) / 2
     arc_end   = start_angle + group_span - (group_span * (1 - arc_span_frac)) / 2
 
-    color = arrow_colors[g]   # 使用同色系深色
+    color = arrow_colors[g]
 
-    # 绘制圆弧
     theta_arc = np.linspace(arc_start, arc_end, 100)
     ax.plot(theta_arc, [ARC_RADIUS] * len(theta_arc),
             color=color, linewidth=4.0, linestyle='-', alpha=0.9, zorder=2.5)
 
-    # 起始端箭头：指向角度减小方向（逆时针，朝外）
     ax.annotate('', xy=(arc_start - arc_half_width, ARC_RADIUS),
                 xytext=(arc_start, ARC_RADIUS),
                 arrowprops=dict(arrowstyle='->', color=color, lw=2.5, shrinkA=0, shrinkB=0),
                 zorder=3)
 
-    # 终止端箭头：指向角度增大方向（顺时针，朝外）
     ax.annotate('', xy=(arc_end + arc_half_width, ARC_RADIUS),
                 xytext=(arc_end, ARC_RADIUS),
                 arrowprops=dict(arrowstyle='->', color=color, lw=2.5, shrinkA=0, shrinkB=0),
@@ -137,14 +136,11 @@ for g, category in enumerate(categories):
 ax.set_xticks([])
 ax.set_xticklabels([])
 
-# 径向范围：包含弧形箭头最外端
 ax.set_ylim(0, ARC_RADIUS + 0.2)
 ax.set_yticklabels([])
 
-# 关闭网格
 ax.grid(False)
 
-# 透明背景
 fig.set_facecolor('none')
 ax.set_facecolor('none')
 ax.set_theta_zero_location('N') # type: ignore
