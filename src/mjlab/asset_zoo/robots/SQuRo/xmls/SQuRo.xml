@@ -33,6 +33,7 @@
         <mesh name="F_body_Link" file="F_body_Link.STL"/>
         <mesh name="Neck_yaw_Link" file="Neck_yaw_Link.STL"/>
         <mesh name="Neck_pitch_Link" file="Neck_pitch_Link.STL"/>
+        <!-- <mesh name="Neck_pitch_Link" file="Head.STL"/> -->
         <mesh name="FL_shoulder_Link" file="FL_shoulder_Link.STL"/>
         <mesh name="FL_shoulder1_Link" file="FL_shoulder1_Link.STL"/>
         <mesh name="FL_elbow_Link" file="FL_elbow_Link.STL"/>
@@ -110,11 +111,13 @@
 
                             <body name="Neck_yaw_Link" pos="0.0014 -0.011 -0.04688" quat="0 0 0.707107 -0.707107">
                                 <joint name="Neck_yaw_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" limited="true" damping="0.006" armature="0.00005"/>
-                                <geom type="mesh" mass="0.010" contype="1" conaffinity="0" group="1" material="PLA_White" mesh="Neck_yaw_Link"/>
+                                <geom type="mesh" mass="0.010" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="Neck_yaw_Link"/>
 
                                 <body name="Neck_pitch_Link" pos="0.0117405 0.01213 -0.00702" quat="0.5 0.5 0.5 0.5">
+                                <!-- <body name="Neck_pitch_Link" pos="0.016 -0.024 -0.024" quat="0 0 0.707107 0.707107"> -->
                                     <joint name="Neck_pitch_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" limited="true" damping="0.006" armature="0.00005"/>
-                                    <geom type="mesh" mass="0.006" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="Neck_pitch_Link"/>
+                                    <!-- <joint name="Neck_pitch_joint" type="hinge" pos="0.0032595 0.01698 0.03613" axis="-1 0 0" range="-1.57 1.57" limited="true" damping="0.006" armature="0.00005"/> -->
+                                    <geom type="mesh" mass="0.006" contype="1" conaffinity="1" group="1" material="PLA_White" mesh="Neck_pitch_Link"/>
                                     <site name="imu_site" type="sphere" pos="0.04 -0.016 -0.0117" size="0.0015" rgba="0 1 0 0"/>
                                 </body>
                             </body>
@@ -221,12 +224,12 @@
                             <site name="H_body_9_site" pos="0.00 0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
 
                             <body name="HL_hip_Link" pos="-0.02765 0.00403 0.01845" quat="0.707107 0 0.707107 0">
-                                <joint name="HL_hip_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.45 0.8" limited="true" damping="0.006" armature="0.00005"/>
+                                <joint name="HL_hip_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.5 0.8" limited="true" damping="0.006" armature="0.00005"/>
                                 <geom name="HL_hip_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="HL_hip_Link"/>
 
                                 <body name="HL_hip1_Link" pos="0.00766291 -0.0206223 -0.00435">
                                     <joint name="HL_hip1_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" limited="true" damping="0.0008" armature="0.00005"/>
-                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" material="PLA_White" mesh="HL_hip1_Link"/>
+                                    <geom type="mesh" mass="0.0002" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="HL_hip1_Link"/>
                                 </body>
                             </body>
 
@@ -252,12 +255,12 @@
                             </body>
 
                             <body name="HR_hip_Link" pos="0.02765 0.00403 0.01845" quat="0.707107 0 0.707107 0">
-                                <joint name="HR_hip_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.45 0.8" limited="true" damping="0.006" armature="0.00005"/>
+                                <joint name="HR_hip_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.5 0.8" limited="true" damping="0.006" armature="0.00005"/>
                                 <geom name="HR_hip_collision" type="mesh" mass="0.0008" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="HR_hip_Link"/>
 
                                 <body name="HR_hip1_Link" pos="0.00766291 -0.0206223 0.00435">
                                     <joint name="HR_hip1_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" limited="true" damping="0.0008" armature="0.00005"/>
-                                    <geom type="mesh" mass="0.0002" contype="1" conaffinity="0" group="1" material="PLA_White" mesh="HR_hip1_Link"/>
+                                    <geom type="mesh" mass="0.0002" contype="0" conaffinity="0" group="1" material="PLA_White" mesh="HR_hip1_Link"/>
                                 </body>
                             </body>
 
@@ -299,9 +302,9 @@
         <position name="FR_elbow" joint="FR_elbow_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.8 2.5" forcelimited="true" forcerange="-0.12 0.12"/>
         <position name="H_spine1" joint="H_spine1_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.6 0.6" forcelimited="true" forcerange="-0.15 0.15"/>
         <position name="H_body" joint="H_body_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.57 1.57" forcelimited="true" forcerange="-0.2 0.2"/>
-        <position name="HL_hip" joint="HL_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.45 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HL_hip" joint="HL_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.5 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
         <position name="HL_knee" joint="HL_knee_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
-        <position name="HR_hip" joint="HR_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.45 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
+        <position name="HR_hip" joint="HR_hip_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-1.5 0.8" forcelimited="true" forcerange="-0.12 0.12"/>
         <position name="HR_knee" joint="HR_knee_joint" gear="1" kp="2.5" kv="0.01" ctrllimited="true" ctrlrange="-0.5 1.9" forcelimited="true" forcerange="-0.12 0.12"/>
     </actuator>
 
