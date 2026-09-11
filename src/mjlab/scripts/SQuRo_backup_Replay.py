@@ -2,6 +2,7 @@ from __future__ import annotations
 import tyro
 import torch
 import mjlab.tasks  # noqa: F401  触发任务注册
+import pandas as pd
 from pathlib import Path
 from typing import Any, Literal
 from dataclasses import dataclass
@@ -223,6 +224,30 @@ class StateMachinePolicy:
             plt.show()
         plt.close(fig)
 
+    def save_spine_csv(self, save_path: str | None = None) -> None:
+        if not self._spn_ts:
+            print("[SPN] 无数据可保存")
+            return
+        # 内存顺序均为 [F_sp1, F_body, H_sp1, H_body]
+        data = {
+            "step": list(range(len(self._spn_ts))),
+            "time": self._spn_ts,
+            # 实际角 (命名 *_pos, 兼容 SQuRo_compute_spine_primitives.py)
+            "F_spine1_pos": [r[0] for r in self._spn_act],
+            "F_body_pos": [r[1] for r in self._spn_act],
+            "H_spine1_pos": [r[2] for r in self._spn_act],
+            "H_body_pos": [r[3] for r in self._spn_act],
+            # 期望角
+            "F_spine1_ref": [r[0] for r in self._spn_ref],
+            "F_body_ref": [r[1] for r in self._spn_ref],
+            "H_spine1_ref": [r[2] for r in self._spn_ref],
+            "H_body_ref": [r[3] for r in self._spn_ref],
+        }
+        df = pd.DataFrame(data)
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True) # type: ignore
+        df.to_csv(save_path, index=False)
+        print(f"[SPN] 脊柱CSV已保存: {save_path}")
+
 
 
 @dataclass(frozen=True)
@@ -280,6 +305,7 @@ def main() -> None:
         print(f"[RESULT] 最终 phase={policy.phase}, 重试 P1={policy.retry['P1']}, P2={policy.retry['P2']}")
         out_dir = Path(args.video_dir)
         policy.plot_spine_curves(str(out_dir / f"spine_ts{args.time_scale:g}.png"))
+        policy.save_spine_csv(str(out_dir / f"spine_ts{args.time_scale:g}.csv"))
         env.close()
         return
 
@@ -289,6 +315,7 @@ def main() -> None:
     viewer.run(num_steps=int(args.duration / env.step_dt))
     out_dir = Path(args.video_dir)
     policy.plot_spine_curves(str(out_dir / f"spine_ts{args.time_scale:g}.png"))
+    policy.save_spine_csv(str(out_dir / f"spine_ts{args.time_scale:g}.csv"))
     env.close()
 
 
