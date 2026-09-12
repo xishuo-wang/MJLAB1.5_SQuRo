@@ -109,3 +109,23 @@ uv run python -B -m mjlab.scripts.Backup.baseline_trivial_policy --num-envs 16 -
 - 以上均指课程内部系数；外部 reward weight 保持 1。其余奖励、熵系数、动作缩放和时序不变。
 - 若预算有限，可先比较 A/C，但不能单独归因于 L1 或 L2。
 - 若弱平滑下四个脊柱 std 仍过早收缩，再单独测试所有关节统一的 std 下限（如 0.05～0.1 action，需验证），不修改关键扭转关节奖励权重。
+
+## 新增实验：脊柱目标指令跟踪成本
+
+本轮在当前 B 组基础上，仅新增 `spine_target`，不同时进行上述弱 L2 消融。
+
+- 公式：`-2.0 * mean((q_cmd_spine - q_ref_spine)^2)`，四个脊柱关节等权。
+- `q_cmd = action_term.raw_action * action_term.scale + action_term.offset`，取动作项及 XML 限幅之前的目标，不用实际关节角代替。
+- `raw_action` 已经经过训练 wrapper 的全局 action 裁剪，不代表未经裁剪的 PPO 原始样本。
+- 权重 2.0 在 `SQuRo_Backup_env_cfg.py` 的 `rewards["spine_target"]` 设置；函数本身只返回负均方误差，RewardManager 再统一乘权重和 dt。
+- 现有实际角/速度模仿、L1=0、L2=0.1、熵系数、动作缩放、T2 时长和 PPO 参数不变。
+- 日志自动增加 `Episode_Reward/spine_target`，最优为零，负值表示目标指令偏离参考。旧 checkpoint 的总回报因此不能直接与新训练比较。
+- 优先观察：T1 末侧摆/俯仰目标是否减少超限；T2 是否回收侧摆/俯仰并保留扭转；S1/S2 到达率是否改善。
+- 建议从头训练以做对照。2.0 是待验证权重，不能保证收敛；该项也会压制探索噪声和偏离参考的动力学补偿。
+
+## 整体架构与设计变更
+
+此次变更仅扩展任务奖励层：原有实际关节模仿等奖励保持，RewardManager 新增一项限幅前目标指令成本。
+数据流为本步 action → scale/offset 还原目标角 → 与同一步参考计算四脊柱负均方误差 → 加权并乘 dt 后汇总。
+观测维度、动作维度、动作映射、物理参数、状态机、PPO 和训练循环不变；日志多出 `Episode_Reward/spine_target`。
+变更目的是让执行器限幅隐藏的过量指令及 T2 提前解扭产生可区分的成本，并不构成成功率提升的验证结论。

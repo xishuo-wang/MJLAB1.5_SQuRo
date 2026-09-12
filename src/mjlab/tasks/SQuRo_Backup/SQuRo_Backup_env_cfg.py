@@ -72,6 +72,8 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
+        # 新增限幅前目标指令约束；四个脊柱等权，不替换原有实际角度模仿。
+        "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=2.0),
         "upright": RewardTermCfg(func=mdp.compute_upright_reward, weight=0.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "stand": RewardTermCfg(func=mdp.compute_stand_reward, weight=0.0),

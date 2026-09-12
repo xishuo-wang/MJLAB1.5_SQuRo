@@ -2,11 +2,12 @@ from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
-from .indices import _MODEL_INDICES
+from .indices import _ACTUATED_JOINT_NAMES, _MODEL_INDICES
 from .reference import get_reference_joint_state, get_body_reference
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from mjlab.envs.mdp.actions import JointPositionAction
     from .command import BackupCommand
 
 
@@ -71,6 +72,24 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
     return reward * weight
 
+
+
+# =========================================================================================
+# 四脊柱等权的目标指令成本：识别实际角度跟踪无法区分的超限指令和提前解扭。
+def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
+    # raw_action 已经过训练 wrapper 的全局裁剪，但尚未经过动作项和 XML 的限幅。
+    # 重建限幅前目标；不要读取实际关节角或已经限幅的控制量，否则过量指令会被隐藏。
+    target = action_term.raw_action * action_term.scale + action_term.offset
+    ref_pos, _ = get_reference_joint_state(env)
+    ref_columns = _MODEL_INDICES.actuator_spn_ids
+    # 动作项按自身关节顺序排列，参考表按固定顺序排列；用名称对齐，避免列序假设。
+    target_columns = tuple(
+        action_term.target_names.index(_ACTUATED_JOINT_NAMES[i]) for i in ref_columns
+    )
+    error = target[:, target_columns] - ref_pos[:, ref_columns]
+    # 这里只返回负均方误差，权重和 dt 均由 RewardManager 统一乘一次。
+    return -torch.mean(error.square(), dim=1)
 
 
 # =========================================================================================
