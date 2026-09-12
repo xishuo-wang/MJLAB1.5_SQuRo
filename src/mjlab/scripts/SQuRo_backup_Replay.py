@@ -22,7 +22,6 @@ LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
 
 # 状态检测阈值
-_UP_TH = 0.5        # 背腹轴朝上/朝下判定阈值
 _GROUND_TH = 0.03   # 贴地高度阈值
 _GROUND_TH_S2 = 0.04  # S2(趴地) 高度阈值: 段3 末 H 后肢略翘(≈0.034), 放宽到 0.04
 
@@ -98,24 +97,33 @@ class StateMachinePolicy:
         self._spn_ref: list[list[float]] = [] # 四个脊柱期望角 [F_sp1, F_body, H_sp1, H_body]
         self._spn_act: list[list[float]] = [] # 四个脊柱实际关节角
 
-    def _body_up(self, body_id: int, sign: float) -> float:
-        q = self.asset.data.body_link_quat_w[0, body_id]
-        w, x, y, z = q[0].item(), q[1].item(), q[2].item(), q[3].item()
-        return sign * 2.0 * (y*z + w*x)   # body+Y 世界 Z 分量; H 用 sign=-1 修正
+    # 身体段"正置"判定 — 用腹/背标记 site 的世界坐标, 与 mdp/command.py 完全一致
+    # 踩坑: data.body_link_quat_w 名为 world, 但实测 reset 后 root_link_quat_w 为单位四元数,
+    #   其参考系至今未定论 (见 docs/SQuRo_Backup_技术细节.md §3); 旧写法 sign*2(yz+wx)
+    #   在翻正过程中会失效。改用 site 世界坐标比较可自动消除 F/H 局部坐标相反的差异。
+    def _uprightness(self, idx: int) -> float:
+        # 返回背腹轴的世界 Z 分量 (已统一符号): >0 = 正置(腹面朝下), <0 = 倒置(腹面朝上)
+        pairs = _MODEL_INDICES.segment_belly_back_ids
+        assert pairs is not None, "segment_belly_back_ids 未解析"
+        belly_id, back_id = pairs[idx]
+        sp = self.asset.data.site_pos_w[0]
+        return float(sp[back_id, 2] - sp[belly_id, 2])
 
     def _fz(self, body_id: int) -> float:
         return self.asset.data.body_link_pos_w[0, body_id, 2].item()
 
     def _state(self) -> tuple[float, float]:
-        return self._body_up(self.fb, +1.0), self._body_up(self.hb, -1.0)
+        return self._uprightness(0), self._uprightness(1)
 
+    # S1: 后段已翻正、前段未翻正, 且两段躯干都平躺贴地
     def _is_S1(self) -> bool:
         fu, hu = self._state()
-        return fu > _UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
+        return fu < 0.0 and hu > 0.0 and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
 
+    # S2: 两段躯干都已翻正并重新贴地
     def _is_S2(self) -> bool:
         fu, hu = self._state()
-        return fu < -_UP_TH and hu < -_UP_TH and self._fz(self.fb) < _GROUND_TH_S2 and self._fz(self.hb) < _GROUND_TH_S2
+        return fu > 0.0 and hu > 0.0 and self._fz(self.fb) < _GROUND_TH_S2 and self._fz(self.hb) < _GROUND_TH_S2
 
     def _log(self, msg: str) -> None:
         if self.log_events:
