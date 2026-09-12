@@ -29,8 +29,8 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
             clip_param=0.2,
             entropy_coef=0.01,
             # step_dt 0.02->0.005 后 rollout 物理时间变短, 增大 epochs/minibatches 提高数据利用率
-            num_learning_epochs=10,
-            num_mini_batches=8,
+            num_learning_epochs=5,
+            num_mini_batches=4,
             learning_rate=3.0e-4,
             schedule="adaptive",
             gamma=0.99,
@@ -41,7 +41,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         experiment_name="SQuRo_Backup",
         save_interval=100,
         num_steps_per_env=_STEPS_PER_ITER,
-        max_iterations=3_000,
+        max_iterations=1_000,
 
         clip_actions=6.0,
         seed=42,
