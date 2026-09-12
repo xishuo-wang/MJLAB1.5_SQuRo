@@ -3,7 +3,10 @@ import torch
 from typing import Any
 
 
-_STEPS_PER_ITER = 60               # 每 iter 步数 (timestep=0.001/decimation=5, step_dt=0.005; 60步=0.3s rollout)
+# 每 iter 的 rollout 步数。step_dt = sim.timestep(0.002) × decimation(5) = 0.01 s,
+# 故 300 步 = 3.0 s 仿真时长, 覆盖 λ 采样下限 (TIME_SCALE_MIN_START=3.0) 下的完整动作段
+# (P2_END=0.95 s × 3.0 = 2.85 s)。原值 60 步仅 0.6 s, 一个 rollout 装不下完整翻正, 已废弃。
+_STEPS_PER_ITER = 300
 
 
 # 训练阶段边界 (iter)
@@ -39,7 +42,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_energy":            (0.1,),
 
     "sigma_leg_pos":      (10.0,),
-    "sigma_spn_pos":      (10.0,),
+    "sigma_spn_pos":      (20.0,),
     "sigma_neck_pos":     (10.0,),
     "sigma_leg_vel":      (0.5,),
     "sigma_spn_vel":      (0.5,),

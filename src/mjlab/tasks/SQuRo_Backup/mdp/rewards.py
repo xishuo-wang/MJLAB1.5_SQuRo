@@ -1,12 +1,13 @@
 from __future__ import annotations
 import torch
 from mjlab.entity import Entity
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from .indices import _MODEL_INDICES
 from .reference import get_reference_joint_state, get_body_reference
 from .curriculums import get_curriculum_reward_weight
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from .command import BackupCommand
 
 
 _STAND_STILL_DEADZONE = 0.2   # 站立保持: 平均关节速度死区 (rad/s), 微小抖动不惩罚
@@ -19,6 +20,29 @@ _FALLEN_ANG_THRESHOLD = 0.5   # 贴地时角速度低于此值视为"不动" (ra
 # 走廊 (YoZ 平面) 参数
 _CORRIDOR_HALF = 0.05         # 走廊半宽/死区 (m), 前后肢共用
 _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
+
+
+# =========================================================================================
+# 一次性里程碑奖励。RewardManager 默认会再乘 env.step_dt，因此这里除以 dt，
+# 使配置中的 weight 直接表示一次事件对 episode return 的实际增量。
+def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    pulse = command.s1_transition_pulse
+    env.extras["log"]["Data/milestone_s1"] = pulse.float().mean().item()
+    return pulse.float() / env.step_dt
+
+
+def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    pulse = command.s2_transition_pulse
+    env.extras["log"]["Data/milestone_s2"] = pulse.float().mean().item()
+    return pulse.float() / env.step_dt
+
+
+def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    pulse = env.termination_manager.get_term("stand")
+    env.extras["log"]["Data/milestone_task_success"] = pulse.float().mean().item()
+    return pulse.float() / env.step_dt
 
 
 
