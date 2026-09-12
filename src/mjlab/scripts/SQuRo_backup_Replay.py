@@ -110,12 +110,12 @@ class StateMachinePolicy:
     # S1: 后段已翻正、前段未翻正, 且两段躯干都平躺贴地
     def _is_S1(self) -> bool:
         command = self.env.unwrapped.command_manager.get_term("backup_cmd")
-        return bool(command._check_S1()[0])
+        return bool(command._check_S1()[0]) # type: ignore
 
     # S2: 两段躯干都已翻正并重新贴地
     def _is_S2(self) -> bool:
         command = self.env.unwrapped.command_manager.get_term("backup_cmd")
-        return bool(command._check_S2()[0])
+        return bool(command._check_S2()[0]) # type: ignore
 
     def _log(self, msg: str) -> None:
         if self.log_events:
