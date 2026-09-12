@@ -21,11 +21,6 @@ HL_HOLD = (-1.50, -0.25)
 LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
 
-# 状态检测阈值
-_GROUND_TH = 0.03   # 贴地高度阈值
-_GROUND_TH_S2 = 0.04  # S2(趴地) 高度阈值: 段3 末 H 后肢略翘(≈0.034), 放宽到 0.04
-
-
 # 完整名义参考 (MJLAB 顺序), 0-0.65 段1, 0.65-0.8 段2, 0.8-0.95 段3, 0.95-1.45 time5, 之后站立
 def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
     time1 = 1.0
@@ -97,10 +92,7 @@ class StateMachinePolicy:
         self._spn_ref: list[list[float]] = [] # 四个脊柱期望角 [F_sp1, F_body, H_sp1, H_body]
         self._spn_act: list[list[float]] = [] # 四个脊柱实际关节角
 
-    # 身体段"正置"判定 — 用腹/背标记 site 的世界坐标, 与 mdp/command.py 完全一致
-    # 踩坑: data.body_link_quat_w 名为 world, 但实测 reset 后 root_link_quat_w 为单位四元数,
-    #   其参考系至今未定论 (见 docs/SQuRo_Backup_技术细节.md §3); 旧写法 sign*2(yz+wx)
-    #   在翻正过程中会失效。改用 site 世界坐标比较可自动消除 F/H 局部坐标相反的差异。
+    # 诊断输出使用背腹 site 的世界高度差；阶段门控直接复用训练环境判据。
     def _uprightness(self, idx: int) -> float:
         # 返回背腹轴的世界 Z 分量 (已统一符号): >0 = 正置(腹面朝下), <0 = 倒置(腹面朝上)
         pairs = _MODEL_INDICES.segment_belly_back_ids
@@ -117,13 +109,13 @@ class StateMachinePolicy:
 
     # S1: 后段已翻正、前段未翻正, 且两段躯干都平躺贴地
     def _is_S1(self) -> bool:
-        fu, hu = self._state()
-        return fu < 0.0 and hu > 0.0 and self._fz(self.fb) < _GROUND_TH and self._fz(self.hb) < _GROUND_TH
+        command = self.env.unwrapped.command_manager.get_term("backup_cmd")
+        return bool(command._check_S1()[0])
 
     # S2: 两段躯干都已翻正并重新贴地
     def _is_S2(self) -> bool:
-        fu, hu = self._state()
-        return fu > 0.0 and hu > 0.0 and self._fz(self.fb) < _GROUND_TH_S2 and self._fz(self.hb) < _GROUND_TH_S2
+        command = self.env.unwrapped.command_manager.get_term("backup_cmd")
+        return bool(command._check_S2()[0])
 
     def _log(self, msg: str) -> None:
         if self.log_events:
