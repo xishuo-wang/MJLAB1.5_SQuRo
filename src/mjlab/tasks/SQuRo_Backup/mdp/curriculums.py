@@ -35,8 +35,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_stand_still":       (0.0,),
     "weight_fallen":            (0.0,),
     
-    "weight_smooth_L1_leg":     (0.1,),
-    "weight_smooth_L1_spn":     (0.1,),
+    "weight_smooth_L1_leg":     (0.0,),
+    "weight_smooth_L1_spn":     (0.0,),
     "weight_smooth_L2_leg":     (0.1,),
     "weight_smooth_L2_spn":     (0.1,),
     "weight_energy":            (0.1,),
