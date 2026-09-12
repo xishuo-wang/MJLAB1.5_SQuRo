@@ -72,7 +72,7 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
 
 
 class StateMachinePolicy:
-    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, buffer: float = 0.3, action_scale: float = 0.3, log_events: bool = True) -> None:
+    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, buffer: float = 0.3, action_scale: float | None = None, log_events: bool = True) -> None:
         self.env = env
         self.asset = env.unwrapped.scene.entities["robot"]
         resolve_model_indices(self.asset)
@@ -80,7 +80,9 @@ class StateMachinePolicy:
         self.lam = time_scale
         self.max_retry = max_retry
         self.buffer = buffer       # 缓冲时间 (s): 超过预期时长后, 缓冲期内继续观察, 未达标才重试
-        self.action_scale = action_scale
+        # 动作反算比例默认跟随环境配置, 保证手调动作与 RL 策略同口径; 显式传值可复现旧脚本
+        env_scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)  # type: ignore[union-attr]
+        self.action_scale = env_scale if action_scale is None else float(action_scale)
         self.log_events = log_events
         self.fb = _MODEL_INDICES.f_body_id
         self.hb = _MODEL_INDICES.h_body_id

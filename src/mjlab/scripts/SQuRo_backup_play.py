@@ -13,6 +13,7 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+from mjlab.tasks.SQuRo_Backup.mdp.timing import TIME_COMPARISON_SCALE
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 
 
@@ -34,7 +35,7 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Backup 任务相关配置
-    fixed_time_scale: float | None = 2
+    fixed_time_scale: float | None = TIME_COMPARISON_SCALE
 
 
 # 从 checkpoint 文件名提取训练轮次

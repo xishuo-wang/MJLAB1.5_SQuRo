@@ -12,16 +12,16 @@ except Exception:
 
 # ==================================================================================================
 # 文件路径配置
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Backup\replay_videos\spine_ts1.csv"
+CSV_PATH = r"D:\Code\SQuRo-MuJoCo\Loco_Hole\Data\Hole_1and2.csv"
 
 # 控制时间配置（与仿真一致）
-TIMESTEP = 0.002          # 原始仿真步长 (s)
-DECIMATION = 5            # 策略控制周期倍数
+TIMESTEP = 0.001          # 原始仿真步长 (s)
+DECIMATION = 1            # 策略控制周期倍数
 DT = TIMESTEP * DECIMATION  # 实际数据采样间隔 (s)
 
 # 分析时间配置
-START_TIME = 0.0          # 分析区间起点 (s)
-END_TIME = 1.5            # 分析区间终点 (s)
+START_TIME = 11.0          # 分析区间起点 (s)
+END_TIME = 30            # 分析区间终点 (s)
 
 # 脊柱关节通道配置: (关节名, CSV列名, θ_max, 基元角色)
 JOINT_CHANNELS = [
@@ -65,7 +65,8 @@ def compute_spine_primitives(df: pd.DataFrame) -> tuple[dict, float, int]:
         A = S / (thmax * T)                            # 激活度
         total_s = float(np.sum(s))
         if total_s > 0:
-            tau = (float(np.sum(t_sel * s)) / total_s) / T  # 归一化时序中心 [0,1]
+            t_rel = t_sel - t_sel[0]
+            tau = (np.sum(t_rel * s) / np.sum(s)) / T
         else:
             tau = float("nan")
 
@@ -104,7 +105,7 @@ def print_results(results: dict, T: float, n_points: int) -> None:
     for title, key in metrics:
         # 收集该指标的所有值
         values = [results[joint_name][key] for joint_name, _, _, _ in JOINT_CHANNELS]
-        
+
         # 打印简洁数值列表（标题重复）
         value_strs = [f"{v:.4f}" for v in values]
         print(f"\n{title}")
