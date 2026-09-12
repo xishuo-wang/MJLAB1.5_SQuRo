@@ -3,18 +3,27 @@ import torch
 import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING
+from .timing import (
+    BODY_TRAJ_BUILD_END,
+    BODY_TRAJ_P1_END,
+    P1_BUILD_DURATION,
+    P1_END,
+    P2_END,
+    REFERENCE_TOTAL_TIME,
+    STAND_TRANSITION_END,
+)
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
-REF_TOTAL_TIME = 2.5        # 名义参考总时长 (s, λ=1 基准: 动作 0.95s + 过渡 0.5s + 保持 1.05s)
+REF_TOTAL_TIME = REFERENCE_TOTAL_TIME  # 动作 1.45s + 过渡 0.5s + 保持 1.05s
 _REF_DT = 0.005             # 参考表分辨率 (s)
-_ACTION_END = 0.95          # 三段动作结束的名义时间 (s)
-_SEG1_END = 0.65            # 段1 结束
-_SEG2_END = 0.80            # 段2 结束
-_TRANS_END = 1.45           # time5 平滑过渡结束 (0.95 + 0.5)
+_ACTION_END = P2_END        # 三段动作结束
+_SEG1_END = P1_BUILD_DURATION
+_SEG2_END = P1_END
+_TRANS_END = STAND_TRANSITION_END
 
 # 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
 # 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
@@ -25,10 +34,9 @@ _body_traj_cache: dict = {}
 _LEG_INIT = np.array([0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3], dtype=np.float64)
 
 
-# 腿支撑期望角 — 直接使用手调 slow1/PD 实际值, 尽量减少与参考脚本的不一致
-# (IK 精确值 -0.2833/0.5622/-1.4041/-0.2523 vs PD 实际 -0.271/0.550/-1.388/-0.250)
+# 腿支撑期望角 — 与手调脚本 (SQuRo_backup_Replay.FL_HOLD / HL_HOLD) 完全一致
 _FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
-_HL_HOLD = (-1.40, -0.25)  # HL/HR hip, knee
+_HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
 
 
 # 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
@@ -72,7 +80,7 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
             for c in range(4, 8):
                 leg[c] = _HL_HOLD[c % 2] + u * (_LEG_INIT[c] - _HL_HOLD[c % 2])
             f_sp1 = 0.6 * (1.0 - u)
-        # tn >= 1.45: 保持站立 (默认腿站立角, 脊柱 0)
+        # 站立过渡结束后保持站立 (默认腿站立角, 脊柱 0)
 
         for c in range(8):
             ref[i, leg_col[c]] = leg[c]
@@ -118,13 +126,22 @@ def _get_body_traj(device: str) -> dict:
     return cache
 
 
-# 获取身体参考轨迹 (时变期望高度 + 走廊中心): 返回 (yF, zF, yH, zH) [N]
-# 时间缩放与关节参考一致 (t_nom = t_episode / λ), 超出表范围取末值 (站起后理想值)
+# 将新动作时间映射回旧身体轨迹的采集时间，只拉伸 P1 回收段。
+# 保留原始轨迹文件与空间数值；这是参考重定时，不是重新仿真得到的身体轨迹。
+def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
+    recover_fraction = (t_nom - _SEG1_END) / (_SEG2_END - _SEG1_END)
+    recover_t = BODY_TRAJ_BUILD_END + recover_fraction * (BODY_TRAJ_P1_END - BODY_TRAJ_BUILD_END)
+    return torch.where(
+        t_nom < _SEG1_END,
+        t_nom * (BODY_TRAJ_BUILD_END / _SEG1_END),
+        torch.where(t_nom < _SEG2_END, recover_t, BODY_TRAJ_P1_END + t_nom - _SEG2_END),
+    )
+
+
+# 获取身体参考轨迹 (时变期望高度 + 走廊中心)，按阶段时间重定时并冻结缓冲期参考。
 def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     cache = _get_body_traj(env.device)
-    cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
-    lam = cmd[:, 5].clamp(min=0.1)  # [N]
-    t_nom = _stage_t_nom(env)
+    t_nom = _body_traj_source_time(_stage_t_nom(env))
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = ((t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)).clamp(0.0, 1.0)
@@ -135,23 +152,27 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     return out[0], out[1], out[2], out[3]
 
 
-# 获取当前步的参考关节位置和速度 — 按 episode 时间 / λ 查参考表
-# ???? -> ??????: P1 t_phase/lam, P2 0.8+t_phase/lam, P3 0.95+t_phase/lam
+# 阶段时间映射到统一名义时间；P2/P3 起点与动作表共享时间常量。
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
     phase = cmd_term.phase  # type: ignore[attr-defined]
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
-    z = torch.zeros_like(lam)
-    phase_start = torch.where(phase == 0, z,
-                   torch.where(phase == 1, torch.full_like(lam, 0.8), torch.full_like(lam, 0.95)))
-    return phase_start + t_phase / lam
+    t_local_nom = t_phase / lam
+
+    # 与手调状态机一致：等待状态门控判定时固定在当前阶段端点，
+    # 不让缓冲期参考继续泄漏到下一段动作。
+    p1_t = t_local_nom.clamp(max=_SEG2_END)
+    p2_t = _SEG2_END + t_local_nom.clamp(max=_ACTION_END - _SEG2_END)
+    p3_t = _ACTION_END + t_local_nom
+    return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 
 
 def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
     cache = _get_ref_table(env.device)
     # 命令 time_scale λ (放慢倍数): λ=1.0 原始速度, λ=1.5 放慢 1.5 倍
-    cmd = env.command_manager._terms["backup_cmd"].command  # type: ignore[union-attr]
+    cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
+    cmd = cmd_term.command
     lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale
     t_nom = _stage_t_nom(env)  # [N]
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
@@ -160,4 +181,10 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     pos = cache["pos"][idx_p] + frac.unsqueeze(1) * (cache["pos"][idx] - cache["pos"][idx_p])
     # 参考速度: dref/dt = dref/dt_nom * (1/λ)
     vel = cache["vel"][idx_p] / lam.unsqueeze(1)
+    phase = cmd_term.phase  # type: ignore[attr-defined]
+    endpoint_eps = 1e-6
+    holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | (
+        (phase == 1) & (t_nom >= _ACTION_END - endpoint_eps)
+    )
+    vel = torch.where(holding.unsqueeze(1), torch.zeros_like(vel), vel)
     return pos, vel

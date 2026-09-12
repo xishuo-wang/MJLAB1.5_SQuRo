@@ -6,6 +6,7 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
+from .timing import P1_END, P2_DURATION
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -22,12 +23,11 @@ if TYPE_CHECKING:
 # =========================================================================================
 
 # 阶段状态检测阈值
-_UP_TH = 0.5          # 背腹轴朝上/朝下判定
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)
-_P1_EXPECT = 0.8
-_P2_EXPECT = 0.15
+_P1_EXPECT = P1_END
+_P2_EXPECT = P2_DURATION
 _BUFFER = 0.3         # 缓冲时间 (s): 超过预期时长后缓冲期内持续检测, 未达标才重试
 _MAX_RETRY = 5
 
@@ -54,7 +54,10 @@ class BackupCommand(CommandTerm):
         # 状态机指标缓存 (供 _update_metrics 记录上一步检测结果)
         self._last_s1_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_s2_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_advance1 = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_advance2 = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_retry_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._update_dt = 0.0
         self._asset = self._env.scene.entities[cfg.asset_name]
         resolve_model_indices(self._asset)
 
@@ -71,6 +74,16 @@ class BackupCommand(CommandTerm):
     @property
     def stage_t(self) -> torch.Tensor:
         return self.t_phase
+
+    @property
+    def s1_transition_pulse(self) -> torch.Tensor:
+        """仅在 P1→P2 后的一个奖励步内为 True。"""
+        return self._last_advance1
+
+    @property
+    def s2_transition_pulse(self) -> torch.Tensor:
+        """仅在 P2→P3 后的一个奖励步内为 True。"""
+        return self._last_advance2
 
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -92,6 +105,11 @@ class BackupCommand(CommandTerm):
         self.t_phase[env_ids] = 0.0
         self.retry[env_ids] = 0
         self.phase_command[env_ids] = 0.0
+        self._last_s1_ok[env_ids] = False
+        self._last_s2_ok[env_ids] = False
+        self._last_advance1[env_ids] = False
+        self._last_advance2[env_ids] = False
+        self._last_retry_mask[env_ids] = False
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
@@ -99,31 +117,52 @@ class BackupCommand(CommandTerm):
             self._resample_command(env_ids)
         return extras
 
-    # 身体背腹轴 (body+Y) 世界 Z 分量: F 直接取, H 取负 (局部坐标相反, 踩坑)
-    def _body_up(self, body_id: int, sign: float) -> torch.Tensor:
-        q = self._asset.data.body_link_quat_w[:, body_id]
-        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-        return sign * 2.0 * (y * z + w * x)
+    def compute(self, dt: float) -> None:
+        # CommandTerm._update_command() 不接收 dt，因此在调用父类前暂存本次真实步长。
+        self._update_dt = dt
+        super().compute(dt)
+
+    # 身体段"正置"判定 — 用腹/背标记 site 的世界坐标, 不依赖四元数约定
+    # 踩坑: data.body_link_quat_w 名为 world, 但实测 reset 后 root_link_quat_w 为单位四元数
+    #   (base_Link 的 XML 安装旋转约为绕 XY 对角线 180°), 说明该量并非世界系表达;
+    #   其参考系至今未定论 (见 docs/SQuRo_Backup_技术细节.md §3)。
+    #   旧写法 sign*2(yz+wx) 在翻正过程中会失效, 故改用标记 site:
+    #     belly_z < back_z  ⇔  腹面朝下  ⇔  该段已翻正
+    #   F/H 两段的局部坐标相反 (F 腹面在局部 +Y, H 腹面在局部 -Y), 但用世界坐标比较可自动消除该差异。
+    def _segment_upright(self, idx: int) -> torch.Tensor:
+        pairs = _MODEL_INDICES.segment_belly_back_ids
+        assert pairs is not None, "segment_belly_back_ids 未解析, 请先调用 resolve_model_indices"
+        belly_id, back_id = pairs[idx]
+        sp = self._asset.data.site_pos_w
+        return sp[:, belly_id, 2] < sp[:, back_id, 2]
+
+    def _body_height(self, body_id: int) -> torch.Tensor:
+        return self._asset.data.body_link_pos_w[:, body_id, 2]
 
     def _check_S1(self) -> torch.Tensor:
-        fu = self._body_up(_MODEL_INDICES.f_body_id, +1.0)
-        hu = self._body_up(_MODEL_INDICES.h_body_id, -1.0)
-        fz = self._asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, 2]
-        hz = self._asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, 2]
-        return (fu > _UP_TH) & (hu < -_UP_TH) & (fz < _GROUND_TH) & (hz < _GROUND_TH)
+        # S1: 后段已翻正、前段未翻正, 且两段躯干都平躺贴地
+        f_up = self._segment_upright(0)
+        h_up = self._segment_upright(1)
+        fz = self._body_height(_MODEL_INDICES.f_body_id)
+        hz = self._body_height(_MODEL_INDICES.h_body_id)
+        return (~f_up) & h_up & (fz < _GROUND_TH) & (hz < _GROUND_TH)
 
     def _check_S2(self) -> torch.Tensor:
-        fu = self._body_up(_MODEL_INDICES.f_body_id, +1.0)
-        hu = self._body_up(_MODEL_INDICES.h_body_id, -1.0)
-        fz = self._asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, 2]
-        hz = self._asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, 2]
-        return (fu < -_UP_TH) & (hu < -_UP_TH) & (fz < _GROUND_TH_S2) & (hz < _GROUND_TH_S2)
+        # S2: 两段躯干都已翻正并重新贴地 — 完整翻转完成
+        f_up = self._segment_upright(0)
+        h_up = self._segment_upright(1)
+        fz = self._body_height(_MODEL_INDICES.f_body_id)
+        hz = self._body_height(_MODEL_INDICES.h_body_id)
+        return f_up & h_up & (fz < _GROUND_TH_S2) & (hz < _GROUND_TH_S2)
 
     def _update_command(self) -> None:
-        dt = self._env.step_dt
+        dt = self._update_dt
         lam = self.time_scale_command.clamp(min=0.1)
         # 所有阶段推进 t_phase (P1/P2 用于段内参考, P3 用于 time5/站立)
-        self.t_phase = self.t_phase + dt
+        # reset() 末尾也会调用 command_manager.compute(dt=0)。重置环境的参考时钟应停在 0，
+        # 只有真实环境步开始后才推进，避免初始参考提前一个控制步。
+        running = self._env.episode_length_buf > 0
+        self.t_phase = self.t_phase + running.to(self.t_phase.dtype) * dt
         # P1: 检测 S1
         p1 = self.phase == 0
         expected1 = _P1_EXPECT * lam
@@ -148,6 +187,8 @@ class BackupCommand(CommandTerm):
         # 保存本步检测结果供 _update_metrics 记录 (metrics 在 command 前被调用, 记录上一步状态)
         self._last_s1_ok = s1_ok
         self._last_s2_ok = s2_ok
+        self._last_advance1 = advance1
+        self._last_advance2 = advance2
         self._last_retry_mask = retry_mask
 
     def _update_metrics(self) -> None:
@@ -159,6 +200,8 @@ class BackupCommand(CommandTerm):
         log["Data/backup_retry_rate"] = self._last_retry_mask.float().mean().item()
         log["Data/backup_s1_ok"] = self._last_s1_ok.float().mean().item()
         log["Data/backup_s2_ok"] = self._last_s2_ok.float().mean().item()
+        log["Data/backup_s1_transition"] = self._last_advance1.float().mean().item()
+        log["Data/backup_s2_transition"] = self._last_advance2.float().mean().item()
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         pass

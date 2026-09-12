@@ -108,6 +108,9 @@
                             <site name="F_body_7_site" pos="0.00 -0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
                             <site name="F_body_8_site" pos="0.00 -0.022 -0.028" size="0.0015" rgba="1 0 0 0"/>
                             <site name="F_body_9_site" pos="0.00 -0.022 -0.010" size="0.0015" rgba="1 0 0 0"/>
+                            <!-- 躯干朝向标记: 腹面/背面各一个, 连线即背腹轴 (用于 projected_gravity 判据) -->
+                            <site name="F_body_belly_site" pos="0.00 0.021 -0.023" size="0.0015" rgba="0 1 1 1"/>
+                            <site name="F_body_back_site"  pos="0.00 -0.023 -0.023" size="0.0015" rgba="1 1 0 1"/>
 
                             <body name="Neck_yaw_Link" pos="0.0014 -0.011 -0.04688" quat="0 0 0.707107 -0.707107">
                                 <joint name="Neck_yaw_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" limited="true" damping="0.006" armature="0.00005"/>
@@ -222,6 +225,9 @@
                             <site name="H_body_7_site" pos="0.00 0.022 -0.01" size="0.0015" rgba="1 0 0 0"/>
                             <site name="H_body_8_site" pos="0.00 0.022 0.026" size="0.0015" rgba="1 0 0 0"/>
                             <site name="H_body_9_site" pos="0.00 0.022 0.008" size="0.0015" rgba="1 0 0 0"/>
+                            <!-- 躯干朝向标记: 腹面/背面各一个, 连线即背腹轴 (与 F 段符号相反) -->
+                            <site name="H_body_belly_site" pos="0.00 -0.021 0.008" size="0.0015" rgba="0 1 1 1"/>
+                            <site name="H_body_back_site"  pos="0.00 0.023 0.008" size="1.5e-3" rgba="1 1 0 1"/>
 
                             <body name="HL_hip_Link" pos="-0.02765 0.00403 0.01845" quat="0.707107 0 0.707107 0">
                                 <joint name="HL_hip_joint" type="hinge" pos="0 0 0" axis="0 0 1" range="-1.5 0.8" limited="true" damping="0.006" armature="0.00005"/>
