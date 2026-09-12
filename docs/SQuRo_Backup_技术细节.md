@@ -100,6 +100,21 @@ base_Link 位于脊柱正中, 是万向节中心, 不属于前三段中的任何
 
 → 绕过方案见 §4。所有姿态判据改用标记 site 的世界坐标。
 
+### 3.3 奖励量纲陷阱：`Episode_Reward/*` 是"每秒速率"，不是每步值
+
+`managers/reward_manager.py` 中：
+
+```python
+value = term_cfg.func(...) * term_cfg.weight * dt          # 逐步累计时已乘 dt
+extras["Episode_Reward/" + key] = episodic_sum_avg / max_episode_length_s   # 除以回合秒数
+```
+
+因此 **`Episode_Reward/x` = 该项的"每秒平均奖励"**，要还原单回合总量须再乘 `max_episode_length_s`（本任务 10 s）。
+
+**踩坑**：训练日志里的 `Mean reward` 是 PPO 侧的统计量，与环境单回合回报量纲不同；
+拿它直接和"自己逐步累加的回报"比较会得到约 10 倍的假差异。
+比较不同策略时必须统一口径（建议都统计 `reset` 时刻的 `Episode_Reward/*`，或用同样的累加方式）。
+
 ---
 
 ## 4. 地面真值：标记 site（已验收）
