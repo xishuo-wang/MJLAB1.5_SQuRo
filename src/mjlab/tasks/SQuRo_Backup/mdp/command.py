@@ -1,12 +1,13 @@
 from __future__ import annotations
 import torch
+from math import isfinite
 from typing import TYPE_CHECKING, Tuple
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import P1_END, P2_DURATION
+from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -28,7 +29,6 @@ _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)
 _P1_EXPECT = P1_END
 _P2_EXPECT = P2_DURATION
-_BUFFER = 0.3         # 缓冲时间 (s): 超过预期时长后缓冲期内持续检测, 未达标才重试
 _MAX_RETRY = 5
 
 
@@ -36,6 +36,10 @@ class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
 
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
+        for name in ("p1_buffer_s", "p2_buffer_s"):
+            value = getattr(cfg, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"{name} 必须为有限的非负实际秒数")
         super().__init__(cfg, env)
         self.fixed_time_scale = cfg.fixed_time_scale
         self.command_tensor = torch.zeros(self.num_envs, 7, device=self.device)
@@ -168,13 +172,14 @@ class BackupCommand(CommandTerm):
         expected1 = _P1_EXPECT * lam
         s1_ok = self._check_S1()
         advance1 = p1 & (self.t_phase >= expected1) & s1_ok
-        retry1 = p1 & (self.t_phase >= expected1 + _BUFFER) & ~s1_ok
+        # 等待从参考 T2 结束计时；reference.py 保持末端位置及零速度，不延长回收斜坡。
+        retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_ok
         # P2: 检测 S2
         p2 = self.phase == 1
         expected2 = _P2_EXPECT * lam
         s2_ok = self._check_S2()
         advance2 = p2 & (self.t_phase >= expected2) & s2_ok
-        retry2 = p2 & (self.t_phase >= expected2 + _BUFFER) & ~s2_ok
+        retry2 = p2 & (self.t_phase >= expected2 + self.cfg.p2_buffer_s) & ~s2_ok
         # 达标推进
         advance = advance1 | advance2
         self.phase = torch.where(advance, self.phase + 1, self.phase)
@@ -214,6 +219,9 @@ class BackupCommandCfg(CommandTermCfg):
     debug_vis: bool = False
     fixed_time_scale: float | None = None
     """固定参考时间缩放 (回放/demo 用, 如 1.4); None 时按课程采样"""
+    # P1=T1+T2、P2=T3；末端等待均为实际秒，不随 λ 缩放。
+    p1_buffer_s: float = P1_BUFFER_DURATION
+    p2_buffer_s: float = P2_BUFFER_DURATION
 
     @dataclass
     class VizCfg:

@@ -1,4 +1,4 @@
-# 翻正时间对照：仅延长 P1 回收段，其他动作时长保持不变（名义秒）。
+# 翻正参考轨迹各段时长（名义秒，执行时乘以 λ）。
 # T2 回收段取 0.15s —— 手调实测的最小可行值；放大到 0.65s 等效于对该段单独做时间缩放。
 P1_BUILD_DURATION = 0.65
 P1_RECOVER_DURATION = 0.15
@@ -10,6 +10,10 @@ P1_END = P1_BUILD_DURATION + P1_RECOVER_DURATION
 P2_END = P1_END + P2_DURATION
 STAND_TRANSITION_END = P2_END + STAND_TRANSITION_DURATION
 REFERENCE_TOTAL_TIME = STAND_TRANSITION_END + STAND_HOLD_DURATION
+
+# 阶段末端额外等待（实际秒，不乘 λ）；S1/S2 达成即推进，超时才重试。
+P1_BUFFER_DURATION = 1.0
+P2_BUFFER_DURATION = 0.3
 
 # 本轮训练和默认策略回放使用相同速度；原速度课程保留但不启用。
 TIME_COMPARISON_SCALE = 3.0

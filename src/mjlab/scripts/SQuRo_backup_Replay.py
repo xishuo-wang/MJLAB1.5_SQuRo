@@ -66,14 +66,17 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
 
 
 class StateMachinePolicy:
-    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, buffer: float = 0.3, action_scale: float | None = None, log_events: bool = True) -> None:
+    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, buffer: float | None = None, action_scale: float | None = None, log_events: bool = True) -> None:
         self.env = env
         self.asset = env.unwrapped.scene.entities["robot"]
         resolve_model_indices(self.asset)
         self.default = self.asset.data.default_joint_pos[:, _MODEL_INDICES.joint_ids]
         self.lam = time_scale
         self.max_retry = max_retry
-        self.buffer = buffer       # 缓冲时间 (s): 超过预期时长后, 缓冲期内继续观察, 未达标才重试
+        # 等待时间默认跟随训练配置，均为实际秒；旧 buffer 参数仍可共同覆盖两阶段。
+        command_cfg = env.unwrapped.cfg.commands["backup_cmd"]
+        self.p1_buffer_s = float(command_cfg.p1_buffer_s if buffer is None else buffer)
+        self.p2_buffer_s = float(command_cfg.p2_buffer_s if buffer is None else buffer)
         # 动作反算比例默认跟随环境配置, 保证手调动作与 RL 策略同口径; 显式传值可复现旧脚本
         env_scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)  # type: ignore[union-attr]
         self.action_scale = env_scale if action_scale is None else float(action_scale)
@@ -138,7 +141,7 @@ class StateMachinePolicy:
                 t_used = self.t_phase - dt
                 self.phase = "P2"; self.t_phase = 0.0
                 self._log(f"S1 达成 (用时 {t_used:.2f}s) -> 进入 P2")
-            elif self.t_phase >= expected + self.buffer:
+            elif self.t_phase >= expected + self.p1_buffer_s:
                 self.retry["P1"] += 1; self.t_phase = 0.0
                 self._log(f"S1 未达 (缓冲后, 重试 {self.retry['P1']}/{self.max_retry})")
                 if self.retry["P1"] >= self.max_retry:
@@ -156,7 +159,7 @@ class StateMachinePolicy:
                 t_used = self.t_phase - dt
                 self.phase = "P3"; self.t_phase = 0.0
                 self._log(f"S2 达成 (用时 {t_used:.2f}s) -> 进入 P3")
-            elif self.t_phase >= expected + self.buffer:
+            elif self.t_phase >= expected + self.p2_buffer_s:
                 self.retry["P2"] += 1; self.t_phase = 0.0
                 fu, hu = self._state()
                 fz, hz = self._fz(self.fb), self._fz(self.hb)
@@ -258,8 +261,11 @@ class VisConfig:
     """slow1 时间缩放 (λ)。"""
     max_retry: int = 5
     """每阶段最大重试次数。"""
-    buffer: float = 0.3
-    """缓冲时间 (s): 超过预期时长后, 缓冲期内持续检测, 未达标才重试。"""
+    # 旧参数：共同覆盖 P1/P2 等待时间；None 时使用环境配置，单位为实际秒。
+    buffer: float | None = None
+    # 分阶段覆盖优先于 buffer；None 时沿用环境配置或共同覆盖值。
+    p1_buffer_s: float | None = None
+    p2_buffer_s: float | None = None
     visualize: Literal["none", "viewer", "video"] = "viewer"
     num_envs: int = 1
     device: str | None = None
@@ -269,15 +275,29 @@ class VisConfig:
 
 
 
+# 命令行等待时间同时写入内置 RL 状态机，确保两套状态机使用相同配置。
+def _configure_command(command_cfg: Any, args: VisConfig) -> None:
+    command_cfg.fixed_time_scale = args.time_scale
+    if args.buffer is not None:
+        command_cfg.p1_buffer_s = args.buffer
+        command_cfg.p2_buffer_s = args.buffer
+    if args.p1_buffer_s is not None:
+        command_cfg.p1_buffer_s = args.p1_buffer_s
+    if args.p2_buffer_s is not None:
+        command_cfg.p2_buffer_s = args.p2_buffer_s
+
+
 def main() -> None:
     args = tyro.cli(VisConfig)
     device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     env_cfg = load_env_cfg("Mjlab-SQuRo-Backup")
     env_cfg.scene.num_envs = args.num_envs
-    env_cfg.commands["backup_cmd"].fixed_time_scale = args.time_scale  # type: ignore[attr-defined]
+    command_cfg = env_cfg.commands["backup_cmd"]
+    _configure_command(command_cfg, args)
 
     render_mode = "rgb_array" if args.visualize == "video" else None
     print(f"[INFO] 状态机可视化: λ={args.time_scale}, max_retry={args.max_retry}, "
+          f"P1 等待={command_cfg.p1_buffer_s}s, P2 等待={command_cfg.p2_buffer_s}s, "  # type: ignore[attr-defined]
           f"visualize={args.visualize}")
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
@@ -294,7 +314,7 @@ def main() -> None:
         )
 
     env.reset()
-    policy = StateMachinePolicy(env, args.time_scale, args.max_retry, args.buffer)
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
 
     if args.visualize in ("none", "video"):
         n = int(args.duration / env.step_dt)
@@ -312,7 +332,7 @@ def main() -> None:
         return
 
     env.reset()
-    policy = StateMachinePolicy(env, args.time_scale, args.max_retry, args.buffer)
+    policy = StateMachinePolicy(env, args.time_scale, args.max_retry)
     viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore[arg-type]
     viewer.run(num_steps=int(args.duration / env.step_dt))
     out_dir = Path(args.video_dir)

@@ -5,9 +5,12 @@ import pytest
 import torch
 
 from mjlab.tasks.SQuRo_Backup.mdp import reference
-from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommand
+from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommand, BackupCommandCfg
 from mjlab.tasks.SQuRo_Backup.mdp.timing import (
+    P1_BUFFER_DURATION,
     P1_END,
+    P2_BUFFER_DURATION,
+    P2_DURATION,
     P2_END,
     STAND_TRANSITION_END,
     TIME_COMPARISON_SCALE,
@@ -99,13 +102,18 @@ def test_body_reference_retiming():
     (0, 2.38, True, 0, 0),
     (0, 2.39, True, 1, 0),
     (0, 2.39, False, 0, 0),
-    (0, 2.69, False, 0, 1),
+    (0, 2.69, False, 0, 0),
+    (0, 2.69, True, 1, 0),
+    (0, 3.38, False, 0, 0),
+    (0, 3.40, False, 0, 1),
+    (0, 3.40, True, 1, 0),
     (1, 0.43, True, 1, 0),
     (1, 0.45, True, 2, 0),
     (1, 0.75, False, 1, 1),
 ])
 def test_stage_time_gates(phase, start, ok, expected_phase, expected_retry):
     term = SimpleNamespace(
+        cfg=BackupCommandCfg(),
         _update_dt=0.01,
         time_scale_command=torch.tensor([TIME_COMPARISON_SCALE]),
         t_phase=torch.tensor([start]),
@@ -125,12 +133,90 @@ def test_stage_time_gates(phase, start, ok, expected_phase, expected_retry):
         assert term.t_phase.item() == pytest.approx(start + 0.01)
 
 
+# 等待按实际秒计时，阶段截止时成功优先；P1/P2 可独立覆盖等待时间。
+@pytest.mark.parametrize("lam", [1.0, 3.0, 6.0])
+@pytest.mark.parametrize("phase,nominal", [(0, P1_END), (1, P2_DURATION)])
+@pytest.mark.parametrize("buffers", [(1.0, 0.3), (0.3, 0.8), (0.0, 0.0)])
+def test_independent_buffer_deadlines(lam, phase, nominal, buffers):
+    cfg = BackupCommandCfg(p1_buffer_s=buffers[0], p2_buffer_s=buffers[1])
+    deadline = nominal * lam + buffers[phase]
+    for delta, ok in [(-0.001, False), (0.0, False), (0.0, True)]:
+        term = SimpleNamespace(
+            cfg=cfg,
+            _update_dt=0.0,
+            time_scale_command=torch.tensor([lam], dtype=torch.float64),
+            t_phase=torch.tensor([deadline + delta], dtype=torch.float64),
+            phase=torch.tensor([phase]),
+            retry=torch.zeros(1, dtype=torch.long),
+            phase_command=torch.zeros(1),
+            _env=SimpleNamespace(episode_length_buf=torch.ones(1, dtype=torch.long)),
+            _check_S1=lambda: torch.tensor([ok]),
+            _check_S2=lambda: torch.tensor([ok]),
+        )
+        BackupCommand._update_command(term)
+        assert term.phase.item() == phase + int(ok)
+        assert term.retry.item() == int(delta == 0.0 and not ok)
+        assert term._last_retry_mask.item() == (delta == 0.0 and not ok)
+        if delta == 0.0:
+            assert term.t_phase.item() == 0.0
+        else:
+            assert term.t_phase.item() == pytest.approx(deadline + delta)
+
+
+# 整个新增等待区间内保持所有参考位置和零速度；超时清时钟后才回到 T1 起点。
+def test_extended_p1_hold_and_retry_reference():
+    env = make_reference_env([0] * 5, [2.4, 2.7, 3.0, 3.39, 3.4])
+    pos, vel = reference.get_reference_joint_state(env)
+    torch.testing.assert_close(pos, pos[:1].expand_as(pos))
+    torch.testing.assert_close(vel, torch.zeros_like(vel), atol=0, rtol=0)
+    torch.testing.assert_close(pos[0, [0, 1, 8, 9]], torch.tensor([0.0, -1.57, 0.0, 1.57]))
+
+    # 用真实状态机触发失败重试；物理状态不变，仅阶段时钟归零。
+    actual_pos = torch.tensor([[0.0, -1.4, 0.0, 1.4]])
+    actual_vel = torch.ones_like(actual_pos)
+    term = SimpleNamespace(
+        cfg=BackupCommandCfg(),
+        _update_dt=0.01,
+        time_scale_command=torch.tensor([TIME_COMPARISON_SCALE]),
+        t_phase=torch.tensor([3.4]),
+        phase=torch.tensor([0]),
+        retry=torch.zeros(1, dtype=torch.long),
+        phase_command=torch.zeros(1),
+        _env=SimpleNamespace(episode_length_buf=torch.ones(1, dtype=torch.long)),
+        _asset=SimpleNamespace(data=SimpleNamespace(
+            joint_pos=actual_pos.clone(), joint_vel=actual_vel.clone(),
+        )),
+        _check_S1=lambda: torch.tensor([False]),
+        _check_S2=lambda: torch.tensor([False]),
+    )
+    BackupCommand._update_command(term)
+    assert term.phase.item() == 0 and term.retry.item() == 1
+    assert term.t_phase.item() == 0.0
+    torch.testing.assert_close(term._asset.data.joint_pos, actual_pos)
+    torch.testing.assert_close(term._asset.data.joint_vel, actual_vel)
+    reset_env = make_reference_env(term.phase.tolist(), term.t_phase.tolist())
+    reset_pos, _ = reference.get_reference_joint_state(reset_env)
+    torch.testing.assert_close(reset_pos[0, [0, 1, 8, 9]], torch.zeros(4))
+
+
+# 拒绝负值或非有限等待，避免无法推进或无限等待；校验不需要构建物理环境。
+@pytest.mark.parametrize("name", ["p1_buffer_s", "p2_buffer_s"])
+@pytest.mark.parametrize("value", [-0.1, float("inf"), float("nan")])
+def test_invalid_buffer_rejected(name, value):
+    cfg = BackupCommandCfg(**{name: value})
+    with pytest.raises(ValueError, match=name):
+        BackupCommand(cfg, None)
+
+
 # 训练和回放配置使用固定速度，单次完整动作及等待可容纳于原回合上限。
 @pytest.mark.parametrize("play", [False, True])
 def test_fixed_scale_and_episode_budget(play):
     cfg = SQuRo_Backup_Env_Cfg(play=play)
-    assert cfg.commands["backup_cmd"].fixed_time_scale == TIME_COMPARISON_SCALE
-    assert STAND_TRANSITION_END * TIME_COMPARISON_SCALE + 2 * 0.3 + 0.5 < cfg.episode_length_s
+    command_cfg = cfg.commands["backup_cmd"]
+    assert command_cfg.fixed_time_scale == TIME_COMPARISON_SCALE
+    assert command_cfg.p1_buffer_s == P1_BUFFER_DURATION == 1.0
+    assert command_cfg.p2_buffer_s == P2_BUFFER_DURATION == 0.3
+    assert STAND_TRANSITION_END * TIME_COMPARISON_SCALE + command_cfg.p1_buffer_s + command_cfg.p2_buffer_s + 0.5 < cfg.episode_length_s
 
 
 # 动作 scale 与手调脚本同口径，且能覆盖期望轨迹极值并留出 clip 冗余。
