@@ -62,15 +62,15 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
                 h_bd = 1.57 * u
             elif tn < _SEG2_END:
                 u = (tn - _SEG1_END) / (_SEG2_END - _SEG1_END)
-                f_sp1 = 0.6 - 0.6 * u
+                f_sp1 = 0.6 - 0.9 * u
                 f_bd = -1.57
-                h_sp1 = 0.6 - 0.6 * u
+                h_sp1 = 0.6 - 0.9 * u
                 h_bd = 1.57
             else:
                 u = (tn - _SEG2_END) / (_ACTION_END - _SEG2_END)
-                f_sp1 = 0.6 * u
+                f_sp1 = -0.3 + 0.3 * u
                 f_bd = -1.57 + 1.57 * u
-                h_sp1 = 0.0
+                h_sp1 = -0.3 + 0.3 * u
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
             # time5: 腿支撑位 -> 站立角, F_spine1 0.6 -> 0 (平滑过渡, 避免生硬切换)
