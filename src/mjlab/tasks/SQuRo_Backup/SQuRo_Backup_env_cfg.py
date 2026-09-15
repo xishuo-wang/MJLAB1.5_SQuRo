@@ -13,7 +13,6 @@ from mjlab.managers import (
 from mjlab.scene import SceneCfg
 from mjlab.viewer import ViewerConfig
 from mjlab.tasks.SQuRo_Backup import mdp
-from mjlab.tasks.SQuRo_Backup.mdp.timing import TIME_COMPARISON_SCALE
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
@@ -50,10 +49,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-    # 动作空间 — 14个执行器位置控制
-    # scale 与手调脚本 (SQuRo_backup_Replay.StateMachinePolicy.action_scale=0.3) 保持一致。
-    # 覆盖性核算见 scripts/Backup/check_action_scale_coverage.py:
-    #   最紧的是两个扭转关节 F_body/H_body, 期望极值 ±1.57 需 action 5.233, clip=6.0 余量 1.15x
+    # 动作空间
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -72,7 +68,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
-        # 新增限幅前目标指令约束；四个脊柱等权，不替换原有实际角度模仿。
         "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=2.0),
         "upright": RewardTermCfg(func=mdp.compute_upright_reward, weight=0.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
@@ -80,10 +75,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=2.0),
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=3.0),
         "milestone_success": RewardTermCfg(func=mdp.compute_task_success_milestone_reward, weight=10.0),
-        # "stand_still": RewardTermCfg(func=mdp.compute_stand_still_penalty, weight=0.0),
-        # "fallen": RewardTermCfg(func=mdp.compute_fallen_penalty, weight=1.0),
-        # "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=0.0),
-        # mimic/height 测试阶段: 平滑/能耗惩罚会抑制腿部大动作(站立角->支撑位), 权重置 0
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
@@ -100,7 +91,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "backup_cmd": mdp.BackupCommandCfg(
             asset_name="robot",
             debug_vis=play,
-            fixed_time_scale=TIME_COMPARISON_SCALE,
+            fixed_time_scale=mdp.TIME_COMPARISON_SCALE,
         )
     }
 
