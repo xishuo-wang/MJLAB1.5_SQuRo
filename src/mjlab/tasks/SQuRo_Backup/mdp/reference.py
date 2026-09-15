@@ -64,13 +64,13 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
                 u = (tn - _SEG1_END) / (_SEG2_END - _SEG1_END)
                 f_sp1 = 0.6 - 0.4 * u
                 f_bd = -1.57
-                h_sp1 = 0.6 - 0.6 * u
+                h_sp1 = 0.6 - 0.8 * u
                 h_bd = 1.57
             else:
                 u = (tn - _SEG2_END) / (_ACTION_END - _SEG2_END)
                 f_sp1 = 0.2 + 0.4 * u
                 f_bd = -1.57 + 1.57 * u
-                h_sp1 = 0.0
+                h_sp1 = -0.2 + 0.2 * u
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
             # T4: 腿支撑位 -> 站立角, 脊柱保持全零，避免前段侧摆在 T3 末再次跳变
