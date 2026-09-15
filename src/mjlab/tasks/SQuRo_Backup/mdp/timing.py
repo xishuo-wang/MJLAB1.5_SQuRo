@@ -15,6 +15,10 @@ REFERENCE_TOTAL_TIME = STAND_TRANSITION_END + STAND_HOLD_DURATION
 P1_BUFFER_DURATION = 1.0
 P2_BUFFER_DURATION = 0.3
 
+# 站起成功所需的连续达标时长（实际秒，不乘 λ）。
+# 训练侧 terminations.check_stand_success 与手调脚本 StateMachinePolicy 共用此值。
+STAND_CONFIRM_DURATION = 0.5
+
 # 本轮训练和默认策略回放使用相同速度；原速度课程保留但不启用。
 TIME_COMPARISON_SCALE = 3.0
 

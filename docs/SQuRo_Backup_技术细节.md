@@ -311,30 +311,65 @@ TIME_COMPARISON_SCALE     = 3.0
 
 ---
 
-## 7. 已知未解决问题
+## 7. 踩坑记录
 
-1. **`body_link_quat_w` 参考系未定论**（见 §3）。**当前所有姿态判据已完全绕开它**
-   （S1/S2 改用 §4 的标记 site，见 §5.3），因此该问题不再影响翻正任务的功能。
-   保留此条仅为提醒：**不要基于该量写新的物理判断代码**。若某处必须用四元数，
-   请先用 `fit_body_axes.py` 一类的 site 配准法交叉验证。
+### 7.1 参考动作在 `reference.py` 与手调脚本之间漂移
 
-2. **XML 加了 4 个 site**（nsite 23 → 27）。现有 `find_sites` 调用都按名字精确匹配，
-   已回归验证通过；但任何按 site 索引顺序硬编码的代码需要复核。
+**症状**：RL 长期 `backup_s1_ok = 0`，但手调脚本能正常达成 S1。
 
-3. **全量测试在本机受限环境下无法运行**：`mujoco_warp` 的 kernel cache 位于
-   `%LOCALAPPDATA%\NVIDIA\warp\Cache`，只读环境下会抛大量 `PermissionError`
-   （与代码无关）。验证 SQuRo 改动请只跑相关子集：
-   `tests/test_squro_backup_timing.py`、`tests/test_squro_backup_replay.py`、`tests/test_asset_zoo.py`。
+**根因**：参考动作有两份独立实现，`H_spine1` 的 T2/T3 系数不一致：
 
-4. **`events.py` 硬编码了 36 个 XML joint 下标**（`[6,8,12,14,24,...]`），
-   绕过了 `mdp/indices.py` 的统一管理，XML 一改就会静默错位。**建议改走 indices。**
+| 段 | `reference.py`（曾用） | `slow1_target`（曾用） |
+|---|---|---|
+| T2 | `h_sp1 = 0.6 - 0.8u` | `h_sp1 = 0.6 - 1.0u` |
+| T3 | `h_sp1 = -0.2 + 0.2u` | `h_sp1 = -0.4 + 0.4u` |
 
-5. **`curriculums.py` 注释写 `timestep=0.001/decimation=5`**，
-   实测 `sim.mujoco.timestep=0.002`、`decimation=5` → `step_dt = 0.01 s`（注释过期）。
+差异落在 **S1 姿态点（T2 末）**：`H_spine1` 差 **0.2 rad**。RL 实际在跟踪一条与
+"已可视化验证可行"的动作不同的轨迹。
+
+**统一口径**：两份实现都取 `0.6 - 0.8u` / `-0.2 + 0.2u`。
+
+**验收方法**：`verify_script_vs_training.py` 逐点对拍两侧参考（修复后最大偏差 1e-6 rad）。
+
+**教训**：动作参数一旦有两份实现，必须用脚本对拍而不是读代码比对。
+
+### 7.2 站起确认时长在两侧不一致
+
+**症状**：`STAND_CONFIRM_S` 与训练侧的站起判据不是同一个值。
+
+**根因**：训练侧 `terminations.check_stand_success` 硬编码 `int(0.5 / step_dt)`，
+而手调脚本用本地常量 `STAND_CONFIRM_S = 0.2`。
+
+**统一口径**：该值提升为 `mdp/timing.py` 的 `STAND_CONFIRM_DURATION = 0.5`，
+两侧共同引用（训练 `terminations.py` 导入，脚本导入）。
+
+**注意**：这与 S1/S2 的 `pose_confirm_s`（0.10 s，来自 `BackupCommandCfg`）是
+**两个不同的量**，不要混淆。
+
+### 7.3 `body_link_quat_w` 参考系未定论
+
+见 §3。当前所有姿态判据已完全绕开它（S1/S2 改用 §4 的标记 site）。
+**不要基于该量写新的物理判断代码**；若必须用四元数，先用 `fit_body_axes.py`
+一类的 site 配准法交叉验证。
 
 ---
 
-## 8. 诊断脚本与测试清单
+## 8. 已知未解决问题
+
+1. **XML 加了 4 个 site**（nsite 23 → 27）。现有 `find_sites` 调用都按名字精确匹配，
+   已回归验证通过；但任何按 site 索引顺序硬编码的代码需要复核。
+
+2. **`events.py` 硬编码了 36 个 XML joint 下标**（`[6,8,12,14,24,...]`），
+   绕过了 `mdp/indices.py` 的统一管理，XML 一改就会静默错位。**建议改走 indices。**
+
+3. **`reference.py` 第 74 行注释与代码挤在同一行**（T4 段），Python 可正常解析但不便阅读。
+
+4. **全量测试在受限环境无法运行**：`mujoco_warp` 的 kernel cache 位于
+   `%LOCALAPPDATA%\NVIDIA\warp\Cache`，只读环境下抛大量 `PermissionError`（与代码无关）。
+
+---
+
+## 9. 诊断脚本与测试清单
 
 `src/mjlab/scripts/Backup/` 下的只读诊断脚本（均不落盘，结果打到 stdout）：
 
@@ -370,6 +405,12 @@ uv run python -m mjlab.scripts.SQuRo_backup_Replay --time-scale 1.0 --visualize 
 
 # 地面真值姿态验收
 uv run python -m mjlab.scripts.Backup.measure_segment_gravity_truth 1.0
+
+# 手调脚本 vs 训练环境 的参考与检测对拍 (改参考/判据后必跑)
+uv run python -m mjlab.scripts.Backup.verify_script_vs_training 3.0
+
+# 门控窗口与进度奖励上限测量 (纯开环跟踪参考)
+uv run python -m mjlab.scripts.Backup.measure_ref_tracking_conditions 3.0 10.5
 ```
 
 > 注意：`--visualize none/video` 分支末尾会尝试写 PNG/CSV 到 `logs/rsl_rl/.../replay_videos/`，

@@ -64,20 +64,24 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励函数
+    # 奖励函数 — 权重一律 1.0, 实际权重见 mdp/curriculums.py 的 _CURVES
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
-        "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=2.0),
-        # "upright": RewardTermCfg(func=mdp.compute_upright_reward, weight=0.0),
+        "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
-        # "stand": RewardTermCfg(func=mdp.compute_stand_reward, weight=0.0),
-        "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=2.0),
-        "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=3.0),
-        "milestone_success": RewardTermCfg(func=mdp.compute_task_success_milestone_reward, weight=10.0),
+        "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=1.0),
+        "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),
+        "milestone_success": RewardTermCfg(func=mdp.compute_task_success_milestone_reward, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
+        # 未启用, 需要时取消注释并在 _CURVES 补对应权重
+        # "upright":     RewardTermCfg(func=mdp.compute_upright_reward),
+        # "stand":       RewardTermCfg(func=mdp.compute_stand_reward),
+        # "stand_still": RewardTermCfg(func=mdp.compute_stand_still_penalty),
+        # "fallen":      RewardTermCfg(func=mdp.compute_fallen_penalty),
+        # "corridor":    RewardTermCfg(func=mdp.compute_corridor_reward),
     }
 
     # 终止条件

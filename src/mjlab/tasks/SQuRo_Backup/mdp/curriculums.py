@@ -6,7 +6,7 @@ from typing import Any
 # 100 Hz 初筛配置：控制周期 0.002 × 5 = 0.01 s，48 步采样仍覆盖 0.48 s。
 # RL 配置与课程轮数换算共用此值；采样段末不重置环境，后续采样继续当前回合。
 # 短采样段更依赖价值估计，结果确定后再恢复更高物理精度和更长采样段验证。
-_STEPS_PER_ITER = 48
+_STEPS_PER_ITER = 96
 
 
 # 训练阶段边界 (iter)
@@ -26,32 +26,32 @@ TIME_SCALE_MIN_END = 1.0
 
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
+#
+# 权重唯一管理处: env_cfg 中所有奖励项的 cfg.weight 一律为 1.0,
+# 生效权重 = cfg.weight(1.0) × 本表的值, 调权重只改这里。
+# 本表同时容纳 weight_*(权重) / sigma_*(误差系数) / alpha_*(复合项配比) 三类量。
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (10.0,),
     "weight_mimic_vel":         (5.0,),
-    "weight_upright":           (0.0,),
+    "weight_spine_target":      (2.0,),
     "weight_height":            (5.0,),
-    "weight_stand":             (0.0,),
-    "weight_stand_still":       (0.0,),
-    "weight_fallen":            (0.0,),
-    
+    "weight_milestone_s1":      (2.0,),
+    "weight_milestone_s2":      (3.0,),
+    "weight_milestone_success": (10.0,),
     "weight_smooth_L1_leg":     (0.1,),
     "weight_smooth_L1_spn":     (0.1,),
     "weight_smooth_L2_leg":     (0.1,),
     "weight_smooth_L2_spn":     (0.1,),
     "weight_energy":            (0.1,),
-
     "sigma_leg_pos":      (10.0,),
     "sigma_spn_pos":      (20.0,),
     "sigma_neck_pos":     (10.0,),
     "sigma_leg_vel":      (0.5,),
     "sigma_spn_vel":      (0.5,),
     "sigma_neck_vel":     (0.5,),
-    "sigma_upright":      (5.0,),
-    "sigma_height":       (500,),
-
-    "weight_corridor":    (0.0, 0.0, 4.0, 8.0),
-    "sigma_corridor":     (50.0, 50.0, 50.0, 50.0),
+    "sigma_height":       (500.0,),
+    "alpha_neck_pos":     (0.3,),
+    "alpha_neck_vel":     (0.3,),
 }
 
 

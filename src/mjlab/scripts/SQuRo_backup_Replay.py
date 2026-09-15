@@ -18,20 +18,20 @@ from mjlab.tasks.SQuRo_Backup.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
+from mjlab.tasks.SQuRo_Backup.mdp.timing import STAND_CONFIRM_DURATION
 
 
 
-FL_HOLD = (-0.28, 0.55)     # 腿支撑角 (与手调/参考表一致)
+FL_HOLD = (-0.28, 0.55)
 HL_HOLD = (-1.50, -0.25)
 LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
 
-T1 = 0.65           # T1 起转: 两个扭转关节反向拧满 90°, 侧摆/俯仰同步到 0.6
-T2 = 0.15           # T2 回收: 保持扭转, 侧摆/俯仰回零  (= S1 姿态, P1 末)
-T3 = 0.15           # T3 解扭: 扭转回零 + F_spine1 回加 0.6 (= S2 姿态, P2 末)
-T4 = 0.5            # T4 站立过渡: 腿从支撑位回到站立位, F_spine1 归零
-T5 = 1.05           # T5 站立保持
+T1 = 0.65
+T2 = 0.15
+T3 = 0.15
+T4 = 0.5
+T5 = 1.05
 
-# 累计边界 (名义秒)
 T_SEG1_END = T1
 T_SEG2_END = T_SEG1_END + T2
 T_SEG3_END = T_SEG2_END + T3
@@ -39,11 +39,8 @@ T_SEG4_END = T_SEG3_END + T4
 T_TOTAL = T_SEG4_END + T5
 T_OFFSET = 1.0
 
-STAND_CONFIRM_S = 0.2
 
 
-
-# 完整名义参考 (MJLAB 顺序); 各段时长见上方 T_SEG* 配置
 def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
     time1 = T_OFFSET
     time2 = time1 + T1 * scale
@@ -65,13 +62,13 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
         u = (current_time - time2) / (time3 - time2)
         r[0] = 0.6 - 0.4 * u
         r[1] = -1.57
-        r[8] = 0.6 - 0.6 * u
+        r[8] = 0.6 - 0.8 * u
         r[9] = 1.57
     elif current_time < time4:
         u = (current_time - time3) / (time4 - time3)
         r[0] = 0.2 + 0.4 * u
         r[1] = -1.57 + 1.57 * u
-        r[8] = 0.0
+        r[8] = -0.2 + 0.2 * u
         r[9] = 1.57 - 1.57 * u
     else:
         # T4: 腿从支撑角平滑回站立角，脊柱全程保持零；之后保持站立
@@ -276,7 +273,7 @@ class StateMachinePolicy:
                 self.stand_steps += 1
             else:
                 self.stand_steps = 0
-            if self.stand_steps >= int(STAND_CONFIRM_S / dt):
+            if self.stand_steps >= int(STAND_CONFIRM_DURATION / dt):
                 self.stand_t = self.t_phase - (self.stand_steps - 1) * dt
                 self._log(f"稳定站起! stand_t≈{self.stand_t:.2f}s (P3 内)")
                 self.phase = "DONE"

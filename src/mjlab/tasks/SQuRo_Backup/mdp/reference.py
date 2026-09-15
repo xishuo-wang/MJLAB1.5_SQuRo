@@ -40,6 +40,7 @@ _HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
 
 
 # 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
+# T2/T3 的系数必须与 scripts/SQuRo_backup_Replay.py 的 slow1_target 一致, 见踩坑记录
 def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)

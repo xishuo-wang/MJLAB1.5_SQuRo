@@ -33,7 +33,8 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # 读取每个 episode 的首次里程碑脉冲；转移脉冲仍保留给诊断使用。
     pulse = command.s1_milestone_pulse
     env.extras["log"]["Data/milestone_s1"] = pulse.float().mean().item()
-    return pulse.float() / env.step_dt
+    weight = get_curriculum_reward_weight(env, "weight_milestone_s1")
+    return weight * pulse.float() / env.step_dt
 
 
 
@@ -44,14 +45,16 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
     pulse = command.s2_milestone_pulse
     env.extras["log"]["Data/milestone_s2"] = pulse.float().mean().item()
-    return pulse.float() / env.step_dt
+    weight = get_curriculum_reward_weight(env, "weight_milestone_s2")
+    return weight * pulse.float() / env.step_dt
 
 
 
 def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     pulse = env.termination_manager.get_term("stand")
     env.extras["log"]["Data/milestone_task_success"] = pulse.float().mean().item()
-    return pulse.float() / env.step_dt
+    weight = get_curriculum_reward_weight(env, "weight_milestone_success")
+    return weight * pulse.float() / env.step_dt
 
 
 
@@ -70,14 +73,16 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
+    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
+    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_pos")
     # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
+    reward_neck = torch.exp(-sigma_neck * mse_neck)
+    reward = (reward_leg + reward_spn) / 2 + alpha_neck * reward_neck
     return reward * weight
 
 
@@ -113,14 +118,16 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
+    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
+    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_vel")
     # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
+    reward_neck = torch.exp(-sigma_neck * mse_neck)
+    reward = (reward_leg + reward_spn) / 2 + alpha_neck * reward_neck
     return reward * weight
 
 
