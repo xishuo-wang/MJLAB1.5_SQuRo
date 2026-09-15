@@ -8,3 +8,4 @@ from .observations import *
 from .reference import *
 from .rewards import *
 from .terminations import *
+from .timing import *
