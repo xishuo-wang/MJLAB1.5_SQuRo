@@ -28,14 +28,16 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 # 使配置中的 weight 直接表示一次事件对 episode return 的实际增量。
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    pulse = command.s1_transition_pulse
+    # 读取每个 episode 的首次里程碑脉冲；转移脉冲仍保留给诊断使用。
+    pulse = command.s1_milestone_pulse
     env.extras["log"]["Data/milestone_s1"] = pulse.float().mean().item()
     return pulse.float() / env.step_dt
 
 
 def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    pulse = command.s2_transition_pulse
+    # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
+    pulse = command.s2_milestone_pulse
     env.extras["log"]["Data/milestone_s2"] = pulse.float().mean().item()
     return pulse.float() / env.step_dt
 
