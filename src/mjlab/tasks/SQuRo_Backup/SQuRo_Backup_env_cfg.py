@@ -135,11 +135,11 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.005,
+                timestep=0.002,
                 iterations=100,
                 ls_iterations=50,
             ),
         ),
-        decimation=4,
+        decimation=10,
         episode_length_s=10.0,
     )
