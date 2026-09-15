@@ -20,8 +20,8 @@ _STAGES = (0, 2000, 4000)
 
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间
-TIME_SCALE_MAX = 6.0
-TIME_SCALE_MIN_START = 3.0
+TIME_SCALE_MAX = 4.0
+TIME_SCALE_MIN_START = 2.0
 TIME_SCALE_MIN_END = 1.0
 
 
