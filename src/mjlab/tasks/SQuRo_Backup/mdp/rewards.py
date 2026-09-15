@@ -2,13 +2,15 @@ from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
+from .curriculums import get_curriculum_reward_weight
 from .indices import _ACTUATED_JOINT_NAMES, _MODEL_INDICES
 from .reference import get_reference_joint_state, get_body_reference
-from .curriculums import get_curriculum_reward_weight
+
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.envs.mdp.actions import JointPositionAction
     from .command import BackupCommand
+
 
 
 _STAND_STILL_DEADZONE = 0.2   # 站立保持: 平均关节速度死区 (rad/s), 微小抖动不惩罚
@@ -23,9 +25,9 @@ _CORRIDOR_HALF = 0.05         # 走廊半宽/死区 (m), 前后肢共用
 _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
+
 # =========================================================================================
-# 一次性里程碑奖励。RewardManager 默认会再乘 env.step_dt，因此这里除以 dt，
-# 使配置中的 weight 直接表示一次事件对 episode return 的实际增量。
+# s1里程碑奖励
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     # 读取每个 episode 的首次里程碑脉冲；转移脉冲仍保留给诊断使用。
@@ -34,12 +36,16 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return pulse.float() / env.step_dt
 
 
+
+# =========================================================================================
+# s2里程碑奖励
 def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
     pulse = command.s2_milestone_pulse
     env.extras["log"]["Data/milestone_s2"] = pulse.float().mean().item()
     return pulse.float() / env.step_dt
+
 
 
 def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
@@ -77,21 +83,19 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 四脊柱等权的目标指令成本：识别实际角度跟踪无法区分的超限指令和提前解扭。
+# 四脊柱等权的目标指令成本
 def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
-    # raw_action 已经过训练 wrapper 的全局裁剪，但尚未经过动作项和 XML 的限幅。
     # 重建限幅前目标；不要读取实际关节角或已经限幅的控制量，否则过量指令会被隐藏。
     target = action_term.raw_action * action_term.scale + action_term.offset
     ref_pos, _ = get_reference_joint_state(env)
     ref_columns = _MODEL_INDICES.actuator_spn_ids
     # 动作项按自身关节顺序排列，参考表按固定顺序排列；用名称对齐，避免列序假设。
-    target_columns = tuple(
-        action_term.target_names.index(_ACTUATED_JOINT_NAMES[i]) for i in ref_columns
-    )
+    target_columns = tuple(action_term.target_names.index(_ACTUATED_JOINT_NAMES[i]) for i in ref_columns)
     error = target[:, target_columns] - ref_pos[:, ref_columns]
     # 这里只返回负均方误差，权重和 dt 均由 RewardManager 统一乘一次。
     return -torch.mean(error.square(), dim=1)
+
 
 
 # =========================================================================================
@@ -122,7 +126,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 身体竖直奖励 — root 的 body+Z 与重力反方向对齐程度 (站立≈+1, 仰面≈-1, 侧躺≈0)
+# 身体竖直奖励
 def compute_upright_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     uprightness = asset.data.projected_gravity_b[:, 2]  # [N]
@@ -135,8 +139,7 @@ def compute_upright_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 # =========================================================================================
-# 身体高度跟踪奖励 — 时变期望高度: 从身体轨迹表按参考时间查 F/H body 期望高度
-# (翻身期期望低匹配实际, 站起后期望 0.055), 避免"躺着被要求站高"的局部最优
+# 身体高度跟踪奖励
 def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     body_pos_w = asset.data.body_link_pos_w
@@ -156,7 +159,6 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 # =========================================================================================
 # 走廊一致性奖励 (YoZ 平面, 前/后肢独立) — 约束 F/H body 的 (y,z) 贴近手调参考轨迹走廊
-# e = |Δy| + |Δz| + 身体段半径 - 走廊半宽; 超出走廊半宽才惩罚, r = exp(-σ·v²)
 def compute_corridor_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     body_pos_w = asset.data.body_link_pos_w
@@ -182,9 +184,6 @@ def compute_corridor_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 # =========================================================================================
 # 站起奖励（连续化）— 身体竖直 (uprightness>0.8) 时, 按 F/H body 高度接近站立目标连续给奖励
-# exp(-σ·(h-0.055)²): 侧立(h≈0.04) 给部分奖励, 完全站直(h≈0.055) 给满奖励,
-# 提供从"侧立"到"完全站直"的连续梯度 (替代原二值 0/1, 避免侧立局部最优)
-# 与站起成功终止配合 (终止仍要求 h>0.05 & up>0.9)
 def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     up = asset.data.projected_gravity_b[:, 2]  # [N]
@@ -216,9 +215,9 @@ def compute_stand_still_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return penalty
 
 
+
 # =========================================================================================
 # 跌倒滞留惩罚 — 检测"贴地且不动"的跌倒状态 (翻身过程贴地但在运动, 不惩罚)
-# 抑制策略赖在地上不复位; 贴地判定用 F/H body 高度, 运动判定用 base 速度/角速度
 def compute_fallen_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     body_pos_w = asset.data.body_link_pos_w
