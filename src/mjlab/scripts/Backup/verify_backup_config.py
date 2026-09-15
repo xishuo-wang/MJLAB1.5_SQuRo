@@ -34,13 +34,16 @@ def main() -> None:
     print("=== 1) 奖励权重净值 (cfg.weight × _CURVES) ===")
     cfg = SQuRo_Backup_Env_Cfg()
     for name, term in cfg.rewards.items():
+        # 权重键默认按 weight_<奖励项名> 推导, 只有命名不一致的少数项需要显式映射
         key = {
-            "mimic_pos": "weight_mimic_pos", "mimic_vel": "weight_mimic_vel",
             "spine_target": "weight_spine_target", "height": "weight_height",
-            "milestone_s1": "weight_milestone_s1", "milestone_s2": "weight_milestone_s2",
-            "milestone_success": "weight_milestone_success", "energy": "weight_energy",
+            "energy": "weight_energy",
             "action_L1": "weight_smooth_L1_leg", "action_L2": "weight_smooth_L2_leg",
-        }[name]
+        }.get(name, f"weight_{name}")
+        if key not in _CURVES:
+            print(f"  {name:20s} ** _CURVES 缺少 {key} **")
+            ok = False
+            continue
         net = term.weight * _CURVES[key][0]
         flag = "" if term.weight == 1.0 else "  ** cfg 非 1.0 **"
         if term.weight != 1.0:

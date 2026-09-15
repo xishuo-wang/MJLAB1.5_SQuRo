@@ -73,7 +73,8 @@ class BackupCommand(CommandTerm):
         self._inverted_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
         self._s1_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        self._pose_cache = None
+        self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._pose_cos_cache: torch.Tensor | None = None
         self._update_dt = 0.0
         self._asset = self._env.scene.entities[cfg.asset_name]
         resolve_model_indices(self._asset)
@@ -171,18 +172,52 @@ class BackupCommand(CommandTerm):
         u = delta[:, 2] / norm.clamp_min(torch.finfo(sp.dtype).tiny)
         return torch.where(valid, u, torch.full_like(u, float("nan")))
 
-    def _pose_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
-        # 返回 [env, segment] 的正置与倒置标记；中间姿态和未知均为 False。
-        u = torch.stack((self._segment_u(0), self._segment_u(1)), dim=1)
+    def _pose_cos(self) -> torch.Tensor:
+        # 返回 [env, segment] 的 belly->back 世界 Z 方向余弦, 无效值置 NaN。
+        return torch.stack((self._segment_u(0), self._segment_u(1)), dim=1)
+
+    def _flags_from_cos(self, u: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # 方向余弦 -> [env, segment] 的正置与倒置标记；中间姿态和未知均为 False。
         finite = torch.isfinite(u)
         threshold = self._pose_cos_threshold
         return finite & (u >= threshold), finite & (u <= -threshold)
 
+    def _pose_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
+        u = self._pose_cos()
+        # 状态机本步的方向余弦留存给区间奖励复用, 避免重复读取 site。
+        self._pose_cos_cache = u
+        return self._flags_from_cos(u)
+
     def _get_pose_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
         # 状态机同一步复用一次 site 方向计算；外部诊断调用则即时计算。
-        if getattr(self, "_pose_cache", None) is None:
+        cached = getattr(self, "_pose_cache", None)
+        if cached is None:
             return self._pose_flags()
-        return self._pose_cache
+        return cached
+
+    def _get_pose_cos(self) -> torch.Tensor:
+        # 与 _get_pose_flags 同样的缓存语义, 供区间奖励读取同一份方向余弦。
+        cached = getattr(self, "_pose_cos_cache", None)
+        if cached is None:
+            return self._pose_cos()
+        return cached
+
+    @staticmethod
+    def _ramp(u: torch.Tensor, sign: float) -> torch.Tensor:
+        # 方向余弦 -> [0, 1] 线性爬升；原点取 u=0, 保证初始姿态就有非零梯度。
+        return (sign * u).clamp(0.0, 1.0)
+
+    @property
+    def progress_s1(self) -> torch.Tensor:
+        # 区间奖励: 前段保持仰面 + 后段已翻到俯卧 (朝 S1 的连续进度)；未知姿态按 0 处理。
+        u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
+        return torch.minimum(self._ramp(u[:, 0], -1.0), self._ramp(u[:, 1], 1.0))
+
+    @property
+    def progress_s2(self) -> torch.Tensor:
+        # 区间奖励: 两段都已翻到俯卧 (朝 S2 的连续进度)；未知姿态按 0 处理。
+        u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
+        return torch.minimum(self._ramp(u[:, 0], 1.0), self._ramp(u[:, 1], 1.0))
 
     def _segment_upright(self, idx: int) -> torch.Tensor:
         upright, _ = self._get_pose_flags()
@@ -246,6 +281,8 @@ class BackupCommand(CommandTerm):
             self._s2_awarded = torch.zeros_like(self.phase, dtype=torch.bool)
         if not hasattr(self, "_pose_cache"):
             self._pose_cache = None
+        if not hasattr(self, "_pose_cos_cache"):
+            self._pose_cos_cache = None
         lam = self.time_scale_command.clamp(min=0.1)
         # 所有阶段推进 t_phase (P1/P2 用于段内参考, P3 用于 time5/站立)
         # reset() 末尾也会调用 command_manager.compute(dt=0)。重置环境的参考时钟应停在 0，
@@ -267,6 +304,7 @@ class BackupCommand(CommandTerm):
         s2_ok = self._check_S2()
         both_inverted = getattr(self, "_check_both_inverted", lambda: torch.zeros_like(s1_ok))()
         self._pose_cache = None
+        self._pose_cos_cache = None
 
         self._s1_confirm_elapsed, s1_confirmed = BackupCommand._update_confirmation(
             self._s1_confirm_elapsed, s1_ok, running, real_dt, float(self.cfg.pose_confirm_s)

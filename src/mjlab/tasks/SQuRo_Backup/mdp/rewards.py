@@ -59,6 +59,25 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 
 
 # =========================================================================================
+# s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度
+# 用背腹 site 的方向余弦线性爬升, 仰面躺的姿态读数恒为 0, 不产生"不动也拿分"的底分。
+def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    weight = get_curriculum_reward_weight(env, "weight_progress_s1")
+    return weight * command.progress_s1
+
+
+
+# =========================================================================================
+# s2区间奖励 — 朝 S2 姿态 (两段都已俯卧) 的连续进度
+def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    weight = get_curriculum_reward_weight(env, "weight_progress_s2")
+    return weight * command.progress_s2
+
+
+
+# =========================================================================================
 # 关节位置模仿奖励
 def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]

@@ -28,6 +28,8 @@ KEYS = [
     "Episode_Reward/milestone_s1",
     "Episode_Reward/milestone_s2",
     "Episode_Reward/milestone_success",
+    "Episode_Reward/progress_s1",
+    "Episode_Reward/progress_s2",
     "Episode_Reward/action_L1",
     "Episode_Reward/action_L2",
     "Episode_Reward/energy",
@@ -61,7 +63,7 @@ def main() -> None:
     resolve_model_indices(asset)
 
     default = asset.data.default_joint_pos[:, _MODEL_INDICES.joint_ids]
-    scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)
+    scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)  # type: ignore[union-attr]
     n = int(env.unwrapped.max_episode_length)
     dev = env.unwrapped.device
     print(f"λ={lam}  {cfg.scene.num_envs} envs  episode {n} 步 ({n*float(env.step_dt):.1f}s)")
@@ -76,15 +78,19 @@ def main() -> None:
 
     for tag, fn in [("零动作 (仰面躺)", zero), ("纯开环跟踪参考", openloop)]:
         acc, term = run_case(env, fn, n)
-        dense = sum(v for k, v in acc.items() if "milestone" not in k)
+        dense = sum(v for k, v in acc.items() if "milestone" not in k and "progress" not in k)
         sparse = sum(v for k, v in acc.items() if "milestone" in k)
+        prog = sum(v for k, v in acc.items() if "progress" in k)
+        total = dense + sparse + prog
         print(f"\n=== {tag} ===")
         for k in KEYS:
             print(f"    {k.split('/')[-1]:18s} {acc.get(k, 0.0):+9.4f}")
         print(f"    {'-'*30}")
         print(f"    {'密集项合计':18s} {dense:+9.4f}")
+        print(f"    {'区间项合计':18s} {prog:+9.4f}")
         print(f"    {'里程碑合计':18s} {sparse:+9.4f}")
-        print(f"    {'总计':18s} {dense+sparse:+9.4f}")
+        print(f"    {'总计':18s} {total:+9.4f}")
+        print(f"    {'成就相关占比':18s} {(sparse+prog)/total if total else 0.0:.4f}")
         print(f"    {'stand 终止占比':18s} {term.get('Episode_Termination/stand', 0.0)/n:.4f}")
 
     env.close()
