@@ -3,10 +3,10 @@ import torch
 from typing import Any
 
 
-# 每 iter 的 rollout 步数。step_dt = sim.timestep(0.002) × decimation(5) = 0.01 s,
-# 故 300 步 = 3.0 s 仿真时长, 覆盖 λ 采样下限 (TIME_SCALE_MIN_START=3.0) 下的完整动作段
-# (P2_END=0.95 s × 3.0 = 2.85 s)。原值 60 步仅 0.6 s, 一个 rollout 装不下完整翻正, 已废弃。
-_STEPS_PER_ITER = 120
+# 快速初筛配置：控制周期 0.005 × 4 = 0.02 s，24 步采样覆盖 0.48 s。
+# RL 配置与课程轮数换算共用此值；采样段末不重置环境，后续采样继续当前回合。
+# 短采样段更依赖价值估计，结果确定后再恢复更高物理精度和更长采样段验证。
+_STEPS_PER_ITER = 24
 
 
 # 训练阶段边界 (iter)

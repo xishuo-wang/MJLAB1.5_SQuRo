@@ -91,7 +91,8 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "backup_cmd": mdp.BackupCommandCfg(
             asset_name="robot",
             debug_vis=play,
-            fixed_time_scale=mdp.TIME_COMPARISON_SCALE,
+            # 训练恢复原时间缩放课程；策略回放仍默认固定速度，方便比较。
+            fixed_time_scale=mdp.TIME_COMPARISON_SCALE if play else None,
         )
     }
 
@@ -134,11 +135,11 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.002,
-                iterations=100,
-                ls_iterations=50,
+                timestep=0.005,
+                iterations=10,
+                ls_iterations=20,
             ),
         ),
-        decimation=5,
+        decimation=4,
         episode_length_s=10.0,
     )
