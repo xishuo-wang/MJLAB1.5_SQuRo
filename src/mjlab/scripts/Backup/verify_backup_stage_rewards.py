@@ -47,18 +47,42 @@ class StageRewardTests(unittest.TestCase):
     def tearDown(self):
         _MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id = self.ids
 
-    def test_progress_rewards_ungated_and_s3_is_p3_only(self):
+    def test_progress_terrain_is_monotone(self):
         env, cmd = make_env([0, 1, 2])
-        # S1 姿态 (前段仰面 + 后段俯卧): 区间项不再按阶段门控, 任何阶段都全额付费。
-        # 门控会在 P2 入口把前滚前半程的奖励清零并制造 3/s 的悬崖, 故取消。
-        cmd.test_u[:] = torch.tensor([-1., 1.])
-        torch.testing.assert_close(rewards.compute_s1_progress_reward(env), torch.tensor([3., 3., 3.]))
-        self.assertEqual(rewards.compute_s2_progress_reward(env).sum(), 0.)
+
+        def total(u):
+            cmd.test_u[:] = torch.tensor(u)
+            return (rewards.compute_s1_progress_reward(env)
+                    + rewards.compute_s2_progress_reward(env))
+
+        supine = total([-1., -1.])          # 完全仰卧
+        rear_only = total([-1., 1.])        # S1: 后段已翻正
+        side = total([0., 1.])              # 正侧立: 前段翻到一半
+        prone = total([1., 1.])             # S2: 两段都翻正
+        wrong_order = total([1., -1.])      # 前段先翻(错误顺序)
+
+        for t in (supine, rear_only, side, prone, wrong_order):
+            # 区间项不按阶段门控: 三个环境读数必须相同
+            torch.testing.assert_close(t, t[:1].expand(3))
+            self.assertTrue(torch.isfinite(t).all())
+
+        # 躺平与错误顺序都不给分, 不构成"不动也拿分"的底分
+        self.assertEqual(supine[0].item(), 0.)
+        self.assertEqual(wrong_order[0].item(), 0.)
+        # 沿目标轨迹严格单调: 仰卧 < S1 < 侧立 < S2, 且 uF<0 半程不许出现零梯度平台
+        self.assertLess(supine[0].item(), rear_only[0].item())
+        self.assertLess(rear_only[0].item(), side[0].item())
+        self.assertLess(side[0].item(), prone[0].item())
+        # 数值锚点: clamp(uH)*1.0 与 clamp(uH)*(clamp(uF)+1)/2*2.0
+        torch.testing.assert_close(rear_only, torch.full((3,), 1.0))
+        torch.testing.assert_close(side, torch.full((3,), 2.0))
+        torch.testing.assert_close(prone, torch.full((3,), 3.0))
+
+    def test_s3_progress_is_p3_only(self):
+        env, cmd = make_env([0, 1, 2])
+        cmd.test_u[:] = -1.                 # 仰面: 朝向门控关闭 -> 三段全 0
         self.assertEqual(rewards.compute_s3_progress_reward(env).sum(), 0.)
-        # 双段俯卧: progress_s2 全额, progress_s1 归零; 站立进度仍然只在 P3 生效
-        cmd.test_u[:] = 1.
-        self.assertEqual(rewards.compute_s1_progress_reward(env).sum(), 0.)
-        torch.testing.assert_close(rewards.compute_s2_progress_reward(env), torch.tensor([3., 3., 3.]))
+        cmd.test_u[:] = 1.                  # 双段正置 + 高度达标 -> 只有 P3 拿到
         torch.testing.assert_close(rewards.compute_s3_progress_reward(env), torch.tensor([0., 0., 3.]))
 
     def test_standing_requires_both_segments(self):

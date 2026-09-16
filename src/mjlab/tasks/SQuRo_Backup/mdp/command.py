@@ -210,15 +210,24 @@ class BackupCommand(CommandTerm):
 
     @property
     def progress_s1(self) -> torch.Tensor:
-        # 区间奖励: 前段保持仰面 + 后段已翻到俯卧 (朝 S1 的连续进度)；未知姿态按 0 处理。
+        # 后段翻正进度: 仰卧(-1) -> 俯卧(+1) 单调爬升, 是 S1 的充分特征, 未知姿态按 0 处理。
+        # 这是唯一的"起步"梯度来源 —— 完全仰卧时 progress_s2 的前段系数为 0, 只有它能
+        # 把后段先推起来。
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
-        return torch.minimum(self._ramp(u[:, 0], -1.0), self._ramp(u[:, 1], 1.0))
+        return self._ramp(u[:, 1], 1.0)
 
     @property
     def progress_s2(self) -> torch.Tensor:
-        # 区间奖励: 两段都已翻到俯卧 (朝 S2 的连续进度)；未知姿态按 0 处理。
+        # 在后段已翻正的基础之上, 继续奖励前段翻过去的程度 (朝 S2 的连续进度)。
+        # 前段系数取 (clamp(uF)+1)/2 而不是 clamp(uF): 后者在 uF<0 的半程恒为 0,
+        # 于是 progress_s1 的 clamp(-uF) 与 progress_s2 的 clamp(uF) 恰好互补,
+        # 两项相加在 uF=0 处取 0、在 S1/S2 两处等高 —— 形成"两峰等高等价 + 中间零梯度谷"
+        # 的地形, 策略停在 S1 就是并列最优解, 永远拿不到跨过 uF=0 的梯度。
+        # 改成 (clamp(uF)+1)/2 后全程单调, 配合权重 1.0/2.0 合成地形为
+        # 仰卧 0 -> S1 1.0/s -> 正侧立 2.0/s -> S2 3.0/s, uF 方向处处正梯度。
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
-        return torch.minimum(self._ramp(u[:, 0], 1.0), self._ramp(u[:, 1], 1.0))
+        front = (u[:, 0].clamp(-1.0, 1.0) + 1.0) / 2.0
+        return self._ramp(u[:, 1], 1.0) * front
 
     # 站立几何与连续进度共用背腹轴、前后段各自高度；阶段门控由调用方负责。
     def standing_state(self) -> tuple[torch.Tensor, torch.Tensor]:

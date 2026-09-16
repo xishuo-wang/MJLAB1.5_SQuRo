@@ -41,10 +41,14 @@ def sample(series: list[tuple[int, float]], n: int) -> list[tuple[int, float]]:
 def main() -> None:
     args = [a for a in sys.argv[1:]]
     if not args:
-        raise SystemExit("用法: dump_training_scalars.py <run_dir> [标签子串 ...] [--list]")
+        raise SystemExit("用法: dump_training_scalars.py <run_dir> [标签子串 ...] [--list] [--points=N]")
     run_dir = args[0]
     rest = args[1:]
     list_only = "--list" in rest
+    n_points = _DEFAULT_POINTS
+    for a in rest:
+        if a.startswith("--points="):
+            n_points = int(a.split("=", 1)[1])
     filters = [a for a in rest if not a.startswith("--")]
 
     scalars = load_scalars(run_dir)
@@ -61,7 +65,7 @@ def main() -> None:
         if not series:
             continue
         vals = [v for _, v in series]
-        pts = sample(series, _DEFAULT_POINTS)
+        pts = sample(series, n_points)
         body = "  ".join(f"{s}:{v:+.4g}" for s, v in pts)
         print(f"\n{tag}   n={len(series)}  min={min(vals):+.4g} max={max(vals):+.4g}")
         print(f"  {body}")

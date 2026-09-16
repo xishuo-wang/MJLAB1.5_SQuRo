@@ -1,15 +1,19 @@
 # SQuRo_Backup（翻正）任务技术细节
 
-## 整体架构与设计变更：阶段单向 + 动作超限成本 + 参考连续化（2026-09-16 晚，当前配置）
+## 整体架构与设计变更：阶段单向 + 单调进度地形 + 解除冗余裁剪（2026-09-16 深夜，当前配置）
 
-- 范围：奖励层（区间项与新增成本项）、状态机推进规则、参考表 T4 段、成功终止语义；PPO、物理参数、观测/动作维度不变。
+- 范围：奖励层（区间项与成本项的定义与权重）、状态机推进规则、参考表 T4 段、成功终止语义、PPO 动作裁剪；物理参数与观测/动作维度不变。
 - 上一版行为：区间奖励按阶段互斥，允许 `back_to_p1`/`back_to_p2` 回退。实测旧 run 在 P3 重新扭转回 S1、被回退到 P2，`s2_transition`(0.0089/步) ≈ `back_to_p2`(0.0085/步) 形成 0.72 s 极限环；新 run 更退回 P1（77% 时间），S2 达成率从 0.76 掉到 0.001。
 - 根因一（奖励）：参考随阶段切换 ⇒ 各阶段"每步可赚分"不同（实测 P2 0.206 vs P3 0.159），回退通道让策略可以主动挑自己跟得上的阶段。
-- 根因二（动作）：执行器 `ctrlrange` 之外的指令被 MuJoCo 直接丢弃（`ctrllimited="true"`），实测策略确定性输出长期停在 ±26~47，把 8 条腿 + 2 个颈关节永久钉在饱和点上，腿完全失去控制权；站起必须靠腿，因此 P3 物理上不可能完成。
+- 根因二（动作）：执行器 `ctrlrange` 之外的指令被 MuJoCo 直接丢弃（`ctrllimited="true"`）；实测策略确定性输出长期停在 ±26~47，把 8 条腿 + 2 个颈关节永久钉在饱和点上，腿完全失去控制权；站起必须靠腿，因此 P3 物理上不可能完成。
+- 根因三（地形）：`progress_s1 = min(clamp(-uF), clamp(uH))` 与 `progress_s2 = min(clamp(uF), clamp(uH))` 在前段方向上互补，两项相加在 uF=0 处取 0、在 S1 与 S2 处**等高** —— 形成"两峰等高等价 + 中间零梯度谷"，策略停在 S1 就是并列最优解。
 - 阶段推进改为单向：只保留 `advance1`/`advance2` 与阶段内超时重试；`back_to_p1`/`back_to_p2` 取消，`both_inverted`/`inverted_confirmed`/两个 `_last_back_to_*` 仅作诊断（后者恒为 False）。
-- `progress_s1` 权重 3、`progress_s2` 权重 3 恢复为**不做阶段门控**：前滚全程 uF 从 −1 走到 +1，两项合起来才是连续付费；门控会在 P2 入口把前半程清零并制造 3/s 的悬崖。
-- `progress_s3` 权重 3，仅 P3 生效；改为"45° 锥门控 + 单调增长"：`orient = ((min(uF,uH) - cos45)/(1 - cos45)).clamp(0,1)`，`progress = orient × ((min(zF,zH)-0.024)/(0.055-0.024)).clamp(0,1)`。锥外恒为 0（任一段转回侧面/仰面立即断供），锥内越接近最终站立越大，同时充当"维持站立"的密集奖励。
-- 新增 `action_excess` 权重 0.5：`target = raw_action*scale + offset`，`excess = (ctrl_lo - target).clamp(0) + (target - ctrl_hi).clamp(0)`，取 14 列均值后取负。只对**被 MuJoCo 丢弃的那一段**计成本，命令落在 `ctrlrange` 内时为 0，因此贴住限位撑地不受罚；把 HL_hip 从 −28 收回 −4.67 力矩完全相同。
+- `progress_s1` 改为 `clamp(uH)`（后段翻正进度，权重 **1.0**）；`progress_s2` 改为 `clamp(uH) × (clamp(uF)+1)/2`（权重 **2.0**）。合成地形：仰卧 0 → S1 1.0/s → 正侧立 2.0/s → S2 3.0/s，**全程单调、uF 方向处处正梯度**，且 S2 相对 S1 有 3:1 优势；完全仰卧与"前段先翻"的错误顺序都恒为 0，不产生底分。
+- 两项都不做阶段门控：门控会在 P2 入口把前滚前半程清零并制造悬崖；单调地形已经保证了前进方向始终有利。
+- `progress_s3` 权重 3，仅 P3 生效；"45° 锥门控 + 单调增长"：`orient = ((min(uF,uH) - cos45)/(1 - cos45)).clamp(0,1)`，`progress = orient × ((min(zF,zH)-0.024)/(0.055-0.024)).clamp(0,1)`。锥外恒为 0（任一段转回侧面/仰面立即断供），锥内越接近最终站立越大，同时充当"维持站立"的密集奖励。
+- `action_excess` 权重 0.5：`target = raw_action*scale + offset`，`excess = (ctrl_lo - target).clamp(0) + (target - ctrl_hi).clamp(0)`，取 14 列均值后取负。只对**被 MuJoCo 丢弃的那一段**计成本，命令落在 `ctrlrange` 内时为 0，因此贴住限位撑地不受罚。
+- **`clip_actions` 由 6.0 改为 `None`**：SQuRo.xml 每个 actuator 都是 `ctrllimited="true"`，MuJoCo 已按 `ctrlrange` 限幅，外层 ±6 不改变任何物理行为，只把策略真实输出挡在奖励之外。实测 run `2026-09-16_16-42-03` 在 iter 2800 时腿指令均值 −21.9、std 3.7、范围 −33.4~−10.6 —— **策略已经在调制腿，但整个调制都落在 ±6 之外，裁剪后腿拿到的是常数 −6，10 个关节的梯度恒为 0 再也回不来**。去掉后由 `ctrlrange` 继续限幅，`action_excess` 与 `action_L1/L2` 重新看得见真实输出。
+- 由此产生两个必须知道的副作用：`action_L1/L2` 之前只看得见 4 个脊柱 + 2 个颈关节的抖动（其余被裁成常数），现在 14 个关节全部计入，等效惩罚自然上升（用初始策略标定约 4 倍）；`last_action` 观测不再有界，由观测归一化承担。
 - `_ACTUATOR_CTRL_RANGE` 常量表放在 `mdp/indices.py`，与 SQuRo.xml 的 `ctrlrange` 逐项对拍（`verify_backup_config.py` 第 5 节），改 XML 必须同步改表。
 - 删除 `leg_target`（P3 专用、从未激活）；`spine_target` 权重 2 不变。
 - T4 参考改为承接 T3 末端：`F_spine1 = 0.6 × (1 − u)` 在过渡段线性回零。原实现直接取 0，在 0.95 处造成 0.6 rad 阶跃（等于要求瞬时 60 rad/s），并使 P3 入口的 14 维参考退化成 P1 入口的形状。手调回放 `slow1_target` 与 `verify_backup_config._hand_at` 同步修改，三处必须逐字一致。

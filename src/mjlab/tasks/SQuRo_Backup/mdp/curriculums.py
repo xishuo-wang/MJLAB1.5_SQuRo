@@ -38,8 +38,11 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_milestone_s1":      (10.0,),
     "weight_milestone_s2":      (15.0,),
     "weight_milestone_success": (35.0,),
-    "weight_progress_s1":       (3.0,),
-    "weight_progress_s2":       (3.0,),
+    # progress_s1 只负责把后段先推起来, progress_s2 承担翻正的主推力。
+    # 两者合成后的地形: 仰卧 0 -> S1 1.0/s -> 正侧立 2.0/s -> S2 3.0/s (单调, uF 方向处处正梯度)。
+    # 若把两者设成相等, 合成地形会退化成"S1 与 S2 等高", 策略停在 S1 即并列最优。
+    "weight_progress_s1":       (1.0,),
+    "weight_progress_s2":       (2.0,),
     "weight_progress_s3":       (3.0,),
     "weight_action_excess":     (0.5,),
     "weight_smooth_L1_leg":     (0.1,),

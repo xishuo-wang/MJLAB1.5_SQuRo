@@ -42,7 +42,12 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         num_steps_per_env=_STEPS_PER_ITER,
         max_iterations=3_000,
 
-        clip_actions=6.0,
+        # 不做外层裁剪: SQuRo.xml 的每个 actuator 都是 ctrllimited="true", MuJoCo 已按
+        # ctrlrange 裁剪 ctrl, 外层 ±6 不改变任何物理行为, 只把策略的真实输出挡在奖励之外。
+        # 实测策略输出长期停在 ±14~47, 裁到 ±6 后 action_excess 与 action_L1/L2 看到的
+        # 都是同一个被压平的常数 (梯度恒为 0), 腿因此永久钉死在关节限位上再也回不来。
+        # 去掉后由 ctrlrange 继续承担限幅, 而 action_excess 重新看得见"命令超出行程多少"。
+        clip_actions=None,
         seed=42,
 
         # resume=True,
