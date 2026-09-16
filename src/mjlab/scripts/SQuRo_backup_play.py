@@ -217,6 +217,27 @@ class JointDataRecorder:
         record['height_actual'] = float(0.5 * (body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2]
                                                + body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2]).item())
 
+        # 记录后状态与本步事件，避免仅靠参考列猜测 S2、P3 和超时重试。
+        term = unwrapped.command_manager.get_term("backup_cmd")
+        pose = term._pose_cos()[env_idx]
+        record['backup_phase'] = int(term.phase[env_idx].item())  # 0=P1, 1=P2, 2=P3
+        record['backup_t_phase'] = float(term.t_phase[env_idx].item())
+        record['f_body_up_cos'] = float(pose[0].item())
+        record['h_body_up_cos'] = float(pose[1].item())
+        record['f_body_height'] = float(body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2].item())
+        record['h_body_height'] = float(body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2].item())
+        for name, attr in {
+            's1_candidate': '_last_s1_ok', 's2_candidate': '_last_s2_ok',
+            's1_confirmed': '_last_s1_confirmed', 's2_confirmed': '_last_s2_confirmed',
+            's1_transition': '_last_advance1', 's2_transition': '_last_advance2',
+            'back_to_p1': '_last_back_to_p1', 'back_to_p2': '_last_back_to_p2',
+            'phase_retry': '_last_retry_mask',
+            's1_confirm_elapsed': '_s1_confirm_elapsed', 's2_confirm_elapsed': '_s2_confirm_elapsed',
+        }.items():
+            record[name] = float(getattr(term, attr)[env_idx].item())
+        # 站立计时在终止检测时更新；auto-reset 后已清零，终止事件另见 done。
+        record['stand_confirm_elapsed'] = float(unwrapped._stand_elapsed[env_idx].item())
+
         if rewards is not None:
             record['reward'] = float(rewards[0].item()) if torch.is_tensor(rewards) else float(rewards[0])
         if dones is not None:

@@ -5,7 +5,7 @@ import mjlab.tasks  # noqa: F401  触发任务注册
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from math import nextafter
+from math import ceil, nextafter
 from typing import Any, Literal
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
@@ -267,13 +267,14 @@ class StateMachinePolicy:
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P3 检测到 S1 (连续确认后) -> 回到 P2")
-            z = self.asset.data.root_link_pos_w[0, 2].item()
-            up = self.asset.data.projected_gravity_b[0, 2].item()
-            if self.phase == "P3" and z > 0.05 and up > 0.9:
+            # 与训练共用双段背腹朝向和各自高度；手调阶段仍由自身状态机管理。
+            command = self.env.unwrapped.command_manager.get_term("backup_cmd")
+            standing, _ = command.standing_state()
+            if self.phase == "P3" and bool(standing[0]):
                 self.stand_steps += 1
             else:
                 self.stand_steps = 0
-            if self.stand_steps >= int(STAND_CONFIRM_DURATION / dt):
+            if self.stand_steps >= ceil(STAND_CONFIRM_DURATION / dt - 1e-6):
                 self.stand_t = self.t_phase - (self.stand_steps - 1) * dt
                 self._log(f"稳定站起! stand_t≈{self.stand_t:.2f}s (P3 内)")
                 self.phase = "DONE"

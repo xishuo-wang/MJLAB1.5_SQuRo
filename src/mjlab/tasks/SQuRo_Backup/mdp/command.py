@@ -8,6 +8,7 @@ from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
+from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_TARGET_HEIGHT, STAND_UPRIGHT_COS
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -218,6 +219,19 @@ class BackupCommand(CommandTerm):
         # 区间奖励: 两段都已翻到俯卧 (朝 S2 的连续进度)；未知姿态按 0 处理。
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
         return torch.minimum(self._ramp(u[:, 0], 1.0), self._ramp(u[:, 1], 1.0))
+
+    # 站立几何与连续进度共用背腹轴、前后段各自高度；阶段门控由调用方负责。
+    def standing_state(self) -> tuple[torch.Tensor, torch.Tensor]:
+        u = self._pose_cos()
+        heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id),
+                               self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
+        valid = torch.isfinite(u).all(dim=1) & torch.isfinite(heights).all(dim=1)
+        standing = valid & (u > STAND_UPRIGHT_COS).all(dim=1) & (heights > STAND_MIN_HEIGHT).all(dim=1)
+        # 较低的一段决定抬升进度，不能只抬起一端；贴地时不给站立底分。
+        height_progress = ((heights.amin(dim=1) - STAND_GROUND_HEIGHT)
+                           / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
+        progress = u.amin(dim=1).clamp(0.0, 1.0) * height_progress
+        return standing, torch.where(valid, progress, torch.zeros_like(progress))
 
     def _segment_upright(self, idx: int) -> torch.Tensor:
         upright, _ = self._get_pose_flags()

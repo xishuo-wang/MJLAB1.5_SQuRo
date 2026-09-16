@@ -64,7 +64,7 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s1")
-    return weight * command.progress_s1
+    return weight * command.progress_s1 * (command.phase == 0)
 
 
 
@@ -73,7 +73,15 @@ def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s2")
-    return weight * command.progress_s2
+    return weight * command.progress_s2 * (command.phase == 1)
+
+
+# P3 只奖励双段正置并共同抬升，回到 S1 或仅一端抬高不能获得站立奖励。
+def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    _, progress = command.standing_state()
+    weight = get_curriculum_reward_weight(env, "weight_progress_s3")
+    return weight * progress * (command.phase == 2)
 
 
 
@@ -107,18 +115,29 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# 四脊柱等权的目标指令成本
-def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+# 按名称对齐关节目标成本；raw_action 已经过 RL 外层 ±6 裁剪，但尚未经过 XML 控制限幅。
+def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...]) -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
     # 重建限幅前目标；不要读取实际关节角或已经限幅的控制量，否则过量指令会被隐藏。
     target = action_term.raw_action * action_term.scale + action_term.offset
     ref_pos, _ = get_reference_joint_state(env)
-    ref_columns = _MODEL_INDICES.actuator_spn_ids
     # 动作项按自身关节顺序排列，参考表按固定顺序排列；用名称对齐，避免列序假设。
     target_columns = tuple(action_term.target_names.index(_ACTUATED_JOINT_NAMES[i]) for i in ref_columns)
     error = target[:, target_columns] - ref_pos[:, ref_columns]
-    # 这里只返回负均方误差，权重和 dt 均由 RewardManager 统一乘一次。
     return -torch.mean(error.square(), dim=1)
+
+
+# 四脊柱等权，课程权重在这里生效；RewardManager 只乘外层 1.0 和 dt。
+def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    weight = get_curriculum_reward_weight(env, "weight_spine_target")
+    return weight * _joint_target_cost(env, _MODEL_INDICES.actuator_spn_ids)
+
+
+# P3 增加腿目标跟踪成本，抑制腿仍压在支撑极限、不跟随站立参考的行为。
+def compute_leg_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    weight = get_curriculum_reward_weight(env, "weight_leg_target")
+    return weight * _joint_target_cost(env, _MODEL_INDICES.actuator_leg_ids) * (command.phase == 2)
 
 
 

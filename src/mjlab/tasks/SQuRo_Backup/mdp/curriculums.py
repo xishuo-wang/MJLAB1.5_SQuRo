@@ -3,7 +3,7 @@ import torch
 from typing import Any
 
 
-# 100 Hz 初筛配置：控制周期 0.002 × 5 = 0.01 s，48 步采样仍覆盖 0.48 s。
+# 100 Hz 初筛配置：控制周期 0.002 × 5 = 0.01 s，96 步采样覆盖 0.96 s。
 # RL 配置与课程轮数换算共用此值；采样段末不重置环境，后续采样继续当前回合。
 # 短采样段更依赖价值估计，结果确定后再恢复更高物理精度和更长采样段验证。
 _STEPS_PER_ITER = 96
@@ -34,12 +34,14 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (10.0,),
     "weight_mimic_vel":         (5.0,),
     "weight_spine_target":      (2.0,),
+    "weight_leg_target":        (1.0,),
     "weight_height":            (5.0,),
     "weight_milestone_s1":      (10.0,),
     "weight_milestone_s2":      (15.0,),
     "weight_milestone_success": (35.0,),
     "weight_progress_s1":       (3.0,),
     "weight_progress_s2":       (3.0,),
+    "weight_progress_s3":       (3.0,),
     "weight_smooth_L1_leg":     (0.1,),
     "weight_smooth_L1_spn":     (0.1,),
     "weight_smooth_L2_leg":     (0.1,),

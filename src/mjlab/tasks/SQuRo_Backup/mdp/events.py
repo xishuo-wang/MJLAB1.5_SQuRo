@@ -9,6 +9,10 @@ def reset_model(env, env_ids):
     if n == 0:
         return
 
+    # 按环境清零成功计时，不能将上一回合的站立确认时间带入新回合。
+    if hasattr(env, "_stand_elapsed"):
+        env._stand_elapsed[env_ids] = 0.0
+
     # 获取机器人实体
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)

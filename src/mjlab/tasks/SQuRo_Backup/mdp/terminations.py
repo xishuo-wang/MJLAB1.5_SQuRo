@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
-from .indices import _MODEL_INDICES
+from .command import BackupCommand
 from .timing import STAND_CONFIRM_DURATION
 
 if TYPE_CHECKING:
@@ -13,16 +13,18 @@ def check_fallen(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
 
-# 站起成功终止 — 身体竖直且高度达标连续 STAND_CONFIRM_DURATION 秒
+# P3 中两段分别正置且高度达标，连续 STAND_CONFIRM_DURATION 实际秒后结束。
 def check_stand_success(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    asset = env.scene.entities["robot"]
-    up = asset.data.projected_gravity_b[:, 2]
-    body_pos_w = asset.data.body_link_pos_w
-    h = 0.5 * (body_pos_w[:, _MODEL_INDICES.f_body_id, 2] + body_pos_w[:, _MODEL_INDICES.h_body_id, 2])
-    standing = (up > 0.9) & (h > 0.05)
-    buf = getattr(env, "_stand_steps", None)
-    if buf is None:
-        buf = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
-        env._stand_steps = buf  # type: ignore[attr-defined]
-    buf[:] = torch.where(standing, buf + 1, torch.zeros_like(buf))
-    return buf >= int(STAND_CONFIRM_DURATION / env.step_dt)
+    command = env.command_manager.get_term("backup_cmd")
+    standing, _ = command.standing_state()
+    candidate = standing & (command.phase == 2)
+    elapsed = getattr(env, "_stand_elapsed", None)
+    if elapsed is None:
+        elapsed = torch.zeros(env.num_envs, device=env.device)
+    elapsed, confirmed = BackupCommand._update_confirmation(
+        elapsed, candidate, env.episode_length_buf > 0, env.step_dt, STAND_CONFIRM_DURATION
+    )
+    env._stand_elapsed = elapsed  # type: ignore[attr-defined]
+    env.extras["log"]["Data/stand_candidate"] = candidate.float().mean().item()
+    env.extras["log"]["Data/stand_confirm_elapsed"] = elapsed.mean().item()
+    return confirmed

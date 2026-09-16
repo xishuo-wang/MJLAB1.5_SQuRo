@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 
-REF_TOTAL_TIME = REFERENCE_TOTAL_TIME  # 动作 1.45s + 过渡 0.5s + 保持 1.05s
+REF_TOTAL_TIME = REFERENCE_TOTAL_TIME  # 动作 0.95s + 过渡 0.5s + 保持 1.05s
 _REF_DT = 0.005             # 参考表分辨率 (s)
 _ACTION_END = P2_END        # 三段动作结束
 _SEG1_END = P1_BUILD_DURATION
@@ -41,7 +41,7 @@ _HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
 
 # 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
 # T2/T3 的系数必须与 scripts/SQuRo_backup_Replay.py 的 slow1_target 一致, 见踩坑记录
-def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
+def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray, np.ndarray]:
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)
     ref = np.zeros((n, 14), dtype=np.float64)
@@ -51,7 +51,9 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
     for i, tn in enumerate(t_grid):
         leg = _LEG_INIT.copy()
         f_sp1, f_bd, h_sp1, h_bd = 0.0, 0.0, 0.0, 0.0
-        if tn < _ACTION_END:
+        # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
+        at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
+        if tn < _ACTION_END or at_p2_end:
             # 腿支撑位 (段1-3)
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
@@ -74,7 +76,7 @@ def _generate_reference_table() -> tuple[np.ndarray, np.ndarray]:
                 h_sp1 = -0.2 + 0.2 * u
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
-            # T4: 腿支撑位 -> 站立角, 脊柱保持全零，避免前段侧摆在 T3 末再次跳变
+            # T4: 腿支撑位 -> 站立角，按约定脊柱从零开始；不将该跳变插值进 P2。
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
@@ -106,7 +108,11 @@ def _get_ref_table(device: str) -> dict:
     pos_t = torch.tensor(ref_np, device=device, dtype=torch.float32)
     vel_t = (pos_t[1:] - pos_t[:-1]) / _REF_DT
     vel_t = torch.cat([vel_t, vel_t[-1:]])
-    cache = {"t": t_t, "pos": pos_t, "vel": vel_t}
+    _, p2_np = _generate_reference_table(p2_endpoint=True)
+    p2_pos = torch.tensor(p2_np, device=device, dtype=torch.float32)
+    p2_vel = (p2_pos[1:] - p2_pos[:-1]) / _REF_DT
+    p2_vel = torch.cat([p2_vel, p2_vel[-1:]])
+    cache = {"t": t_t, "pos": pos_t, "vel": vel_t, "p2_pos": p2_pos, "p2_vel": p2_vel}
     _table_cache[device] = cache
     return cache
 
@@ -164,7 +170,8 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # 与手调状态机一致：等待状态门控判定时固定在当前阶段端点，
     # 不让缓冲期参考继续泄漏到下一段动作。
     p1_t = t_local_nom.clamp(max=_SEG2_END)
-    p2_t = _SEG2_END + t_local_nom.clamp(max=_ACTION_END - _SEG2_END)
+    # float32 的起点+段长可能比边界大一个 ulp，需再次限幅，避免读到 T4 插值。
+    p2_t = (_SEG2_END + t_local_nom.clamp(max=_ACTION_END - _SEG2_END)).clamp(max=_ACTION_END)
     p3_t = _ACTION_END + t_local_nom
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 
@@ -175,14 +182,20 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     cmd = cmd_term.command
     lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale
-    t_nom = _stage_t_nom(env)  # [N]
-    idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
+    t_nom = _stage_t_nom(env).clamp(0.0, REF_TOTAL_TIME)  # [N]
+    # 精确落在节点时使用右侧导数，尤其 P3 起点不能读到 T3->T4 跳变速度。
+    idx = torch.searchsorted(cache["t"], t_nom, right=True).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = (t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)
     pos = cache["pos"][idx_p] + frac.unsqueeze(1) * (cache["pos"][idx] - cache["pos"][idx_p])
     # 参考速度: dref/dt = dref/dt_nom * (1/λ)
     vel = cache["vel"][idx_p] / lam.unsqueeze(1)
     phase = cmd_term.phase  # type: ignore[attr-defined]
+    # 同一名义时间有两个边界值：P2 保持 T3 末端，P3 才使用全零脊柱。
+    p2_pos = cache["p2_pos"][idx_p] + frac.unsqueeze(1) * (cache["p2_pos"][idx] - cache["p2_pos"][idx_p])
+    p2_vel = cache["p2_vel"][idx_p] / lam.unsqueeze(1)
+    pos = torch.where((phase == 1).unsqueeze(1), p2_pos, pos)
+    vel = torch.where((phase == 1).unsqueeze(1), p2_vel, vel)
     endpoint_eps = 1e-6
     holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | (
         (phase == 1) & (t_nom >= _ACTION_END - endpoint_eps)
