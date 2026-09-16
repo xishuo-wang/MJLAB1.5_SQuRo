@@ -11,8 +11,8 @@ from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_TARGET_HEIGHT, STAND_UPRIGHT_COS
 
 if TYPE_CHECKING:
-    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
+    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 # 阶段状态检测阈值
@@ -235,8 +235,7 @@ class BackupCommand(CommandTerm):
         # 任一段转回侧面或仰面会立即关闭门控, 因此该进度也直接抑制 P3 里的回扭。
         cone = float(self._pose_cos_threshold)
         orient = ((u_floor - cone) / (1.0 - cone)).clamp(0.0, 1.0)
-        height_progress = ((h_floor - STAND_GROUND_HEIGHT)
-                           / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
+        height_progress = ((h_floor - STAND_GROUND_HEIGHT) / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
         progress = orient * height_progress
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
 

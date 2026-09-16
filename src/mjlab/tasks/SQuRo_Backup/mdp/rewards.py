@@ -2,14 +2,14 @@ from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
+from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
-from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .reference import get_reference_joint_state, get_body_reference
+from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 
 if TYPE_CHECKING:
-    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.envs.mdp.actions import JointPositionAction
-    from .command import BackupCommand
+    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
@@ -60,9 +60,6 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 
 # =========================================================================================
 # s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度
-# 用背腹 site 的方向余弦线性爬升, 仰面躺的姿态读数恒为 0, 不产生"不动也拿分"的底分。
-# 不做阶段门控: 前滚全程 uF 从 -1 走到 +1, progress_s1 覆盖 -1->0, progress_s2 覆盖 0->+1,
-# 加起来才是连续付费; 门控会在 P2 入口把前半程的奖励清零并制造 3/s 的悬崖。
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s1")
@@ -129,14 +126,17 @@ def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...]) -
     return -torch.mean(error.square(), dim=1)
 
 
+
 # 四脊柱等权，课程权重在这里生效；RewardManager 只乘外层 1.0 和 dt。
 def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_spine_target")
     return weight * _joint_target_cost(env, _MODEL_INDICES.actuator_spn_ids)
 
 
+
 # 执行器 ctrlrange 张量 (按动作项自身的关节顺序排列), 按名称解析一次后缓存。
 _CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+
 
 
 def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
@@ -151,6 +151,7 @@ def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tenso
                   torch.tensor(hi, device=device, dtype=dtype))
         _CTRL_RANGE_CACHE[key] = cached
     return cached
+
 
 
 # 动作超出执行器 ctrlrange 的成本。

@@ -39,14 +39,13 @@ _FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
 _HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
 
 
-# 生成参考表: 返回 (t[np], ref[np, 14]) — MJLAB actuator 顺序
-# T2/T3 的系数必须与 scripts/SQuRo_backup_Replay.py 的 slow1_target 一致, 见踩坑记录
+# 生成参考表
 def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray, np.ndarray]:
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)
     ref = np.zeros((n, 14), dtype=np.float64)
-    leg_col = (4, 5, 6, 7, 10, 11, 12, 13)  # MJLAB 中腿列: FL/FR 4-7, HL/HR 10-13
-    spn_col = (0, 1, 8, 9)                   # MJLAB 中脊柱列
+    leg_col = (4, 5, 6, 7, 10, 11, 12, 13)      # MJLAB 中腿列: FL/FR 4-7, HL/HR 10-13
+    spn_col = (0, 1, 8, 9)                      # MJLAB 中脊柱列
 
     for i, tn in enumerate(t_grid):
         leg = _LEG_INIT.copy()
@@ -54,7 +53,6 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
         # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
         if tn < _ACTION_END or at_p2_end:
-            # 腿支撑位 (段1-3)
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
             if tn < _SEG1_END:
@@ -76,10 +74,6 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
                 h_sp1 = -0.2 + 0.2 * u
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
-            # T4: 腿支撑位 -> 站立角; 脊柱承接 T3 末端的 F_spine1 在过渡段内线性回零。
-            # 不能直接取 0: 那会在 0.95 处造出 0.6 rad 的阶跃 (等于要求关节瞬时转 60 rad/s),
-            # 既给 mimic_pos/spine_target 送一个无法消除的误差, 也让 P3 入口的参考
-            # 退化成 P1 入口的形状 (脊柱全零 + 腿支撑位)。
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
@@ -136,6 +130,7 @@ def _get_body_traj(device: str) -> dict:
     return cache
 
 
+
 # 将新动作时间映射回旧身体轨迹的采集时间，只拉伸 P1 回收段。
 # 保留原始轨迹文件与空间数值；这是参考重定时，不是重新仿真得到的身体轨迹。
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
@@ -146,6 +141,7 @@ def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
         t_nom * (BODY_TRAJ_BUILD_END / _SEG1_END),
         torch.where(t_nom < _SEG2_END, recover_t, BODY_TRAJ_P1_END + t_nom - _SEG2_END),
     )
+
 
 
 # 获取身体参考轨迹 (时变期望高度 + 走廊中心)，按阶段时间重定时并冻结缓冲期参考。
@@ -162,6 +158,7 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     return out[0], out[1], out[2], out[3]
 
 
+
 # 阶段时间映射到统一名义时间；P2/P3 起点与动作表共享时间常量。
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
@@ -169,8 +166,6 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     phase = cmd_term.phase  # type: ignore[attr-defined]
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
-
-    # 与手调状态机一致：等待状态门控判定时固定在当前阶段端点，
     # 不让缓冲期参考继续泄漏到下一段动作。
     p1_t = t_local_nom.clamp(max=_SEG2_END)
     # float32 的起点+段长可能比边界大一个 ulp，需再次限幅，避免读到 T4 插值。
@@ -179,6 +174,8 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 
 
+
+# 获取参考关节状态
 def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
     cache = _get_ref_table(env.device)
     # 命令 time_scale λ (放慢倍数): λ=1.0 原始速度, λ=1.5 放慢 1.5 倍
@@ -200,8 +197,6 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     pos = torch.where((phase == 1).unsqueeze(1), p2_pos, pos)
     vel = torch.where((phase == 1).unsqueeze(1), p2_vel, vel)
     endpoint_eps = 1e-6
-    holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | (
-        (phase == 1) & (t_nom >= _ACTION_END - endpoint_eps)
-    )
+    holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | ((phase == 1) & (t_nom >= _ACTION_END - endpoint_eps))
     vel = torch.where(holding.unsqueeze(1), torch.zeros_like(vel), vel)
     return pos, vel
