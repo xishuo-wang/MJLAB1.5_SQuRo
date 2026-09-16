@@ -155,7 +155,7 @@ def main() -> None:
                 f"  t={i*env.step_dt:4.2f}s rew={rew.mean().item():+.4f} "
                 f"base_z={base_z.mean().item():.3f} "
                 f"upright={log.get('Data/uprightness', float('nan')):+.3f} "
-                f"h={log.get('Data/height_actual', float('nan')):.3f}"
+                f"h={log.get('Body/height', float('nan')):.3f}"
             )
 
     tail_avg = sum(z_tail) / max(1, len(z_tail))

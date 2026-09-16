@@ -31,8 +31,8 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     # 读取每个 episode 的首次里程碑脉冲；转移脉冲仍保留给诊断使用。
+    # 不再单独写日志: 脉冲是 Progress/enter_p2 的导数, 累积量更好读。
     pulse = command.s1_milestone_pulse
-    env.extras["log"]["Data/milestone_s1"] = pulse.float().mean().item()
     weight = get_curriculum_reward_weight(env, "weight_milestone_s1")
     return weight * pulse.float() / env.step_dt
 
@@ -44,7 +44,6 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
     pulse = command.s2_milestone_pulse
-    env.extras["log"]["Data/milestone_s2"] = pulse.float().mean().item()
     weight = get_curriculum_reward_weight(env, "weight_milestone_s2")
     return weight * pulse.float() / env.step_dt
 
@@ -52,7 +51,7 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     pulse = env.termination_manager.get_term("stand")
-    env.extras["log"]["Data/milestone_task_success"] = pulse.float().mean().item()
+    env.extras["log"]["Progress/success"] = pulse.float().mean().item()
     weight = get_curriculum_reward_weight(env, "weight_milestone_success")
     return weight * pulse.float() / env.step_dt
 
@@ -228,7 +227,7 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
     r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
     Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
-    env.extras["log"]["Data/height_actual"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
+    env.extras["log"]["Body/height"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
     return Reward_height
 
 

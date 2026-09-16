@@ -283,3 +283,28 @@ uv run train Mjlab-SQuRo-Backup --agent.resume True --agent.load-run 2026-09-12_
 `_pose_flags` 改为由同一份 `u` 派生，正置/倒置判据的数值含义不变。
 观测维度、动作维度、动作映射、物理参数、状态机、PPO 和训练循环不变；日志多出 `Episode_Reward/progress_s1`、`Episode_Reward/progress_s2`。
 里程碑权重也同步上调。旧 checkpoint 的网络形状仍兼容，但其总回报不能与新配置直接比较。
+
+### 训练日志精简（同一批）
+
+任务侧 `Data/*` 从 24 条减到 10 条，按"能回答哪个问题"分三组，其余全部删除：
+
+| 新名 | 旧名 | 含义 |
+| --- | --- | --- |
+| `Progress/enter_p2` | `Data/backup_s1_awarded` | 本回合已进入 P2 的环境占比 |
+| `Progress/enter_p3` | `Data/backup_s2_awarded` | 本回合已进入 P3 的环境占比 |
+| `Progress/success` | `Data/milestone_task_success` | 本步成功站起（站立判据连续 0.5 s）的占比 |
+| `Progress/standing` | `Data/stand_candidate` | 本步满足站立姿态判据的占比 |
+| `Progress/relapse` | `Data/backup_both_inverted` | 又整体翻回仰面的占比（取消回退后唯一能看出该姿态的量） |
+| `Phase/p2` / `Phase/p3` | `Data/backup_phase`（拆开） | 当前处在 P2 / P3 的占比，`p1 = 1 − p2 − p3` |
+| `Phase/retry` | `Data/backup_retry_cum` | 本回合累计相位超时重试次数的均值 |
+| `Gate/s1_pose` / `s2_pose` | `Data/backup_s1_ok` / `s2_ok` | 姿态到过没有 |
+| `Gate/s1_advance` / `s2_advance` | `Data/backup_s1_transition` / `s2_transition` | 相位真的推进的速率 |
+
+删除与理由：`backup_phase` 是加权均值，P2/P3 同时有人时无法反解占比，拆成两个占比；
+`backup_s1/s2_confirmed`、`backup_inverted_confirmed` 在取消阶段回退后与对应阶段内的 `advance` 等价或已无后果；
+`backup_s1/s2_milestone` 与 `Data/milestone_s1/s2` 是 `Progress/enter_*` 的导数（且互为重复）；
+`backup_back_to_p1/p2` 恒为 0；`backup_t_phase`、`backup_retry_rate`、`stand_confirm_elapsed` 读数不直观或与保留项重复。
+
+`_last_*` 属性**全部保留**（`SQuRo_backup_play.py` 的录像列依赖它们），只是不再全部写日志 —— 日志面向训练监控，属性面向回放诊断。
+**日志改名会与历史 run 的曲线名断开**，对照旧 run 时按上表映射。
+`Episode_Reward/*`、`Episode_Termination/*` 由管理器按已注册项自动生成，本轮不动。

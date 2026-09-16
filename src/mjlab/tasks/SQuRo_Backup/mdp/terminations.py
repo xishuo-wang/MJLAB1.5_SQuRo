@@ -19,6 +19,6 @@ def check_stand_success(env: "ManagerBasedRlEnv") -> torch.Tensor:
         elapsed = torch.zeros(env.num_envs, device=env.device)
     elapsed, confirmed = BackupCommand._update_confirmation(elapsed, candidate, env.episode_length_buf > 0, env.step_dt, STAND_CONFIRM_DURATION)
     env._stand_elapsed = elapsed  # type: ignore[attr-defined]
-    env.extras["log"]["Data/stand_candidate"] = candidate.float().mean().item()
-    env.extras["log"]["Data/stand_confirm_elapsed"] = elapsed.mean().item()
+    # 站立候选占比 = 站立进度的时间曲线; 计时器均值大部分时间为 0, 不再记录。
+    env.extras["log"]["Progress/standing"] = candidate.float().mean().item()
     return confirmed

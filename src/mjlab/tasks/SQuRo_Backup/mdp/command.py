@@ -384,26 +384,25 @@ class BackupCommand(CommandTerm):
         self._last_retry_mask = retry_mask
 
     def _update_metrics(self) -> None:
-        # 状态机阶段/重试指标 -> wandb 日志 (env.step 中已初始化 extras['log'])
+        # 训练监控只保留三组共 10 条, 每条都对应一个明确问题:
+        #   Progress/*  回合级成就 —— 策略走到哪一步了
+        #   Phase/*     当前停在哪一段 (p1 = 1 - p2 - p3, 不再记录无法反解的加权均值)
+        #   Gate/*      pose = 姿态到过没, advance = 相位真的推进的速率
+        # 其余确认计时/回退/里程碑脉冲不再写日志: 取消阶段回退后 confirmed 与 advance 在
+        # 对应阶段内等价, 里程碑脉冲是 Progress/enter_* 的导数, 回退量恒为 0。
+        # 注意 _last_* 记录的是上一步检测结果 (metrics 在 _update_command 之前被调用);
+        # 这些属性全部保留 —— SQuRo_backup_play.py 的录像列依赖它们, 日志与属性解耦。
         log = self._env.extras["log"]
-        log["Data/backup_phase"] = self.phase.float().mean().item()
-        log["Data/backup_t_phase"] = self.t_phase.mean().item()
-        log["Data/backup_retry_cum"] = self.retry.float().mean().item()
-        log["Data/backup_retry_rate"] = self._last_retry_mask.float().mean().item()
-        log["Data/backup_s1_ok"] = self._last_s1_ok.float().mean().item()
-        log["Data/backup_s2_ok"] = self._last_s2_ok.float().mean().item()
-        log["Data/backup_both_inverted"] = self._last_both_inverted.float().mean().item()
-        log["Data/backup_s1_confirmed"] = self._last_s1_confirmed.float().mean().item()
-        log["Data/backup_s2_confirmed"] = self._last_s2_confirmed.float().mean().item()
-        log["Data/backup_inverted_confirmed"] = self._last_inverted_confirmed.float().mean().item()
-        log["Data/backup_s1_transition"] = self._last_advance1.float().mean().item()
-        log["Data/backup_s2_transition"] = self._last_advance2.float().mean().item()
-        log["Data/backup_s1_milestone"] = self._last_s1_milestone.float().mean().item()
-        log["Data/backup_s2_milestone"] = self._last_s2_milestone.float().mean().item()
-        log["Data/backup_back_to_p1"] = self._last_back_to_p1.float().mean().item()
-        log["Data/backup_back_to_p2"] = self._last_back_to_p2.float().mean().item()
-        log["Data/backup_s1_awarded"] = self._s1_awarded.float().mean().item()
-        log["Data/backup_s2_awarded"] = self._s2_awarded.float().mean().item()
+        log["Progress/enter_p2"] = self._s1_awarded.float().mean().item()
+        log["Progress/enter_p3"] = self._s2_awarded.float().mean().item()
+        log["Progress/relapse"] = self._last_both_inverted.float().mean().item()
+        log["Phase/p2"] = (self.phase == 1).float().mean().item()
+        log["Phase/p3"] = (self.phase == 2).float().mean().item()
+        log["Phase/retry"] = self.retry.float().mean().item()
+        log["Gate/s1_pose"] = self._last_s1_ok.float().mean().item()
+        log["Gate/s2_pose"] = self._last_s2_ok.float().mean().item()
+        log["Gate/s1_advance"] = self._last_advance1.float().mean().item()
+        log["Gate/s2_advance"] = self._last_advance2.float().mean().item()
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         pass
