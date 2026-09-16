@@ -32,8 +32,6 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
             num_mini_batches=4,
             learning_rate=3.0e-4,
             schedule="adaptive",
-            # 控制周期由 0.02 s 减半到 0.01 s；保持每单位实际时间的折扣与 GAE 衰减。
-            # 新参数连续作用两步，等于旧参数作用一步；这里 lam 是 GAE 系数，不是参考速度 λ。
             gamma=0.99 ** 0.5,
             lam=0.95 ** 0.5,
             desired_kl=0.01,
