@@ -3,7 +3,7 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .curriculums import get_curriculum_reward_weight
-from .indices import _ACTUATED_JOINT_NAMES, _MODEL_INDICES
+from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .reference import get_reference_joint_state, get_body_reference
 
 if TYPE_CHECKING:
@@ -61,10 +61,12 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 # =========================================================================================
 # s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度
 # 用背腹 site 的方向余弦线性爬升, 仰面躺的姿态读数恒为 0, 不产生"不动也拿分"的底分。
+# 不做阶段门控: 前滚全程 uF 从 -1 走到 +1, progress_s1 覆盖 -1->0, progress_s2 覆盖 0->+1,
+# 加起来才是连续付费; 门控会在 P2 入口把前半程的奖励清零并制造 3/s 的悬崖。
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s1")
-    return weight * command.progress_s1 * (command.phase == 0)
+    return weight * command.progress_s1
 
 
 
@@ -73,10 +75,10 @@ def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s2")
-    return weight * command.progress_s2 * (command.phase == 1)
+    return weight * command.progress_s2
 
 
-# P3 只奖励双段正置并共同抬升，回到 S1 或仅一端抬高不能获得站立奖励。
+# P3 站立进度: 只对 P3 生效；前后段同时背部朝上才解锁, 越接近最终站立越大。
 def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     _, progress = command.standing_state()
@@ -133,11 +135,38 @@ def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return weight * _joint_target_cost(env, _MODEL_INDICES.actuator_spn_ids)
 
 
-# P3 增加腿目标跟踪成本，抑制腿仍压在支撑极限、不跟随站立参考的行为。
-def compute_leg_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    weight = get_curriculum_reward_weight(env, "weight_leg_target")
-    return weight * _joint_target_cost(env, _MODEL_INDICES.actuator_leg_ids) * (command.phase == 2)
+# 执行器 ctrlrange 张量 (按动作项自身的关节顺序排列), 按名称解析一次后缓存。
+_CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    key = (tuple(names), str(device), str(dtype))
+    cached = _CTRL_RANGE_CACHE.get(key)
+    if cached is None:
+        lo = [0.0] * len(names)
+        hi = [0.0] * len(names)
+        for i, name in enumerate(names):
+            lo[i], hi[i] = _ACTUATOR_CTRL_RANGE[name]
+        cached = (torch.tensor(lo, device=device, dtype=dtype),
+                  torch.tensor(hi, device=device, dtype=dtype))
+        _CTRL_RANGE_CACHE[key] = cached
+    return cached
+
+
+# 动作超出执行器 ctrlrange 的成本。
+# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到 ctrlrange: 超出部分被完全丢弃,
+# 命令写 -28 和写 -4.67 (= 髋的 ctrlrange 下限 / scale) 产生完全一样的力矩。
+# 实测策略的确定性输出长期停在 ±26~47, 把 8 条腿和 2 个颈关节永久钉在饱和点上,
+# 腿因此完全失去控制权, 站起不可能完成。这里只对被丢弃的那一段计成本:
+# 命令落在 ctrlrange 内时为 0, 所以"贴住限位撑地"这个有用行为不受惩罚。
+def compute_action_ctrl_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
+    # 与 spine_target 同源: 用裁剪后、XML 控制限幅前的目标, 含 scale 与默认角偏移。
+    target = action_term.raw_action * action_term.scale + action_term.offset
+    lo, hi = _ctrl_range_tensors(action_term.target_names, target.device, target.dtype)
+    excess = (lo - target).clamp(min=0.0) + (target - hi).clamp(min=0.0)
+    weight = get_curriculum_reward_weight(env, "weight_action_excess")
+    return -weight * excess.mean(dim=1)
 
 
 

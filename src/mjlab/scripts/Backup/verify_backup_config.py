@@ -16,6 +16,7 @@ from mjlab.tasks.SQuRo_Backup.mdp import timing as T
 def _hand_at(tn: float) -> tuple[float, float, float, float]:
     # 手调脚本分区公式 (与 slow1_target 同构), 用于独立复算
     T1, T2, T3 = T.P1_BUILD_DURATION, T.P1_RECOVER_DURATION, T.P2_DURATION
+    T4 = T.STAND_TRANSITION_DURATION
     if tn < T1:
         u = tn / T1
         return (0.6 * u, -1.57 * u, 0.6 * u, 1.57 * u)
@@ -25,6 +26,10 @@ def _hand_at(tn: float) -> tuple[float, float, float, float]:
     if tn < T1 + T2 + T3:
         u = (tn - T1 - T2) / T3
         return (0.2 + 0.4 * u, -1.57 + 1.57 * u, -0.2 + 0.2 * u, 1.57 - 1.57 * u)
+    if tn < T1 + T2 + T3 + T4:
+        # T4: F_spine1 承接 T3 末端 0.6 线性回零, 其余脊柱保持零
+        u = (tn - T1 - T2 - T3) / T4
+        return (0.6 * (1.0 - u), 0.0, 0.0, 0.0)
     return (0.0, 0.0, 0.0, 0.0)
 
 
@@ -86,6 +91,33 @@ def main() -> None:
     for k in ("p1_buffer_s", "p2_buffer_s", "pose_confirm_s", "inverted_confirm_s",
               "pose_angle_tolerance_deg"):
         print(f"  {k:26s} = {getattr(c, k)}")
+
+    print("\n=== 5) 执行器 ctrlrange 常量 vs SQuRo.xml ===")
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+    from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATOR_CTRL_RANGE
+    xml_path = Path("src/mjlab/asset_zoo/robots/SQuRo/xmls/SQuRo.xml")
+    found: dict[str, tuple[float, float]] = {}
+    if xml_path.exists():
+        for act in ET.parse(xml_path).getroot().iter("position"):
+            rng = act.get("ctrlrange")
+            joint = act.get("joint")
+            if rng and joint:
+                lo, hi = (float(v) for v in rng.split())
+                found[joint] = (lo, hi)
+    else:
+        print(f"  ** 找不到 XML: {xml_path} **")
+        ok = False
+    for name, rng in _ACTUATOR_CTRL_RANGE.items():
+        ref = found.get(name)
+        same = ref is not None and abs(ref[0] - rng[0]) < 1e-9 and abs(ref[1] - rng[1]) < 1e-9
+        if not same:
+            ok = False
+        print(f"  {name:20s} 常量=({rng[0]:+.2f}, {rng[1]:+.2f})  XML={ref}  "
+              f"{'OK' if same else '** 不一致 **'}")
+    if set(_ACTUATOR_CTRL_RANGE) != set(found):
+        ok = False
+        print(f"  ** 常量与 XML 的关节集合不同: 常量 {len(_ACTUATOR_CTRL_RANGE)} 项, XML {len(found)} 项 **")
 
     print(f"\n[总判定] {'全部通过' if ok else '** 存在问题 **'}")
     raise SystemExit(0 if ok else 1)

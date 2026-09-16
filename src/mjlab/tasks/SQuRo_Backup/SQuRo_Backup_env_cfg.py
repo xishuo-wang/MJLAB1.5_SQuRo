@@ -69,7 +69,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=1.0),
-        "leg_target": RewardTermCfg(func=mdp.compute_leg_target_cost, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=1.0),
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),
@@ -77,6 +76,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "progress_s1": RewardTermCfg(func=mdp.compute_s1_progress_reward, weight=1.0),
         "progress_s2": RewardTermCfg(func=mdp.compute_s2_progress_reward, weight=1.0),
         "progress_s3": RewardTermCfg(func=mdp.compute_s3_progress_reward, weight=1.0),
+        "action_excess": RewardTermCfg(func=mdp.compute_action_ctrl_excess_penalty, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
@@ -89,9 +89,12 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
     # 终止条件
+    # stand 必须是 time_out=True: 提前结束会截断后续密集奖励, 若按真终止处理
+    # (不 bootstrap) 则"3 秒站起"要丢掉约 7 s x 18/s ≈ 126 分, 而成功里程碑只有 35 分,
+    # 策略会被算成"站起来反而亏"。标记为截断后价值估计会 bootstrap 到后续状态。
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
-        "stand": TerminationTermCfg(func=mdp.check_stand_success, time_out=False),
+        "stand": TerminationTermCfg(func=mdp.check_stand_success, time_out=True),
     }
 
     # 命令系统

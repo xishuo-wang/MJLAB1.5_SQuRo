@@ -71,7 +71,8 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
         r[8] = -0.2 + 0.2 * u
         r[9] = 1.57 - 1.57 * u
     else:
-        # T4: 腿从支撑角平滑回站立角，脊柱全程保持零；之后保持站立
+        # T4: 腿从支撑角平滑回站立角；F_spine1 承接 T3 末端在过渡段内线性回零，
+        # 其余脊柱保持零；之后保持站立。与 mdp/reference.py 的 T4 必须逐字一致。
         u = min(1.0, (current_time - time4) / (time5_end - time4))
         r[4] = FL_HOLD[0] + u * (LEG_INIT[0] - FL_HOLD[0])
         r[5] = FL_HOLD[1] + u * (LEG_INIT[1] - FL_HOLD[1])
@@ -79,7 +80,7 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
         r[10] = HL_HOLD[0] + u * (LEG_INIT[4] - HL_HOLD[0])
         r[11] = HL_HOLD[1] + u * (LEG_INIT[5] - HL_HOLD[1])
         r[12], r[13] = r[10], r[11]
-        r[0] = 0.0
+        r[0] = 0.6 * (1.0 - u)
     return r
 
 

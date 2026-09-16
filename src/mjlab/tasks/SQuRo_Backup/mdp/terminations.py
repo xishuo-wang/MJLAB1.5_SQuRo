@@ -1,6 +1,6 @@
 from __future__ import annotations
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from .command import BackupCommand
 from .timing import STAND_CONFIRM_DURATION
 
@@ -14,8 +14,10 @@ def check_fallen(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 # P3 中两段分别正置且高度达标，连续 STAND_CONFIRM_DURATION 实际秒后结束。
+# 该终止在 env_cfg 中标记为 time_out=True: 提前结束会截断后续密集奖励,
+# 按真终止处理会把"站起来"算成亏分, 标记为截断后价值估计会 bootstrap 到后续状态。
 def check_stand_success(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    command = env.command_manager.get_term("backup_cmd")
+    command = cast(BackupCommand, env.command_manager.get_term("backup_cmd"))
     standing, _ = command.standing_state()
     candidate = standing & (command.phase == 2)
     elapsed = getattr(env, "_stand_elapsed", None)

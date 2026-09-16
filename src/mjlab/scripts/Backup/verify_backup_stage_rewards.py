@@ -47,15 +47,18 @@ class StageRewardTests(unittest.TestCase):
     def tearDown(self):
         _MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id = self.ids
 
-    def test_exclusive_stage_rewards(self):
+    def test_progress_rewards_ungated_and_s3_is_p3_only(self):
         env, cmd = make_env([0, 1, 2])
+        # S1 姿态 (前段仰面 + 后段俯卧): 区间项不再按阶段门控, 任何阶段都全额付费。
+        # 门控会在 P2 入口把前滚前半程的奖励清零并制造 3/s 的悬崖, 故取消。
         cmd.test_u[:] = torch.tensor([-1., 1.])
-        torch.testing.assert_close(rewards.compute_s1_progress_reward(env), torch.tensor([3., 0., 0.]))
+        torch.testing.assert_close(rewards.compute_s1_progress_reward(env), torch.tensor([3., 3., 3.]))
         self.assertEqual(rewards.compute_s2_progress_reward(env).sum(), 0.)
         self.assertEqual(rewards.compute_s3_progress_reward(env).sum(), 0.)
+        # 双段俯卧: progress_s2 全额, progress_s1 归零; 站立进度仍然只在 P3 生效
         cmd.test_u[:] = 1.
         self.assertEqual(rewards.compute_s1_progress_reward(env).sum(), 0.)
-        torch.testing.assert_close(rewards.compute_s2_progress_reward(env), torch.tensor([0., 3., 0.]))
+        torch.testing.assert_close(rewards.compute_s2_progress_reward(env), torch.tensor([3., 3., 3.]))
         torch.testing.assert_close(rewards.compute_s3_progress_reward(env), torch.tensor([0., 0., 3.]))
 
     def test_standing_requires_both_segments(self):
@@ -71,6 +74,25 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_heights[:] = .055
         cmd.test_u[:] = 1.
         self.assertTrue(cmd.standing_state()[0].all())
+
+    def test_standing_progress_is_gated_and_monotone(self):
+        _, cmd = make_env([2])
+        cmd.test_heights[:] = .055          # 高度已达标, 只考察朝向门控
+        # 任一段落在 45 度锥外 -> 进度必须为 0
+        cmd.test_u[:] = torch.tensor([[.5, 1.]])
+        self.assertEqual(cmd.standing_state()[1].item(), 0.)
+        # 锥内随朝向单调增长, 完全正置时为 1
+        cmd.test_u[:] = torch.tensor([[.85, 1.]])
+        low = cmd.standing_state()[1].item()
+        cmd.test_u[:] = torch.tensor([[.95, 1.]])
+        high = cmd.standing_state()[1].item()
+        self.assertGreater(high, low)
+        self.assertGreater(low, 0.)
+        cmd.test_u[:] = 1.
+        self.assertAlmostEqual(cmd.standing_state()[1].item(), 1., places=6)
+        # 高度不达标时用"较低的一段"决定进度: 只抬起一端拿不到分
+        cmd.test_heights[:] = torch.tensor([[.055, .024]])
+        self.assertEqual(cmd.standing_state()[1].item(), 0.)
 
     def test_stand_confirmation_and_phase_gate(self):
         env, cmd = make_env([2, 1])
@@ -94,17 +116,24 @@ class StageRewardTests(unittest.TestCase):
         env.scene = NS(entities={'robot': robot})
         with patch.object(events, 'resolve_model_indices'):
             events.reset_model(env, torch.tensor([0]))
-        torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., .3]))
+            torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., .3]))
+            # 计时器尚未被 termination 创建过时也要能建立并清零, 不能静默跳过
+            del env._stand_elapsed
+            events.reset_model(env, torch.tensor([1]))
+            torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., 0.]))
 
-    def test_p2_boundary_and_p3_zero(self):
+    def test_p2_boundary_and_p3_is_continuous(self):
         env, cmd = make_env([1, 1, 1, 2])
         cmd.t_phase[:] = torch.tensor([.43, .44, .75, 0.])
         pos, vel = reference.get_reference_joint_state(env)
-        torch.testing.assert_close(pos[:, 0], torch.tensor([.5822222, .5911111, .6, 0.]), atol=2e-6, rtol=0.)
+        # 前三个环境在 P2: 保持段读到 T3 左端极限 0.6; P3 起点也承接 0.6, 不再跳回 0
+        torch.testing.assert_close(pos[:, 0], torch.tensor([.5822222, .5911111, .6, .6]), atol=2e-6, rtol=0.)
         torch.testing.assert_close(vel[:2, 0], torch.full((2,), .4/.45), atol=1e-5, rtol=0.)
         self.assertEqual(vel[2].abs().sum(), 0.)
-        self.assertEqual(pos[3, [0, 1, 8, 9]].abs().sum(), 0.)
-        self.assertEqual(vel[3, [0, 1, 8, 9]].abs().sum(), 0.)
+        self.assertEqual(pos[3, [1, 8, 9]].abs().sum(), 0.)
+        # P3 入口 F_spine1 以 0.6/0.5/λ 的速率线性回零, 其余脊柱速度为 0
+        torch.testing.assert_close(vel[3, 0], torch.tensor(-0.6 / 0.5 / 3.0), atol=1e-5, rtol=0.)
+        self.assertEqual(vel[3, [1, 8, 9]].abs().sum(), 0.)
         self.assertGreater(vel[3, 10], 0.)
         torch.testing.assert_close(pos[2, [1, 8, 9]], torch.zeros(3), atol=1e-6, rtol=0.)
         cmd.phase[:] = 0
@@ -135,43 +164,69 @@ class StageRewardTests(unittest.TestCase):
         env.action_manager = NS(get_term=lambda _: action)
         with patch.object(rewards, 'get_reference_joint_state', return_value=(torch.zeros(3,14), torch.zeros(3,14))):
             torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -2.))
-            torch.testing.assert_close(rewards.compute_leg_target_cost(env), torch.tensor([0., 0., -1.]))
             with patch.dict(_CURVES, weight_spine_target=(4.,)):
                 torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -4.))
             action.raw_action.zero_()
             action.raw_action[:, action.target_names.index('F_body_joint')] = 2.
             torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -2.))
-            self.assertEqual(rewards.compute_leg_target_cost(env).sum(), 0.)
 
-    def test_pose_transitions_and_milestone_deduplication(self):
+    def test_action_ctrl_excess_penalty(self):
+        env, cmd = make_env([0])
+        action = NS(raw_action=torch.zeros(1, 14), scale=1., offset=0.,
+                    target_names=list(reversed(_ACTUATED_JOINT_NAMES)))
+        env.action_manager = NS(get_term=lambda _: action)
+        with patch.dict(_CURVES, weight_action_excess=(1.,)):
+            # 命令落在 ctrlrange 内 -> 零成本 (贴住限位撑地不受罚)
+            action.raw_action[:, action.target_names.index('F_body_joint')] = 1.0
+            self.assertEqual(rewards.compute_action_ctrl_excess_penalty(env).item(), 0.)
+            # 只对被丢弃的那一段计成本: HL_hip 上限 0.8, 目标 5.0 -> 超出 4.2, 均值除以 14 列
+            action.raw_action.zero_()
+            action.raw_action[:, action.target_names.index('HL_hip_joint')] = 5.0
+            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+                                   -4.2 / 14, places=6)
+            # 必须计入 scale: 同样 action=6.0, scale 0.3 时 F_body 目标 1.8 才刚超出 1.57
+            action.scale = 0.3
+            action.raw_action.zero_()
+            action.raw_action[:, action.target_names.index('F_body_joint')] = 6.0
+            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+                                   -0.23 / 14, places=6)
+            # 负方向同样计成本
+            action.raw_action.zero_()
+            action.raw_action[:, action.target_names.index('F_spine1_joint')] = -6.0
+            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+                                   -(1.8 - 0.6) / 14, places=6)
+
+    def test_phase_is_monotone_and_milestones_once_per_episode(self):
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
-        cmd.test_u[:] = torch.tensor([-1., 1.])
+        cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
         for _ in range(10):
             cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
-        cmd.test_u[:] = 1.
+        # P2 里持续保持 S1 姿态不再触发任何回退 (取消 back_to_p2 的套利通道)
+        for _ in range(30):
+            cmd._update_command()
+        self.assertEqual(cmd.phase.item(), 1)
+        self.assertFalse(cmd._last_back_to_p1.any())
+        self.assertFalse(cmd._last_back_to_p2.any())
+        cmd.test_u[:] = 1.                                # S2 候选
         for _ in range(10):
             cmd._update_command()
         self.assertEqual(cmd.phase.item(), 2)
         self.assertTrue(cmd.s2_milestone_pulse.item())
+        # P3 里摆回 S1 姿态或双倒都不再退回, 里程碑也不重复发放
         cmd.test_u[:] = torch.tensor([-1., 1.])
-        for _ in range(10):
-            cmd._update_command()
-        self.assertEqual(cmd.phase.item(), 1)
-        self.assertTrue(cmd._last_back_to_p2.item())
-        cmd.test_u[:] = 1.
-        for _ in range(10):
+        for _ in range(30):
             cmd._update_command()
         self.assertEqual(cmd.phase.item(), 2)
-        self.assertTrue(cmd.s2_transition_pulse.item())
-        self.assertFalse(cmd.s2_milestone_pulse.item())
+        self.assertFalse(cmd.s1_milestone_pulse.item())
         cmd.test_u[:] = -1.
-        for _ in range(15):
+        for _ in range(30):
             cmd._update_command()
-        self.assertEqual(cmd.phase.item(), 0)
-        self.assertTrue(cmd._last_back_to_p1.item())
+        self.assertEqual(cmd.phase.item(), 2)
+        self.assertFalse(cmd.s2_milestone_pulse.item())
+        self.assertTrue(cmd._last_inverted_confirmed.item())   # 双倒仍作为诊断指标保留
 
     def test_confirmation_wins_over_timeout(self):
         _, cmd = make_env([1, 1])

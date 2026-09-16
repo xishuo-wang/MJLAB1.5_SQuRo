@@ -76,13 +76,16 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
                 h_sp1 = -0.2 + 0.2 * u
                 h_bd = 1.57 - 1.57 * u
         elif tn < _TRANS_END:
-            # T4: 腿支撑位 -> 站立角，按约定脊柱从零开始；不将该跳变插值进 P2。
+            # T4: 腿支撑位 -> 站立角; 脊柱承接 T3 末端的 F_spine1 在过渡段内线性回零。
+            # 不能直接取 0: 那会在 0.95 处造出 0.6 rad 的阶跃 (等于要求关节瞬时转 60 rad/s),
+            # 既给 mimic_pos/spine_target 送一个无法消除的误差, 也让 P3 入口的参考
+            # 退化成 P1 入口的形状 (脊柱全零 + 腿支撑位)。
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
             for c in range(4, 8):
                 leg[c] = _HL_HOLD[c % 2] + u * (_LEG_INIT[c] - _HL_HOLD[c % 2])
-            f_sp1 = 0.0
+            f_sp1 = 0.6 * (1.0 - u)
         # 站立过渡结束后保持站立 (默认腿站立角, 脊柱 0)
 
         for c in range(8):

@@ -169,6 +169,50 @@ uv run train Mjlab-SQuRo-Backup --agent.resume True --agent.load-run 2026-09-12_
 本次接口新增 `pose_angle_tolerance_deg=45.0`、`pose_confirm_s=0.10`、`inverted_confirm_s=0.15`，均属于 `BackupCommandCfg`，手调回放读取同一配置。
 观测/动作维度不变，旧 checkpoint 的网络形状兼容；是否从零训练或续训应按实验对照目的选择，不能把追加预算带来的改善全部归因于本改动。
 
+## 新实验：阶段单向 + 动作超限成本 + T4 参考连续化
+
+本轮针对"已进入 S1/S2 但始终进不了/留不住 P3"的失败做三项改动。
+
+### 实测诊断（两次训练的录像 CSV + tensorboard 标量）
+
+| 指标 | 旧 run 2026-09-15_22-22-27 @2999 | 新 run 2026-09-16_12-25-52 @2000 |
+| --- | --- | --- |
+| `s1_awarded` | 0.926 | 0.802 |
+| `s2_awarded` | **0.869** | **0.001** |
+| `s2_transition` / `back_to_p2` | 0.0089 / 0.0085（相等 ⇒ 极限环） | 0 / 0 |
+| `backup_phase` | 1.065（P2/P3 之间来回） | 0.166（赖在 P1） |
+| 单步奖励（剔除里程碑脉冲） | T1 0.150 / T3 0.206 / T4 0.159 | T1 0.189 / T3 0.169 / 无 P3 |
+| 姿态 | 俯卧 39.6%，height max 0.052 | 俯卧 **0%**，`uprightness` max 0.259 |
+
+两个根因：
+
+1. **参考随阶段切换 ⇒ 各阶段可赚分不同。** 旧 run P2 每步 0.206 > P3 每步 0.159，10 s 回合差 ≈48 分，比 `milestone_success`(35) 还大；策略于是主动摆回 S1 姿态触发 `back_to_p2`，`s2_transition` 与 `back_to_p2` 速率相等，4 s 录像里跑了 5 个来回。新 run 则是 P1(0.189) > P2(0.169)，走 `back_to_p1` 赖在 P1。
+2. **执行器指令长期饱和，腿失去控制权。** `ctrlrange` 之外的指令被 MuJoCo 直接丢弃；策略确定性输出为腿 −26~−47、颈 ±25~39，而 `scale=0.3`、所需最大动作只有 5.233，clip=6 的余量仅 1.15×。8 条腿 + 2 个颈关节 100% 时间处于饱和，站起必需的腿伸展无法产生。
+
+此外上一版把 `progress_s1/s2` 按阶段互斥，使前滚前半程（uF 从 −1 到 0）在 P2 里零奖励，并在 P2 入口制造 3/s 的悬崖。
+
+### 改动
+
+- 阶段推进单向：只保留 `advance1`/`advance2` 与阶段内超时重试，取消 `back_to_p1`/`back_to_p2`。
+- `progress_s1`/`progress_s2` 恢复全阶段生效；删除 `leg_target`；`progress_s3` 保留并改为"45° 锥门控 + 单调增长"（同时充当维持站立的密集奖励）。
+- 新增 `action_excess`（权重 0.5）：只惩罚目标超出执行器 `ctrlrange` 被丢弃的那一段，含 `scale` 与默认角偏移，命令在限位内时为 0。
+- T4 的 `F_spine1` 改为 `0.6 × (1 − u)` 承接 T3 末端线性回零，消除 0.95 处 0.6 rad 阶跃与 P3/P1 入口雷同；`reference.py`、`SQuRo_backup_Replay.slow1_target`、`verify_backup_config._hand_at` 三处同步。
+- `stand` 终止改为 `time_out=True`（截断语义），避免"站起来反而亏分"。
+- `events.reset_model` 显式建立并清零 `_stand_elapsed`。
+
+### 验收
+
+- `verify_backup_stage_rewards` 11 项通过（含区间项非门控、站立进度门控与单调性、ctrlrange 超限成本含 scale 与列序对齐、阶段单向、里程碑去重）。
+- `verify_backup_config` 全部通过，新增第 5 节：`_ACTUATOR_CTRL_RANGE` 与 SQuRo.xml 的 `ctrlrange` 逐项对拍。
+- `verify_script_vs_training 3.0`：参考最大偏差 1e-6 rad；S1/S2/INV 逐帧一致；T4 改 ramp 后手调回放仍在 2.40 s 到 S1、2.89 s 到 S2。
+- `pyright` 任务目录 + 配置验收脚本 0 errors；训练冒烟 2 轮通过，新增 `Episode_Reward/action_excess`（初始策略 ≈0，符合"命令在限位内不罚"的设计）。
+
+### 本轮不做
+
+- `clip_actions` 保持 6.0：实测参考轨迹最大所需动作 5.233（F_body/H_body）与 4.667（髋），clip=6 余量仅 1.15×，降到 2.0 会让脊柱扭转与髋无法到位，任务直接不可解。
+- 不改 PPO：`entropy_coef=0.01`、`std_type="scalar"` 无上限，`Policy/mean_std` 两次 run 同轮次为 4.11 vs 9.76 且单调上涨，本轮先观察动作超限成本是否把它压住。
+- 不改 `events.reset_model` 中的 36 个硬编码关节索引（改关节数量时会静默错位，已知）。
+
 ## 新实验：里程碑加权 + 新增 S1/S2 区间奖励
 
 本轮只改奖励权重与新增两个区间项，不动参考时序、状态机判据、PPO、动作缩放和物理参数。

@@ -226,11 +226,18 @@ class BackupCommand(CommandTerm):
         heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id),
                                self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
         valid = torch.isfinite(u).all(dim=1) & torch.isfinite(heights).all(dim=1)
-        standing = valid & (u > STAND_UPRIGHT_COS).all(dim=1) & (heights > STAND_MIN_HEIGHT).all(dim=1)
-        # 较低的一段决定抬升进度，不能只抬起一端；贴地时不给站立底分。
-        height_progress = ((heights.amin(dim=1) - STAND_GROUND_HEIGHT)
+        # 较低的一段同时决定"是否解锁"和"抬升进度", 不能只抬起一端冒充站立。
+        u_floor = u.amin(dim=1)
+        h_floor = heights.amin(dim=1)
+        standing = valid & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
+        # 进度只在"前后段同时背部朝上"的 45 度锥内解锁: 锥外恒为 0, 锥内越接近最终站立越大。
+        # 朝向从锥边界到完全正置线性增长, 高度从贴地到站立目标线性增长, 完全站立时为 1。
+        # 任一段转回侧面或仰面会立即关闭门控, 因此该进度也直接抑制 P3 里的回扭。
+        cone = float(self._pose_cos_threshold)
+        orient = ((u_floor - cone) / (1.0 - cone)).clamp(0.0, 1.0)
+        height_progress = ((h_floor - STAND_GROUND_HEIGHT)
                            / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
-        progress = u.amin(dim=1).clamp(0.0, 1.0) * height_progress
+        progress = orient * height_progress
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
 
     def _segment_upright(self, idx: int) -> torch.Tensor:
@@ -334,19 +341,18 @@ class BackupCommand(CommandTerm):
             float(self.cfg.inverted_confirm_s),
         )
 
-        # 阶段转移：确认成功/回退优先于同一步理论超时重试。
+        # 阶段推进: P1 -> P2 -> P3 单向, 只在阶段内做超时重试。
+        # 原来允许 back_to_p1 / back_to_p2, 但参考随阶段切换 ⇒ 每个阶段"可赚分"不同
+        # (实测 P2 每步 0.206 vs P3 每步 0.159), 策略于是主动摆回 S1/双倒姿态把阶段换回去,
+        # 形成 P2<->P3 极限环且永远站不起来。取消回退后策略无法再通过"挑阶段"获利。
         advance1 = p1 & s1_confirmed
         advance2 = p2 & s2_confirmed
-        back_to_p1 = (p2 | (self.phase == 2)) & inverted_confirmed
-        back_to_p2 = (self.phase == 2) & s1_confirmed
         retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_confirmed
-        retry2 = p2 & (self.t_phase >= expected2 + self.cfg.p2_buffer_s) & ~s2_confirmed & ~back_to_p1
-        # P1 中双倒不触发回退/清阶段时钟；P3 无新增超时机制。
+        retry2 = p2 & (self.t_phase >= expected2 + self.cfg.p2_buffer_s) & ~s2_confirmed
+        # P3 无超时机制; inverted_confirmed 与 both_inverted 仅保留为诊断指标。
         phase_next = self.phase.clone()
         phase_next = torch.where(advance1, torch.ones_like(phase_next), phase_next)
         phase_next = torch.where(advance2, torch.full_like(phase_next, 2), phase_next)
-        phase_next = torch.where(back_to_p1, torch.zeros_like(phase_next), phase_next)
-        phase_next = torch.where(back_to_p2, torch.ones_like(phase_next), phase_next)
         phase_changed = phase_next != self.phase
         self.phase = phase_next
         # 阶段切换和阶段重试都清理本 env 的阶段/候选确认时钟，但不动物理状态。
@@ -369,8 +375,9 @@ class BackupCommand(CommandTerm):
         self._last_advance2 = advance2
         self._last_s1_milestone = s1_milestone
         self._last_s2_milestone = s2_milestone
-        self._last_back_to_p1 = back_to_p1
-        self._last_back_to_p2 = back_to_p2
+        # 阶段已单向, 这两个字段恒为 False; 保留供录像/日志字段兼容。
+        self._last_back_to_p1 = torch.zeros_like(advance1)
+        self._last_back_to_p2 = torch.zeros_like(advance2)
         self._last_both_inverted = both_inverted
         self._last_s1_confirmed = s1_confirmed
         self._last_s2_confirmed = s2_confirmed

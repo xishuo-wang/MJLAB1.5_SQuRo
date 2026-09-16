@@ -33,6 +33,28 @@ _ACTION_SPN_LATERAL_ID = 0          # F_spine1
 _ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
 
 
+# 执行器控制范围 (SQuRo.xml 中 <position ... ctrlrange=...>)，顺序与 _ACTUATED_JOINT_NAMES 一致。
+# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到该区间: 目标指令超出部分被完全丢弃,
+# 命令再大也不会产生额外力矩。动作幅值惩罚只对"被丢弃的那一段"计成本, 因此依赖这张表。
+# 如改 XML 的 ctrlrange, 必须同步改这里; verify_backup_config.py 会与 XML 对拍。
+_ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
+    "F_spine1_joint":    (-0.6, 0.6),
+    "F_body_joint":      (-1.57, 1.57),
+    "Neck_yaw_joint":    (-0.8, 0.8),
+    "Neck_pitch_joint":  (-0.9, 0.9),
+    "FL_shoulder_joint": (-1.5, 1.9),
+    "FL_elbow_joint":    (-1.8, 2.5),
+    "FR_shoulder_joint": (-1.5, 1.9),
+    "FR_elbow_joint":    (-1.8, 2.5),
+    "H_spine1_joint":    (-0.6, 0.6),
+    "H_body_joint":      (-1.57, 1.57),
+    "HL_hip_joint":      (-1.5, 0.8),
+    "HL_knee_joint":     (-0.5, 1.9),
+    "HR_hip_joint":      (-1.5, 0.8),
+    "HR_knee_joint":     (-0.5, 1.9),
+}
+
+
 class ModelIndices:
     __slots__ = (
         "f_body_id", "h_body_id",
