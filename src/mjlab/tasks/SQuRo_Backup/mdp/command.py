@@ -25,6 +25,13 @@ _P2_EXPECT = P2_DURATION
 _MAX_RETRY = 5
 
 
+# 对含 NaN 的记录取"有效值均值"; 没有有效值时返回 0 (供条件型日志使用)。
+def _mean_valid(values: torch.Tensor) -> float:
+    valid = torch.isfinite(values)
+    count = valid.sum().clamp_min(1).to(values.dtype)
+    return (torch.where(valid, values, torch.zeros_like(values)).sum() / count).item()
+
+
 class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
@@ -73,6 +80,9 @@ class BackupCommand(CommandTerm):
         self._s1_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
         self._s2_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
         self._inverted_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
+        # 时序偏差记录: NaN 表示本回合还没有达成记录。
+        self._s1_lag = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s2_lag = torch.full((self.num_envs,), float("nan"), device=self.device)
         self._s1_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
@@ -147,6 +157,8 @@ class BackupCommand(CommandTerm):
         self._s1_confirm_elapsed[env_ids] = 0.0
         self._s2_confirm_elapsed[env_ids] = 0.0
         self._inverted_confirm_elapsed[env_ids] = 0.0
+        self._s1_lag[env_ids] = float("nan")
+        self._s2_lag[env_ids] = float("nan")
         self._s1_awarded[env_ids] = False
         self._s2_awarded[env_ids] = False
 
@@ -344,6 +356,12 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_s1_awarded"):
             self._s1_awarded = torch.zeros_like(self.phase, dtype=torch.bool)
             self._s2_awarded = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_last_s1_confirmed"):
+            self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_s1_lag"):
+            self._s1_lag = torch.full_like(self.t_phase, float("nan"))
+            self._s2_lag = torch.full_like(self.t_phase, float("nan"))
         if not hasattr(self, "_pose_cache"):
             self._pose_cache = None
         if not hasattr(self, "_pose_cos_cache"):
@@ -382,9 +400,11 @@ class BackupCommand(CommandTerm):
         )
 
         # 阶段推进: P1 -> P2 -> P3 单向, 只在阶段内做超时重试。
+        # 必须等本段参考播完(expected)才能推进: 姿态判据可被抄近路提前满足, 一提前推进
+        # 参考就会瞬移到段末(实测 P1->P2 一步跳 1.37 rad), 跟踪奖励随之失去意义。
         # 取消阶段回退的理由(策略会挑阶段套利、形成极限环)见技术细节 §2。
-        advance1 = p1 & s1_confirmed
-        advance2 = p2 & s2_confirmed
+        advance1 = p1 & s1_confirmed & (self.t_phase >= expected1)
+        advance2 = p2 & s2_confirmed & (self.t_phase >= expected2)
         retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_confirmed
         p2_deadline = expected2 + self.cfg.p2_buffer_s
         # 截止前刚进入候选时允许完成这次连续确认, 参考保持 T3 末端; 中断即清零。
@@ -411,6 +431,17 @@ class BackupCommand(CommandTerm):
         self._s1_awarded |= advance1
         self._s2_awarded |= advance2
         # 保存本步检测结果供 _update_metrics 记录 (metrics 在 command 前被调用, 记录上一步状态)
+        # 时序偏差: 在"确认成立的那一步"记一次 (t_nom - 名义时刻), 早到为负、迟到为正。
+        # 只在上升沿记录, 否则推进那一步会把偏差覆盖成 0。
+        s1_new = s1_confirmed & ~self._last_s1_confirmed
+        s2_new = s2_confirmed & ~self._last_s2_confirmed
+        t_nom = self.t_phase / lam
+        self._s1_lag = torch.where(s1_new, t_nom - _P1_EXPECT, self._s1_lag)
+        self._s2_lag = torch.where(s2_new, t_nom - _P2_EXPECT, self._s2_lag)
+        # 重试意味着本次尝试作废, 偏差记录一起清掉; 阶段切换保留(供 P2/P3 继续读)。
+        nan = torch.full_like(self._s1_lag, float("nan"))
+        self._s1_lag = torch.where(retry_mask, nan, self._s1_lag)
+        self._s2_lag = torch.where(retry_mask, nan, self._s2_lag)
         self._last_s1_ok = s1_ok
         self._last_s2_ok = s2_ok
         self._last_advance1 = advance1
@@ -427,20 +458,21 @@ class BackupCommand(CommandTerm):
         self._last_retry_mask = retry_mask
 
     def _update_metrics(self) -> None:
-        # 只记录三组共 10 条: Progress/* 回合级成就, Phase/* 当前阶段, Gate/* 姿态与推进速率。
+        # 只记录三组共 10 条: Progress/* 回合级成就与节奏偏差, Phase/* 当前阶段, Gate/* 姿态到达速率。
         # 注意 _last_* 是上一步的检测结果(metrics 在 _update_command 之前被调用);
         # 这些属性全部保留, SQuRo_Backup_play.py 的录像列依赖它们。
         log = self._env.extras["log"]
         log["Progress/enter_p2"] = self._s1_awarded.float().mean().item()
         log["Progress/enter_p3"] = self._s2_awarded.float().mean().item()
         log["Progress/relapse"] = self._last_both_inverted.float().mean().item()
+        # s1_lag/s2_lag = 姿态达成时的 t_nom 与名义时刻之差(迟为正), 是"跟不跟得上表"的直接读数。
+        log["Progress/s1_lag"] = _mean_valid(self._s1_lag)
+        log["Progress/s2_lag"] = _mean_valid(self._s2_lag)
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
         log["Phase/p3"] = (self.phase == 2).float().mean().item()
         log["Phase/retry"] = self.retry.float().mean().item()
         log["Gate/s1_pose"] = self._last_s1_ok.float().mean().item()
         log["Gate/s2_pose"] = self._last_s2_ok.float().mean().item()
-        log["Gate/s1_advance"] = self._last_advance1.float().mean().item()
-        log["Gate/s2_advance"] = self._last_advance2.float().mean().item()
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         pass

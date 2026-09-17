@@ -219,8 +219,9 @@ class StateMachinePolicy:
         inverted_confirmed = self._update_confirmation("_inverted_confirm_t", self._is_both_inverted(), dt)
         if self.phase == "P1":
             expected = T_SEG2_END * self.lam
-            # P1 只需 S1 连续确认，取消理论最短动作时间；截止时成功优先于重试。
-            if s1_confirmed:
+            # 与训练同步的段末门控: 本段参考播完之前不推进, 否则参考会瞬移到段末。
+            # 截止时成功优先于重试。
+            if s1_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
@@ -239,12 +240,12 @@ class StateMachinePolicy:
             # 与训练一致：仅给仍有效的候选最多一个确认时长的额外等待。
             s2_grace = (self._s2_confirm_t > 0.0 and not s2_confirmed
                         and self.t_phase < deadline + self.pose_confirm_s)
-            # P2 可在理论段长之前确认 S2；双倒确认优先回退到 P1。
+            # P2 同样要等本段参考播完(名义 T3 时长)才推进, 与训练侧的段末门控一致。
             if inverted_confirmed:
                 self.phase = "P1"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P2 检测到双倒 (连续确认后) -> 回到 P1")
-            elif s2_confirmed:
+            elif s2_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P3"; self.t_phase = 0.0
                 self._clear_confirmation()

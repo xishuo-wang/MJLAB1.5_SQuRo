@@ -281,8 +281,15 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
         for _ in range(10):
             cmd._update_command()
+        # 段末门控: 姿态在第 0.10s 就确认了, 但 P1 名义时长 0.80×λ=2.40s, 不得提前推进。
+        self.assertEqual(cmd.phase.item(), 0)
+        self.assertFalse(cmd.s1_milestone_pulse.item())
+        # 时序偏差记录的是"达成时刻 - 名义时刻"(此处早到, 为负)。
+        self.assertAlmostEqual(cmd._s1_lag.item(), .10 / 3. - .80, places=5)
+        cmd.t_phase[:] = .80 * cmd.time_scale_command
+        cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
-        self.assertTrue(cmd.s1_milestone_pulse.item())
+        self.assertTrue(cmd.s1_milestone_pulse.item())   # 到点才结算 => 早到不再有折扣红利
         # P2 里持续保持 S1 姿态不再触发任何回退 (取消 back_to_p2 的套利通道)
         for _ in range(30):
             cmd._update_command()
@@ -292,6 +299,9 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = 1.                                # S2 候选
         for _ in range(10):
             cmd._update_command()
+        self.assertEqual(cmd.phase.item(), 1)             # 同样要等 P2 段末
+        cmd.t_phase[:] = .15 * cmd.time_scale_command
+        cmd._update_command()
         self.assertEqual(cmd.phase.item(), 2)
         self.assertTrue(cmd.s2_milestone_pulse.item())
         # P3 里摆回 S1 姿态或双倒都不再退回, 里程碑也不重复发放
@@ -306,6 +316,28 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(cmd.phase.item(), 2)
         self.assertFalse(cmd.s2_milestone_pulse.item())
         self.assertTrue(cmd._last_inverted_confirmed.item())   # 双倒仍作为诊断指标保留
+
+    def test_reference_is_continuous_across_phase_switch(self):
+        # 段末门控的直接产物: 推进只发生在参考段末, 而段末两侧的参考值本应相同。
+        # 逐步检查参考变化量, 覆盖切换那一刻 —— 去掉门控后切换会发生在第 10 步(t_nom 仅 0.03),
+        # 参考一步跳约 1.37 rad, 这里立刻超界。只查位置: 段末保持(ref_vel=0)与下一段起点
+        # (取右侧导数)之间速度本来有台阶, 属既有设计。
+        env, cmd = make_env([0])
+        cmd.test_heights[:] = .024
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        prev, _ = reference.get_reference_joint_state(env)
+        prev_phase = cmd.phase.item()
+        advanced = False
+        worst = 0.0
+        for _ in range(260):                       # 覆盖 P1 段末(0.80×λ=2.40s=240 步)与切换
+            cmd._update_command()
+            pos, _ = reference.get_reference_joint_state(env)
+            worst = max(worst, (pos - prev).abs().max().item())
+            prev = pos
+            advanced |= cmd.phase.item() != prev_phase
+            prev_phase = cmd.phase.item()
+        self.assertTrue(advanced)
+        self.assertLess(worst, .1)
 
     def test_confirmation_wins_over_timeout(self):
         _, cmd = make_env([1, 1])
@@ -354,6 +386,10 @@ class StageRewardTests(unittest.TestCase):
         for _ in range(9):
             cmd._update_command()
             self.assertEqual(cmd.phase[1].item(), 1)
+        # 段末门控: 候选连续确认也不得在本段参考播完之前推进 (P2 名义 0.15×λ=0.45s)
+        cmd._update_command()
+        self.assertEqual(cmd.phase[1].item(), 1)
+        cmd.t_phase[1] = .15 * cmd.time_scale_command[1]
         cmd._update_command()
         torch.testing.assert_close(cmd.phase, torch.tensor([0, 2]))
         torch.testing.assert_close(cmd.s2_milestone_pulse, torch.tensor([False, True]))
