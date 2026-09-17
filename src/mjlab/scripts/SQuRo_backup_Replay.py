@@ -5,7 +5,7 @@ import mjlab.tasks  # noqa: F401  触发任务注册
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from math import ceil, nextafter
+from math import nextafter
 from typing import Any, Literal
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
@@ -107,7 +107,6 @@ class StateMachinePolicy:
         self.t_phase = 0.0
         self.retry = {"P1": 0, "P2": 0}
         self.events: list[str] = []
-        self.stand_steps = 0
         self.stand_t: float | None = None
         self._elapsed = 0.0       # 累计仿真时间 (s), 用于脊柱期望角打印
         self._step_cnt = 0        # 步计数, 每 4 步 (0.02s) 打印一次
@@ -146,7 +145,7 @@ class StateMachinePolicy:
         return bool(command._check_S1()[0]) # type: ignore
 
 
-    # S2: 两段躯干都已翻正并重新贴地
+    # S2: 共用训练判据，允许贴地翻正或已经达到双段站立几何。
     def _is_S2(self) -> bool:
         command = self.env.unwrapped.command_manager.get_term("backup_cmd")
         return bool(command._check_S2()[0]) # type: ignore
@@ -174,7 +173,6 @@ class StateMachinePolicy:
         self._s1_confirm_t = 0.0
         self._s2_confirm_t = 0.0
         self._inverted_confirm_t = 0.0
-        self.stand_steps = 0
 
 
     def _log(self, msg: str) -> None:
@@ -237,6 +235,10 @@ class StateMachinePolicy:
                     self._log("P1 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P2":
             expected = T3 * self.lam
+            deadline = expected + self.p2_buffer_s
+            # 与训练一致：仅给仍有效的候选最多一个确认时长的额外等待。
+            s2_grace = (self._s2_confirm_t > 0.0 and not s2_confirmed
+                        and self.t_phase < deadline + self.pose_confirm_s)
             # P2 可在理论段长之前确认 S2；双倒确认优先回退到 P1。
             if inverted_confirmed:
                 self.phase = "P1"; self.t_phase = 0.0
@@ -249,7 +251,7 @@ class StateMachinePolicy:
                 first = not self._milestones["S2"]
                 self._milestones["S2"] = True
                 self._log(f"S2 达成 (用时 {t_used:.2f}s，{'首次' if first else '再次'}，不重复计里程碑) -> 进入 P3")
-            elif self.t_phase >= expected + self.p2_buffer_s:
+            elif self.t_phase >= deadline and not s2_grace:
                 self.retry["P2"] += 1; self.t_phase = 0.0
                 self._clear_confirmation()
                 fu, hu = self._state()
@@ -268,16 +270,15 @@ class StateMachinePolicy:
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P3 检测到 S1 (连续确认后) -> 回到 P2")
-            # 与训练共用双段背腹朝向和各自高度；手调阶段仍由自身状态机管理。
-            command = self.env.unwrapped.command_manager.get_term("backup_cmd")
-            standing, _ = command.standing_state()
-            if self.phase == "P3" and bool(standing[0]):
-                self.stand_steps += 1
-            else:
-                self.stand_steps = 0
-            if self.stand_steps >= ceil(STAND_CONFIRM_DURATION / dt - 1e-6):
-                self.stand_t = self.t_phase - (self.stand_steps - 1) * dt
-                self._log(f"稳定站起! stand_t≈{self.stand_t:.2f}s (P3 内)")
+            # 成功判定必须与训练**同源**: 直接读训练环境的 stand 终止项
+            # (几何 + 关节速度门限 + STAND_CONFIRM_DURATION 迟滞确认)。
+            # 这里曾自己数"几何连续成立步数", 那套判据比训练宽松, 训练判失败时回放仍会
+            # 打印"稳定站起", 于是回放失去"目标可达"的验证意义; 现已删除该计数。
+            termination = getattr(self.env.unwrapped, "termination_manager", None)
+            if self.phase == "P3" and termination is not None and bool(termination.get_term("stand")[0]):
+                # 确认成立的时刻回推确认时长, 即"开始站稳"的时刻。
+                self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
+                self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
                 self.phase = "DONE"
 
 

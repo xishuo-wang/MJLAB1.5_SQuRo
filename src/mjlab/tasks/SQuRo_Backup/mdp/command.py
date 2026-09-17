@@ -8,7 +8,8 @@ from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
-from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_TARGET_HEIGHT, STAND_UPRIGHT_COS
+from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
+from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY, STAND_VEL_RMS_ENTER, STAND_VEL_RMS_STAY
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -230,14 +231,26 @@ class BackupCommand(CommandTerm):
         return self._ramp(u[:, 1], 1.0) * front
 
     # 站立几何与连续进度共用背腹轴、前后段各自高度；阶段门控由调用方负责。
+    def standing_metrics(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 返回站立判据的三个原始量: [env] 的两段最差背腹余弦、最低躯干高度、14 个驱动关节速度 RMS。
+        # 拆出来是为了让"严格进入 / 稍宽退出"的迟滞阈值能各自取不同门限, 而不是只看一个布尔量。
+        u = self._pose_cos()
+        heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id),
+                               self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
+        # 较低的一段同时决定"是否解锁"和"抬升进度", 不能只抬起一端冒充站立。
+        u_floor = u.amin(dim=1)
+        h_floor = heights.amin(dim=1)
+        return u_floor, h_floor, self._joint_vel_rms()
+
     def standing_state(self) -> tuple[torch.Tensor, torch.Tensor]:
         u = self._pose_cos()
         heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id),
                                self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
         valid = torch.isfinite(u).all(dim=1) & torch.isfinite(heights).all(dim=1)
-        # 较低的一段同时决定"是否解锁"和"抬升进度", 不能只抬起一端冒充站立。
         u_floor = u.amin(dim=1)
         h_floor = heights.amin(dim=1)
+        # 站立判据的严格侧: 方向余弦用锥阈值, 高度用 STAND_MIN_HEIGHT, 速度不做要求
+        # (速度侧的门限由 terminations 的迟滞逻辑负责, 这里保持"几何合格"的原语义)。
         standing = valid & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
         # 进度只在"前后段同时背部朝上"的 45 度锥内解锁: 锥外恒为 0, 锥内越接近最终站立越大。
         # 朝向从锥边界到完全正置线性增长, 高度从贴地到站立目标线性增长, 完全站立时为 1。
@@ -247,6 +260,21 @@ class BackupCommand(CommandTerm):
         height_progress = ((h_floor - STAND_GROUND_HEIGHT) / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
         progress = orient * height_progress
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
+
+    def stand_gate(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # 站立确认的双阈值: 严格进入 enter / 稍宽维持 stay; 只有 enter 能推进确认时长,
+        # stay 只决定"短暂掉出"时按 STAND_CONFIRM_DECAY 侵蚀还是立即清零。
+        u_floor, h_floor, vel_rms = self.standing_metrics()
+        finite = torch.isfinite(u_floor) & torch.isfinite(h_floor) & torch.isfinite(vel_rms)
+        enter = finite & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT) & (vel_rms < STAND_VEL_RMS_ENTER)
+        stay = finite & (u_floor > STAND_UPRIGHT_COS_STAY) & (h_floor > STAND_MIN_HEIGHT_STAY) & (vel_rms < STAND_VEL_RMS_STAY)
+        return enter, stay
+
+    def _joint_vel_rms(self) -> torch.Tensor:
+        # 14 个驱动关节速度的瞬时 RMS; 站立参考速度恒为 0, 所以"站得住"要求它接近 0。
+        # 关节顺序与 _ACTUATED_JOINT_NAMES 一致, 速度量纲统一为 rad/s。
+        vel = self._asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
+        return vel.square().mean(dim=1).sqrt()
 
     def _segment_upright(self, idx: int) -> torch.Tensor:
         upright, _ = self._get_pose_flags()
@@ -268,12 +296,15 @@ class BackupCommand(CommandTerm):
         return f_inv & h_up & (fz < _GROUND_TH) & (hz < _GROUND_TH)
 
     def _check_S2(self) -> torch.Tensor:
-        # S2 瞬时候选：两段躯干都正置并重新贴地。
+        # 保留贴地翻正路径；已经达到站立几何的两段也可进入 P3，不要求先落低。
+        # 抬身路径复用更严格的 u>0.9、各自 z>0.05，不能只抬一端或侧立过关。
         f_up = self._segment_upright(0)
         h_up = self._segment_upright(1)
         fz = self._body_height(_MODEL_INDICES.f_body_id)
         hz = self._body_height(_MODEL_INDICES.h_body_id)
-        return f_up & h_up & (fz < _GROUND_TH_S2) & (hz < _GROUND_TH_S2)
+        grounded = f_up & h_up & torch.isfinite(fz) & torch.isfinite(hz) & (fz < _GROUND_TH_S2) & (hz < _GROUND_TH_S2)
+        standing, _ = self.standing_state()
+        return grounded | standing
 
     def _check_both_inverted(self) -> torch.Tensor:
         # 双倒回退只看两个身体段的方向，不借用 S1/S2 的高度条件。
@@ -297,6 +328,33 @@ class BackupCommand(CommandTerm):
         eps = torch.finfo(elapsed.dtype).eps * max(1.0, abs(duration), abs(dt)) * 8.0
         confirmed = elapsed >= (duration - eps)
         return elapsed, confirmed
+
+    @staticmethod
+    def _update_stand_confirmation(
+        elapsed: torch.Tensor,
+        enter: torch.Tensor,
+        stay: torch.Tensor,
+        running: torch.Tensor,
+        dt: float,
+        duration: float,
+        decay: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # 站立确认专用(不动共享的 _update_confirmation, 那套是 S1/S2/倒置用的硬清零语义)。
+        # enter: 推进累计; stay 且非 enter: 按 decay 倍率主动侵蚀累计; 两者都不满足: 立即清零。
+        # 用"主动侵蚀"而不是"暂停累计", 是为了不允许多次短暂达标拼接成一次连续站稳。
+        # 结算条件要求本步仍在 enter 上, 即"结算时当前状态必须有效"。
+        run = running & torch.isfinite(elapsed)
+        step = run.to(elapsed.dtype) * (dt if (dt > 0.0 and isfinite(dt)) else 0.0)
+        grown = elapsed + step
+        eroded = (elapsed - decay * step).clamp_min(0.0)
+        zero = torch.zeros_like(elapsed)
+        nxt = torch.where(enter & run, grown, torch.where(stay & run, eroded, zero))
+        # 确认时长按 duration/dt 步累加, float32 的逐步舍入会随步数增长, 容差必须同步放大
+        # (eps*150*4 ≈ 7e-5 秒, 仅为确认时长的 0.005%, 不改变实际确认秒数)。
+        steps = max(1.0, abs(duration) / max(abs(dt), 1e-9))
+        eps = torch.finfo(elapsed.dtype).eps * steps * 4.0
+        confirmed = enter & run & (nxt >= (duration - eps))
+        return nxt, confirmed
 
     def _update_command(self) -> None:
         dt = float(self._update_dt)
@@ -356,7 +414,12 @@ class BackupCommand(CommandTerm):
         advance1 = p1 & s1_confirmed
         advance2 = p2 & s2_confirmed
         retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_confirmed
-        retry2 = p2 & (self.t_phase >= expected2 + self.cfg.p2_buffer_s) & ~s2_confirmed
+        p2_deadline = expected2 + self.cfg.p2_buffer_s
+        # 截止前刚进入候选时，允许完成这次连续确认，参考继续保持 T3 末端。
+        # 仅延长最多一个确认时长（实际秒）；中断即清零，不无限等待/拼接确认。
+        s2_pending = s2_ok & (self._s2_confirm_elapsed > 0.0) & ~s2_confirmed
+        s2_grace = s2_pending & (self.t_phase < p2_deadline + self.cfg.pose_confirm_s)
+        retry2 = p2 & (self.t_phase >= p2_deadline) & ~s2_confirmed & ~s2_grace
         # P3 无超时机制; inverted_confirmed 与 both_inverted 仅保留为诊断指标。
         phase_next = self.phase.clone()
         phase_next = torch.where(advance1, torch.ones_like(phase_next), phase_next)
