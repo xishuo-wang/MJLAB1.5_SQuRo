@@ -8,7 +8,8 @@
 - 根因二（动作）：执行器 `ctrlrange` 之外的指令被 MuJoCo 直接丢弃（`ctrllimited="true"`）；实测策略确定性输出长期停在 ±26~47，把 8 条腿 + 2 个颈关节永久钉在饱和点上，腿完全失去控制权；站起必须靠腿，因此 P3 物理上不可能完成。
 - 根因三（地形）：`progress_s1 = min(clamp(-uF), clamp(uH))` 与 `progress_s2 = min(clamp(uF), clamp(uH))` 在前段方向上互补，两项相加在 uF=0 处取 0、在 S1 与 S2 处**等高** —— 形成"两峰等高等价 + 中间零梯度谷"，策略停在 S1 就是并列最优解。
 - 阶段推进改为单向：只保留 `advance1`/`advance2` 与阶段内超时重试；`back_to_p1`/`back_to_p2` 取消，`both_inverted`/`inverted_confirmed`/两个 `_last_back_to_*` 仅作诊断（后者恒为 False）。
-- `progress_s1` 改为 `clamp(uH)`（后段翻正进度，权重 **1.0**）；`progress_s2` 改为 `clamp(uH) × (clamp(uF)+1)/2`（权重 **2.0**）。合成地形：仰卧 0 → S1 1.0/s → 正侧立 2.0/s → S2 3.0/s，**全程单调、uF 方向处处正梯度**，且 S2 相对 S1 有 3:1 优势；完全仰卧与"前段先翻"的错误顺序都恒为 0，不产生底分。
+- `progress_s1` 改为 `clamp(uH)`（后段翻正进度，权重 **3.0**）；`progress_s2` 改为 `clamp(uH) × (clamp(uF)+1)/2`（权重 **3.0**）。合成地形：仰卧 0 → S1 3.0/s → 正侧立 4.5/s → S2 6.0/s，**全程单调、uF 方向处处正梯度**，且 S2 相对 S1 有 2:1 优势；完全仰卧与"前段先翻"的错误顺序都恒为 0，不产生底分。
+- **两个权重都必须够大，"地形单调"本身不保证策略会前进**：实测"撑起来原地扭"这个不翻正的解靠 `mimic_pos`/`height` 就能比"翻正"多拿 5.8/s（约 58 分/回合），翻正侧只多拿 progress + 里程碑（约 49 分/回合）。把 `weight_progress_s1` 从 3.0 降到 1.0 后翻正就不划算了 —— run `2026-09-16_21-41-34` 直接收敛到不翻正：`enter_p2` 全程 0，仰卧占比 100%，身体高度反而撑到 0.04 超过 S1 的 0.03 闸门。
 - 两项都不做阶段门控：门控会在 P2 入口把前滚前半程清零并制造悬崖；单调地形已经保证了前进方向始终有利。
 - `progress_s3` 权重 3，仅 P3 生效；"45° 锥门控 + 单调增长"：`orient = ((min(uF,uH) - cos45)/(1 - cos45)).clamp(0,1)`，`progress = orient × ((min(zF,zH)-0.024)/(0.055-0.024)).clamp(0,1)`。锥外恒为 0（任一段转回侧面/仰面立即断供），锥内越接近最终站立越大，同时充当"维持站立"的密集奖励。
 - `action_excess` 权重 0.5：`target = raw_action*scale + offset`，`excess = (ctrl_lo - target).clamp(0) + (target - ctrl_hi).clamp(0)`，取 14 列均值后取负。只对**被 MuJoCo 丢弃的那一段**计成本，命令落在 `ctrlrange` 内时为 0，因此贴住限位撑地不受罚。

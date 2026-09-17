@@ -38,11 +38,14 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_milestone_s1":      (10.0,),
     "weight_milestone_s2":      (15.0,),
     "weight_milestone_success": (35.0,),
-    # progress_s1 只负责把后段先推起来, progress_s2 承担翻正的主推力。
-    # 两者合成后的地形: 仰卧 0 -> S1 1.0/s -> 正侧立 2.0/s -> S2 3.0/s (单调, uF 方向处处正梯度)。
-    # 若把两者设成相等, 合成地形会退化成"S1 与 S2 等高", 策略停在 S1 即并列最优。
-    "weight_progress_s1":       (1.0,),
-    "weight_progress_s2":       (2.0,),
+    # progress_s1 负责把后段推起来, progress_s2 在此之上承担翻正的主推力。
+    # 合成地形: 仰卧 0 -> S1 w1 -> 正侧立 w1+w2/2 -> S2 w1+w2 (单调, uF 方向处处正梯度)。
+    # 两个权重都必须够大: 实测"撑起来原地扭"这个不翻正的解靠 mimic_pos/height 就能比
+    # "翻正"多拿 5.8/s (约 58 分/回合), 而翻正侧只多拿 progress + 里程碑。把 w1 从 3.0
+    # 降到 1.0 之后翻正的总收益不够, 策略会直接收敛到不翻正
+    # (run 21-41-34: enter_p2 全程 0, 身体高度 0.04 反而超过 S1 的 0.03 闸门)。
+    "weight_progress_s1":       (3.0,),
+    "weight_progress_s2":       (3.0,),
     "weight_progress_s3":       (3.0,),
     "weight_action_excess":     (0.5,),
     "weight_smooth_L1_leg":     (0.1,),

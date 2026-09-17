@@ -73,10 +73,14 @@ class StageRewardTests(unittest.TestCase):
         self.assertLess(supine[0].item(), rear_only[0].item())
         self.assertLess(rear_only[0].item(), side[0].item())
         self.assertLess(side[0].item(), prone[0].item())
-        # 数值锚点: clamp(uH)*1.0 与 clamp(uH)*(clamp(uF)+1)/2*2.0
-        torch.testing.assert_close(rear_only, torch.full((3,), 1.0))
-        torch.testing.assert_close(side, torch.full((3,), 2.0))
-        torch.testing.assert_close(prone, torch.full((3,), 3.0))
+        # 数值锚点直接从 _CURVES 推导, 之后调权重不必改测试
+        w1 = _CURVES["weight_progress_s1"][0]
+        w2 = _CURVES["weight_progress_s2"][0]
+        torch.testing.assert_close(rear_only, torch.full((3,), w1))
+        torch.testing.assert_close(side, torch.full((3,), w1 + w2 / 2))
+        torch.testing.assert_close(prone, torch.full((3,), w1 + w2))
+        # S2 必须严格优于 S1: 两者相等时"停在 S1"就是并列最优解
+        self.assertGreater(w2, 0.0)
 
     def test_s3_progress_is_p3_only(self):
         env, cmd = make_env([0, 1, 2])
