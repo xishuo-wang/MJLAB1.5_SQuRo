@@ -51,7 +51,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         clip_actions=None,
         seed=42,
 
-        # resume=True,
-        # load_run="...",
-        # load_checkpoint="model_XXX.pt",
+        resume=True,
+        load_run="2026-09-17_15-00-33",
+        load_checkpoint="model_600.pt",
     )
