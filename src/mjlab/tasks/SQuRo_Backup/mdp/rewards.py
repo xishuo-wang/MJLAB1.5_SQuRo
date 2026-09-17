@@ -6,6 +6,7 @@ from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
+from .timing import STAND_STILL_FULL_SPEED
 
 if TYPE_CHECKING:
     from mjlab.envs.mdp.actions import JointPositionAction
@@ -13,7 +14,6 @@ if TYPE_CHECKING:
 
 
 
-_STAND_STILL_DEADZONE = 0.2   # 站立保持: 平均关节速度死区 (rad/s), 微小抖动不惩罚
 _STAND_UP_THRESHOLD = 0.8     # 站起奖励: 竖直度下限 (身体基本竖直才给站直奖励)
 _TARGET_HEIGHT = 0.055        # 站直目标高度 (m, 与命令 height_f/h 一致)
 # 跌倒滞留惩罚阈值
@@ -273,20 +273,19 @@ def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 # =========================================================================================
-# 站立保持惩罚 — 检测到站立 (竖直且高度达标) 时, 惩罚关节运动 (平均关节速度超死区部分)制起身后的抖动, 
-def compute_stand_still_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    up = asset.data.projected_gravity_b[:, 2]  # [N]
-    body_pos_w = asset.data.body_link_pos_w
-    h = 0.5 * (body_pos_w[:, _MODEL_INDICES.f_body_id, 2] + body_pos_w[:, _MODEL_INDICES.h_body_id, 2])
-    standing = (up > 0.9) & (h > 0.05)  # [N] bool
-    joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]  # [N,14]
-    speed = joint_vel.abs().mean(dim=1)  # [N] 平均关节速度 (rad/s)
-    excess = (speed - _STAND_STILL_DEADZONE).clamp(min=0.0)
+# 站立静止奖励 — P3 内站立几何成立时, 关节速度 RMS 越接近 0 给分越高。
+# 与成功判据共用同一个 `standing_metrics()` 门控与同一个速度量, 避免"奖励和判据量两个不同的数"。
+# 用奖励而不是"超死区惩罚": 惩罚带死区(低于死区无梯度, 策略没理由从 1.0 降到 0),
+# 而且惩罚天然给出一条作弊路线 —— 不进锥内就不被罚; 奖励形式下不进锥只是拿不到钱, 方向相反。
+# 线性核而不是 exp: mimic_vel 的指数核在本任务已饱和, 在"接近静止"处几乎没有梯度。
+def compute_stand_still_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    _, strict = command.stand_gate()
     weight = get_curriculum_reward_weight(env, "weight_stand_still")
-    penalty = -weight * standing.float() * excess
-    env.extras["log"]["Data/stand_still_speed"] = (standing.float() * speed).mean().item()
-    return penalty
+    speed = torch.nan_to_num(command.standing_metrics()[2], nan=STAND_STILL_FULL_SPEED,
+                             posinf=STAND_STILL_FULL_SPEED, neginf=STAND_STILL_FULL_SPEED)
+    still = (1.0 - speed / STAND_STILL_FULL_SPEED).clamp(0.0, 1.0)
+    return weight * (strict & (command.phase == 2)).float() * still
 
 
 

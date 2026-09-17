@@ -47,6 +47,11 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_progress_s1":       (3.0,),
     "weight_progress_s2":       (3.0,),
     "weight_progress_s3":       (3.0,),
+    # stand_still 只在 P3 站立几何成立时给分(线性核, vel_rms=0 满分, 6 rad/s 归零)。
+    # 权重取 3.0 的理由: 站立窗口内现有密集项合计只有 +0.19/s, 而"赶时间"靠
+    # milestone_success 的 60·γ^T 早到红利实测净赚 6.6; 要压过它, 站立静止项在
+    # 3~5 秒的维持窗口里必须能挣到同量级(约 +1.4/s), 故不能按"和 action_L2 同量级"来给。
+    "weight_stand_still":       (3.0,),
     "weight_action_excess":     (0.5,),
     "weight_smooth_L1_leg":     (0.1,),
     "weight_smooth_L1_spn":     (0.1,),

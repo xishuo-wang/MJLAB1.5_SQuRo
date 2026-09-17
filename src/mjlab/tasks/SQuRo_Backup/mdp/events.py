@@ -12,11 +12,12 @@ def reset_model(env, env_ids):
     # 按环境清零成功计时，不能将上一回合的站立确认时间带入新回合。
     # 计时器由 terminations.check_stand_success 惰性创建，这里补上"无则先建"，
     # 避免首次 reset 时属性还不存在而跳过清零（隐式依赖 termination 先跑过一次）。
-    stand_elapsed = getattr(env, "_stand_elapsed", None)
-    if stand_elapsed is None:
-        stand_elapsed = torch.zeros(env.num_envs, device=env.device)
-        env._stand_elapsed = stand_elapsed  # type: ignore[attr-defined]
-    stand_elapsed[env_ids] = 0.0
+    for name in ("_stand_elapsed", "_stand_vel_integral"):
+        buffer = getattr(env, name, None)
+        if buffer is None:
+            buffer = torch.zeros(env.num_envs, device=env.device)
+            setattr(env, name, buffer)
+        buffer[env_ids] = 0.0
 
     # 获取机器人实体
     robot_entity = env.scene.entities["robot"]

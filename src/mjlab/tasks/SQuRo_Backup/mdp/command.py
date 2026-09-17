@@ -9,7 +9,7 @@ from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
-from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY, STAND_VEL_RMS_ENTER, STAND_VEL_RMS_STAY
+from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -262,13 +262,14 @@ class BackupCommand(CommandTerm):
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
 
     def stand_gate(self) -> tuple[torch.Tensor, torch.Tensor]:
-        # 站立确认的双阈值: 严格进入 enter / 稍宽维持 stay; 只有 enter 能推进确认时长,
-        # stay 只决定"短暂掉出"时按 STAND_CONFIRM_DECAY 侵蚀还是立即清零。
+        # 返回两个几何门控: hold = 维持站立窗口的宽松门控, strict = 结算与静止奖励要求的严格门控。
+        # 速度条件不在这里 —— 成功判据用窗口**平均**速度, 静止奖励用瞬时速度, 两者阈值不同,
+        # 由各自的调用方负责, 避免"一个函数里塞两个语义不同的速度门限"。
         u_floor, h_floor, vel_rms = self.standing_metrics()
         finite = torch.isfinite(u_floor) & torch.isfinite(h_floor) & torch.isfinite(vel_rms)
-        enter = finite & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT) & (vel_rms < STAND_VEL_RMS_ENTER)
-        stay = finite & (u_floor > STAND_UPRIGHT_COS_STAY) & (h_floor > STAND_MIN_HEIGHT_STAY) & (vel_rms < STAND_VEL_RMS_STAY)
-        return enter, stay
+        hold = finite & (u_floor > STAND_UPRIGHT_COS_STAY) & (h_floor > STAND_MIN_HEIGHT_STAY)
+        strict = finite & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
+        return hold, strict
 
     def _joint_vel_rms(self) -> torch.Tensor:
         # 14 个驱动关节速度的瞬时 RMS; 站立参考速度恒为 0, 所以"站得住"要求它接近 0。
@@ -330,31 +331,25 @@ class BackupCommand(CommandTerm):
         return elapsed, confirmed
 
     @staticmethod
-    def _update_stand_confirmation(
+    def _update_stand_window(
         elapsed: torch.Tensor,
-        enter: torch.Tensor,
-        stay: torch.Tensor,
+        vel_integral: torch.Tensor,
+        active: torch.Tensor,
         running: torch.Tensor,
+        vel_rms: torch.Tensor,
         dt: float,
-        duration: float,
-        decay: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # 站立确认专用(不动共享的 _update_confirmation, 那套是 S1/S2/倒置用的硬清零语义)。
-        # enter: 推进累计; stay 且非 enter: 按 decay 倍率主动侵蚀累计; 两者都不满足: 立即清零。
-        # 用"主动侵蚀"而不是"暂停累计", 是为了不允许多次短暂达标拼接成一次连续站稳。
-        # 结算条件要求本步仍在 enter 上, 即"结算时当前状态必须有效"。
-        run = running & torch.isfinite(elapsed)
+        # 站立窗口(不动共享的 _update_confirmation, 那套是 S1/S2/倒置用的硬清零语义)。
+        # 窗口成立时累加时长 T 与"速度×时间"积分 V; 窗口中断(几何掉出/非 P3/未运行)则 T 与 V 一起清零。
+        # 结算量是 V/T —— 窗口内的**平均**关节速度, 不是"连续达标时长":
+        # 均值形式骗不过去(窗口里任何一次剧烈抖动都会直接抬高 V/T), 也没有占空比悬崖。
+        run = running & active
         step = run.to(elapsed.dtype) * (dt if (dt > 0.0 and isfinite(dt)) else 0.0)
-        grown = elapsed + step
-        eroded = (elapsed - decay * step).clamp_min(0.0)
         zero = torch.zeros_like(elapsed)
-        nxt = torch.where(enter & run, grown, torch.where(stay & run, eroded, zero))
-        # 确认时长按 duration/dt 步累加, float32 的逐步舍入会随步数增长, 容差必须同步放大
-        # (eps*150*4 ≈ 7e-5 秒, 仅为确认时长的 0.005%, 不改变实际确认秒数)。
-        steps = max(1.0, abs(duration) / max(abs(dt), 1e-9))
-        eps = torch.finfo(elapsed.dtype).eps * steps * 4.0
-        confirmed = enter & run & (nxt >= (duration - eps))
-        return nxt, confirmed
+        speed = torch.nan_to_num(vel_rms, nan=0.0, posinf=0.0, neginf=0.0)
+        nxt_t = torch.where(run, elapsed + step, zero)
+        nxt_v = torch.where(run, vel_integral + step * speed, zero)
+        return nxt_t, nxt_v
 
     def _update_command(self) -> None:
         dt = float(self._update_dt)

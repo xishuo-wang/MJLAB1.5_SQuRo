@@ -76,6 +76,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "progress_s1": RewardTermCfg(func=mdp.compute_s1_progress_reward, weight=1.0),
         "progress_s2": RewardTermCfg(func=mdp.compute_s2_progress_reward, weight=1.0),
         "progress_s3": RewardTermCfg(func=mdp.compute_s3_progress_reward, weight=1.0),
+        "stand_still": RewardTermCfg(func=mdp.compute_stand_still_reward, weight=1.0),
         "action_excess": RewardTermCfg(func=mdp.compute_action_ctrl_excess_penalty, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
@@ -83,15 +84,11 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # 未启用, 需要时取消注释并在 _CURVES 补对应权重
         # "upright":     RewardTermCfg(func=mdp.compute_upright_reward),
         # "stand":       RewardTermCfg(func=mdp.compute_stand_reward),
-        # "stand_still": RewardTermCfg(func=mdp.compute_stand_still_penalty),
         # "fallen":      RewardTermCfg(func=mdp.compute_fallen_penalty),
         # "corridor":    RewardTermCfg(func=mdp.compute_corridor_reward),
     }
 
     # 终止条件
-    # stand 必须是 time_out=True: 提前结束会截断后续密集奖励, 若按真终止处理
-    # (不 bootstrap) 则"3 秒站起"要丢掉约 7 s x 18/s ≈ 126 分, 而成功里程碑只有 35 分,
-    # 策略会被算成"站起来反而亏"。标记为截断后价值估计会 bootstrap 到后续状态。
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "stand": TerminationTermCfg(func=mdp.check_stand_success, time_out=True),
@@ -102,7 +99,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "backup_cmd": mdp.BackupCommandCfg(
             asset_name="robot",
             debug_vis=play,
-            # 训练恢复原时间缩放课程；策略回放仍默认固定速度，方便比较。
             fixed_time_scale=mdp.TIME_COMPARISON_SCALE if play else None,
         )
     }

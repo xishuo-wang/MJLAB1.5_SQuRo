@@ -139,48 +139,67 @@ class StageRewardTests(unittest.TestCase):
             self.assertFalse(terminations.check_stand_success(env).any())
         self.assertTrue(terminations.check_stand_success(env)[0])
 
-    def test_stand_requires_low_joint_velocity(self):
+    def test_stand_window_uses_mean_velocity(self):
         env, cmd = make_env([2, 2, 2])
-        # 0.3 进入阈值内 / 4.5 落在迟滞带 (3.5 与 5.5 之间) / 6.0 超过退出阈值
-        cmd.test_vel[:] = torch.tensor([.3, 4.5, 6.])
-        for _ in range(200):
+        cmd.test_vel[:] = torch.tensor([.3, 4.5, 1.])
+        for _ in range(50):                                   # 攒 0.5s 窗口
+            self.assertFalse(terminations.check_stand_success(env).any())
+        # 判据量就是窗口平均速度: 恒定的 0.3 与 4.5 分别远离门限两侧
+        self.assertAlmostEqual(env._stand_vel_integral[0].item() / env._stand_elapsed[0].item(), .3, places=4)
+        self.assertAlmostEqual(env._stand_vel_integral[1].item() / env._stand_elapsed[1].item(), 4.5, places=4)
+        cmd.test_vel[2] = .3                                  # 后半程变静 -> 窗口均值被拉低
+        for _ in range(100):
             terminations.check_stand_success(env)
-        self.assertAlmostEqual(env._stand_elapsed[0].item(), 2., places=4)   # 一直达标 -> 持续累计
-        self.assertAlmostEqual(env._stand_elapsed[1].item(), 0., places=4)   # 迟滞带只侵蚀, 不累计
-        self.assertAlmostEqual(env._stand_elapsed[2].item(), 0., places=4)   # 超过退出阈值 -> 立即清零
+        self.assertLess((env._stand_vel_integral[2] / env._stand_elapsed[2]).item(), .75)  # (0.5×1.0+1.0×0.3)/1.5
+        self.assertGreater(env._stand_elapsed[2].item(), 1.4)
+        # 窗口攒满 1.5s 且均值远低于 3.5 -> 结算; 一直抖的 4.5 永远不结算
+        torch.testing.assert_close(terminations.check_stand_success(env), torch.tensor([True, False, True]))
 
-    def test_stand_dropout_erodes_instead_of_pausing(self):
-        env, cmd = make_env([2, 2])
+    def test_stand_window_resets_instead_of_pausing(self):
+        env, cmd = make_env([2])
         cmd.test_vel[:] = .3
-        for _ in range(50):                                   # 先攒 0.5s
+        for _ in range(50):
             terminations.check_stand_success(env)
         self.assertAlmostEqual(env._stand_elapsed[0].item(), .5, places=4)
-        cmd.test_vel[:] = 4.5                                 # 掉进迟滞带: 按 2 倍速率侵蚀
-        for _ in range(10):                                   # 0.1s 掉出 -> 只退 0.2s
-            terminations.check_stand_success(env)
-        self.assertAlmostEqual(env._stand_elapsed[0].item(), .3, places=4)
-        for _ in range(20):                                   # 再掉 0.2s -> 侵蚀到 0
-            terminations.check_stand_success(env)
-        self.assertAlmostEqual(env._stand_elapsed[0].item(), 0., places=4)
-        # 侵蚀到 0 后必须重新从 0 攒满 1.5s, 不能把多次短暂达标拼成一次连续站稳
-        cmd.test_vel[:] = .3
+        cmd.test_u[:] = torch.tensor([[-1., 1.]])             # 几何掉出 -> T 与 V 一起清零, 不是暂停累计
+        terminations.check_stand_success(env)
+        self.assertEqual(env._stand_elapsed[0].item(), 0.)
+        self.assertEqual(env._stand_vel_integral[0].item(), 0.)
+        # 窗口重启后必须重新攒满 1.5s, 不能把前后两段拼接成一次站稳
+        cmd.test_u[:] = 1.
         for _ in range(149):
             self.assertFalse(terminations.check_stand_success(env).any())
         self.assertTrue(terminations.check_stand_success(env)[0])
 
+    def test_stand_still_reward_is_p3_gated_and_linear(self):
+        env, cmd = make_env([2, 1, 2])
+        cmd.test_vel[:] = torch.tensor([0., 0., 3.])
+        reward = rewards.compute_stand_still_reward(env)
+        weight = _CURVES["weight_stand_still"][0]
+        self.assertAlmostEqual(reward[0].item(), weight, places=6)      # 完全静止 -> 满分
+        self.assertEqual(reward[1].item(), 0.)                          # 非 P3 -> 0
+        self.assertAlmostEqual(reward[2].item(), weight * .5, places=6)  # 3 rad/s -> 线性核一半
+        # 姿态不达标时不给分: 不存在"不进锥就不被罚"的反向作弊路线(惩罚形式才有)
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)
+
     def test_reset_clears_only_selected_stand_timer(self):
         env, _ = make_env([2, 2])
         env._stand_elapsed = torch.tensor([.4, .3])
+        env._stand_vel_integral = torch.tensor([1.2, .9])
         robot = NS(num_joints=36, write_root_state_to_sim=lambda *a, **kw: None,
                    write_joint_state_to_sim=lambda *a, **kw: None)
         env.scene = NS(entities={'robot': robot})
         with patch.object(events, 'resolve_model_indices'):
             events.reset_model(env, torch.tensor([0]))
             torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., .3]))
+            torch.testing.assert_close(env._stand_vel_integral, torch.tensor([0., .9]))
             # 计时器尚未被 termination 创建过时也要能建立并清零, 不能静默跳过
             del env._stand_elapsed
+            del env._stand_vel_integral
             events.reset_model(env, torch.tensor([1]))
             torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., 0.]))
+            torch.testing.assert_close(env._stand_vel_integral, torch.tensor([0., 0.]))
 
     def test_p2_boundary_and_p3_is_continuous(self):
         env, cmd = make_env([1, 1, 1, 2])

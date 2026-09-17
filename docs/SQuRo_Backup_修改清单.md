@@ -29,64 +29,55 @@
 实测同代策略赶时间在里程项净赚 +27.9、在稠密项只亏 −34.5，**净差仅 6.6**，
 所以只在 P3 追加平滑惩罚必然被探索收益盖过去。
 
-### 本批改动（一个批次，三处必须一起改）
+### 本批改动（一个批次，判据结构与静止奖励一起改）
 
 | 状态 | 内容 | 规则或验收 |
 | --- | --- | --- |
-| 已实现 | 成功判据加稳定性条件 | 14 个驱动关节速度瞬时 RMS：进入 `< STAND_VEL_RMS_ENTER = 3.5`、退出 `< STAND_VEL_RMS_STAY = 5.5` rad/s；站立参考速度恒为 0 |
+| 已实现 | 成功判据加稳定性条件 | 站立窗口内**平均**关节速度 ≤ `STAND_VEL_MEAN_MAX = 3.5` rad/s（14 驱动关节瞬时 RMS 的窗口均值）；站立参考速度恒为 0 |
 | 已实现 | 确认时长 0.5 → **1.5 s** | `timing.STAND_CONFIRM_DURATION = 1.5`，训练与手调两侧共同引用（`verify_backup_config` 第 3 节校验一致） |
-| 已实现 | 站立确认专用迟滞 | `BackupCommand._update_stand_confirmation`：`enter` 推进累计、只有 `stay` 时按 `STAND_CONFIRM_DECAY = 2.0` **主动侵蚀**、两者都不满足立即清零、结算当步必须仍在 `enter` 上 |
-| 已实现 | 新增标定用日志 | `Progress/stand_vel` = 站立几何成立时的关节速度 RMS 均值（**不参与判据**），用来决定下一轮收紧还是放松 |
+| 已实现 | 判据用窗口均值，不用连续达标时长 | `BackupCommand._update_stand_window`：窗口成立累加 `T` 与 `V = ∫vel_rms dt`，中断则一起清零；结算 `T ≥ 1.5 s 且 V/T ≤ 3.5` 且当步满足严格几何 |
+| 已实现 | 新增 `stand_still` 静止奖励 | P3 且严格几何成立时 `(1 − vel_rms/6).clamp(0,1)`，`weight_stand_still = 3.0`，与判据共用同一个 `vel_rms` |
+| 已实现 | 新增标定日志 | `Progress/stand_hold`（窗口时长）与 `Progress/stand_mean_vel`（**判据量本身**），均不参与判据 |
 | 已实现 | 回放与训练同源 | 手调脚本 P3 分支原先自己数"几何连续步数"，比训练宽松、会在训练判失败时仍打印"稳定站起"；已改为直接读训练环境的 `stand` 终止项 |
-| 已验证 | CPU 回归 20 项通过 | 新增 `test_stand_requires_low_joint_velocity`、`test_stand_dropout_erodes_instead_of_pausing`（侵蚀到 0 后必须重新攒满 1.5 s，禁止拼接） |
-| 已验证 | 手调版本仍可达 | `SQuRo_backup_Replay.py --visualize none` 在 λ=1 与 λ=3 均走到 `[RESULT] phase=DONE`，且走的是"训练环境确认稳定站起"分支 |
-| 待验证 | 从 `model_600` 续训的达标率 | 214 轮内 `stand` 终止项为 0（见下），已再续 300 轮并加入 `Progress/stand_hold` 判别瓶颈 |
+| 已验证 | CPU 回归 21 项通过 | 新增窗口均值判据、清零重启（非暂停）、静止奖励 P3 门控与线性核三项 |
+| 已验证 | 手调版本仍可达 | `SQuRo_backup_Replay.py --visualize none` 在 λ=1/λ=3 均走到 `[RESULT] phase=DONE`，走的是"训练环境确认稳定站起"分支 |
+| 待验证 | 从 `model_800` 续训 300 轮 | 看 `Episode_Termination/stand` 是否恢复、`Progress/stand_mean_vel` 是否降到 3.5 以下、`Policy/mean_std` 会否继续压低 |
 
-### 验证：从 `model_600` 续训 214 轮（run `2026-09-17_19-19-21_S2_stand_smoke`，读到 iter 814）
+### 已撤回：判据的第一版实现（"连续达标 + 2 倍侵蚀"）
 
-| 指标 | iter 600 | iter 814 | 同区间基线（`17-14-06`，旧判据） |
-| --- | ---: | ---: | ---: |
-| `Episode_Termination/stand`（每步） | 0 | **0** | 8.84 |
-| `Episode_Termination/timeout`（每步） | 1.57 | 1.65 | 0 |
-| `Train/mean_episode_length` | 49.5 | **1000（上限）** | 221 → 114.7 |
-| `Progress/success`、`Episode_Reward/milestone_success` | 0 | **0** | 饱和 |
-| `Progress/standing`（严格瞬时占比） | 0 | 0.552 | （旧口径只看几何）0.445 |
-| `Progress/stand_vel`（条件均值, rad/s） | 0 | **3.22** | — |
-| `Policy/mean_std` | 0.845 | **0.291** | 0.759 → 0.866（不降） |
-| `Episode_Reward/action_L2` | −0.090 | −0.322 | −0.27 → −0.36 |
-| `Phase/p3` | ~0 | 0.944 | — |
+第一版写成 `STAND_VEL_RMS_ENTER/STAY` 双阈值 + 短暂掉出按 `STAND_CONFIRM_DECAY = 2.0` 侵蚀。
+实测 219 轮 `stand` 终止项**全程为 0**。复盘结论：问题不在阈值（`Progress/stand_vel = 3.21`
+已低于门限 3.5），而在**判据结构隐含了一个占空比门槛**：
 
-**两个结论**：
+```
+设 d = 严格达标瞬时占空比, k = 侵蚀倍率 = 2
+每步净漂移 = d·dt − k(1−d)·dt  ⇒  只有 d > 2/3 计数器才可能增长
+要在 P3 的 ~900 步内攒满 1.5 s 需要 d ≥ 0.72
+实测 d = Progress/standing = 0.55, Progress/stand_hold = 0.094 s (目标 1.5 s)
+```
 
-1. **机制按设计生效**。判据现在量的是**采样后**的关节速度，探索噪声因此有了代价 ⇒
-   σ 在 200 轮内从 0.845 崩到 0.291；同区间的基线 run 里 σ 是平的（0.759→0.866）。
-   而 σ 正是 100 Hz 可见抖动的直接来源，所以这条路径**正好对准用户提的问题 2**。
-2. **当前还拿不到成功**：条件均值 3.22 已低于进入门限 3.5，瞬时严格达标占 55%，
-   但要求**连续** 1.5 s，于是 214 轮里 `stand` 终止项全程为 0，回合全部走 10 s 超时。
+⇒ 判据**结构上不可达**，成功里程碑恒为 0、回合全部走 10 s 超时。
+改成窗口均值后这套机制（`enter/stay`、侵蚀倍率、宽限预算）**全部删除**：
+均值形式下"多次短暂达标拼接"这条路不存在，因为窗口内任何一次剧烈抖动都会直接抬高 `V/T`。
 
-⇒ 尚不能判断瓶颈是"速度门限"还是"1.5 s 保持时长"，因此新增
-`Progress/stand_hold`（已累计连续达标时长均值，非 P3 恒为 0）作为判别器：
-
-- 长期停在 0.2~0.4 s ⇒ 连不成片，该放松保持时长或加大侵蚀容忍；
-- 接近 1.5 s 仍不结算 ⇒ 几何/速度门限才是瓶颈，该放松 `STAND_VEL_RMS_ENTER`。
-
-**注意（续训语义）**：`rsl_rl` 的 `total_it = start_it + num_learning_iterations`，
-所以恢复训练时 `--agent.max-iterations` 是**增量**而不是绝对目标（`600 + 620 = 1220`）。
-
-**副作用**：成功项归零后回合长度顶到 1000 步，`Train/mean_reward` 变成"10 秒稠密奖励累计"，
-与旧 run 的数值**不可直接比较**（旧 run 约 114 步就结算）。
+**教训**：写"连续达标 N 秒"类判据时，先算清楚它对占空比的要求，
+再确认当前策略的占空比是否够得着；否则会得到一个永远拿不到的成功条件。
 
 ### 本批边界
 
 - **不动**共享的 `BackupCommand._update_confirmation`：那套是 S1/S2/倒置判据用的硬清零语义，
   改成衰减会影响阶段推进与重试规则。站立另走一套。
-- **不加** P3 专用平滑惩罚、**不全局加大** `action_L2`/`action_L1` 权重、**不恢复** `clip_actions`。
+- **不全局加大** `action_L2`/`action_L1` 权重、**不恢复** `clip_actions`；静止奖励是**P3 专属**的，
+  且用"奖励"而不是"惩罚"（惩罚会给出"不进锥就不被罚"的作弊路线）。
 - **不动**参考时钟与结算层（问题 1）：不引入 `t_cycle`、不改里程碑发放时刻、不动 `stand` termination 的 `time_out=True`。
 - **不动** γ、回合长度、rollout 长度、网络结构与 PPO 其他参数。
-- **不动**参考表、状态机阶段划分、S1/S2 判据与全部奖励权重。
+- **不动**参考表、状态机阶段划分、S1/S2 判据与其余奖励权重。
 - 阈值改动的风险是"成功变得不可达 ⇒ 里程碑归零 ⇒ 策略退化"。
-  这是可回滚的单点常量（`mdp/timing.py`），下一轮先看 `Progress/stand_vel` 再决定收紧或放松。
+  这是可回滚的单点常量（`mdp/timing.py`），先看 `Progress/stand_mean_vel`（判据量本身）
+  与 `Policy/mean_std`，再决定收紧还是放松；`Progress/stand_hold` 回答"窗口时长够不够"。
 - 用手调回放（λ=1/λ=3）作为"目标可达"的可行性闸门；回放必须与训练**同源**才有意义。
+- 新增 `stand_still` 奖励**只作用于 P3**，且用奖励而不是惩罚；它同时是"判据可达性"的加速器
+  （给同方向的稠密梯度），不是判据的替代品。
 
 ---
 
@@ -297,7 +288,7 @@ A2–A5 的联改设计（`t_nom` 结算、固定循环、去掉 `stand` termina
 | --- | --- | --- |
 | D1 | 相位重试把参考平移 1.570 rad | **A1 落地后 retry 停用 ⇒ 本项自动消失**，届时复查 |
 | D2 | `backup_body_traj.npy` 是 λ=1 录制、用在 λ∈[2,4]；P2_END 处完美跟踪者 r_height 仅 0.731 | 属行为改动（改高度奖励信号），独立排期 |
-| D3 | `compute_stand_still_penalty` 仍用基座重力投影，与背腹轴判据不一致 | 若启用必须先统一判据 |
+| D3 | ~~`compute_stand_still_penalty` 仍用基座重力投影~~ | **已处理**：该函数已重写为 `compute_stand_still_reward`，门控统一走 `stand_gate()` 的分段 site 判据，并已注册（本批） |
 | D4 | 指标命名：`Progress/relapse` 含初始仰卧；`Progress/enter_p3` 不是成功率 | 纯命名/口径，可与 E 批一起 |
 
 ### E 批：日志与验收口径
