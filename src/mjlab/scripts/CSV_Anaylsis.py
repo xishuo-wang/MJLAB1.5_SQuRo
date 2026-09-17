@@ -13,7 +13,7 @@ from scipy.signal import welch, savgol_filter, find_peaks
 # ==================================================================================================
 # 文件路径配置
 XML_PATH = r"D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\SQuRo\xmls\SQuRo.xml"
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Backup\2026-09-14_11-21-04\videos\SQuRo_Backup_999-ts3.00.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Backup\2026-09-17_15-00-33\videos\SQuRo_Backup_900-ts3.00.csv"
 
 # 控制时间配置
 TIMESTEP = 0.002
