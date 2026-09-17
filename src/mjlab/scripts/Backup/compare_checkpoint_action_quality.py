@@ -12,10 +12,8 @@ sys.path.insert(0, "src")
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATOR_CTRL_RANGE
 
 # 检查点动作质量对照: 站立窗口内的关节速度 / 力矩饱和 / 目标角相邻步变化
-# 站立窗口必须用**与代码版本无关**的原始列定义, 不能用 stand_confirm_elapsed:
-# 判据从 "0.5 s @ u>0.9" 改成 "1.5 s @ u>0.8" 之后, 同一个阈值选中的帧集完全不同
-# (实测同一检查点 600: 旧口径 39 步 vs 新口径 139 步), 跨版本读数会被判据本身污染。
-# 这里直接复现判据的"严格几何": P3 且 min(u_F,u_H) > 0.9 且 min(z_F,z_H) > 0.05 m。
+# 窗口用与代码版本无关的原始列定义(P3 且 min(u_F,u_H)>0.9 且 min(z_F,z_H)>0.05 m),
+# 不用 stand_confirm_elapsed —— 后者语义随判据改动而变, 会被判据本身污染(见技术细节 §7.2.3)。
 SPINE = ("F_spine1", "F_body", "H_spine1", "H_body")
 LEG = ("FL_shoulder", "FL_elbow", "FR_shoulder", "FR_elbow",
        "HL_hip", "HL_knee", "HR_hip", "HR_knee")

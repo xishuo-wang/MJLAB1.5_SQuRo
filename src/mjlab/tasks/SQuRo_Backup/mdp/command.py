@@ -198,7 +198,7 @@ class BackupCommand(CommandTerm):
         return cached
 
     def _get_pose_cos(self) -> torch.Tensor:
-        # 与 _get_pose_flags 同样的缓存语义, 供区间奖励读取同一份方向余弦。
+        # 与 _get_pose_flags 相同的缓存语义。
         cached = getattr(self, "_pose_cos_cache", None)
         if cached is None:
             return self._pose_cos()
@@ -206,38 +206,30 @@ class BackupCommand(CommandTerm):
 
     @staticmethod
     def _ramp(u: torch.Tensor, sign: float) -> torch.Tensor:
-        # 方向余弦 -> [0, 1] 线性爬升；原点取 u=0, 保证初始姿态就有非零梯度。
+        # 方向余弦 -> [0, 1] 线性爬升, 原点取 u=0。
         return (sign * u).clamp(0.0, 1.0)
 
     @property
     def progress_s1(self) -> torch.Tensor:
-        # 后段翻正进度: 仰卧(-1) -> 俯卧(+1) 单调爬升, 是 S1 的充分特征, 未知姿态按 0 处理。
-        # 这是唯一的"起步"梯度来源 —— 完全仰卧时 progress_s2 的前段系数为 0, 只有它能
-        # 把后段先推起来。
+        # 后段翻正进度: 仰卧(-1) -> 俯卧(+1) 单调爬升, 未知姿态按 0 处理。
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
         return self._ramp(u[:, 1], 1.0)
 
     @property
     def progress_s2(self) -> torch.Tensor:
-        # 在后段已翻正的基础之上, 继续奖励前段翻过去的程度 (朝 S2 的连续进度)。
-        # 前段系数取 (clamp(uF)+1)/2 而不是 clamp(uF): 后者在 uF<0 的半程恒为 0,
-        # 于是 progress_s1 的 clamp(-uF) 与 progress_s2 的 clamp(uF) 恰好互补,
-        # 两项相加在 uF=0 处取 0、在 S1/S2 两处等高 —— 形成"两峰等高等价 + 中间零梯度谷"
-        # 的地形, 策略停在 S1 就是并列最优解, 永远拿不到跨过 uF=0 的梯度。
-        # 改成 (clamp(uF)+1)/2 后全程单调, 配合权重 1.0/2.0 合成地形为
-        # 仰卧 0 -> S1 1.0/s -> 正侧立 2.0/s -> S2 3.0/s, uF 方向处处正梯度。
+        # 前段进度乘以后段进度; 前段系数取 (clamp(uF)+1)/2 而非 clamp(uF), 目的是让两项
+        # 合成的激励地形全程单调 (取值依据见技术细节 §2)。
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
         front = (u[:, 0].clamp(-1.0, 1.0) + 1.0) / 2.0
         return self._ramp(u[:, 1], 1.0) * front
 
-    # 站立几何与连续进度共用背腹轴、前后段各自高度；阶段门控由调用方负责。
+    # 站立几何与连续进度共用背腹轴与两段高度；阶段门控由调用方负责。
     def standing_metrics(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # 返回站立判据的三个原始量: [env] 的两段最差背腹余弦、最低躯干高度、14 个驱动关节速度 RMS。
-        # 拆出来是为了让"严格进入 / 稍宽退出"的迟滞阈值能各自取不同门限, 而不是只看一个布尔量。
+        # 返回 [env] 的两段最差背腹余弦、最低躯干高度、14 个驱动关节速度 RMS。
         u = self._pose_cos()
         heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id),
                                self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
-        # 较低的一段同时决定"是否解锁"和"抬升进度", 不能只抬起一端冒充站立。
+        # 取两段的较低/较差者, 不允许只抬起或只翻正一端。
         u_floor = u.amin(dim=1)
         h_floor = heights.amin(dim=1)
         return u_floor, h_floor, self._joint_vel_rms()
@@ -249,12 +241,9 @@ class BackupCommand(CommandTerm):
         valid = torch.isfinite(u).all(dim=1) & torch.isfinite(heights).all(dim=1)
         u_floor = u.amin(dim=1)
         h_floor = heights.amin(dim=1)
-        # 站立判据的严格侧: 方向余弦用锥阈值, 高度用 STAND_MIN_HEIGHT, 速度不做要求
-        # (速度侧的门限由 terminations 的迟滞逻辑负责, 这里保持"几何合格"的原语义)。
+        # 严格侧只含几何, 速度条件由 terminations 与静止奖励各自负责。
         standing = valid & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
-        # 进度只在"前后段同时背部朝上"的 45 度锥内解锁: 锥外恒为 0, 锥内越接近最终站立越大。
-        # 朝向从锥边界到完全正置线性增长, 高度从贴地到站立目标线性增长, 完全站立时为 1。
-        # 任一段转回侧面或仰面会立即关闭门控, 因此该进度也直接抑制 P3 里的回扭。
+        # 站立进度: 朝向从锥边界到完全正置、高度从贴地到站立目标各线性增长, 完全站立为 1。
         cone = float(self._pose_cos_threshold)
         orient = ((u_floor - cone) / (1.0 - cone)).clamp(0.0, 1.0)
         height_progress = ((h_floor - STAND_GROUND_HEIGHT) / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
@@ -262,9 +251,7 @@ class BackupCommand(CommandTerm):
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
 
     def stand_gate(self) -> tuple[torch.Tensor, torch.Tensor]:
-        # 返回两个几何门控: hold = 维持站立窗口的宽松门控, strict = 结算与静止奖励要求的严格门控。
-        # 速度条件不在这里 —— 成功判据用窗口**平均**速度, 静止奖励用瞬时速度, 两者阈值不同,
-        # 由各自的调用方负责, 避免"一个函数里塞两个语义不同的速度门限"。
+        # 返回 (维持站立窗口的宽松门控, 结算与静止奖励要求的严格门控); 速度门限不在此处。
         u_floor, h_floor, vel_rms = self.standing_metrics()
         finite = torch.isfinite(u_floor) & torch.isfinite(h_floor) & torch.isfinite(vel_rms)
         hold = finite & (u_floor > STAND_UPRIGHT_COS_STAY) & (h_floor > STAND_MIN_HEIGHT_STAY)
@@ -272,8 +259,7 @@ class BackupCommand(CommandTerm):
         return hold, strict
 
     def _joint_vel_rms(self) -> torch.Tensor:
-        # 14 个驱动关节速度的瞬时 RMS; 站立参考速度恒为 0, 所以"站得住"要求它接近 0。
-        # 关节顺序与 _ACTUATED_JOINT_NAMES 一致, 速度量纲统一为 rad/s。
+        # 14 个驱动关节速度的瞬时 RMS (rad/s), 顺序与 _ACTUATED_JOINT_NAMES 一致。
         vel = self._asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
         return vel.square().mean(dim=1).sqrt()
 
@@ -289,7 +275,7 @@ class BackupCommand(CommandTerm):
         return self._asset.data.body_link_pos_w[:, body_id, 2]
 
     def _check_S1(self) -> torch.Tensor:
-        # S1 瞬时候选：前段倒置、后段正置，且两段躯干都平躺贴地。
+        # S1 瞬时候选：前段倒置、后段正置, 且两段躯干都平躺贴地。
         f_inv = self._segment_inverted(0)
         h_up = self._segment_upright(1)
         fz = self._body_height(_MODEL_INDICES.f_body_id)
@@ -297,8 +283,7 @@ class BackupCommand(CommandTerm):
         return f_inv & h_up & (fz < _GROUND_TH) & (hz < _GROUND_TH)
 
     def _check_S2(self) -> torch.Tensor:
-        # 保留贴地翻正路径；已经达到站立几何的两段也可进入 P3，不要求先落低。
-        # 抬身路径复用更严格的 u>0.9、各自 z>0.05，不能只抬一端或侧立过关。
+        # S2 瞬时候选取两条路径的并集: 贴地翻正, 或已达成站立几何 (见技术细节 §1)。
         f_up = self._segment_upright(0)
         h_up = self._segment_upright(1)
         fz = self._body_height(_MODEL_INDICES.f_body_id)
@@ -339,10 +324,8 @@ class BackupCommand(CommandTerm):
         vel_rms: torch.Tensor,
         dt: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # 站立窗口(不动共享的 _update_confirmation, 那套是 S1/S2/倒置用的硬清零语义)。
-        # 窗口成立时累加时长 T 与"速度×时间"积分 V; 窗口中断(几何掉出/非 P3/未运行)则 T 与 V 一起清零。
-        # 结算量是 V/T —— 窗口内的**平均**关节速度, 不是"连续达标时长":
-        # 均值形式骗不过去(窗口里任何一次剧烈抖动都会直接抬高 V/T), 也没有占空比悬崖。
+        # 站立窗口: 窗口成立时累加时长 T 与"速度×时间"积分 V, 中断则一起清零。
+        # 结算量是 V/T 即窗口平均关节速度, 设计与理由见技术细节 §7.2.1。
         run = running & active
         step = run.to(elapsed.dtype) * (dt if (dt > 0.0 and isfinite(dt)) else 0.0)
         zero = torch.zeros_like(elapsed)
@@ -366,18 +349,14 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_pose_cos_cache"):
             self._pose_cos_cache = None
         lam = self.time_scale_command.clamp(min=0.1)
-        # 所有阶段推进 t_phase (P1/P2 用于段内参考, P3 用于 time5/站立)
-        # reset() 末尾也会调用 command_manager.compute(dt=0)。重置环境的参考时钟应停在 0，
-        # 只有真实环境步开始后才推进，避免初始参考提前一个控制步。
+        # t_phase 是所有阶段共用的段内时钟; 只有真实环境步才推进, 避免初始参考提前一步。
         running = self._env.episode_length_buf > 0
         real_dt = dt if dt > 0.0 and isfinite(dt) else 0.0
         self.t_phase = self.t_phase + running.to(self.t_phase.dtype) * real_dt
-        # 本步缓存姿态，避免 S1/S2/双倒分别重复读取 site。
-        # 单元测试可用替代的 _check_* 判据而不构造物理 asset；真实环境始终有
-        # _pose_flags，由背腹 site 的世界坐标统一计算三类姿态候选。
+        # 本步缓存姿态, 避免 S1/S2/双倒重复读取 site; 测试可注入替代的 _pose_flags。
         pose_flags = getattr(self, "_pose_flags", None)
         self._pose_cache = pose_flags() if pose_flags is not None else None
-        # 瞬时候选只用于日志和确认计时，不能直接当作阶段转移。
+        # 瞬时候选只用于日志与确认计时, 不能直接当作阶段转移。
         p1 = self.phase == 0
         expected1 = _P1_EXPECT * lam
         s1_ok = self._check_S1()
@@ -403,19 +382,16 @@ class BackupCommand(CommandTerm):
         )
 
         # 阶段推进: P1 -> P2 -> P3 单向, 只在阶段内做超时重试。
-        # 原来允许 back_to_p1 / back_to_p2, 但参考随阶段切换 ⇒ 每个阶段"可赚分"不同
-        # (实测 P2 每步 0.206 vs P3 每步 0.159), 策略于是主动摆回 S1/双倒姿态把阶段换回去,
-        # 形成 P2<->P3 极限环且永远站不起来。取消回退后策略无法再通过"挑阶段"获利。
+        # 取消阶段回退的理由(策略会挑阶段套利、形成极限环)见技术细节 §2。
         advance1 = p1 & s1_confirmed
         advance2 = p2 & s2_confirmed
         retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_confirmed
         p2_deadline = expected2 + self.cfg.p2_buffer_s
-        # 截止前刚进入候选时，允许完成这次连续确认，参考继续保持 T3 末端。
-        # 仅延长最多一个确认时长（实际秒）；中断即清零，不无限等待/拼接确认。
+        # 截止前刚进入候选时允许完成这次连续确认, 参考保持 T3 末端; 中断即清零。
         s2_pending = s2_ok & (self._s2_confirm_elapsed > 0.0) & ~s2_confirmed
         s2_grace = s2_pending & (self.t_phase < p2_deadline + self.cfg.pose_confirm_s)
         retry2 = p2 & (self.t_phase >= p2_deadline) & ~s2_confirmed & ~s2_grace
-        # P3 无超时机制; inverted_confirmed 与 both_inverted 仅保留为诊断指标。
+        # P3 无超时机制; inverted_confirmed 与 both_inverted 仅作诊断。
         phase_next = self.phase.clone()
         phase_next = torch.where(advance1, torch.ones_like(phase_next), phase_next)
         phase_next = torch.where(advance2, torch.full_like(phase_next, 2), phase_next)
@@ -451,14 +427,9 @@ class BackupCommand(CommandTerm):
         self._last_retry_mask = retry_mask
 
     def _update_metrics(self) -> None:
-        # 训练监控只保留三组共 10 条, 每条都对应一个明确问题:
-        #   Progress/*  回合级成就 —— 策略走到哪一步了
-        #   Phase/*     当前停在哪一段 (p1 = 1 - p2 - p3, 不再记录无法反解的加权均值)
-        #   Gate/*      pose = 姿态到过没, advance = 相位真的推进的速率
-        # 其余确认计时/回退/里程碑脉冲不再写日志: 取消阶段回退后 confirmed 与 advance 在
-        # 对应阶段内等价, 里程碑脉冲是 Progress/enter_* 的导数, 回退量恒为 0。
-        # 注意 _last_* 记录的是上一步检测结果 (metrics 在 _update_command 之前被调用);
-        # 这些属性全部保留 —— SQuRo_backup_play.py 的录像列依赖它们, 日志与属性解耦。
+        # 只记录三组共 10 条: Progress/* 回合级成就, Phase/* 当前阶段, Gate/* 姿态与推进速率。
+        # 注意 _last_* 是上一步的检测结果(metrics 在 _update_command 之前被调用);
+        # 这些属性全部保留, SQuRo_Backup_play.py 的录像列依赖它们。
         log = self._env.extras["log"]
         log["Progress/enter_p2"] = self._s1_awarded.float().mean().item()
         log["Progress/enter_p3"] = self._s2_awarded.float().mean().item()

@@ -270,13 +270,10 @@ class StateMachinePolicy:
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P3 检测到 S1 (连续确认后) -> 回到 P2")
-            # 成功判定必须与训练**同源**: 直接读训练环境的 stand 终止项
-            # (几何 + 关节速度门限 + STAND_CONFIRM_DURATION 迟滞确认)。
-            # 这里曾自己数"几何连续成立步数", 那套判据比训练宽松, 训练判失败时回放仍会
-            # 打印"稳定站起", 于是回放失去"目标可达"的验证意义; 现已删除该计数。
+            # 成功判定与训练同源: 直接读训练环境的 stand 终止项(理由见技术细节 §7.2.1)。
             termination = getattr(self.env.unwrapped, "termination_manager", None)
             if self.phase == "P3" and termination is not None and bool(termination.get_term("stand")[0]):
-                # 确认成立的时刻回推确认时长, 即"开始站稳"的时刻。
+                # 从确认成立的时刻回推确认时长, 即"开始站稳"的时刻。
                 self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
                 self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
                 self.phase = "DONE"

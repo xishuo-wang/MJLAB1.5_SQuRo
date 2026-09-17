@@ -131,8 +131,7 @@ def _get_body_traj(device: str) -> dict:
 
 
 
-# 将新动作时间映射回旧身体轨迹的采集时间，只拉伸 P1 回收段。
-# 保留原始轨迹文件与空间数值；这是参考重定时，不是重新仿真得到的身体轨迹。
+# 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段 (参考重定时, 不是重新仿真)。
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
     recover_fraction = (t_nom - _SEG1_END) / (_SEG2_END - _SEG1_END)
     recover_t = BODY_TRAJ_BUILD_END + recover_fraction * (BODY_TRAJ_P1_END - BODY_TRAJ_BUILD_END)
@@ -166,9 +165,8 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     phase = cmd_term.phase  # type: ignore[attr-defined]
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
-    # 不让缓冲期参考继续泄漏到下一段动作。
+    # 缓冲期参考不得泄漏到下一段动作; float32 的起点+段长可能超边界一个 ulp, 需再限幅。
     p1_t = t_local_nom.clamp(max=_SEG2_END)
-    # float32 的起点+段长可能比边界大一个 ulp，需再次限幅，避免读到 T4 插值。
     p2_t = (_SEG2_END + t_local_nom.clamp(max=_ACTION_END - _SEG2_END)).clamp(max=_ACTION_END)
     p3_t = _ACTION_END + t_local_nom
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
@@ -178,12 +176,11 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
 # 获取参考关节状态
 def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
     cache = _get_ref_table(env.device)
-    # 命令 time_scale λ (放慢倍数): λ=1.0 原始速度, λ=1.5 放慢 1.5 倍
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     cmd = cmd_term.command
-    lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale
+    lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale (放慢倍数)
     t_nom = _stage_t_nom(env).clamp(0.0, REF_TOTAL_TIME)  # [N]
-    # 精确落在节点时使用右侧导数，尤其 P3 起点不能读到 T3->T4 跳变速度。
+    # 精确落在节点时取右侧导数, 尤其 P3 起点不能读到 T3->T4 的跳变速度。
     idx = torch.searchsorted(cache["t"], t_nom, right=True).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = (t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)
@@ -191,7 +188,7 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     # 参考速度: dref/dt = dref/dt_nom * (1/λ)
     vel = cache["vel"][idx_p] / lam.unsqueeze(1)
     phase = cmd_term.phase  # type: ignore[attr-defined]
-    # 同一名义时间有两个边界值：P2 保持 T3 末端，P3 才使用全零脊柱。
+    # 同一名义时间有两个边界值: P2 保持 T3 末端, P3 用全零脊柱。
     p2_pos = cache["p2_pos"][idx_p] + frac.unsqueeze(1) * (cache["p2_pos"][idx] - cache["p2_pos"][idx_p])
     p2_vel = cache["p2_vel"][idx_p] / lam.unsqueeze(1)
     pos = torch.where((phase == 1).unsqueeze(1), p2_pos, pos)

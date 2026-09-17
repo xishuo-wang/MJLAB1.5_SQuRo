@@ -34,9 +34,8 @@ _ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
 
 
 # 执行器控制范围 (SQuRo.xml 中 <position ... ctrlrange=...>)，顺序与 _ACTUATED_JOINT_NAMES 一致。
-# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到该区间: 目标指令超出部分被完全丢弃,
-# 命令再大也不会产生额外力矩。动作幅值惩罚只对"被丢弃的那一段"计成本, 因此依赖这张表。
-# 如改 XML 的 ctrlrange, 必须同步改这里; verify_backup_config.py 会与 XML 对拍。
+# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到该区间, 超出指令不产生额外力矩,
+# 动作超限成本依赖这张表。改 XML 必须同步改这里 (verify_backup_config.py 会对拍)。
 _ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
     "F_spine1_joint":    (-0.6, 0.6),
     "F_body_joint":      (-1.57, 1.57),

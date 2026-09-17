@@ -26,7 +26,6 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
 
-# =========================================================================================
 # s1里程碑奖励
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -38,7 +37,6 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # s2里程碑奖励
 def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -57,7 +55,6 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 
 
 
-# =========================================================================================
 # s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -66,7 +63,6 @@ def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # s2区间奖励 — 朝 S2 姿态 (两段都已俯卧) 的连续进度
 def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -83,24 +79,20 @@ def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 关节位置模仿奖励
 def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算关节角度误差
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
     error = joint_pos - ref_pos
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
     error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
-    # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
     alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_pos")
-    # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
@@ -112,7 +104,6 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 按名称对齐关节目标成本；raw_action 已经过 RL 外层 ±6 裁剪，但尚未经过 XML 控制限幅。
 def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...]) -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
@@ -153,12 +144,8 @@ def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tenso
 
 
 
-# 动作超出执行器 ctrlrange 的成本。
-# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到 ctrlrange: 超出部分被完全丢弃,
-# 命令写 -28 和写 -4.67 (= 髋的 ctrlrange 下限 / scale) 产生完全一样的力矩。
-# 实测策略的确定性输出长期停在 ±26~47, 把 8 条腿和 2 个颈关节永久钉在饱和点上,
-# 腿因此完全失去控制权, 站起不可能完成。这里只对被丢弃的那一段计成本:
-# 命令落在 ctrlrange 内时为 0, 所以"贴住限位撑地"这个有用行为不受惩罚。
+# 动作超出执行器 ctrlrange 的成本: 只对会被 MuJoCo 裁掉的那一段计费。
+# 背景(策略被钉在饱和点、腿失去控制权)见技术细节 §2。
 def compute_action_ctrl_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
     # 与 spine_target 同源: 用裁剪后、XML 控制限幅前的目标, 含 scale 与默认角偏移。
@@ -170,24 +157,20 @@ def compute_action_ctrl_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor
 
 
 
-# =========================================================================================
 # 关节速度模仿奖励
 def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算关节速度误差
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
     error = joint_vel - ref_vel
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
     error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
-    # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
     alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_vel")
-    # 计算奖励
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
@@ -199,7 +182,6 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 身体竖直奖励
 def compute_upright_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -212,7 +194,6 @@ def compute_upright_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 身体高度跟踪奖励
 def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -231,7 +212,6 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return Reward_height
 
 
-# =========================================================================================
 # 走廊一致性奖励 (YoZ 平面, 前/后肢独立) — 约束 F/H body 的 (y,z) 贴近手调参考轨迹走廊
 def compute_corridor_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -256,7 +236,6 @@ def compute_corridor_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 站起奖励（连续化）— 身体竖直 (uprightness>0.8) 时, 按 F/H body 高度接近站立目标连续给奖励
 def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -272,12 +251,8 @@ def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
-# 站立静止奖励 — P3 内站立几何成立时, 关节速度 RMS 越接近 0 给分越高。
-# 与成功判据共用同一个 `standing_metrics()` 门控与同一个速度量, 避免"奖励和判据量两个不同的数"。
-# 用奖励而不是"超死区惩罚": 惩罚带死区(低于死区无梯度, 策略没理由从 1.0 降到 0),
-# 而且惩罚天然给出一条作弊路线 —— 不进锥内就不被罚; 奖励形式下不进锥只是拿不到钱, 方向相反。
-# 线性核而不是 exp: mimic_vel 的指数核在本任务已饱和, 在"接近静止"处几乎没有梯度。
+# 站立静止奖励 — P3 内站立几何成立时, 关节速度 RMS 越接近 0 给分越高(线性核)。
+# 与成功判据共用同一个门控与速度量; 用奖励而非超死区惩罚、用线性核而非 exp 的理由见技术细节 §7.2.4。
 def compute_stand_still_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     _, strict = command.stand_gate()
@@ -289,7 +264,6 @@ def compute_stand_still_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 跌倒滞留惩罚 — 检测"贴地且不动"的跌倒状态 (翻身过程贴地但在运动, 不惩罚)
 def compute_fallen_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -308,54 +282,42 @@ def compute_fallen_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# =========================================================================================
 # L1 动作平滑惩罚
 def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 计算动作变化
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     abs_diff = torch.abs(current_action - prev_action)
     leg_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
     spn_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
     error_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
-    # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L1_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L1_spn")
-    # 计算奖励
     penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
 
 
-# =========================================================================================
 # L2 动作平滑惩罚
 def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 计算动作变化
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     sq_diff = torch.square(current_action - prev_action)
     leg_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
     spn_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
     error_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
-    # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L2_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L2_spn")
-    # 计算奖励
     penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
 
 
-# =========================================================================================
 # 能耗惩罚
 def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    # 计算能量消耗
     actuator_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     actuator_torque = asset.data.actuator_force
     cost = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
-    # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_energy")
-    # 计算奖励
     penalty = -weight * cost
     return penalty

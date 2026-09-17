@@ -9,9 +9,7 @@ def reset_model(env, env_ids):
     if n == 0:
         return
 
-    # 按环境清零成功计时，不能将上一回合的站立确认时间带入新回合。
-    # 计时器由 terminations.check_stand_success 惰性创建，这里补上"无则先建"，
-    # 避免首次 reset 时属性还不存在而跳过清零（隐式依赖 termination 先跑过一次）。
+    # 按环境清零成功计时; 计时器由 termination 惰性创建, 这里补上"无则先建"。
     for name in ("_stand_elapsed", "_stand_vel_integral"):
         buffer = getattr(env, name, None)
         if buffer is None:
@@ -23,8 +21,7 @@ def reset_model(env, env_ids):
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)
 
-    # 基座: identity (仰面跌倒), 位置 (0,0,0.024) — 贴地初始 (仰面稳定躺姿 base_z≈0.0236),
-    # 避免悬空落地阶段, 可直接开始翻身复位
+    # 基座: identity (仰面跌倒), 位置 (0,0,0.024) 贴地, 避免悬空落地阶段
     root_state = torch.zeros(n, 13, device=env.device)
     root_state[:, 0] = 0.0
     root_state[:, 1] = 0.0

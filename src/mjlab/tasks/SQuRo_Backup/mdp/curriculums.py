@@ -3,9 +3,7 @@ import torch
 from typing import Any
 
 
-# 100 Hz 初筛配置：控制周期 0.002 × 5 = 0.01 s，96 步采样覆盖 0.96 s。
-# RL 配置与课程轮数换算共用此值；采样段末不重置环境，后续采样继续当前回合。
-# 短采样段更依赖价值估计，结果确定后再恢复更高物理精度和更长采样段验证。
+# 100 Hz 初筛配置: 控制周期 0.002 × 5 = 0.01 s, 96 步覆盖 0.96 s。取舍理由见技术细节 §6。
 _STEPS_PER_ITER = 96
 
 
@@ -25,10 +23,8 @@ TIME_SCALE_MIN_START = 2.0
 TIME_SCALE_MIN_END = 1.0
 
 
-# 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值 (对齐 Slalom curriculums 风格)
-#
-# 权重唯一管理处: env_cfg 中所有奖励项的 cfg.weight 一律为 1.0,
-# 生效权重 = cfg.weight(1.0) × 本表的值, 调权重只改这里。
+# 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值。
+# 权重唯一管理处: env_cfg 中所有奖励项 cfg.weight 一律为 1.0, 生效权重 = 1.0 × 本表的值。
 # 本表同时容纳 weight_*(权重) / sigma_*(误差系数) / alpha_*(复合项配比) 三类量。
 _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (10.0,),
@@ -38,19 +34,13 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_milestone_s1":      (10.0,),
     "weight_milestone_s2":      (15.0,),
     "weight_milestone_success": (35.0,),
-    # progress_s1 负责把后段推起来, progress_s2 在此之上承担翻正的主推力。
-    # 合成地形: 仰卧 0 -> S1 w1 -> 正侧立 w1+w2/2 -> S2 w1+w2 (单调, uF 方向处处正梯度)。
-    # 两个权重都必须够大: 实测"撑起来原地扭"这个不翻正的解靠 mimic_pos/height 就能比
-    # "翻正"多拿 5.8/s (约 58 分/回合), 而翻正侧只多拿 progress + 里程碑。把 w1 从 3.0
-    # 降到 1.0 之后翻正的总收益不够, 策略会直接收敛到不翻正
-    # (run 21-41-34: enter_p2 全程 0, 身体高度 0.04 反而超过 S1 的 0.03 闸门)。
+    # progress_s1 推后段、progress_s2 在此之上承担翻正主推力。两项都必须够大,
+    # 否则策略会收敛到"撑起来原地扭"的不翻正解 (标定依据见技术细节 §2)。
     "weight_progress_s1":       (3.0,),
     "weight_progress_s2":       (3.0,),
     "weight_progress_s3":       (3.0,),
-    # stand_still 只在 P3 站立几何成立时给分(线性核, vel_rms=0 满分, 6 rad/s 归零)。
-    # 权重取 3.0 的理由: 站立窗口内现有密集项合计只有 +0.19/s, 而"赶时间"靠
-    # milestone_success 的 60·γ^T 早到红利实测净赚 6.6; 要压过它, 站立静止项在
-    # 3~5 秒的维持窗口里必须能挣到同量级(约 +1.4/s), 故不能按"和 action_L2 同量级"来给。
+    # stand_still 只在 P3 站立几何成立时给分(线性核, vel_rms=0 满分, 6 rad/s 归零);
+    # 权重 3.0 与"早到红利"的对冲标定见技术细节 §7.2.4。
     "weight_stand_still":       (3.0,),
     "weight_action_excess":     (0.5,),
     "weight_smooth_L1_leg":     (0.1,),

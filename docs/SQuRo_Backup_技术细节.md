@@ -1,6 +1,50 @@
 # SQuRo_Backup（翻正）任务技术细节
 
-## 当前增量：S2 双路径与有界确认宽限（2026-09-17）
+## 当前配置（2026-09-17，站立抖动修复后）
+
+一句话：从仰卧出发，经 P1→P2→P3 **单向**翻正，并在 P3 内**站稳** 1.5 秒才算成功。
+
+**任务与状态机**
+
+- 阶段单向 P1→P2→P3，不可跳级、无回退；S1/S2 各需 `pose_confirm_s = 0.10` 实际秒连续确认。
+- S1 = 前段倒置 + 后段正置 + 两段贴地（各自 <0.03 m）；
+  S2 = 贴地路径（两段正置、各自 <0.04 m）**或**抬身路径（已达站立几何）。
+- 超时只触发阶段内重试：P1 截止 `0.80λ + 1.0 s`，P2 截止 `0.15λ + 0.3 s`（含最多 0.10 s 确认宽限）。
+- 参考时间缩放 λ 每回合采样一次，课程区间 `[2,4] → [1,4]`（iter 1000~2000 收敛到 1）。
+
+**成功判据**（`terminations.check_stand_success`，同时是回合终止源与成功里程碑的取值源）
+
+1. 当步在 P3；
+2. 站立窗口当步成立：两段背腹余弦下确界 > 0.8 且高度下确界 > 0.045 m；
+3. 窗口时长 `T ≥ 1.5 s`；
+4. 窗口内**平均**关节速度 `V/T ≤ 3.5 rad/s`（14 个驱动关节瞬时 RMS 的窗口均值）；
+5. 当步严格几何成立：余弦下确界 > 0.9 且高度下确界 > 0.05 m。
+
+窗口中断（几何掉出或离开 P3）则 `T` 与 `V` 一起清零。`time_out=True`，记为截断。
+设计与标定依据见 §7.2.1~§7.2.4。
+
+**奖励**：15 项，权重全部由 `mdp/curriculums.py` 的 `_CURVES` 唯一管理（env_cfg 的 `cfg.weight` 一律 1.0）。
+里程碑 35 分按**达成时刻**发放；`stand_still`（3.0）只在 P3 站立几何内按 `1 − vel_rms/6` 给分。
+
+**PPO 与时序**：`step_dt = 0.01`（物理 0.002 × decimation 5），96 步/迭代，`γ = 0.99^0.5`，
+`lam = 0.95^0.5`，`entropy_coef = 0.003`，`clip_actions = None`，1024 环境。
+
+**验收基线**：run `2026-09-17_19-54-10_S2_stand_window`（800→1099）。成功率 ~100%、`timeout` 归零、
+回合 277 步；确定性站立比 600 基准**静止 2.7 倍**、力矩饱和 6.0%（600 为 27.3%）。
+
+## 变更历史（倒序）
+
+### 2026-09-17 站立稳定性判据 + P3 静止奖励（本批）
+
+- 起因：从 600 继续训练后站立抖动变重（确定性回放脊柱速度 RMS 1.51 → 5.22 → 6.88）；降熵只修掉约 1/3。
+- 根因：成功判据不要求"站住"，而里程碑奖励"早"（`60·γ^T`），"快而猛"严格优于"慢而稳"。
+- 改动：成功判据加入**站立窗口平均关节速度** ≤3.5 rad/s、窗口时长 0.5 → 1.5 s；
+  新增 P3 `stand_still` 静止奖励（3.0，线性核）。判据第一版用"连续达标 + 侵蚀"曾导致
+  **结构上不可达**，改为窗口均值后才恢复成功率 —— 完整复盘见 §7.2.1。
+- 效果：成功率恢复 ~100%、回合 1000 → 277 步；确定性站立比 600 基准静止 2.7 倍。
+- 遗留：`Progress/stand_mean_vel` 3.43 对门限 3.5 只有 2% 余量，且 σ 在回升（§7.2.4）。
+
+### 2026-09-17 S2 双路径与有界确认宽限
 
 - 证据：新 run `2026-09-17_17-14-06` 的 800 轮 λ=1 回放在 step 85/250 发生 P2 重试。前后段余弦约 0.95/1.00、高度约 0.05–0.057 m，已正置抬高，但原 S2 要求各自高度 <0.04 m，导致参考重新跳至前后扭转 ±1.57 rad。
 - S2 候选改为两条路径的并集：原贴地翻正（各自朝向满足 45° 容差、各自高度 <0.04 m），或 `standing_state()` 的双段站立几何（各自余弦 >0.9、各自高度 >0.05 m）。无效值不能过关；仅单端抬起和侧立不能走新增路径。
@@ -8,10 +52,10 @@
 - P2 原截止为 `0.15λ + p2_buffer_s`。截止时若候选仍有效但未确认，允许最多额外 `pose_confirm_s` 实际秒；中断则清零并恢复超时重试，宽限有硬上限。已确认的推进优先于重试。
 - 宽限期间不清阶段时钟，现有参考查询自然保持 T3 末端及零参考速度。P1 的确认、缓冲和重试不改。
 - 手调脚本同步 S2 候选和 P2 宽限；其既有双倒/S1 回退机制与训练单向机制的差异仍存在，不在本批范围。
-- 最终成功仍仅在 P3、双段站立几何连续 0.5 秒；没有新增速度约束或迟滞。熵系数保留 0.003，奖励权重、终止语义、观测、参考表和物理参数均不改。
+- 最终成功在当时仍为"P3、双段站立几何连续 0.5 秒"（**此项已被取代**：现为 1.5 s 站立窗口 + 窗口平均关节速度 ≤3.5 rad/s，见 §7.2.1）。熵系数保留 0.003，奖励权重、终止语义、观测、参考表和物理参数均不改。
 - 验证：`verify_backup_stage_rewards.py` 18 项 CPU 回归通过。只验证判据与状态机，不代表新策略闭环已验证；先用新 800 检查点回放 λ=1/3，再决定是否续训。
 
-## 历史配置：阶段单向 + 单调进度地形 + 解除冗余裁剪（2026-09-16 深夜）
+### 2026-09-16 阶段单向 + 单调进度地形 + 解除冗余裁剪（奖励地形与权重仍为当前配置）
 
 - 范围：奖励层（区间项与成本项的定义与权重）、状态机推进规则、参考表 T4 段、成功终止语义、PPO 动作裁剪；物理参数与观测/动作维度不变。
 - 上一版行为：区间奖励按阶段互斥，允许 `back_to_p1`/`back_to_p2` 回退。实测旧 run 在 P3 重新扭转回 S1、被回退到 P2，`s2_transition`(0.0089/步) ≈ `back_to_p2`(0.0085/步) 形成 0.72 s 极限环；新 run 更退回 P1（77% 时间），S2 达成率从 0.76 掉到 0.001。
@@ -30,9 +74,13 @@
 - 删除 `leg_target`（P3 专用、从未激活）；`spine_target` 权重 2 不变。
 - T4 参考改为承接 T3 末端：`F_spine1 = 0.6 × (1 − u)` 在过渡段线性回零。原实现直接取 0，在 0.95 处造成 0.6 rad 阶跃（等于要求瞬时 60 rad/s），并使 P3 入口的 14 维参考退化成 P1 入口的形状。手调回放 `slow1_target` 与 `verify_backup_config._hand_at` 同步修改，三处必须逐字一致。
 - 参考查询仍为 P2 独立保留 T3 左端极限、节点速度取右侧导数、float32 时间再次限幅。
-- 成功判定：仅 P3、前后段各自 u>0.9、各自高度>0.05 m、14 个驱动关节速度 RMS < 3.5 rad/s，**连续 1.5 实际秒**（退出侧用更宽的 0.8/0.045/5.5 构成迟滞带，短暂掉出按 2 倍侵蚀累计，非"暂停累计"）。`stand` 终止为 `time_out=True`：提前结束会截断后续密集奖励（3 s 站起约丢 126 分 vs 里程碑 35 分），按截断处理后价值估计会 bootstrap 到后续状态。判据量的是**采样后**的速度，因此成功与探索噪声耦合，详见 §7.2.2。
-- `events.reset_model` 显式"无则先建、有则清零" `_stand_elapsed`，去掉"termination 必须先跑过一次"的隐式依赖。
-- 回归入口：`uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards`（20 项，覆盖区间项非门控、站立进度门控与单调性、ctrlrange 超限成本含 scale/名称对齐、阶段单向、里程碑去重、确认时间/重置、参考端点与多速度、站立速度门限与侵蚀式迟滞）。
+- 成功判定：仅 P3，且**站立窗口**（两段余弦下确界 >0.8、高度下确界 >0.045 m）内 `T ≥ 1.5 s`、
+  窗口平均关节速度 `V/T ≤ 3.5 rad/s`，结算当步还须满足严格几何（>0.9 / >0.05 m）。`stand` 终止为
+  `time_out=True`：提前结束会截断后续密集奖励（3 s 站起约丢 126 分 vs 里程碑 35 分），按截断处理后
+  价值估计会 bootstrap 到后续状态。判据量的是**采样后**的速度，因此成功与探索噪声耦合，详见 §7.2.2。
+- `events.reset_model` 显式"无则先建、有则清零" `_stand_elapsed` 与 `_stand_vel_integral`，
+  去掉"termination 必须先跑过一次"的隐式依赖。
+- 回归入口：`uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards`（21 项，覆盖区间项非门控、站立进度门控与单调性、ctrlrange 超限成本含 scale/名称对齐、阶段单向、里程碑去重、确认时间/重置、参考端点与多速度、站立窗口均值判据与清零重启、静止奖励门控与线性核）。
 - 验证边界：小批量仿真和短 PPO 更新只能验证代码链路，不能代替完整训练成功率评估。
 
 以下章节包含历史实验记录；与上述条目冲突时，以当前源码及本节为准。
@@ -146,7 +194,10 @@ value = term_cfg.func(...) * term_cfg.weight * dt          # 逐步累计时已�
 extras["Episode_Reward/" + key] = episodic_sum_avg / max_episode_length_s   # 除以回合秒数
 ```
 
-因此 **`Episode_Reward/x` = 该项的"每秒平均奖励"**，要还原单回合总量须再乘 `max_episode_length_s`（本任务 10 s）。
+因此 **`Episode_Reward/x` = 该项在回合内的累计量 ÷ `max_episode_length_s`（本任务恒为 10 s）**。
+只有当回合长度恰好等于 10 s 时它才等于"每秒平均奖励"；
+**回合更短时它会被按 `实际回合秒数 / 10` 稀释**（实测回合从 1000 步缩到 285 步时同样的行为小 3.5 倍）。
+要还原每秒速率须乘 `10 s / 实际回合时长`；跨回合长度比较这些数无效（详见 §7.2.3a）。
 
 **踩坑**：训练日志里的 `Mean reward` 是 PPO 侧的统计量，与环境单回合回报量纲不同；
 拿它直接和"自己逐步累加的回报"比较会得到约 10 倍的假差异。
@@ -515,10 +566,13 @@ TIME_COMPARISON_SCALE     = 3.0
 2. **`events.py` 硬编码了 36 个 XML joint 下标**（`[6,8,12,14,24,...]`），
    绕过了 `mdp/indices.py` 的统一管理，XML 一改就会静默错位。**建议改走 indices。**
 
-3. **`reference.py` 第 74 行注释与代码挤在同一行**（T4 段），Python 可正常解析但不便阅读。
+3. ~~`reference.py` 第 74 行注释与代码挤在同一行~~ —— **已修复**（该行现为正常代码）。
 
 4. **全量测试在受限环境无法运行**：`mujoco_warp` 的 kernel cache 位于
    `%LOCALAPPDATA%\NVIDIA\warp\Cache`，只读环境下抛大量 `PermissionError`（与代码无关）。
+
+5. **成功判据的安全余量很薄**：`Progress/stand_mean_vel` 3.43 对门限 3.5 只有 2%，
+   且 `Policy/mean_std` 在回升。压 σ 只能靠判据阈值课程（§7.2.4），**动阈值前必须看余量**。
 
 ---
 
@@ -528,6 +582,9 @@ TIME_COMPARISON_SCALE     = 3.0
 
 | 脚本 | 用途 |
 |---|---|
+| `verify_backup_stage_rewards.py` | **主回归入口**：判据/参考/状态机/奖励的 CPU 单测（21 项，不建环境、不落盘） |
+| `verify_backup_config.py` | 配置一致性：`_CURVES` 权重 ↔ env_cfg、参考表 ↔ 手调公式、确认时长两侧一致、ctrlrange ↔ XML |
+| `verify_script_vs_training.py` | 手调脚本与训练环境的参考及 S1/S2 检测逐点对拍（改参考或判据后必跑） |
 | `measure_segment_gravity_truth.py` | **地面真值**：标记 site 测各段正置度（本文档 §4 的验收工具） |
 | `verify_gate_predicates.py` | 验收 `_check_S1`/`_check_S2` 与独立地面真值是否一致（§5.3） |
 | `check_action_scale_coverage.py` | 核算 action scale 对期望极值的覆盖与 clip 冗余（§6.1） |
@@ -535,20 +592,32 @@ TIME_COMPARISON_SCALE     = 3.0
 | `trace_s1_window.py` | 逐帧观察 S1/S2 达成瞬间的关节角与几何条件 |
 | `analyze_righting_attitude.py` | 从回放 CSV 反推姿态、对比手调参考与策略实际 |
 | `fk_body_height.py` | 用 MuJoCo FK 精确计算 F/H body 高度（CSV 未记录该量） |
-| `audit_body_frame.py` | 四元数参考系对拍（已证明未能定论，见 §3） |
-| `fit_body_axes.py` | 用 site 世界坐标最小二乘拟合 body 姿态 |
+| `audit_body_frame.py` / `fit_body_axes.py` | 四元数参考系对拍 / site 坐标最小二乘拟合（§3 未定论） |
+| `dump_training_scalars.py` | 读 TensorBoard 标量：`--points=N` 抽稀、`--list` 列标签 |
+| `compare_checkpoint_action_quality.py` | **站立动作质量对照**：速度 RMS / 力矩饱和 / 目标角抖动（窗口口径见 §7.2.3b） |
+| `measure_body_height_vs_scale.py` | 不同 λ 下参考高度与站立门限的关系 |
+| `measure_reward_economy.py` / `compare_episode_returns.py` | 奖励经济性与回合回报拆解 |
 
-单元测试（23 passed）：
+回归与验收入口：
 
-| 测试 | 覆盖内容 |
-|---|---|
-| `tests/test_squro_backup_replay.py` | `slow1_target` 各段关键帧姿态、T4 腿角过渡、T1–T3 腿固定、`action_scale` 跟随 env |
-| `tests/test_squro_backup_timing.py` | 参考表关键帧、T1/T2 速度、缓冲冻结、身体轨迹重定时、相位门限、**动作覆盖冗余** |
+```powershell
+# 主回归（21 项，必须全绿）
+uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards
 
-> **跑测试时建议加 `-p no:cacheprovider` 并设 `PYTHONDONTWRITEBYTECODE=1`**：
-> 受限/只读环境下 `.pytest_cache` 与 `__pycache__` 写不进去，会读到**过期字节码**，
-> 表现为测试结果与源码不符的假失败。命令：
-> `$env:PYTHONDONTWRITEBYTECODE="1"; uv run python -B -m pytest tests/test_squro_backup_timing.py -q -p no:cacheprovider`
+# 配置一致性（权重、参考公式、确认时长、ctrlrange ↔ XML）
+uv run python -B -m mjlab.scripts.Backup.verify_backup_config
+
+# 手调版本能否达到成功判据（"目标可达"闸门；结果读 [RESULT] phase=DONE）
+uv run python -B -m mjlab.scripts.SQuRo_backup_Replay --visualize none --time-scale 3 --duration 20
+```
+
+> `SQuRo_Backup_play.py` 只能开 GUI 窗口（`NativeMujocoViewer.run()`），没有无头模式。
+> 需要无头产出与历史 CSV 同源的对照数据时，用一个把 `NativeMujocoViewer` 换成桩的
+> 小脚本调用 `run_play(PlayConfig(...))`，步进循环照抄 `BaseViewer._execute_step`；
+> **务必先把检查点复制到临时目录**，否则 CSV 文件名相同会覆盖历史参考数据（§7.2.3b）。
+
+> 注意：`--visualize none/video` 分支末尾会尝试写 PNG/CSV 到 `logs/rsl_rl/.../replay_videos/`，
+> 在只读或受限环境下会抛 `PermissionError`（不影响前面的仿真与 stdout 结果）。
 
 回放脚本：`src/mjlab/scripts/SQuRo_backup_Replay.py`
 
@@ -566,6 +635,11 @@ uv run python -m mjlab.scripts.Backup.verify_script_vs_training 3.0
 uv run python -m mjlab.scripts.Backup.measure_ref_tracking_conditions 3.0 10.5
 ```
 
+> 回归已从 `tests/` 目录迁到 `scripts/Backup/verify_backup_stage_rewards.py`（unittest 套件，
+> 也可用 pytest 运行）。**跑 pytest 时建议加 `-p no:cacheprovider` 并设 `PYTHONDONTWRITEBYTECODE=1`**：
+> 受限/只读环境下 `.pytest_cache` 与 `__pycache__` 写不进去，会读到**过期字节码**，
+> 表现为测试结果与源码不符的假失败。
+
 > 注意：`--visualize none/video` 分支末尾会尝试写 PNG/CSV 到 `logs/rsl_rl/.../replay_videos/`，
 > 在只读或受限环境下会抛 `PermissionError`（不影响前面的仿真与 stdout 结果）。
 
@@ -582,7 +656,10 @@ uv run python -m mjlab.scripts.Backup.measure_ref_tracking_conditions 3.0 10.5
 - 变更理由：降低初步试验成本。较粗接触求解和较短采样段可能影响翻正行为，初筛失败不能直接判定方案无效，确定方案后需恢复精度复验。
 - 回合仍为 10 s，未自动延长；大 λ 下等待与站立过渡可能接近回合上限，分析时需区分阶段失败与整回合超时。
 
-## 整体架构与设计变更：100 Hz 控制初筛（2026-09-15，当前配置）
+## 整体架构与设计变更：100 Hz 控制初筛（2026-09-15）
+
+> 以下是**当时的**变更记录；采样长度后来由 48 步再调为 96 步、熵系数由 0.01 调为 0.003，
+> 当前值一律以本文开头的"当前配置"节为准。
 
 - 变更前：最近训练采用物理步长 0.002 s、decimation=10、求解迭代 100/50，24 步采样，gamma=0.99、GAE lam=0.95。
 - 变更后：物理步长与求解器不变，decimation=5，控制周期缩短到 0.01 s；每轮采样由 24 增至 48 步，实际采样时长仍为 0.48 s。
