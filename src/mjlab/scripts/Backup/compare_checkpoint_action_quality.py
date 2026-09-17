@@ -12,7 +12,10 @@ sys.path.insert(0, "src")
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATOR_CTRL_RANGE
 
 # 检查点动作质量对照: 站立窗口内的关节速度 / 力矩饱和 / 目标角相邻步变化
-# 站立窗口定义与人工核对一致: stand_confirm_elapsed > 0.1 s (排除重置帧与刚进 P3 的瞬态)
+# 站立窗口必须用**与代码版本无关**的原始列定义, 不能用 stand_confirm_elapsed:
+# 判据从 "0.5 s @ u>0.9" 改成 "1.5 s @ u>0.8" 之后, 同一个阈值选中的帧集完全不同
+# (实测同一检查点 600: 旧口径 39 步 vs 新口径 139 步), 跨版本读数会被判据本身污染。
+# 这里直接复现判据的"严格几何": P3 且 min(u_F,u_H) > 0.9 且 min(z_F,z_H) > 0.05 m。
 SPINE = ("F_spine1", "F_body", "H_spine1", "H_body")
 LEG = ("FL_shoulder", "FL_elbow", "FR_shoulder", "FR_elbow",
        "HL_hip", "HL_knee", "HR_hip", "HR_knee")
@@ -40,7 +43,9 @@ def report(tag: str, path: str) -> dict:
     n = len(d)
     st = d["step"].to_numpy()
     cont = np.diff(st) == 1                       # 同一 rollout 内相邻步
-    stand = d["stand_confirm_elapsed"].to_numpy(float) > 0.1
+    u_floor = np.minimum(d["f_body_up_cos"].to_numpy(float), d["h_body_up_cos"].to_numpy(float))
+    z_floor = np.minimum(d["f_body_height"].to_numpy(float), d["h_body_height"].to_numpy(float))
+    stand = (d["backup_phase"].to_numpy() == 2) & (u_floor > 0.9) & (z_floor > 0.05)
     print(f"\n=== {tag} ===   步数 {n}   站立窗口占比 {stand.mean()*100:.1f}% ({stand.sum()} 步)")
     print(f"  阶段分布: P1 {(d['backup_phase']==0).mean()*100:5.1f}%  P2 {(d['backup_phase']==1).mean()*100:5.1f}%  P3 {(d['backup_phase']==2).mean()*100:5.1f}%"
           f"   重试帧 {int((d['phase_retry']>0).sum())}   done {int(d['done'].sum())}")

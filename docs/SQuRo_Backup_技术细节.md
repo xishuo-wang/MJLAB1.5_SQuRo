@@ -466,6 +466,39 @@ TIME_COMPARISON_SCALE     = 3.0
 真正的瓶颈是判据**结构**（占空比 `d > 2/3` 的隐含门槛，见 §7.2.1）。
 **先看"判据量本身离门限多远"（`stand_mean_vel` vs 3.5），再决定是调阈值还是改结构。**
 
+### 7.2.3 三个会静默给出错误结论的量纲/口径陷阱
+
+**（a）`Episode_Reward/*` 的分母是 `max_episode_length_s`，不是实际回合长度。**
+`reward_manager.py` 记的是 `Σ(w·raw·dt) / max_episode_length_s`，本项目里分母恒为 **10 s**。
+所以回合越短，这些数被稀释得越狠：回合从 1000 步缩到 285 步时，同样的行为会小 3.5 倍。
+**跨回合长度比较 `Episode_Reward/*` 无效**，必须先乘 `10 s / (实际回合步数 × step_dt)` 还原成每秒速率。
+`Train/mean_reward` 是未除的回合原始回报，同样只在回合长度相同时可比。
+
+**（b）站立窗口不能用 `stand_confirm_elapsed` 做跨版本对照。**
+该列的语义随判据改动而变（0.5 s @ u>0.9 → 1.5 s @ u>0.8）。
+同一检查点 600 在新旧口径下窗口步数是 39 vs 139 —— 读数会被**判据本身**污染。
+⇒ 跨版本对照要用与代码版本无关的原始列：
+`P3 且 min(f_body_up_cos, h_body_up_cos) > 0.9 且 min(f_body_height, h_body_height) > 0.05`。
+即便如此仍有约 30% 系统性偏差（新代码每回合多站 1.0 s，窗口含更晚的漂移段），
+所以**只能 harness 对 harness，不能与历史绝对数混用**。
+
+**（c）`SQuRo_Backup_play.py` 与 `SQuRo_backup_Replay.py` 的大小写不一致。**
+前者是 `Backup`（大写 B），后者是 `backup`（小写 b）。Windows 路径不区分大小写，
+所以 `-Path ...SQuRo_backup_play.py` 之类的写法照样能读到文件，
+但 `import mjlab.scripts.SQuRo_backup_play` 会直接 `ModuleNotFoundError`。
+按模块名调用时务必用文件真实名。
+
+### 7.2.4 σ 只被"离散事件"塑造，稠密惩罚几乎压不住它
+
+实测：判据加入速度条件后 σ 在 200 轮内 0.845 → 0.291；判据被满足后 300 轮内又 0.296 → 0.329。
+机制：优势会被标准化 `(adv − mean) / (std + 1e-8)`，而 `stand_still` 这类稠密项在 σ 上产生的
+是**近似常数**的回报偏移（所有 rollout 的噪声水平都差不多），标准化后基本被抹掉。
+成功判据则相反：它是 35 分的离散事件，出现/消失带来巨大的样本间差异 ⇒ 对 σ 的梯度极强。
+
+**结论**：想压 σ，唯一有效的杠杆是**让成功判据咬住**（阈值课程），
+不是加大 `stand_still`/`action_L2` 这类稠密权重。想保住已有成果，就盯住 `Progress/stand_mean_vel`
+与 `Policy/mean_std`，一旦前者越过门限，成功率会像 §7.2.1 那样直接归零。
+
 ### 7.3 `body_link_quat_w` 参考系未定论
 
 见 §3。当前所有姿态判据已完全绕开它（S1/S2 改用 §4 的标记 site）。
