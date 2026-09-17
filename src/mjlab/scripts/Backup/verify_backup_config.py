@@ -79,7 +79,7 @@ def main() -> None:
     print("\n=== 3) 站起确认时长 ===")
     print(f"  timing.STAND_CONFIRM_DURATION = {T.STAND_CONFIRM_DURATION}")
     from mjlab.tasks.SQuRo_Backup.mdp.terminations import STAND_CONFIRM_DURATION as D
-    from mjlab.scripts.SQuRo_backup_Replay import STAND_CONFIRM_DURATION as R
+    from mjlab.scripts.SQuRo_Backup_Replay import STAND_CONFIRM_DURATION as R
     same = D == R == T.STAND_CONFIRM_DURATION
     if not same:
         ok = False

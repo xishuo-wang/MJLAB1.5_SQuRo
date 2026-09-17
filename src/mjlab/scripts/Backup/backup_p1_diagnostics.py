@@ -43,7 +43,7 @@ def sample_state(env, action, target, time):
 
 # 仅比较首次 P1：强制执行完整参考后保持端点，不允许重试或提前进入 P2 混淆终态。
 def manual_trial(env, lam, recover, inverse_scale, hind_hip, buffer):
-    from mjlab.scripts.SQuRo_backup_Replay import slow1_target
+    from mjlab.scripts.SQuRo_Backup_Replay import slow1_target
 
     env.reset()
     asset = env.scene.entities["robot"]

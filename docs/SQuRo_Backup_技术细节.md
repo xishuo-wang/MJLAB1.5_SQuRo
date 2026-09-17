@@ -88,7 +88,7 @@
 本文档记录 SQuRo 翻正任务在开发过程中**反复踩到、且不查就会重复踩**的技术细节。
 主要覆盖：坐标系与姿态判据的陷阱、动作时序、状态机门控、以及已验收的地面真值测量方法。
 
-针对的是 `src/mjlab/tasks/SQuRo_Backup/` 与 `src/mjlab/scripts/SQuRo_backup_Replay.py`。
+针对的是 `src/mjlab/tasks/SQuRo_Backup/` 与 `src/mjlab/scripts/SQuRo_Backup_Replay.py`。
 
 ---
 
@@ -299,7 +299,7 @@ slow1_target:  time1 ──0.65──> time2 ──0.15──> time3 ──0.15�
 ### 5.3 门控判据
 
 **判据已改为基于 §4 的标记 site（不再依赖四元数）。**
-`mdp/command.py` 与 `scripts/SQuRo_backup_Replay.py` 两侧实现保持一致：
+`mdp/command.py` 与 `scripts/SQuRo_Backup_Replay.py` 两侧实现保持一致：
 
 ```python
 # u=(back_z-belly_z)/||p_back-p_belly||；u≥cos(45°) 为正置，u≤−cos(45°) 为倒置
@@ -481,7 +481,7 @@ TIME_COMPARISON_SCALE     = 3.0
 `test_stand_window_uses_mean_velocity`（判据量确为窗口均值、恒定抖动永不结算、后半程变静可结算）、
 `test_stand_window_resets_instead_of_pausing`（窗口中断 T 与 V 一起清零、重启必须重新攒满）、
 `test_stand_still_reward_is_p3_gated_and_linear`（P3 门控、线性核、姿态不达标不给分）；
-另外 `SQuRo_backup_Replay.py --visualize none` 的 `[RESULT] phase=DONE`
+另外 `SQuRo_Backup_Replay.py --visualize none` 的 `[RESULT] phase=DONE`
 读的就是**训练环境**的 `stand` 终止项，因此手调版本通过即证明新判据可达。
 
 **调参入口**：`Progress/stand_hold`（窗口内已累计时长均值）与
@@ -533,11 +533,16 @@ TIME_COMPARISON_SCALE     = 3.0
 即便如此仍有约 30% 系统性偏差（新代码每回合多站 1.0 s，窗口含更晚的漂移段），
 所以**只能 harness 对 harness，不能与历史绝对数混用**。
 
-**（c）`SQuRo_Backup_play.py` 与 `SQuRo_backup_Replay.py` 的大小写不一致。**
-前者是 `Backup`（大写 B），后者是 `backup`（小写 b）。Windows 路径不区分大小写，
-所以 `-Path ...SQuRo_backup_play.py` 之类的写法照样能读到文件，
-但 `import mjlab.scripts.SQuRo_backup_play` 会直接 `ModuleNotFoundError`。
-按模块名调用时务必用文件真实名。
+**（c）脚本文件名的**大小写**在 Windows 上不会报错，但 Python 导入区分大小写。**
+
+历史情况：`SQuRo_Backup_play.py` 是 `Backup`（大写 B），而回放脚本曾是 `SQuRo_backup_Replay.py`（小写 b）。
+`Select-String -Path ...SQuRo_backup_play.py` 这类写法照样能读到文件，但
+`import mjlab.scripts.SQuRo_backup_play` 会直接 `ModuleNotFoundError` —— 回归里就有一条因此报错。
+**现已统一为 `SQuRo_Backup_play.py` / `SQuRo_Backup_Replay.py`（都用大写 B）**，
+与任务名 `SQuRo_Backup` 一致。按模块名调用时务必核对文件真实大小写。
+
+> 附带教训：`git` 在 Windows 上默认 `core.ignorecase=true`，
+> 索引里的大小写与磁盘不一致时 `git status` **不会提示**，只有实际导入/运行才会暴露。
 
 ### 7.2.4 σ 只被"离散事件"塑造，稠密惩罚几乎压不住它
 
@@ -608,7 +613,7 @@ uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards
 uv run python -B -m mjlab.scripts.Backup.verify_backup_config
 
 # 手调版本能否达到成功判据（"目标可达"闸门；结果读 [RESULT] phase=DONE）
-uv run python -B -m mjlab.scripts.SQuRo_backup_Replay --visualize none --time-scale 3 --duration 20
+uv run python -B -m mjlab.scripts.SQuRo_Backup_Replay --visualize none --time-scale 3 --duration 20
 ```
 
 > `SQuRo_Backup_play.py` 只能开 GUI 窗口（`NativeMujocoViewer.run()`），没有无头模式。
@@ -619,11 +624,11 @@ uv run python -B -m mjlab.scripts.SQuRo_backup_Replay --visualize none --time-sc
 > 注意：`--visualize none/video` 分支末尾会尝试写 PNG/CSV 到 `logs/rsl_rl/.../replay_videos/`，
 > 在只读或受限环境下会抛 `PermissionError`（不影响前面的仿真与 stdout 结果）。
 
-回放脚本：`src/mjlab/scripts/SQuRo_backup_Replay.py`
+回放脚本：`src/mjlab/scripts/SQuRo_Backup_Replay.py`
 
 ```powershell
 # 手调状态机回放（λ=1，无头，结果打到 stdout）
-uv run python -m mjlab.scripts.SQuRo_backup_Replay --time-scale 1.0 --visualize none --duration 4.0
+uv run python -m mjlab.scripts.SQuRo_Backup_Replay --time-scale 1.0 --visualize none --duration 4.0
 
 # 地面真值姿态验收
 uv run python -m mjlab.scripts.Backup.measure_segment_gravity_truth 1.0

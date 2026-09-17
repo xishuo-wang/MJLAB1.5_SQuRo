@@ -414,7 +414,7 @@ class StageRewardTests(unittest.TestCase):
         torch.testing.assert_close(cmd.retry, torch.tensor([1, 0, 1]))
 
     def test_manual_replay_shares_s2_grace(self):
-        from mjlab.scripts.SQuRo_backup_Replay import StateMachinePolicy
+        from mjlab.scripts.SQuRo_Backup_Replay import StateMachinePolicy
 
         _, cmd = make_env([1])
         cmd.time_scale_command[:] = 1.

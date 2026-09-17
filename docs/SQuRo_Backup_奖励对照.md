@@ -196,7 +196,7 @@ uv run train Mjlab-SQuRo-Backup --agent.resume True --agent.load-run 2026-09-12_
 - 阶段推进单向：只保留 `advance1`/`advance2` 与阶段内超时重试，取消 `back_to_p1`/`back_to_p2`。
 - `progress_s1`/`progress_s2` 恢复全阶段生效；删除 `leg_target`；`progress_s3` 保留并改为"45° 锥门控 + 单调增长"（同时充当维持站立的密集奖励）。
 - 新增 `action_excess`（权重 0.5）：只惩罚目标超出执行器 `ctrlrange` 被丢弃的那一段，含 `scale` 与默认角偏移，命令在限位内时为 0。
-- T4 的 `F_spine1` 改为 `0.6 × (1 − u)` 承接 T3 末端线性回零，消除 0.95 处 0.6 rad 阶跃与 P3/P1 入口雷同；`reference.py`、`SQuRo_backup_Replay.slow1_target`、`verify_backup_config._hand_at` 三处同步。
+- T4 的 `F_spine1` 改为 `0.6 × (1 − u)` 承接 T3 末端线性回零，消除 0.95 处 0.6 rad 阶跃与 P3/P1 入口雷同；`reference.py`、`SQuRo_Backup_Replay.slow1_target`、`verify_backup_config._hand_at` 三处同步。
 - `stand` 终止改为 `time_out=True`（截断语义），避免"站起来反而亏分"。
 - `events.reset_model` 显式建立并清零 `_stand_elapsed`。
 

@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.scripts.SQuRo_backup_Replay import StateMachinePolicy
+from mjlab.scripts.SQuRo_Backup_Replay import StateMachinePolicy
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 

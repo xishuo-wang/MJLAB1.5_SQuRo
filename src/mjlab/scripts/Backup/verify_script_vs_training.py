@@ -9,7 +9,7 @@ except Exception:
     pass
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.scripts.SQuRo_backup_Replay import (
+from mjlab.scripts.SQuRo_Backup_Replay import (
     StateMachinePolicy,
     slow1_target,
     T_OFFSET,
