@@ -88,10 +88,10 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # "corridor":    RewardTermCfg(func=mdp.compute_corridor_reward),
     }
 
-    # 终止条件
+    # 终止条件 — 只有超时。"站稳"已改为非终止的循环完成事件(见 mdp/terminations.py 注释):
+    # 完成即部分复位开始下一次翻正, 回合只在 episode_length_s 上限处截断。
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
-        "stand": TerminationTermCfg(func=mdp.check_stand_success, time_out=True),
     }
 
     # 命令系统

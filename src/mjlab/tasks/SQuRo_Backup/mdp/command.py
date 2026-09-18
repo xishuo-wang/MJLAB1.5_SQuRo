@@ -7,8 +7,8 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import EARLY_LEAD_FRACTION, P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
-from .timing import WINDOW_LATE_S
+from .timing import EARLY_LEAD_FRACTION, P1_END, P2_DURATION, STAND_CONFIRM_DURATION
+from .timing import STAND_VEL_MEAN_MAX, WINDOW_LATE_S
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
 from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
 
@@ -36,7 +36,7 @@ def _mean_valid(values: torch.Tensor) -> float:
 class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
-        for name in ("p1_buffer_s", "p2_buffer_s", "window_late_s"):
+        for name in ("window_late_s",):
             value = getattr(cfg, name)
             if not isfinite(value) or value < 0:
                 raise ValueError(f"{name} 必须为有限的非负实际秒数")
@@ -98,6 +98,16 @@ class BackupCommand(CommandTerm):
         # 门控开启前的候选上一拍状态, 用于取脉冲起点(eligible 内的上升沿)。
         self._last_s1_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_s2_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # 循环完成 (站立 1.5s 窗口) 的判定状态。判定必须发生在奖励项里、复位之前,
+        # 因此窗口张量放在这里而不是 terminations; 见 _stand_reward_and_pulse 的时序说明。
+        self._stand_elapsed = torch.zeros(self.num_envs, device=self.device)
+        self._stand_vel_integral = torch.zeros(self.num_envs, device=self.device)
+        # 待复位标志: 本步冻结合成完成脉冲, 下一步在 _update_command 里执行部分复位。
+        # _last_cycle_end_pulse 必须在这里就建好 —— 奖励项在 _update_command 之后才被调用,
+        # 而它以 |= 的方式累积, 首次读到时不能是缺失属性。
+        self._pending_cycle_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_cycle_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_cycle_end_pulse = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s1_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
@@ -419,6 +429,14 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_last_s1_confirmed"):
             self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+        # 循环完成/复位相关的缓冲; 单测是 object.__new__ 造出来的, 可能没有预置。
+        if not hasattr(self, "_pending_cycle_reset"):
+            self._pending_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_cycle_end_pulse = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_stand_elapsed"):
+            self._stand_elapsed = torch.zeros_like(self.t_phase)
+            self._stand_vel_integral = torch.zeros_like(self.t_phase)
         if not hasattr(self, "_pose_cache"):
             self._pose_cache = None
         if not hasattr(self, "_pose_cos_cache"):
@@ -544,6 +562,76 @@ class BackupCommand(CommandTerm):
         self._last_s2_confirmed = s2_confirmed
         self._last_inverted_confirmed = inverted_confirmed
         self._last_retry_mask = retry_mask
+        # 循环复位放在最后: 它会把循环状态清零, 但本步的 _last_* 检测结果与冻结脉冲必须留下。
+        self._apply_cycle_reset(running)
+
+    # 完成一次循环的部分复位 — 只搬回机器人与短期记忆, 不结束回合。
+    # 为什么不在本步做: 完成脉冲要在奖励项里被读走(只领一次)之后才允许清状态。
+    def _apply_cycle_reset(self, running: torch.Tensor) -> None:
+        ids = self._pending_cycle_reset.nonzero(as_tuple=False).squeeze(-1)
+        self._last_cycle_reset = self._pending_cycle_reset.clone()
+        self._pending_cycle_reset = torch.zeros_like(self._pending_cycle_reset)
+        if len(ids) == 0:
+            return
+        env = self._env
+        from .events import apply_fallen_state
+        # 1) 清物理状态: sim.reset 会按 world 掩码清 qpos/qvel/qacc/qacc_warmstart/ctrl/act/
+        #    qfrc_applied/M/contact/sensordata/time —— 关键是清掉求解器热启动, 否则复位后
+        #    第一步会带着上一循环的接触冲量。
+        env.sim.reset(ids)
+        # 2) 实体与传感器: contact_sensor.reset 会零掉 air-time 历史并把 last_time 重设到新的
+        #    仿真时间, 正好修掉 sim.reset 把仿真时间归零带来的时间基跳变。
+        env.scene.reset(ids)
+        # 3) 写仰卧初态 (与回合重置同一份代码)
+        apply_fallen_state(env, ids)
+        # 4) 清策略侧短期记忆: last_action 的历史环形缓冲与 prev/prev_prev_action。
+        env.observation_manager.reset(ids)
+        env.action_manager.reset(ids)
+        # 5) 清循环状态: 重采 λ、phase=0、t_phase=0、确认计时、里程碑锁存、脉冲起点、站立窗口。
+        self._resample_command(ids)
+        self._stand_elapsed[ids] = 0.0
+        self._stand_vel_integral[ids] = 0.0
+        # 6) 刷新派生量 —— 写 qpos/qvel 之后必须 forward 才能让 site/body 位置与新状态一致
+        #    (entity/data.py 明确要求"写后读前先 forward")。
+        env.sim.forward()
+
+    # 站立窗口的累积与"循环完成"判定 — 由奖励项每步调用, 必须在复位之前。
+    # 返回本步刚凑满窗口的完成脉冲; 同时把完成脉冲冻结一步(cycle_end_pulse), 供下一步的
+    # 奖励项读取并结算 —— 因为 _update_command 在 reward 之后, 直接在本步产生又清除的脉冲
+    # 到不了奖励, 这一步的延后是必须的。
+    def stand_reward_and_pulse(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hold, strict = self.stand_gate()
+        in_p3 = self.phase == 2
+        running = self._env.episode_length_buf > 0
+        active = hold & in_p3
+        vel_rms = self.standing_metrics()[2]
+        obs_t, obs_v = self._stand_elapsed, self._stand_vel_integral
+        self._stand_elapsed, self._stand_vel_integral = BackupCommand._update_stand_window(
+            obs_t, obs_v, active, running, vel_rms, float(self._update_dt))
+        # float32 逐步累加的舍入容差（约 7e-5 秒，不改变实际确认秒数）。
+        steps = max(1.0, abs(STAND_CONFIRM_DURATION) / max(abs(float(self._update_dt)), 1e-9))
+        eps = torch.finfo(self._stand_elapsed.dtype).eps * steps * 4.0
+        mean_vel = self._stand_vel_integral / self._stand_elapsed.clamp_min(torch.finfo(self._stand_elapsed.dtype).tiny)
+        confirmed = active & running & strict & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps)) & (mean_vel <= STAND_VEL_MEAN_MAX)
+        # 每个循环只能完成一次: 窗口在复位前一直保持"已攒满", 不加这道锁的话在"完成帧"
+        # 与"复位帧"之间(以及同一帧内重复结算时)会反复结算同一个循环。
+        confirmed = confirmed & ~self._pending_cycle_reset
+        # 冻结: 下一步的奖励项读 _last_cycle_end_pulse, 读走即被置回 False(只领一次)。
+        self._last_cycle_end_pulse |= confirmed
+        self._pending_cycle_reset |= confirmed
+        return obs_t, obs_v, mean_vel, confirmed
+
+    # 消费本步的循环完成脉冲 — 奖励项调用后立刻清零, 保证恰好结算一次。
+    def consume_cycle_end_pulse(self) -> torch.Tensor:
+        pulse = getattr(self, "_last_cycle_end_pulse", None)
+        if pulse is None:
+            pulse = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_cycle_end_pulse = torch.zeros_like(pulse)
+        return pulse
+
+    @property
+    def cycle_completed_pulse(self) -> torch.Tensor:
+        return getattr(self, "_last_cycle_reset", torch.zeros(self.num_envs, dtype=torch.bool, device=self.device))
 
     def _update_metrics(self) -> None:
         # 只记录三组共 10 条: Progress/* 回合级成就与节奏偏差, Phase/* 当前阶段, Gate/* 姿态到达速率。
@@ -577,11 +665,10 @@ class BackupCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (1000.0, 1000.0)   # 不重采样 (episode 内固定)
     debug_vis: bool = False
     fixed_time_scale: float | None = None
-    # P1=T1+T2、P2=T3；末端等待均为实际秒，不随 λ 缩放。
-    p1_buffer_s: float = P1_BUFFER_DURATION
-    p2_buffer_s: float = P2_BUFFER_DURATION
     # 晚侧窗界（实际秒，加在名义段末之后），同时是重试截止；
-    # 早侧门控 = 名义段末 − early_lead_fraction·λ（实际秒的提前量，不是段长比例）。
+    # 早侧地板 = 名义段末 − early_lead_fraction·λ（距段末的提前量，不是段长比例）。
+    # 注意它与"参考播完门 t_phase ≥ 段末"是两件不同的事: 前者允许在段末之前就起算确认,
+    # 后者只管"何时允许切段"; 数值上前者更早, 因此 max(两者) 恒为段末。
     window_late_s: float = WINDOW_LATE_S
     early_lead_fraction: float = EARLY_LEAD_FRACTION
     # site 方向夹角容差与连续确认时长（均为实际秒，不乘 λ）。

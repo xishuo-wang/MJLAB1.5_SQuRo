@@ -28,10 +28,23 @@ def make_env(phases):
     cmd.command_tensor[:, 5] = 3.0
     cmd.time_scale_command = cmd.command_tensor[:, 5]
     cmd.phase_command = cmd.command_tensor[:, 6]
+    # _resample_command 会写这些视图; 单测直接调它, 必须预置。
+    cmd.vel_command = cmd.command_tensor[:, 0]
+    cmd.height_f_command = cmd.command_tensor[:, 1]
+    cmd.height_h_command = cmd.command_tensor[:, 2]
+    cmd.gait_freq_command = cmd.command_tensor[:, 3]
+    cmd.curvature_command = cmd.command_tensor[:, 4]
+    cmd.fixed_time_scale = None          # _resample_command 会读它决定 λ 来源
     cmd._update_dt = env.step_dt
     cmd._pose_cos_threshold = cos(radians(45))
     cmd._pose_cache = None
     cmd._pose_cos_cache = None
+    # 站立窗口现在归 command 所有 (判定必须发生在复位之前)。
+    cmd._stand_elapsed = torch.zeros(n)
+    cmd._stand_vel_integral = torch.zeros(n)
+    cmd._pending_cycle_reset = torch.zeros(n, dtype=torch.bool)
+    cmd._last_cycle_reset = torch.zeros(n, dtype=torch.bool)
+    cmd._last_cycle_end_pulse = torch.zeros(n, dtype=torch.bool)
     cmd.test_u = torch.ones(n, 2)
     cmd.test_heights = torch.full((n, 2), .055)
     cmd.test_vel = torch.zeros(n)
@@ -39,6 +52,15 @@ def make_env(phases):
     cmd._body_height = lambda idx: cmd.test_heights[:, 0 if idx == _MODEL_INDICES.f_body_id else 1]
     cmd._joint_vel_rms = lambda: cmd.test_vel
     env.command_manager = NS(get_term=lambda _: cmd, _terms={'backup_cmd': cmd})
+    # 循环复位会碰这些接口; 记录调用以便断言"只复位选中的环境、不结束回合"。
+    env.reset_calls = {'sim': [], 'scene': [], 'obs': [], 'act': []}
+    env.sim = NS(reset=lambda ids: env.reset_calls['sim'].append(list(ids)),
+                 forward=lambda: None)
+    robot = NS(write_root_state_to_sim=lambda *a, **kw: None,
+               write_joint_state_to_sim=lambda *a, **kw: None, num_joints=36)
+    env.scene = NS(reset=lambda ids: env.reset_calls['scene'].append(list(ids)), entities={'robot': robot})
+    env.observation_manager = NS(reset=lambda ids: env.reset_calls['obs'].append(list(ids)))
+    env.action_manager = NS(reset=lambda ids: env.reset_calls['act'].append(list(ids)))
     return env, cmd
 
 
@@ -126,51 +148,59 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(cmd.standing_state()[1].item(), 0.)
 
     def test_stand_confirmation_and_phase_gate(self):
+        # 站立窗口现在由 command 拥有, 判定入口是 stand_reward_and_pulse (返回 旧T, 旧V, 均值, 本步完成脉冲)。
         env, cmd = make_env([2, 1])
         for _ in range(149):
-            self.assertFalse(terminations.check_stand_success(env).any())
+            self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
         # 第 150 步 (0.01×150=1.5s) 才确认; 非 P3 的环境永远不确认
-        torch.testing.assert_close(terminations.check_stand_success(env), torch.tensor([True, False]))
+        torch.testing.assert_close(cmd.stand_reward_and_pulse()[3], torch.tensor([True, False]))
+        self.assertTrue(cmd.consume_cycle_end_pulse()[0])       # 完成脉冲可被消费一次
+        self.assertFalse(cmd.consume_cycle_end_pulse().any())   # 第二次读到的是空
+        self.assertTrue(cmd._pending_cycle_reset[0].item())     # 复位待执行
+        cmd._pending_cycle_reset[:] = False                     # 模拟下一步的复位(测试不跑完整 step)
         cmd.test_u[0, 0] = -1.
-        self.assertFalse(terminations.check_stand_success(env).any())
-        self.assertEqual(env._stand_elapsed[0], 0.)
+        self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
+        self.assertEqual(cmd._stand_elapsed[0], 0.)
         cmd.test_u[:] = 1.
         env.step_dt = .05
+        cmd._update_dt = .05
         for _ in range(29):
-            self.assertFalse(terminations.check_stand_success(env).any())
-        self.assertTrue(terminations.check_stand_success(env)[0])
+            self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
+        self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
 
     def test_stand_window_uses_mean_velocity(self):
         env, cmd = make_env([2, 2, 2])
         cmd.test_vel[:] = torch.tensor([.3, 4.5, 1.])
         for _ in range(50):                                   # 攒 0.5s 窗口
-            self.assertFalse(terminations.check_stand_success(env).any())
+            self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
         # 判据量就是窗口平均速度: 恒定的 0.3 与 4.5 分别远离门限两侧
-        self.assertAlmostEqual(env._stand_vel_integral[0].item() / env._stand_elapsed[0].item(), .3, places=4)
-        self.assertAlmostEqual(env._stand_vel_integral[1].item() / env._stand_elapsed[1].item(), 4.5, places=4)
+        self.assertAlmostEqual(cmd._stand_vel_integral[0].item() / cmd._stand_elapsed[0].item(), .3, places=4)
+        self.assertAlmostEqual(cmd._stand_vel_integral[1].item() / cmd._stand_elapsed[1].item(), 4.5, places=4)
         cmd.test_vel[2] = .3                                  # 后半程变静 -> 窗口均值被拉低
         for _ in range(100):
-            terminations.check_stand_success(env)
-        self.assertLess((env._stand_vel_integral[2] / env._stand_elapsed[2]).item(), .75)  # (0.5×1.0+1.0×0.3)/1.5
-        self.assertGreater(env._stand_elapsed[2].item(), 1.4)
-        # 窗口攒满 1.5s 且均值远低于 3.5 -> 结算; 一直抖的 4.5 永远不结算
-        torch.testing.assert_close(terminations.check_stand_success(env), torch.tensor([True, False, True]))
+            cmd.stand_reward_and_pulse()
+        self.assertLess((cmd._stand_vel_integral[2] / cmd._stand_elapsed[2]).item(), .75)  # (0.5×1.0+1.0×0.3)/1.5
+        self.assertGreater(cmd._stand_elapsed[2].item(), 1.4)
+        # 窗口攒满 1.5s 且均值远低于 3.5 -> 结算; 一直抖的 4.5 永远不结算。
+        # 先清掉前面已完成的那个循环的待复位标志(测试不跑完整 step), 否则会被"每循环一次"的锁挡住。
+        cmd._pending_cycle_reset[:] = False
+        torch.testing.assert_close(cmd.stand_reward_and_pulse()[3], torch.tensor([True, False, True]))
 
     def test_stand_window_resets_instead_of_pausing(self):
         env, cmd = make_env([2])
         cmd.test_vel[:] = .3
         for _ in range(50):
-            terminations.check_stand_success(env)
-        self.assertAlmostEqual(env._stand_elapsed[0].item(), .5, places=4)
+            cmd.stand_reward_and_pulse()
+        self.assertAlmostEqual(cmd._stand_elapsed[0].item(), .5, places=4)
         cmd.test_u[:] = torch.tensor([[-1., 1.]])             # 几何掉出 -> T 与 V 一起清零, 不是暂停累计
-        terminations.check_stand_success(env)
-        self.assertEqual(env._stand_elapsed[0].item(), 0.)
-        self.assertEqual(env._stand_vel_integral[0].item(), 0.)
+        cmd.stand_reward_and_pulse()
+        self.assertEqual(cmd._stand_elapsed[0].item(), 0.)
+        self.assertEqual(cmd._stand_vel_integral[0].item(), 0.)
         # 窗口重启后必须重新攒满 1.5s, 不能把前后两段拼接成一次站稳
         cmd.test_u[:] = 1.
         for _ in range(149):
-            self.assertFalse(terminations.check_stand_success(env).any())
-        self.assertTrue(terminations.check_stand_success(env)[0])
+            self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
+        self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
 
     def test_stand_still_reward_is_p3_gated_and_linear(self):
         env, cmd = make_env([2, 1, 2])
@@ -426,9 +456,11 @@ class StageRewardTests(unittest.TestCase):
         self.assertTrue(cmd.s2_milestone_pulse[1].item())
         self.assertFalse(cmd.s2_milestone_pulse[0].item())
         # 进入 P3 不是任务成功：仍须独立满足 1.5 秒的"站稳"确认 (含关节速度条件)。
+        # 窗口推进入口是 stand_reward_and_pulse (奖励项调用), 不再是终止项。
+        cmd._update_dt = env.step_dt
         for _ in range(149):
-            self.assertFalse(terminations.check_stand_success(env).any())
-        torch.testing.assert_close(terminations.check_stand_success(env), torch.tensor([False, True]))
+            self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
+        torch.testing.assert_close(cmd.stand_reward_and_pulse()[3], torch.tensor([False, True]))
         cmd._update_command()
         self.assertFalse(cmd.s2_milestone_pulse.any())
 
@@ -615,6 +647,90 @@ class StageRewardTests(unittest.TestCase):
         for _ in range(20):
             cmd2._update_command()
         self.assertEqual(cmd2._s1_confirm_elapsed.item(), 0.)
+
+    def test_cycle_reset_is_isolated_to_selected_envs(self):
+        # 只复位凑满站立窗口的环境; 其他环境的阶段、时钟与累计量必须原封不动。
+        env, cmd = make_env([2, 2])
+        cmd.test_u[1, 0] = -1.                            # env1 姿态掉出 -> 窗口清零
+        cmd.phase[:] = 2
+        cmd.t_phase[:] = torch.tensor([.20, .35])
+        cmd._stand_elapsed[0] = 1.5
+        cmd._stand_vel_integral[0] = 1.5 * 0.3
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()                       # 不推进窗口, 只取上一步已攒的状态
+        self.assertTrue(cmd._pending_cycle_reset[0].item())
+        self.assertFalse(cmd._pending_cycle_reset[1].item())
+        cmd._update_command()
+        # env0 被复位: 阶段归零, 且 sim/scene/obs/act 都只收到 [0]
+        self.assertEqual(cmd.phase.tolist(), [0, 2])
+        self.assertEqual(cmd.t_phase[0].item(), 0.)
+        self.assertAlmostEqual(cmd.t_phase[1].item(), .35, places=5)
+        for key in ('sim', 'scene', 'obs', 'act'):
+            self.assertEqual(env.reset_calls[key], [[0]], f"{key} 复位范围错误")
+
+    def test_cycle_completion_settles_exactly_once(self):
+        # 完成脉冲恰好结算一次: 首次读到 True, 随后必须为空 (不重复发钱)。
+        env, cmd = make_env([2])
+        cmd.phase[:] = 2
+        cmd._stand_elapsed[0] = 1.5
+        cmd._stand_vel_integral[0] = 0.
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()
+        self.assertTrue(cmd.consume_cycle_end_pulse()[0].item())
+        self.assertFalse(cmd.consume_cycle_end_pulse().any())
+        # 完成奖励只能结算一次: 窗口在复位前一直保持"已攒满", 必须有"每循环一次"的锁,
+        # 否则完成帧与复位帧之间会反复结算同一个循环。
+        env2, cmd2 = make_env([2])
+        cmd2._stand_elapsed[0] = 1.5
+        cmd2._stand_vel_integral[0] = 0.
+        cmd2._update_dt = 0.                              # 不推进窗口, 直接结算已攒满的状态
+        with patch.dict(_CURVES, weight_milestone_success=(35.,)):
+            paid = rewards.compute_task_success_milestone_reward(env2)
+            self.assertGreater(paid.item(), 0.)
+            again = rewards.compute_task_success_milestone_reward(env2)
+            self.assertEqual(again.item(), 0.)
+            # 下一步执行复位后, 下一个循环重新可以结算。
+            cmd2._update_command()
+            self.assertEqual(cmd2._stand_elapsed.item(), 0.)
+            self.assertFalse(cmd2._pending_cycle_reset.any())
+
+    def test_cycle_reset_does_not_end_episode_and_reopens_milestones(self):
+        # 关键语义: 循环复位不是回合结束 —— episode_length_buf 不动、奖励累计不清,
+        # 且下一个循环的 S1/S2/完成里程碑重新有效。
+        env, cmd = make_env([2])
+        env.episode_length_buf = torch.tensor([137])
+        cmd._s1_awarded = torch.tensor([True])
+        cmd._s2_awarded = torch.tensor([True])
+        cmd._stand_elapsed[0] = 1.5
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()
+        cmd._update_command()
+        self.assertEqual(env.episode_length_buf.item(), 137)        # 回合没结束
+        self.assertFalse(cmd._s1_awarded.item())                     # 里程碑锁存已重开
+        self.assertFalse(cmd._s2_awarded.item())
+        self.assertFalse(cmd._pending_cycle_reset.any())             # 待复位标志已消费
+        self.assertEqual(cmd._stand_elapsed.item(), 0.)              # 站立窗口已清零
+
+    def test_cycle_reset_writes_all_state_before_forward(self):
+        # 物理一致性: 写入 qpos/qvel 之后必须 forward, 否则观测里的 site/body 派生量
+        # 仍是复位前状态 (entity/data.py 明确要求"写后读前先 forward")。
+        from mjlab.tasks.SQuRo_Backup.mdp import events as ev
+        env, cmd = make_env([2])
+        order: list[str] = []
+        env.sim = NS(reset=lambda ids: order.append('sim.reset'), forward=lambda: order.append('sim.forward'))
+        env.scene.reset = lambda ids: order.append('scene.reset')
+        env.observation_manager.reset = lambda ids: order.append('obs.reset')
+        env.action_manager.reset = lambda ids: order.append('act.reset')
+        with patch.object(ev, 'apply_fallen_state', lambda e, i: order.append('fallen')):
+            cmd._stand_elapsed[0] = 1.5
+            cmd._update_dt = 0.
+            cmd.stand_reward_and_pulse()
+            cmd._update_command()
+        # 仰卧初态必须写在 forward 之前, 否则派生量不刷新
+        self.assertLess(order.index('fallen'), order.index('sim.forward'))
+        # 且 forward 必须是最后一步
+        self.assertEqual(order[-1], 'sim.forward')
+        self.assertEqual(order[0], 'sim.reset')
 
 
 if __name__ == '__main__':

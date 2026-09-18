@@ -48,7 +48,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         clip_actions=None,
         seed=42,
 
-        resume=True,
-        load_run="2026-09-17_15-00-33",
-        load_checkpoint="model_600.pt",
+        # 从头训练: 本批改了任务语义(成功不再终止、改为循环复位)与达成门控,
+        # 旧 checkpoint 的 actor/critic 与课程计数都不再对应同一任务。
+        resume=False,
     )

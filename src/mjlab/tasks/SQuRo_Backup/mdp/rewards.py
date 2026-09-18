@@ -66,7 +66,11 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    pulse = env.termination_manager.get_term("stand")
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    # 循环完成改为非终止事件: 本项既负责推进站立窗口, 又是完成脉冲的唯一产生点。
+    # 时序理由(为什么必须在奖励项里判定)见 command.stand_reward_and_pulse 的注释。
+    command.stand_reward_and_pulse()
+    pulse = command.consume_cycle_end_pulse()
     env.extras["log"]["Progress/success"] = pulse.float().mean().item()
     weight = get_curriculum_reward_weight(env, "weight_milestone_success")
     return weight * pulse.float() / env.step_dt
