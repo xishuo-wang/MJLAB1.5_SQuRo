@@ -7,7 +7,8 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
+from .timing import EARLY_LEAD_FRACTION, P1_BUFFER_DURATION, P1_END, P2_BUFFER_DURATION, P2_DURATION
+from .timing import WINDOW_LATE_S
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
 from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
 
@@ -35,10 +36,12 @@ def _mean_valid(values: torch.Tensor) -> float:
 class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
-        for name in ("p1_buffer_s", "p2_buffer_s"):
+        for name in ("p1_buffer_s", "p2_buffer_s", "window_late_s"):
             value = getattr(cfg, name)
             if not isfinite(value) or value < 0:
                 raise ValueError(f"{name} 必须为有限的非负实际秒数")
+        if not isfinite(float(cfg.early_lead_fraction)) or not 0.0 <= float(cfg.early_lead_fraction) < 1.0:
+            raise ValueError("early_lead_fraction 必须在 [0, 1) 内")
         angle = float(cfg.pose_angle_tolerance_deg)
         if not isfinite(angle) or not 0.0 < angle < 90.0:
             raise ValueError("pose_angle_tolerance_deg 必须为有限的 0 到 90 度之间的角度")
@@ -81,8 +84,20 @@ class BackupCommand(CommandTerm):
         self._s2_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
         self._inverted_confirm_elapsed = torch.zeros(self.num_envs, device=self.device)
         # 时序偏差记录: NaN 表示本回合还没有达成记录。
-        self._s1_lag = torch.full((self.num_envs,), float("nan"), device=self.device)
-        self._s2_lag = torch.full((self.num_envs,), float("nan"), device=self.device)
+        # _s*_onset 是"导致结算的那次确认脉冲"的起点(实际秒, 阶段内计时), 入奖励质量核;
+        # _s*_dev_early/_s*_dev_late 是它与名义段末之差, 分开存两份便于各自 clamp 与记录。
+        self._s1_onset = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s2_onset = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s1_dev_early = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s2_dev_early = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s1_dev_late = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s2_dev_late = torch.full((self.num_envs,), float("nan"), device=self.device)
+        # 判据原始信号最早就为真的时刻, 不加任何门控/窗掩码 —— 只作诊断, 不参与奖励。
+        self._s1_criterion_first = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._s2_criterion_first = torch.full((self.num_envs,), float("nan"), device=self.device)
+        # 门控开启前的候选上一拍状态, 用于取脉冲起点(eligible 内的上升沿)。
+        self._last_s1_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_s2_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s1_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
@@ -121,6 +136,24 @@ class BackupCommand(CommandTerm):
     def s2_milestone_pulse(self) -> torch.Tensor:
         return self._last_s2_milestone
 
+    # 里程碑时间质量核的输入: 脉冲起点与名义段末之差(实际秒, 迟为正; NaN = 尚未达成)。
+    # 早侧 σ 要按 λ 折算, 所以调用方必须传 λ 本身 (time_scale), 不能传 expected(=T_nom·λ)。
+    @property
+    def s1_dev_early(self) -> torch.Tensor:
+        return self._s1_dev_early
+
+    @property
+    def s2_dev_early(self) -> torch.Tensor:
+        return self._s2_dev_early
+
+    @property
+    def s1_dev_late(self) -> torch.Tensor:
+        return self._s1_dev_late
+
+    @property
+    def s2_dev_late(self) -> torch.Tensor:
+        return self._s2_dev_late
+
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -157,8 +190,16 @@ class BackupCommand(CommandTerm):
         self._s1_confirm_elapsed[env_ids] = 0.0
         self._s2_confirm_elapsed[env_ids] = 0.0
         self._inverted_confirm_elapsed[env_ids] = 0.0
-        self._s1_lag[env_ids] = float("nan")
-        self._s2_lag[env_ids] = float("nan")
+        self._s1_onset[env_ids] = float("nan")
+        self._s2_onset[env_ids] = float("nan")
+        self._s1_dev_early[env_ids] = float("nan")
+        self._s2_dev_early[env_ids] = float("nan")
+        self._s1_dev_late[env_ids] = float("nan")
+        self._s2_dev_late[env_ids] = float("nan")
+        self._s1_criterion_first[env_ids] = float("nan")
+        self._s2_criterion_first[env_ids] = float("nan")
+        self._last_s1_gated_ok[env_ids] = False
+        self._last_s2_gated_ok[env_ids] = False
         self._s1_awarded[env_ids] = False
         self._s2_awarded[env_ids] = False
 
@@ -359,9 +400,25 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_last_s1_confirmed"):
             self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
-        if not hasattr(self, "_s1_lag"):
-            self._s1_lag = torch.full_like(self.t_phase, float("nan"))
-            self._s2_lag = torch.full_like(self.t_phase, float("nan"))
+        if not hasattr(self, "_s1_onset"):
+            self._s1_onset = torch.full_like(self.t_phase, float("nan"))
+            self._s2_onset = torch.full_like(self.t_phase, float("nan"))
+            self._s1_dev_early = torch.full_like(self.t_phase, float("nan"))
+            self._s2_dev_early = torch.full_like(self.t_phase, float("nan"))
+            self._s1_dev_late = torch.full_like(self.t_phase, float("nan"))
+            self._s2_dev_late = torch.full_like(self.t_phase, float("nan"))
+            self._s1_criterion_first = torch.full_like(self.t_phase, float("nan"))
+            self._s2_criterion_first = torch.full_like(self.t_phase, float("nan"))
+        if not hasattr(self, "_last_s1_gated_ok"):
+            self._last_s1_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+        # 脉冲起点的上升沿检测要读上一拍的候选; 单测里可能没有预置。
+        if not hasattr(self, "_last_s1_ok"):
+            self._last_s1_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_last_s1_confirmed"):
+            self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
         if not hasattr(self, "_pose_cache"):
             self._pose_cache = None
         if not hasattr(self, "_pose_cos_cache"):
@@ -403,14 +460,34 @@ class BackupCommand(CommandTerm):
         # 必须等本段参考播完(expected)才能推进: 姿态判据可被抄近路提前满足, 一提前推进
         # 参考就会瞬移到段末(实测 P1->P2 一步跳 1.37 rad), 跟踪奖励随之失去意义。
         # 取消阶段回退的理由(策略会挑阶段套利、形成极限环)见技术细节 §2。
+        # 早侧门控: 确认计时不得在 EARLY_FRACTION·λ 之前起算, 把"提前到达并保持"的
+        # 脉冲起点下限抬起来; 晚侧窗界同时是重试截止。设计依据见技术细节 §7.2.6。
+        # 早侧门控按"距段末的提前量"计算, 不能按段长比例 —— 理由见 timing.EARLY_LEAD_FRACTION。
+        early_lead = float(self.cfg.early_lead_fraction) * lam
+        open1 = (expected1 - early_lead).clamp(min=0.0)
+        open2 = (expected2 - early_lead).clamp(min=0.0)
+        close1 = expected1 + float(self.cfg.window_late_s)
+        close2 = expected2 + float(self.cfg.window_late_s)
+        gated1 = p1 & (self.t_phase >= open1) & (self.t_phase <= close1)
+        gated2 = p2 & (self.t_phase >= open2) & (self.t_phase <= close2)
+        # 门控外的候选不累积确认时长, 避免门控前起算的确认把阶段直接放行。
+        self._s1_confirm_elapsed = torch.where(p1 & ~gated1, torch.zeros_like(self._s1_confirm_elapsed), self._s1_confirm_elapsed)
+        self._s2_confirm_elapsed = torch.where(p2 & ~gated2, torch.zeros_like(self._s2_confirm_elapsed), self._s2_confirm_elapsed)
+        # 必须在清零之后重算 confirmed: _update_confirmation 返回的是清零前的判定,
+        # 直接沿用会让"门控外已攒满"的环境跳过门控与窗界, 当步就推进。
+        s1_confirmed = s1_confirmed & gated1
+        s2_confirmed = s2_confirmed & gated2
         advance1 = p1 & s1_confirmed & (self.t_phase >= expected1)
         advance2 = p2 & s2_confirmed & (self.t_phase >= expected2)
-        retry1 = p1 & (self.t_phase >= expected1 + self.cfg.p1_buffer_s) & ~s1_confirmed
-        p2_deadline = expected2 + self.cfg.p2_buffer_s
-        # 截止前刚进入候选时允许完成这次连续确认, 参考保持 T3 末端; 中断即清零。
-        s2_pending = s2_ok & (self._s2_confirm_elapsed > 0.0) & ~s2_confirmed
-        s2_grace = s2_pending & (self.t_phase < p2_deadline + self.cfg.pose_confirm_s)
-        retry2 = p2 & (self.t_phase >= p2_deadline) & ~s2_confirmed & ~s2_grace
+        retry1 = p1 & (self.t_phase > close1) & ~advance1
+        retry2 = p2 & (self.t_phase > close2) & ~advance2
+        # 脉冲起点 = 门控内候选的上升沿; 门控开启当步若候选已成立, 起点即门控开启时刻。
+        gated_ok1 = gated1 & s1_ok
+        gated_ok2 = gated2 & s2_ok
+        onset1 = gated_ok1 & ~self._last_s1_gated_ok
+        onset2 = gated_ok2 & ~self._last_s2_gated_ok
+        first1 = p1 & s1_ok & ~self._last_s1_ok
+        first2 = p2 & s2_ok & ~self._last_s2_ok
         # P3 无超时机制; inverted_confirmed 与 both_inverted 仅作诊断。
         phase_next = self.phase.clone()
         phase_next = torch.where(advance1, torch.ones_like(phase_next), phase_next)
@@ -431,17 +508,28 @@ class BackupCommand(CommandTerm):
         self._s1_awarded |= advance1
         self._s2_awarded |= advance2
         # 保存本步检测结果供 _update_metrics 记录 (metrics 在 command 前被调用, 记录上一步状态)
-        # 时序偏差: 在"确认成立的那一步"记一次 (t_nom - 名义时刻), 早到为负、迟到为正。
-        # 只在上升沿记录, 否则推进那一步会把偏差覆盖成 0。
-        s1_new = s1_confirmed & ~self._last_s1_confirmed
-        s2_new = s2_confirmed & ~self._last_s2_confirmed
-        t_nom = self.t_phase / lam
-        self._s1_lag = torch.where(s1_new, t_nom - _P1_EXPECT, self._s1_lag)
-        self._s2_lag = torch.where(s2_new, t_nom - _P2_EXPECT, self._s2_lag)
-        # 重试意味着本次尝试作废, 偏差记录一起清掉; 阶段切换保留(供 P2/P3 继续读)。
-        nan = torch.full_like(self._s1_lag, float("nan"))
-        self._s1_lag = torch.where(retry_mask, nan, self._s1_lag)
-        self._s2_lag = torch.where(retry_mask, nan, self._s2_lag)
+        # 偏差锁存: 只在脉冲起点那一步记一次, 值取该步的 t_phase(不要读 metrics 时的 t_phase,
+        # 那时可能已被阶段切换清零); 早/晚两份同源, 由奖励侧各自 clamp。
+        # 重试意味着本次尝试作废, 记录一起清掉; 阶段切换保留(供 P2/P3 继续读)。
+        self._s1_onset = torch.where(onset1, self.t_phase, self._s1_onset)
+        self._s2_onset = torch.where(onset2, self.t_phase, self._s2_onset)
+        dev1 = self.t_phase - expected1
+        dev2 = self.t_phase - expected2
+        self._s1_dev_early = torch.where(onset1, dev1, self._s1_dev_early)
+        self._s2_dev_early = torch.where(onset2, dev2, self._s2_dev_early)
+        self._s1_dev_late = torch.where(onset1, dev1, self._s1_dev_late)
+        self._s2_dev_late = torch.where(onset2, dev2, self._s2_dev_late)
+        # 未加任何掩码的首次达成, 仅作诊断: 它回答"姿态最早就何时到位", 不受门控影响。
+        self._s1_criterion_first = torch.where(first1, self.t_phase, self._s1_criterion_first)
+        self._s2_criterion_first = torch.where(first2, self.t_phase, self._s2_criterion_first)
+        nan = torch.full_like(self._s1_onset, float("nan"))
+        for buf in (self._s1_onset, self._s2_onset, self._s1_dev_early, self._s2_dev_early,
+                    self._s1_dev_late, self._s2_dev_late,
+                    self._s1_criterion_first, self._s2_criterion_first):
+            buf.copy_(torch.where(retry_mask, nan, buf))
+        # 重试会清候选锁存: 否则重播后候选仍成立时不会产生新的上升沿, 脉冲起点会丢失。
+        self._last_s1_gated_ok = gated_ok1 & ~retry_mask
+        self._last_s2_gated_ok = gated_ok2 & ~retry_mask
         self._last_s1_ok = s1_ok
         self._last_s2_ok = s2_ok
         self._last_advance1 = advance1
@@ -465,9 +553,14 @@ class BackupCommand(CommandTerm):
         log["Progress/enter_p2"] = self._s1_awarded.float().mean().item()
         log["Progress/enter_p3"] = self._s2_awarded.float().mean().item()
         log["Progress/relapse"] = self._last_both_inverted.float().mean().item()
-        # s1_lag/s2_lag = 姿态达成时的 t_nom 与名义时刻之差(迟为正), 是"跟不跟得上表"的直接读数。
-        log["Progress/s1_lag"] = _mean_valid(self._s1_lag)
-        log["Progress/s2_lag"] = _mean_valid(self._s2_lag)
+        # 主指标用未过窗的首次达成, 否则"窗内确认时刻"落在窗内大多是规则强制的;
+        # navg 与窗界同量纲(实际秒), 迟为正, 负值即"提前达成"。
+        log["Data/s1_onset_s"] = _mean_valid(self._s1_onset)
+        log["Data/s2_onset_s"] = _mean_valid(self._s2_onset)
+        log["Data/s1_first_s"] = _mean_valid(self._s1_criterion_first)
+        log["Data/s2_first_s"] = _mean_valid(self._s2_criterion_first)
+        log["Progress/s1_dev_s"] = _mean_valid(self._s1_dev_early)
+        log["Progress/s2_dev_s"] = _mean_valid(self._s2_dev_early)
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
         log["Phase/p3"] = (self.phase == 2).float().mean().item()
         log["Phase/retry"] = self.retry.float().mean().item()
@@ -487,6 +580,10 @@ class BackupCommandCfg(CommandTermCfg):
     # P1=T1+T2、P2=T3；末端等待均为实际秒，不随 λ 缩放。
     p1_buffer_s: float = P1_BUFFER_DURATION
     p2_buffer_s: float = P2_BUFFER_DURATION
+    # 晚侧窗界（实际秒，加在名义段末之后），同时是重试截止；
+    # 早侧门控 = 名义段末 − early_lead_fraction·λ（实际秒的提前量，不是段长比例）。
+    window_late_s: float = WINDOW_LATE_S
+    early_lead_fraction: float = EARLY_LEAD_FRACTION
     # site 方向夹角容差与连续确认时长（均为实际秒，不乘 λ）。
     pose_angle_tolerance_deg: float = 45.0
     pose_confirm_s: float = 0.10

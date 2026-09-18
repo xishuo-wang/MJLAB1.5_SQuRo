@@ -86,7 +86,7 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
 
 
 class StateMachinePolicy:
-    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, buffer: float | None = None, action_scale: float | None = None, log_events: bool = True) -> None:
+    def __init__(self, env: ManagerBasedRlEnv, time_scale: float, max_retry: int, action_scale: float | None = None, log_events: bool = True) -> None:
         self.env = env
         self.asset = env.unwrapped.scene.entities["robot"]
         resolve_model_indices(self.asset)
@@ -94,8 +94,8 @@ class StateMachinePolicy:
         self.lam = time_scale
         self.max_retry = max_retry
         command_cfg: BackupCommandCfg = env.unwrapped.cfg.commands["backup_cmd"]  # type: ignore[assignment]
-        self.p1_buffer_s = float(command_cfg.p1_buffer_s if buffer is None else buffer)
-        self.p2_buffer_s = float(command_cfg.p2_buffer_s if buffer is None else buffer)
+        self.window_late_s = float(getattr(command_cfg, "window_late_s", 0.50))
+        self.early_lead_fraction = float(getattr(command_cfg, "early_lead_fraction", 0.20))
         self.pose_confirm_s = float(getattr(command_cfg, "pose_confirm_s", 0.10))
         self.inverted_confirm_s = float(getattr(command_cfg, "inverted_confirm_s", 0.15))
         env_scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)  # type: ignore[union-attr]
@@ -219,46 +219,46 @@ class StateMachinePolicy:
         inverted_confirmed = self._update_confirmation("_inverted_confirm_t", self._is_both_inverted(), dt)
         if self.phase == "P1":
             expected = T_SEG2_END * self.lam
-            # 与训练同步的段末门控: 本段参考播完之前不推进, 否则参考会瞬移到段末。
-            # 截止时成功优先于重试。
-            if s1_confirmed and self.t_phase >= expected:
+            close_t = expected + self.window_late_s
+            gate_t = max(0.0, expected - self.early_lead_fraction * self.lam)
+            # 与训练同步的段末门控 + 早侧门控 + 晚侧窗界: 本段参考播完之前不推进(否则参考瞬移);
+            # 门控开启前起算的确认不计; 过窗仍未确认则本次尝试作废(重播本段参考)。
+            if gate_t <= self.t_phase <= close_t and s1_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
                 first = not self._milestones["S1"]
                 self._milestones["S1"] = True
                 self._log(f"S1 达成 (用时 {t_used:.2f}s，{'首次' if first else '再次'}，不重复计里程碑) -> 进入 P2")
-            elif self.t_phase >= expected + self.p1_buffer_s:
+            elif self.t_phase > close_t:
                 self.retry["P1"] += 1; self.t_phase = 0.0
                 self._clear_confirmation()
-                self._log(f"S1 未达 (缓冲后, 重试 {self.retry['P1']}/{self.max_retry or '不限'})")
+                self._log(f"S1 未达 (过窗, 重试 {self.retry['P1']}/{self.max_retry or '不限'})")
                 if self.max_retry > 0 and self.retry["P1"] >= self.max_retry:
                     self._log("P1 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P2":
             expected = T3 * self.lam
-            deadline = expected + self.p2_buffer_s
-            # 与训练一致：仅给仍有效的候选最多一个确认时长的额外等待。
-            s2_grace = (self._s2_confirm_t > 0.0 and not s2_confirmed
-                        and self.t_phase < deadline + self.pose_confirm_s)
-            # P2 同样要等本段参考播完(名义 T3 时长)才推进, 与训练侧的段末门控一致。
+            close_t = expected + self.window_late_s
+            gate_t = max(0.0, expected - self.early_lead_fraction * self.lam)
+            # P2 同样要等本段参考播完(名义 T3 时长)才推进, 并与训练侧共用同一门控与窗界。
             if inverted_confirmed:
                 self.phase = "P1"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P2 检测到双倒 (连续确认后) -> 回到 P1")
-            elif s2_confirmed and self.t_phase >= expected:
+            elif gate_t <= self.t_phase <= close_t and s2_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P3"; self.t_phase = 0.0
                 self._clear_confirmation()
                 first = not self._milestones["S2"]
                 self._milestones["S2"] = True
                 self._log(f"S2 达成 (用时 {t_used:.2f}s，{'首次' if first else '再次'}，不重复计里程碑) -> 进入 P3")
-            elif self.t_phase >= deadline and not s2_grace:
+            elif self.t_phase > close_t:
                 self.retry["P2"] += 1; self.t_phase = 0.0
                 self._clear_confirmation()
                 fu, hu = self._state()
                 fz, hz = self._fz(self.fb), self._fz(self.hb)
                 self._log(f"S2 未达 fu={fu:+.2f} hu={hu:+.2f} fz={fz:.3f} hz={hz:.3f} "
-                          f"(缓冲后, 重试 {self.retry['P2']}/{self.max_retry or '不限'})")
+                          f"(过窗, 重试 {self.retry['P2']}/{self.max_retry or '不限'})")
                 if self.max_retry > 0 and self.retry["P2"] >= self.max_retry:
                     self._log("P2 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P3":
@@ -369,11 +369,9 @@ class VisConfig:
     """slow1 时间缩放 (λ)。"""
     max_retry: int = 0
     """每阶段最大重试次数；0 表示不限次数，与训练一致。"""
-    # 旧参数：共同覆盖 P1/P2 等待时间；None 时使用环境配置，单位为实际秒。
-    buffer: float | None = None
-    # 分阶段覆盖优先于 buffer；None 时沿用环境配置或共同覆盖值。
-    p1_buffer_s: float | None = None
-    p2_buffer_s: float | None = None
+    # 达成时刻门控与晚侧窗界；None 时使用环境配置。
+    early_lead_fraction: float | None = None
+    window_late_s: float | None = None
     visualize: Literal["none", "viewer", "video"] = "viewer"
     num_envs: int = 1
     device: str | None = None
@@ -383,16 +381,13 @@ class VisConfig:
 
 
 
-# 命令行等待时间同时写入内置 RL 状态机，确保两套状态机使用相同配置。
+# 命令行门控/窗界同时写入环境命令配置，保证训练与回放两套状态机使用同一组常量。
 def _configure_command(command_cfg: BackupCommandCfg, args: VisConfig) -> None:
     command_cfg.fixed_time_scale = args.time_scale
-    if args.buffer is not None:
-        command_cfg.p1_buffer_s = args.buffer
-        command_cfg.p2_buffer_s = args.buffer
-    if args.p1_buffer_s is not None:
-        command_cfg.p1_buffer_s = args.p1_buffer_s
-    if args.p2_buffer_s is not None:
-        command_cfg.p2_buffer_s = args.p2_buffer_s
+    if args.early_lead_fraction is not None:
+        command_cfg.early_lead_fraction = args.early_lead_fraction
+    if args.window_late_s is not None:
+        command_cfg.window_late_s = args.window_late_s
 
 
 def main() -> None:

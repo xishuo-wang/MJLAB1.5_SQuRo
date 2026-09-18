@@ -6,7 +6,7 @@ from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
-from .timing import STAND_STILL_FULL_SPEED
+from .timing import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S, STAND_STILL_FULL_SPEED
 
 if TYPE_CHECKING:
     from mjlab.envs.mdp.actions import JointPositionAction
@@ -26,6 +26,22 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
 
+# 里程碑时间质量核: 达成时刻越接近名义段末, 钱越接近满分。
+# 早侧按 λ 比例(陡)、晚侧按绝对秒(缓)的理由见 mdp/timing.py 的常量注释与技术细节 §7.2.6。
+# 关键: dev 取自"导致结算的那次确认脉冲的起点", 不是结算时刻 —— 结算时刻被段末门控压在
+# 名义时刻之后, 拿它做核会恒等于满分, 对"提前翻完干等"完全无效。
+def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam: torch.Tensor) -> torch.Tensor:
+    # 早侧只吃"提前"那一段、晚侧只吃"迟到"那一段: 否则晚到会被早侧的窄 σ 一并罚掉,
+    # 手调参考在 λ=4 的正偏差 (+0.68s) 就会被误杀。传入的 dev 是同一个原值。
+    # NaN(本回合还没有达成记录)按 0 处理: 不达成的环境本来 pulse 就是 0, 乘 0 后仍为 0。
+    late_positive = torch.nan_to_num(dev_late, nan=0.0).clamp(min=0.0)
+    early_negative = (-torch.nan_to_num(dev_early, nan=0.0)).clamp(min=0.0)
+    sigma_early = (QUALITY_SIGMA_EARLY_FRAC * lam).clamp_min(1e-6)
+    q_early = torch.exp(-(early_negative / sigma_early) ** 2)
+    q_late = torch.exp(-(late_positive / QUALITY_SIGMA_LATE_S) ** 2)
+    return q_early * q_late
+
+
 # s1里程碑奖励
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -33,7 +49,8 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # 不再单独写日志: 脉冲是 Progress/enter_p2 的导数, 累积量更好读。
     pulse = command.s1_milestone_pulse
     weight = get_curriculum_reward_weight(env, "weight_milestone_s1")
-    return weight * pulse.float() / env.step_dt
+    quality = _milestone_time_quality(command.s1_dev_early, command.s1_dev_late, command.time_scale_command)
+    return weight * pulse.float() * quality / env.step_dt
 
 
 
@@ -43,7 +60,8 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
     pulse = command.s2_milestone_pulse
     weight = get_curriculum_reward_weight(env, "weight_milestone_s2")
-    return weight * pulse.float() / env.step_dt
+    quality = _milestone_time_quality(command.s2_dev_early, command.s2_dev_late, command.time_scale_command)
+    return weight * pulse.float() * quality / env.step_dt
 
 
 

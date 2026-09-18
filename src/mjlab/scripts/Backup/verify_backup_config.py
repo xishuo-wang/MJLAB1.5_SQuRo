@@ -86,9 +86,9 @@ def main() -> None:
     print(f"  terminations 导入值={D}  回放脚本导入值={R}  "
           f"{'OK 两侧一致' if same else '** 不一致 **'}")
 
-    print("\n=== 4) S1/S2 确认与缓冲参数 ===")
+    print("\n=== 4) S1/S2 确认与达成窗参数 ===")
     c = cfg.commands["backup_cmd"]
-    for k in ("p1_buffer_s", "p2_buffer_s", "pose_confirm_s", "inverted_confirm_s",
+    for k in ("window_late_s", "early_lead_fraction", "pose_confirm_s", "inverted_confirm_s",
               "pose_angle_tolerance_deg"):
         print(f"  {k:26s} = {getattr(c, k)}")
 

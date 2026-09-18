@@ -163,8 +163,10 @@ def cmp_detection(lam: float) -> bool:
           f"脚本读取值={pol.pose_confirm_s}")
     print(f"  inverted_confirm_s(训练配置)={float(cmd.cfg.inverted_confirm_s)}  "
           f"脚本读取值={pol.inverted_confirm_s}")
-    print(f"  p1_buffer_s(训练配置)={float(cmd.cfg.p1_buffer_s)}  脚本读取值={pol.p1_buffer_s}")
-    print(f"  p2_buffer_s(训练配置)={float(cmd.cfg.p2_buffer_s)}  脚本读取值={pol.p2_buffer_s}")
+    print(f"  window_late_s(训练配置)={float(cmd.cfg.window_late_s)}  "
+          f"脚本读取值={pol.window_late_s}")
+    print(f"  early_lead_fraction(训练配置)={float(cmd.cfg.early_lead_fraction)}  "
+          f"脚本读取值={pol.early_lead_fraction}")
 
     print()
     print("  相位推进对拍 (手调脚本 phase vs 训练 command phase):")
