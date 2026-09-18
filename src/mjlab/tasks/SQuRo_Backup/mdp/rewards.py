@@ -28,7 +28,7 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
 # 里程碑时间质量核: 达成时刻越接近名义段末, 钱越接近满分。
-# 早侧按 λ 比例(陡)、晚侧按绝对秒(缓)的理由见 mdp/timing.py 的常量注释与技术细节 §7.2.6。
+# 早侧按 λ 比例(陡)、晚侧按绝对秒(缓)的理由见 mdp/timing.py 的常量注释与技术细节 2026-09-18 一节。
 # 关键: dev 取自"导致结算的那次确认脉冲的起点", 不是结算时刻 —— 结算时刻被段末门控压在
 # 名义时刻之后, 拿它做核会恒等于满分, 对"提前翻完干等"完全无效。
 def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam: torch.Tensor) -> torch.Tensor:
