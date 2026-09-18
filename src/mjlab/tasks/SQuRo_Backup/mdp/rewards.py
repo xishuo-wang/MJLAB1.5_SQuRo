@@ -34,13 +34,17 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam: torch.Tensor) -> torch.Tensor:
     # 早侧只吃"提前"那一段、晚侧只吃"迟到"那一段: 否则晚到会被早侧的窄 σ 一并罚掉,
     # 手调参考在 λ=4 的正偏差 (+0.68s) 就会被误杀。传入的 dev 是同一个原值。
-    # NaN(本回合还没有达成记录)按 0 处理: 不达成的环境本来 pulse 就是 0, 乘 0 后仍为 0。
-    late_positive = torch.nan_to_num(dev_late, nan=0.0).clamp(min=0.0)
-    early_negative = (-torch.nan_to_num(dev_early, nan=0.0)).clamp(min=0.0)
+    valid = torch.isfinite(dev_early) & torch.isfinite(dev_late)
+    e = torch.nan_to_num(dev_early, nan=0.0)
+    l = torch.nan_to_num(dev_late, nan=0.0)
+    late_positive = l.clamp(min=0.0)
+    early_negative = (-e).clamp(min=0.0)
     sigma_early = (QUALITY_SIGMA_EARLY_FRAC * lam).clamp_min(1e-6)
     q_early = torch.exp(-(early_negative / sigma_early) ** 2)
     q_late = torch.exp(-(late_positive / QUALITY_SIGMA_LATE_S) ** 2)
-    return q_early * q_late
+    # 无有效到达记录时必须给 0 而不是 1: 发脉冲说明该循环确实结算了, 此时记录缺失是
+    # "重试后没重新锁存"这类内部不一致, 静默按"零偏差"发满额奖励会变成一条绕过路径。
+    return torch.where(valid, q_early * q_late, torch.zeros_like(q_early))
 
 
 # s1里程碑奖励
@@ -183,37 +187,35 @@ def compute_action_ctrl_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor
 # 加权二次关节跟踪代价 — 复用 mimic_pos 的分组与关节索引, 但用二次核。
 # 与 mimic_pos 的分工: 后者是"跟得准不准"的细粒度形状项, 前者负责在高误差区still有梯度,
 # 让"绕过参考表"持续付出与误差成比例的代价。分组权重只在这里生效, 不改 mimic_pos。
-_JOINT_W: torch.Tensor | None = None
-# 分组按名字判定, 不依赖 action 列序 (F_spine1/F_body 在 0-1, H_spine1/H_body 在 8-9)。
+_JOINT_W: dict = {}
+# 分组按名字判定, 不依赖任何列序 (F_spine1/F_body 在 0-1, H_spine1/H_body 在 8-9)。
 _SPN_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (0, 1, 8, 9)}
 _NECK_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (2, 3)}
 
 
-def _joint_group_weights(action_term, n_joints: int, device, dtype) -> torch.Tensor:
-    # 按动作项自身的关节顺序构造权重向量 (同名对齐, 不假设列序)。
-    global _JOINT_W
-    if _JOINT_W is None or _JOINT_W.numel() != n_joints or _JOINT_W.device != device:
-        names = list(action_term.target_names)
-        w = torch.full((len(names),), TRACK_W_LEG, device=device, dtype=dtype)
-        for i, jname in enumerate(names):
-            if jname in _SPN_NAMES:
-                w[i] = TRACK_W_SPN
-            elif jname in _NECK_NAMES:
-                w[i] = TRACK_W_NECK
-        _JOINT_W = w
-    return _JOINT_W
+def _joint_group_weights(device, dtype) -> torch.Tensor:
+    # 权重向量按"参考表顺序"(= _ACTUATED_JOINT_NAMES 顺序) 构造, 与 joint_pos[:, joint_ids]
+    # 和 ref_pos 完全同序。不要按动作项名称顺序构造 —— 那会让三者顺序不一致,
+    # 一旦动作项列序与参考表不同(名称反序), 代价会从 0 变成非零(已复现 0.23897)。
+    key = (str(device), str(dtype))
+    w = _JOINT_W.get(key)
+    if w is None:
+        w = torch.tensor([TRACK_W_SPN if n in _SPN_NAMES
+                          else TRACK_W_NECK if n in _NECK_NAMES
+                          else TRACK_W_LEG for n in _ACTUATED_JOINT_NAMES],
+                         device=device, dtype=dtype)
+        _JOINT_W[key] = w
+    return w
 
 
 def compute_joint_track_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
+    # 实际关节、参考、权重三者统一用参考表顺序; joint_ids 由 find_joints(preserve_order=True)
+    # 解析, 顺序即 _ACTUATED_JOINT_NAMES, 所以无需再按动作项名称重排。
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
-    # 动作项按自身关节顺序排列, 参考表按固定顺序; 用名称重排后再算误差。
-    target_columns = tuple(action_term.target_names.index(_ACTUATED_JOINT_NAMES[i])
-                           for i in range(len(_ACTUATED_JOINT_NAMES)))
-    err = joint_pos[:, target_columns] - ref_pos
-    w = _joint_group_weights(action_term, err.shape[1], err.device, err.dtype)
+    err = joint_pos - ref_pos
+    w = _joint_group_weights(err.device, err.dtype)
     cost = (w * err.square()).mean(dim=1) / TRACK_REF_MSE_SCALE
     weight = get_curriculum_reward_weight(env, "weight_track_joint")
     env.extras["log"]["Data/track_joint_cost"] = cost.mean().item()

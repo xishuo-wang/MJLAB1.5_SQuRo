@@ -46,11 +46,8 @@ def reset_model(env, env_ids) -> None:
     n = len(env_ids)
     if n == 0:
         return
-    # 按环境清零站立窗口; 窗口张量由 command 惰性创建, 这里补上"无则先建"。
-    for name in ("_stand_elapsed", "_stand_vel_integral"):
-        buffer = getattr(env, name, None)
-        if buffer is None:
-            buffer = torch.zeros(env.num_envs, device=env.device)
-            setattr(env, name, buffer)
-        buffer[env_ids] = 0.0
+    # 站立窗口与循环级状态现在归 BackupCommand 所有, 由 command_manager.reset →
+    # _resample_command → _clear_cycle_state 统一清理。这里**不再**动 env._stand_* ——
+    # 那些旧字段早已不是归属地, 留着只会让人以为完整回合重置清干净了(实际没有)。
+    # 顺序保证: ManagerBasedRlEnv._reset_idx 先 sim.reset/scene.reset, 再 command_manager.reset。
     apply_fallen_state(env, env_ids)

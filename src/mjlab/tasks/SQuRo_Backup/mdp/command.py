@@ -92,9 +92,15 @@ class BackupCommand(CommandTerm):
         self._s2_dev_early = torch.full((self.num_envs,), float("nan"), device=self.device)
         self._s1_dev_late = torch.full((self.num_envs,), float("nan"), device=self.device)
         self._s2_dev_late = torch.full((self.num_envs,), float("nan"), device=self.device)
-        # 判据原始信号最早就为真的时刻, 不加任何门控/窗掩码 —— 只作诊断, 不参与奖励。
+        # 未加掩码的真实首次达成时刻, 只作诊断, 不参与奖励。
         self._s1_criterion_first = torch.full((self.num_envs,), float("nan"), device=self.device)
         self._s2_criterion_first = torch.full((self.num_envs,), float("nan"), device=self.device)
+        # "本次尝试已锁存首次达成"标志: 每个循环只锁一次, 重试时清除(否则记录会被后续
+        # 上升沿覆盖, 提前达成可被"短暂跨出判据再进入"洗掉)。
+        self._s1_cycle_latched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._s2_cycle_latched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # 本回合已完成的循环数: 只由完整回合重置清零, 循环复位不动它。
+        self._cycles_this_episode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         # 门控开启前的候选上一拍状态, 用于取脉冲起点(eligible 内的上升沿)。
         self._last_s1_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_s2_gated_ok = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -165,8 +171,47 @@ class BackupCommand(CommandTerm):
     def s2_dev_late(self) -> torch.Tensor:
         return self._s2_criterion_first - _P2_EXPECT * self.time_scale_command
 
+    # 建立 _resample_command / _clear_cycle_state 会写的全部缓冲。
+    # 抽出来是为了让"回合重置"与"循环复位"两条路径共用同一份生命周期定义 ——
+    # 历史上就是因为站立窗口只清在 events.reset_model 里, 完整回合重置漏清 pending 标志。
+    # 也可以被不跑 __init__ 的测试替身直接调用。
+    def _ensure_buffers(self) -> None:
+        if not hasattr(self, "_s1_onset"):
+            self._s1_onset = torch.full_like(self.t_phase, float("nan"))
+            self._s2_onset = torch.full_like(self.t_phase, float("nan"))
+            self._s1_dev_early = torch.full_like(self.t_phase, float("nan"))
+            self._s2_dev_early = torch.full_like(self.t_phase, float("nan"))
+            self._s1_dev_late = torch.full_like(self.t_phase, float("nan"))
+            self._s2_dev_late = torch.full_like(self.t_phase, float("nan"))
+            self._s1_criterion_first = torch.full_like(self.t_phase, float("nan"))
+            self._s2_criterion_first = torch.full_like(self.t_phase, float("nan"))
+        if not hasattr(self, "_s1_cycle_latched"):
+            self._s1_cycle_latched = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._s2_cycle_latched = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._cycles_this_episode = torch.zeros_like(self.phase)
+        if not hasattr(self, "_stand_elapsed"):
+            self._stand_elapsed = torch.zeros_like(self.t_phase)
+            self._stand_vel_integral = torch.zeros_like(self.t_phase)
+        if not hasattr(self, "_pending_cycle_reset"):
+            self._pending_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_cycle_end_pulse = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_last_s1_ok"):
+            self._last_s1_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_last_s1_confirmed"):
+            self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_last_s1_gated_ok"):
+            self._last_s1_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_s2_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_pose_cache"):
+            self._pose_cache = None
+            self._pose_cos_cache = None
+
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
+        self._ensure_buffers()      # 可能被不跑 __init__ 的测试替身直接调用
         n = len(env_ids)
         if n == 0:
             return
@@ -213,11 +258,33 @@ class BackupCommand(CommandTerm):
         self._last_s2_gated_ok[env_ids] = False
         self._s1_awarded[env_ids] = False
         self._s2_awarded[env_ids] = False
+        # 完整回合重置的入口: 由 reset() 调用, 之后由调用方按 also_episode=True 清循环状态。
+        # 这里只清"每次(重)采样都该回到起点"的字段; 循环状态的清理统一交给
+        # _clear_cycle_state, 避免两条路径各清一半(历史上就是这样漏掉 pending 标志的)。
+        self._clear_cycle_state(env_ids, also_episode=False)
+
+    # 清循环级状态 — 站立窗口与完成/待复位标志的唯一归属地。
+    # 两个入口共用: 完整回合重置(also_episode=True, 连"本回合循环数"一起清) 与
+    # 循环复位(also_episode=False, 保留"本回合循环数", 否则 Cycle/per_episode 永远为 0)。
+    # 旧实现把站立窗口清在 events.reset_model 里、且只动 env._stand_* —— 那里已经不再是
+    # 归属地, 导致完整回合重置后 _pending_cycle_reset 残留、下一帧多执行一次部分复位。
+    def _clear_cycle_state(self, env_ids: torch.Tensor, also_episode: bool) -> None:
+        self._stand_elapsed[env_ids] = 0.0
+        self._stand_vel_integral[env_ids] = 0.0
+        self._pending_cycle_reset[env_ids] = False
+        self._last_cycle_reset[env_ids] = False
+        self._last_cycle_end_pulse[env_ids] = False
+        self._s1_cycle_latched[env_ids] = False
+        self._s2_cycle_latched[env_ids] = False
+        if also_episode:
+            self._cycles_this_episode[env_ids] = 0
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_command(env_ids)
+            # 完整回合重置: 连"本回合循环数"一起清(循环复位不经过这里)。
+            self._clear_cycle_state(env_ids, also_episode=True)
         return extras
 
     def compute(self, dt: float) -> None:
@@ -411,37 +478,8 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_last_s1_confirmed"):
             self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
-        if not hasattr(self, "_s1_onset"):
-            self._s1_onset = torch.full_like(self.t_phase, float("nan"))
-            self._s2_onset = torch.full_like(self.t_phase, float("nan"))
-            self._s1_dev_early = torch.full_like(self.t_phase, float("nan"))
-            self._s2_dev_early = torch.full_like(self.t_phase, float("nan"))
-            self._s1_dev_late = torch.full_like(self.t_phase, float("nan"))
-            self._s2_dev_late = torch.full_like(self.t_phase, float("nan"))
-            self._s1_criterion_first = torch.full_like(self.t_phase, float("nan"))
-            self._s2_criterion_first = torch.full_like(self.t_phase, float("nan"))
-        if not hasattr(self, "_last_s1_gated_ok"):
-            self._last_s1_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
-            self._last_s2_gated_ok = torch.zeros_like(self.phase, dtype=torch.bool)
-        # 脉冲起点的上升沿检测要读上一拍的候选; 单测里可能没有预置。
-        if not hasattr(self, "_last_s1_ok"):
-            self._last_s1_ok = torch.zeros_like(self.phase, dtype=torch.bool)
-            self._last_s2_ok = torch.zeros_like(self.phase, dtype=torch.bool)
-        if not hasattr(self, "_last_s1_confirmed"):
-            self._last_s1_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
-            self._last_s2_confirmed = torch.zeros_like(self.phase, dtype=torch.bool)
-        # 循环完成/复位相关的缓冲; 单测是 object.__new__ 造出来的, 可能没有预置。
-        if not hasattr(self, "_pending_cycle_reset"):
-            self._pending_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
-            self._last_cycle_reset = torch.zeros_like(self.phase, dtype=torch.bool)
-            self._last_cycle_end_pulse = torch.zeros_like(self.phase, dtype=torch.bool)
-        if not hasattr(self, "_stand_elapsed"):
-            self._stand_elapsed = torch.zeros_like(self.t_phase)
-            self._stand_vel_integral = torch.zeros_like(self.t_phase)
-        if not hasattr(self, "_pose_cache"):
-            self._pose_cache = None
-        if not hasattr(self, "_pose_cos_cache"):
-            self._pose_cos_cache = None
+        # 单测用 object.__new__ 造实例, 可能没有任何缓冲; 统一在这里补齐。
+        self._ensure_buffers()
         lam = self.time_scale_command.clamp(min=0.1)
         # t_phase 是所有阶段共用的段内时钟; 只有真实环境步才推进, 避免初始参考提前一步。
         running = self._env.episode_length_buf > 0
@@ -503,8 +541,8 @@ class BackupCommand(CommandTerm):
         gated_ok2 = gated2 & s2_ok
         onset1 = gated_ok1 & ~self._last_s1_gated_ok
         onset2 = gated_ok2 & ~self._last_s2_gated_ok
-        first1 = p1 & s1_ok & ~self._last_s1_ok
-        first2 = p2 & s2_ok & ~self._last_s2_ok
+        first1 = p1 & s1_ok & ~self._s1_cycle_latched
+        first2 = p2 & s2_ok & ~self._s2_cycle_latched
         # P3 无超时机制; inverted_confirmed 与 both_inverted 仅作诊断。
         phase_next = self.phase.clone()
         phase_next = torch.where(advance1, torch.ones_like(phase_next), phase_next)
@@ -536,14 +574,22 @@ class BackupCommand(CommandTerm):
         self._s2_dev_early = torch.where(onset2, dev2, self._s2_dev_early)
         self._s1_dev_late = torch.where(onset1, dev1, self._s1_dev_late)
         self._s2_dev_late = torch.where(onset2, dev2, self._s2_dev_late)
-        # 未加任何掩码的首次达成, 仅作诊断: 它回答"姿态最早就何时到位", 不受门控影响。
+        # 未加任何掩码的真实首次达成: 每个"尝试"(整个循环, 含各阶段)只锁存一次。
+        # 必须用独立的 latch 而不是 _last_s1_ok 的上升沿 —— 后者每次离开再进入候选都会
+        # 重新触发, 于是"提前达成 -> 短暂跨出判据 -> 重新进入"就能把记录覆盖成临近段末
+        # 的时刻, 从而拿到接近满额的时间奖励(实测可绕过)。
         self._s1_criterion_first = torch.where(first1, self.t_phase, self._s1_criterion_first)
         self._s2_criterion_first = torch.where(first2, self.t_phase, self._s2_criterion_first)
+        self._s1_cycle_latched |= first1
+        self._s2_cycle_latched |= first2
         nan = torch.full_like(self._s1_onset, float("nan"))
+        # 重试 = 本次尝试作废: 记录与 latch 一起清, 使下一次尝试能重新锁存首次达成。
         for buf in (self._s1_onset, self._s2_onset, self._s1_dev_early, self._s2_dev_early,
                     self._s1_dev_late, self._s2_dev_late,
                     self._s1_criterion_first, self._s2_criterion_first):
             buf.copy_(torch.where(retry_mask, nan, buf))
+        self._s1_cycle_latched &= ~retry_mask
+        self._s2_cycle_latched &= ~retry_mask
         # 重试会清候选锁存: 否则重播后候选仍成立时不会产生新的上升沿, 脉冲起点会丢失。
         self._last_s1_gated_ok = gated_ok1 & ~retry_mask
         self._last_s2_gated_ok = gated_ok2 & ~retry_mask
@@ -580,16 +626,19 @@ class BackupCommand(CommandTerm):
         env.sim.reset(ids)
         # 2) 实体与传感器: contact_sensor.reset 会零掉 air-time 历史并把 last_time 重设到新的
         #    仿真时间, 正好修掉 sim.reset 把仿真时间归零带来的时间基跳变。
-        env.scene.reset(ids)
+        #    兼容测试替身: scene 可能是 dict (取不到 reset) 或带 reset 的对象。
+        scene_reset = getattr(env.scene, "reset", None)
+        if scene_reset is not None:
+            scene_reset(ids)
         # 3) 写仰卧初态 (与回合重置同一份代码)
         apply_fallen_state(env, ids)
         # 4) 清策略侧短期记忆: last_action 的历史环形缓冲与 prev/prev_prev_action。
         env.observation_manager.reset(ids)
         env.action_manager.reset(ids)
         # 5) 清循环状态: 重采 λ、phase=0、t_phase=0、确认计时、里程碑锁存、脉冲起点、站立窗口。
+        #    also_episode=False —— "本回合循环数"要跨循环累计, 只有完整回合重置才清。
         self._resample_command(ids)
-        self._stand_elapsed[ids] = 0.0
-        self._stand_vel_integral[ids] = 0.0
+        self._clear_cycle_state(ids, also_episode=False)
         # 6) 刷新派生量 —— 写 qpos/qvel 之后必须 forward 才能让 site/body 位置与新状态一致
         #    (entity/data.py 明确要求"写后读前先 forward")。
         env.sim.forward()
@@ -648,6 +697,18 @@ class BackupCommand(CommandTerm):
         log["Data/s2_first_s"] = _mean_valid(self._s2_criterion_first)
         log["Progress/s1_dev_s"] = _mean_valid(self._s1_dev_early)
         log["Progress/s2_dev_s"] = _mean_valid(self._s2_dev_early)
+        # 循环统计。顺序很重要: 先记"本步完成的占比", 再把本步完成计入"本回合循环数";
+        # 清零在下面的回合重置分支里做, 这样刚结束的回合读数不会被抹掉。
+        log["Cycle/completed"] = self._last_cycle_reset.float().mean().item()
+        self._cycles_this_episode += self._last_cycle_reset.long()
+        log["Cycle/per_episode"] = self._cycles_this_episode.float().mean().item()
+        # 完整回合重置(超时): 清"本回合循环数"。注意 metrics 在 _reset_idx 之前被调用,
+        # 所以刚结束回合的读数已经记完, 这里清不会丢数。单测 mock 可能没有 reset_buf。
+        reset_buf = getattr(self._env, "reset_buf", None)
+        if reset_buf is not None:
+            reset_env_ids = reset_buf.nonzero(as_tuple=False).squeeze(-1)
+            if len(reset_env_ids) > 0:
+                self._cycles_this_episode[reset_env_ids] = 0
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
         log["Phase/p3"] = (self.phase == 2).float().mean().item()
         log["Phase/retry"] = self.retry.float().mean().item()

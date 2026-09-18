@@ -235,8 +235,8 @@ class JointDataRecorder:
             's1_confirm_elapsed': '_s1_confirm_elapsed', 's2_confirm_elapsed': '_s2_confirm_elapsed',
         }.items():
             record[name] = float(getattr(term, attr)[env_idx].item())
-        # 站立计时在终止检测时更新；auto-reset 后已清零，终止事件另见 done。
-        record['stand_confirm_elapsed'] = float(unwrapped._stand_elapsed[env_idx].item())
+        # 站立窗口现在归 BackupCommand 所有 (env._stand_* 已废弃, 不再是真实来源)。
+        record['stand_confirm_elapsed'] = float(term._stand_elapsed[env_idx].item())
 
         if rewards is not None:
             record['reward'] = float(rewards[0].item()) if torch.is_tensor(rewards) else float(rewards[0])

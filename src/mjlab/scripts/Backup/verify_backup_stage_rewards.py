@@ -48,6 +48,31 @@ def make_env(phases):
     # 未加掩码的真实首次到达时刻 (里程碑时间质量核的输入)
     cmd._s1_criterion_first = torch.full((n,), float('nan'))
     cmd._s2_criterion_first = torch.full((n,), float('nan'))
+    # 每循环一次的首次达成锁存 + 本回合循环数
+    cmd._s1_cycle_latched = torch.zeros(n, dtype=torch.bool)
+    cmd._s2_cycle_latched = torch.zeros(n, dtype=torch.bool)
+    cmd._cycles_this_episode = torch.zeros(n, dtype=torch.long)
+    # _resample_command 会写这些诊断锁存
+    cmd._last_s1_ok = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s2_ok = torch.zeros(n, dtype=torch.bool)
+    cmd._last_advance1 = torch.zeros(n, dtype=torch.bool)
+    cmd._last_advance2 = torch.zeros(n, dtype=torch.bool)
+    cmd._last_retry_mask = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s1_milestone = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s2_milestone = torch.zeros(n, dtype=torch.bool)
+    cmd._last_back_to_p1 = torch.zeros(n, dtype=torch.bool)
+    cmd._last_back_to_p2 = torch.zeros(n, dtype=torch.bool)
+    cmd._last_both_inverted = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s1_confirmed = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s2_confirmed = torch.zeros(n, dtype=torch.bool)
+    cmd._last_inverted_confirmed = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s1_gated_ok = torch.zeros(n, dtype=torch.bool)
+    cmd._last_s2_gated_ok = torch.zeros(n, dtype=torch.bool)
+    cmd._inverted_confirm_elapsed = torch.zeros(n)
+    cmd._s1_confirm_elapsed = torch.zeros(n)
+    cmd._s2_confirm_elapsed = torch.zeros(n)
+    cmd._s1_awarded = torch.zeros(n, dtype=torch.bool)
+    cmd._s2_awarded = torch.zeros(n, dtype=torch.bool)
     cmd.test_u = torch.ones(n, 2)
     cmd.test_heights = torch.full((n, 2), .055)
     cmd.test_vel = torch.zeros(n)
@@ -60,8 +85,27 @@ def make_env(phases):
     env.sim = NS(reset=lambda ids: env.reset_calls['sim'].append(list(ids)),
                  forward=lambda: None)
     robot = NS(write_root_state_to_sim=lambda *a, **kw: None,
-               write_joint_state_to_sim=lambda *a, **kw: None, num_joints=36)
-    env.scene = NS(reset=lambda ids: env.reset_calls['scene'].append(list(ids)), entities={'robot': robot})
+               write_joint_state_to_sim=lambda *a, **kw: None, num_joints=36,
+               # apply_fallen_state 会调 resolve_model_indices; 单测里 f_body_id 已被 setUp
+               # 预置成 0/1, 该函数会提前 return, 所以这里只需保证被调用时不抛异常。
+               find_bodies=lambda *a, **kw: ([], []),
+               find_sites=lambda *a, **kw: ([], []),
+               find_joints=lambda *a, **kw: ([], []))
+
+    # scene 替身: 既支持 env.scene["robot"] 也支持 env.scene.reset(ids)/.entities,
+    # 因为生产代码两条路径都会走 (apply_fallen_state 用 entities, 复位用 reset)。
+    class _FakeScene(dict):
+        def __init__(self, mapping, on_reset):
+            super().__init__(mapping)
+            self.entities = mapping
+            self._on_reset = on_reset
+
+        def reset(self, ids):
+            self._on_reset(ids)
+
+    env.scene = _FakeScene({'robot': robot},
+                           lambda ids: env.reset_calls['scene'].append(list(ids)))
+    env.make_robot = robot          # 供个别测试替换 data 时保留其余接口
     env.observation_manager = NS(reset=lambda ids: env.reset_calls['obs'].append(list(ids)))
     env.action_manager = NS(reset=lambda ids: env.reset_calls['act'].append(list(ids)))
     return env, cmd
@@ -217,23 +261,26 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = torch.tensor([-1., 1.])
         self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)
 
-    def test_reset_clears_only_selected_stand_timer(self):
-        env, _ = make_env([2, 2])
-        env._stand_elapsed = torch.tensor([.4, .3])
-        env._stand_vel_integral = torch.tensor([1.2, .9])
-        robot = NS(num_joints=36, write_root_state_to_sim=lambda *a, **kw: None,
-                   write_joint_state_to_sim=lambda *a, **kw: None)
-        env.scene = NS(entities={'robot': robot})
-        with patch.object(events, 'resolve_model_indices'):
+    def test_reset_model_writes_fallen_state_only(self):
+        # reset_model 现在只写仰卧初态; 站立窗口/循环状态的归属地已迁到 BackupCommand,
+        # 由 command_manager.reset → _resample_command → _clear_cycle_state 清理。
+        # 这里同时断言它**不再**去碰 env._stand_* (旧字段已废弃, 碰了会让人误以为清干净了)。
+        env, cmd = make_env([2, 2])
+        called = {}
+        with patch.object(events, 'resolve_model_indices'), \
+             patch.object(events, 'apply_fallen_state',
+                          lambda e, ids: called.setdefault('ids', list(ids))):
             events.reset_model(env, torch.tensor([0]))
-            torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., .3]))
-            torch.testing.assert_close(env._stand_vel_integral, torch.tensor([0., .9]))
-            # 计时器尚未被 termination 创建过时也要能建立并清零, 不能静默跳过
-            del env._stand_elapsed
-            del env._stand_vel_integral
-            events.reset_model(env, torch.tensor([1]))
-            torch.testing.assert_close(env._stand_elapsed, torch.tensor([0., 0.]))
-            torch.testing.assert_close(env._stand_vel_integral, torch.tensor([0., 0.]))
+            self.assertEqual(called['ids'], [0])
+            events.reset_model(env, torch.tensor([]))          # 空集合必须安全返回
+            self.assertEqual(called['ids'], [0])
+        self.assertFalse(hasattr(env, '_stand_elapsed'))       # 不再创建旧字段
+        # 循环状态的清理入口是 _clear_cycle_state(also_episode=True)
+        cmd._stand_elapsed[1] = .4
+        cmd._cycles_this_episode[1] = 5
+        cmd._clear_cycle_state(torch.tensor([0]), also_episode=True)
+        torch.testing.assert_close(cmd._stand_elapsed, torch.tensor([0., .4]))
+        torch.testing.assert_close(cmd._cycles_this_episode, torch.tensor([0, 5]))
 
     def test_p2_boundary_and_p3_is_continuous(self):
         env, cmd = make_env([1, 1, 1, 2])
@@ -658,6 +705,54 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(cmd.s1_dev_early.item(), .80 * 3. - .80 * 3., places=5)
         del onset, lam
 
+    def test_first_arrival_is_latched_once_per_attempt(self):
+        # [P1 绕过路径 1] 提前达成 -> 短暂跨出判据 -> 重新进入, 不得把首次到达记录覆盖成
+        # 临近段末的时刻。旧实现每次上升沿都覆盖 _s1_criterion_first, 于是核从 0.019 跳到 0.993。
+        env, cmd = make_env([0])
+        env.step_dt = .01
+        cmd.test_heights[:] = .024
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        cmd._update_command()                              # 首步即达成 -> 记录在 0.01
+        self.assertAlmostEqual(cmd._s1_criterion_first.item(), .01, places=4)
+        # 短暂跨出判据, 再于 2.30s 重新进入
+        cmd.test_u[:] = torch.tensor([1., 1.])             # 不再是 S1 候选
+        cmd.t_phase[:] = 2.20
+        cmd._update_command()
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        cmd.t_phase[:] = 2.30
+        cmd._update_command()
+        # 记录必须仍是 0.01, 不得被覆盖成 2.30
+        self.assertAlmostEqual(cmd._s1_criterion_first.item(), .01, places=4)
+        q = _milestone_time_quality(cmd.s1_dev_early, cmd.s1_dev_late, cmd.time_scale_command)
+        self.assertLess(q.item(), .05)                     # 而不是 0.99
+
+    def test_retry_reopens_first_arrival_latch(self):
+        # [P1 绕过路径 2] 重试后必须能重新锁存首次达成, 否则记录一直是 NaN,
+        # 而旧实现把 NaN 当零偏差 -> 满分。现在 NaN 一律给 0(见 quality kernel),
+        # 且重试会清 latch, 使"候选跨重试持续成立"也能重新记录。
+        env, cmd = make_env([0])
+        env.step_dt = .01
+        cmd.test_heights[:] = .024
+        cmd.test_u[:] = torch.tensor([-1., 1.])            # 候选持续成立, 跨重试不清零
+        cmd.t_phase[:] = .80 * 3. + .50                    # 正好到 P1 窗界
+        cmd._update_command()                              # 这一步触发重试(未确认)
+        self.assertEqual(cmd.retry.item(), 1)
+        self.assertTrue(torch.isnan(cmd._s1_criterion_first).item())
+        cmd._update_command()                              # 重试后重新锁存
+        self.assertFalse(torch.isnan(cmd._s1_criterion_first).item())
+
+    def test_nan_arrival_record_never_pays_full_milestone(self):
+        # 记录缺失时不得静默按零偏差发满额: 脉冲为真但 dev 为 NaN -> 核必须为 0。
+        env, cmd = make_env([0])
+        env.step_dt = .01
+        nan = torch.tensor([float('nan')])
+        q = _milestone_time_quality(nan, nan, torch.tensor([3.]))
+        self.assertEqual(q.item(), 0.)
+        cmd._last_s1_milestone = torch.tensor([True])
+        cmd._s1_criterion_first = nan                      # 记录缺失
+        reward = rewards.compute_s1_milestone_reward(env).item()
+        self.assertEqual(reward, 0.)
+
     def test_segment_end_gate_holds_advance(self):
         # 推进门仍然必须等参考播完 —— 它保证参考连续, 与"早到是否受罚"是两件事。
         env, cmd = make_env([0])
@@ -756,6 +851,84 @@ class StageRewardTests(unittest.TestCase):
         # 且 forward 必须是最后一步
         self.assertEqual(order[-1], 'sim.forward')
         self.assertEqual(order[0], 'sim.reset')
+
+    def test_full_episode_reset_clears_cycle_state(self):
+        # [P2] 完整回合重置也必须清循环级状态: 旧实现只动 env._stand_*, 且 _resample_command
+        # 不清 _pending_cycle_reset -> 成功与超时同帧时, 重置后仍会多执行一次部分复位,
+        # 并把新回合误记为发生了循环完成。
+        env, cmd = make_env([2])
+        cmd._stand_elapsed[0] = 1.5
+        cmd._stand_vel_integral[0] = .4
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()
+        self.assertTrue(cmd._pending_cycle_reset[0].item())
+        cmd._cycles_this_episode[0] = 3
+        # 完整回合重置走 command_manager.reset → CommandTerm.reset → _resample_command
+        with patch('mjlab.managers.command_manager.CommandTerm.reset', lambda self, ids: {}):
+            cmd.reset(torch.tensor([0]))
+        self.assertFalse(cmd._pending_cycle_reset.any())
+        self.assertFalse(cmd._last_cycle_reset.any())
+        self.assertFalse(cmd._last_cycle_end_pulse.any())
+        self.assertEqual(cmd._stand_elapsed.item(), 0.)
+        self.assertEqual(cmd._stand_vel_integral.item(), 0.)
+        self.assertEqual(cmd._cycles_this_episode.item(), 0)      # 回合级计数归零
+
+    def test_cycle_reset_keeps_episode_cycle_counter(self):
+        # 循环复位**不能**清"本回合循环数", 否则 Cycle/per_episode 永远为 0。
+        env, cmd = make_env([2])
+        cmd._stand_elapsed[0] = 1.5
+        cmd._stand_vel_integral[0] = 0.
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()
+        cmd._cycles_this_episode[0] = 2
+        self.assertEqual(cmd._cycles_this_episode.item(), 2)
+        cmd._update_command()                                      # 循环复位
+        self.assertEqual(cmd.phase.item(), 0)                      # 确实复位了
+        self.assertEqual(cmd._cycles_this_episode.item(), 2)       # 但计数保留
+        self.assertEqual(cmd._stand_elapsed.item(), 0.)
+
+    def test_lifecycle_boundaries_are_distinct(self):
+        # 两个入口的状态生命周期必须可区分: 重试(清 latch, 保留循环数) /
+        # 循环复位(清 latch 与窗口, 保留循环数) / 回合重置(全清)。
+        _, cmd = make_env([0])
+        cmd._s1_cycle_latched[0] = True
+        cmd._cycles_this_episode[0] = 4
+        # 重试路径: 只清 latch
+        cmd._clear_cycle_state(torch.tensor([0]), also_episode=False)
+        cmd._s1_cycle_latched[0] = True                            # 复原后再验 also_episode
+        cmd._cycles_this_episode[0] = 4
+        cmd._clear_cycle_state(torch.tensor([0]), also_episode=True)
+        self.assertEqual(cmd._cycles_this_episode.item(), 0)
+        self.assertFalse(cmd._s1_cycle_latched.item())
+
+    def test_joint_track_cost_is_order_invariant(self):
+        # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,
+        # 而权重也按 actions 顺序构造 -> 名称反序时代价从 0 变成 0.239。
+        import torch as _t
+        from mjlab.tasks.SQuRo_Backup.mdp import rewards as R
+        n = 2
+        ref = _t.zeros(n, 14)
+        env, cmd = make_env([0, 0])
+        env.step_dt = .01
+        saved = _MODEL_INDICES.joint_ids
+        _MODEL_INDICES.joint_ids = tuple(range(14))
+        try:
+            # 只替换 data, 保留 write_*/find_*/num_joints —— 否则会破坏后续测试(它们是同一个 env)
+            env.make_robot.data = NS(joint_pos=ref.clone())
+            env.scene['robot'] = env.make_robot
+            with patch.object(R, 'get_reference_joint_state', return_value=(ref.clone(), ref.clone())):
+                cost = R.compute_joint_track_cost(env)
+        finally:
+            _MODEL_INDICES.joint_ids = saved
+        # 完全等于参考 -> 代价必须是 0, 与动作项列序无关
+        torch.testing.assert_close(cost, _t.zeros(n))
+        # 权重向量按参考表顺序构造: 脊柱位为 1.57、颈位为 0.3、其余 1.0
+        w = R._joint_group_weights(_t.device('cpu'), _t.float32)
+        self.assertAlmostEqual(w[0].item(), R.TRACK_W_SPN, places=6)    # F_spine1
+        self.assertAlmostEqual(w[1].item(), R.TRACK_W_SPN, places=6)    # F_body
+        self.assertAlmostEqual(w[2].item(), R.TRACK_W_NECK, places=6)   # Neck_yaw
+        self.assertAlmostEqual(w[4].item(), R.TRACK_W_LEG, places=6)    # FL_shoulder
+        self.assertAlmostEqual(w[8].item(), R.TRACK_W_SPN, places=6)    # H_spine1
 
 
 if __name__ == '__main__':

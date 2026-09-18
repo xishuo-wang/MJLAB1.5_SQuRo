@@ -88,7 +88,7 @@ def main() -> None:
 
     print("\n=== 4) S1/S2 确认与达成窗参数 ===")
     c = cfg.commands["backup_cmd"]
-    for k in ("window_late_s", "early_lead_fraction", "pose_confirm_s", "inverted_confirm_s",
+    for k in ("window_late_s", "pose_confirm_s", "inverted_confirm_s",
               "pose_angle_tolerance_deg"):
         print(f"  {k:26s} = {getattr(c, k)}")
 

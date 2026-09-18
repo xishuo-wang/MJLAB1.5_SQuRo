@@ -95,7 +95,6 @@ class StateMachinePolicy:
         self.max_retry = max_retry
         command_cfg: BackupCommandCfg = env.unwrapped.cfg.commands["backup_cmd"]  # type: ignore[assignment]
         self.window_late_s = float(getattr(command_cfg, "window_late_s", 0.50))
-        self.early_lead_fraction = float(getattr(command_cfg, "early_lead_fraction", 0.20))
         self.pose_confirm_s = float(getattr(command_cfg, "pose_confirm_s", 0.10))
         self.inverted_confirm_s = float(getattr(command_cfg, "inverted_confirm_s", 0.15))
         env_scale = float(env.unwrapped.cfg.actions["joint_pos"].scale)  # type: ignore[union-attr]
@@ -195,8 +194,11 @@ class StateMachinePolicy:
             self._milestones = {"S1": False, "S2": False}
             self._clear_confirmation()
             self._log("环境回合重置 -> 同步回 P1，清除连续确认与里程碑记录")
-            termination = getattr(env, "termination_manager", None)
-            if steps > 0 and termination is not None and bool(termination.get_term("stand")[0]):
+            # stand 终止项已移除; 成功现在是"循环完成"事件, 读 command 的完成脉冲。
+            # 注意: 循环完成会触发部分复位(不回零 episode_length_buf), 所以这里的
+            # 回合重置分支只处理 10s 超时; 循环完成在 _advance_state 里结束回放。
+            cmd_term = env.command_manager.get_term("backup_cmd")
+            if steps > 0 and bool(cmd_term.cycle_completed_pulse[0]):
                 self.phase = "DONE"
                 self._log("训练环境确认稳定站起 -> 回放结束")
         elif steps > 0 and episode_step > 0 and self.phase != "DONE":
@@ -220,7 +222,7 @@ class StateMachinePolicy:
         if self.phase == "P1":
             expected = T_SEG2_END * self.lam
             close_t = expected + self.window_late_s
-            gate_t = max(0.0, expected - self.early_lead_fraction * self.lam)
+            gate_t = 0.0                       # 早侧地板已删除: 可接受区间 = [段末, 段末+余量]
             # 与训练同步的段末门控 + 早侧门控 + 晚侧窗界: 本段参考播完之前不推进(否则参考瞬移);
             # 门控开启前起算的确认不计; 过窗仍未确认则本次尝试作废(重播本段参考)。
             if gate_t <= self.t_phase <= close_t and s1_confirmed and self.t_phase >= expected:
@@ -239,7 +241,7 @@ class StateMachinePolicy:
         elif self.phase == "P2":
             expected = T3 * self.lam
             close_t = expected + self.window_late_s
-            gate_t = max(0.0, expected - self.early_lead_fraction * self.lam)
+            gate_t = 0.0                       # 早侧地板已删除: 可接受区间 = [段末, 段末+余量]
             # P2 同样要等本段参考播完(名义 T3 时长)才推进, 并与训练侧共用同一门控与窗界。
             if inverted_confirmed:
                 self.phase = "P1"; self.t_phase = 0.0
@@ -271,9 +273,10 @@ class StateMachinePolicy:
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
                 self._log("P3 检测到 S1 (连续确认后) -> 回到 P2")
-            # 成功判定与训练同源: 直接读训练环境的 stand 终止项(理由见技术细节 §7.2.1)。
-            termination = getattr(self.env.unwrapped, "termination_manager", None)
-            if self.phase == "P3" and termination is not None and bool(termination.get_term("stand")[0]):
+            # 成功判定与训练同源: 读训练的 BackupCommand 站立窗口 (stand 终止项已移除,
+            # termination_manager 里不再有 "stand", 旧写法会 KeyError)。
+            cmd_term = self.env.unwrapped.command_manager.get_term("backup_cmd")
+            if self.phase == "P3" and bool(cmd_term.cycle_completed_pulse[0]):
                 # 从确认成立的时刻回推确认时长, 即"开始站稳"的时刻。
                 self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
                 self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
@@ -369,8 +372,7 @@ class VisConfig:
     """slow1 时间缩放 (λ)。"""
     max_retry: int = 0
     """每阶段最大重试次数；0 表示不限次数，与训练一致。"""
-    # 达成时刻门控与晚侧窗界；None 时使用环境配置。
-    early_lead_fraction: float | None = None
+    # 晚侧余量；None 时使用环境配置。
     window_late_s: float | None = None
     visualize: Literal["none", "viewer", "video"] = "viewer"
     num_envs: int = 1
@@ -384,8 +386,6 @@ class VisConfig:
 # 命令行门控/窗界同时写入环境命令配置，保证训练与回放两套状态机使用同一组常量。
 def _configure_command(command_cfg: BackupCommandCfg, args: VisConfig) -> None:
     command_cfg.fixed_time_scale = args.time_scale
-    if args.early_lead_fraction is not None:
-        command_cfg.early_lead_fraction = args.early_lead_fraction
     if args.window_late_s is not None:
         command_cfg.window_late_s = args.window_late_s
 
