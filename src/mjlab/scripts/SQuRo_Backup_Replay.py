@@ -194,19 +194,19 @@ class StateMachinePolicy:
             self._milestones = {"S1": False, "S2": False}
             self._clear_confirmation()
             self._log("环境回合重置 -> 同步回 P1，清除连续确认与里程碑记录")
-            # stand 终止项已移除; 成功现在是"循环完成"事件, 读 command 的完成脉冲。
-            # 注意: 循环完成会触发部分复位(不回零 episode_length_buf), 所以这里的
-            # 回合重置分支只处理 10s 超时; 循环完成在 _advance_state 里结束回放。
-            cmd_term = env.command_manager.get_term("backup_cmd")
-            if steps > 0 and bool(cmd_term.cycle_completed_pulse[0]):
-                self.phase = "DONE"
-                self._log("训练环境确认稳定站起 -> 回放结束")
         elif steps > 0 and episode_step > 0 and self.phase != "DONE":
             if steps > 1:
                 # 未观测到中间姿态时，不能假设候选在漏采样期间连续成立。
                 self._clear_confirmation()
                 self.t_phase += (steps - 1) * self.env.step_dt
             self._advance_state(self.env.step_dt)
+            # 循环完成由训练环境的 command 维护: 完成帧 done=False(非终止), 所以必须
+            # 在这里检查, 而不是在"回合重置"分支里 —— 后者只在 10s 超时才会走到。
+            cmd_term = self.env.unwrapped.command_manager.get_term("backup_cmd")
+            if self.phase != "DONE" and bool(cmd_term.cycle_completed_pulse[0]):
+                self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
+                self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
+                self.phase = "DONE"
         self._last_sim_step = step
         self._last_episode_step = episode_step
         self._elapsed = step * self.env.step_dt
@@ -222,10 +222,9 @@ class StateMachinePolicy:
         if self.phase == "P1":
             expected = T_SEG2_END * self.lam
             close_t = expected + self.window_late_s
-            gate_t = 0.0                       # 早侧地板已删除: 可接受区间 = [段末, 段末+余量]
-            # 与训练同步的段末门控 + 早侧门控 + 晚侧窗界: 本段参考播完之前不推进(否则参考瞬移);
-            # 门控开启前起算的确认不计; 过窗仍未确认则本次尝试作废(重播本段参考)。
-            if gate_t <= self.t_phase <= close_t and s1_confirmed and self.t_phase >= expected:
+            # 与训练同步: 可接受区间 = [段末, 段末+晚侧余量]。段末门控防参考瞬移;
+            # 过窗仍未确认则本次尝试作废(重播本段参考)。
+            if self.t_phase <= close_t and s1_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P2"; self.t_phase = 0.0
                 self._clear_confirmation()
@@ -241,13 +240,11 @@ class StateMachinePolicy:
         elif self.phase == "P2":
             expected = T3 * self.lam
             close_t = expected + self.window_late_s
-            gate_t = 0.0                       # 早侧地板已删除: 可接受区间 = [段末, 段末+余量]
-            # P2 同样要等本段参考播完(名义 T3 时长)才推进, 并与训练侧共用同一门控与窗界。
+            # P2 同样要等本段参考播完(名义 T3 时长)才推进, 与训练侧共用同一区间。
+            # 训练侧已单向推进, 所以这里不再有"双倒回退"分支; 只登记诊断。
             if inverted_confirmed:
-                self.phase = "P1"; self.t_phase = 0.0
-                self._clear_confirmation()
-                self._log("P2 检测到双倒 (连续确认后) -> 回到 P1")
-            elif gate_t <= self.t_phase <= close_t and s2_confirmed and self.t_phase >= expected:
+                self._log("P2 内出现双倒 (诊断, 训练侧不再回退)")
+            elif self.t_phase <= close_t and s2_confirmed and self.t_phase >= expected:
                 t_used = self.t_phase
                 self.phase = "P3"; self.t_phase = 0.0
                 self._clear_confirmation()
@@ -264,23 +261,13 @@ class StateMachinePolicy:
                 if self.max_retry > 0 and self.retry["P2"] >= self.max_retry:
                     self._log("P2 重试超限, 放弃"); self.phase = "DONE"
         elif self.phase == "P3":
-            # P3 既接受双倒回退，也接受 S1 回到 P2；两者均须连续确认。
+            # 训练侧已改为单向推进(P1->P2->P3 不可回退), 手调侧必须同步, 否则
+            # "两套状态机同源"不成立、对拍脚本也失去意义。这里只登记诊断, 不回退。
             if inverted_confirmed:
-                self.phase = "P1"; self.t_phase = 0.0
-                self._clear_confirmation()
-                self._log("P3 检测到双倒 (连续确认后) -> 回到 P1")
+                self._log("P3 内出现双倒 (诊断, 训练侧不再回退)")
             elif s1_confirmed:
-                self.phase = "P2"; self.t_phase = 0.0
-                self._clear_confirmation()
-                self._log("P3 检测到 S1 (连续确认后) -> 回到 P2")
-            # 成功判定与训练同源: 读训练的 BackupCommand 站立窗口 (stand 终止项已移除,
-            # termination_manager 里不再有 "stand", 旧写法会 KeyError)。
-            cmd_term = self.env.unwrapped.command_manager.get_term("backup_cmd")
-            if self.phase == "P3" and bool(cmd_term.cycle_completed_pulse[0]):
-                # 从确认成立的时刻回推确认时长, 即"开始站稳"的时刻。
-                self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
-                self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
-                self.phase = "DONE"
+                self._log("P3 内回到 S1 姿态 (诊断, 训练侧不再回退)")
+            # 循环完成由 _sync_state 统一处理(含结束回放)。
 
 
     def __call__(self, obs: Any) -> torch.Tensor:

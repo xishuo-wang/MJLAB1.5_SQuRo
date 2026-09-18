@@ -52,6 +52,10 @@ def make_env(phases):
     cmd._s1_cycle_latched = torch.zeros(n, dtype=torch.bool)
     cmd._s2_cycle_latched = torch.zeros(n, dtype=torch.bool)
     cmd._cycles_this_episode = torch.zeros(n, dtype=torch.long)
+    cmd._pending_episode_reset = torch.zeros(n, dtype=torch.bool)
+    cmd._s1_onset = torch.full((n,), float('nan'))
+    cmd._s2_onset = torch.full((n,), float('nan'))
+    env.reset_buf = torch.zeros(n, dtype=torch.bool)
     # _resample_command 会写这些诊断锁存
     cmd._last_s1_ok = torch.zeros(n, dtype=torch.bool)
     cmd._last_s2_ok = torch.zeros(n, dtype=torch.bool)
@@ -275,10 +279,10 @@ class StageRewardTests(unittest.TestCase):
             events.reset_model(env, torch.tensor([]))          # 空集合必须安全返回
             self.assertEqual(called['ids'], [0])
         self.assertFalse(hasattr(env, '_stand_elapsed'))       # 不再创建旧字段
-        # 循环状态的清理入口是 _clear_cycle_state(also_episode=True)
+        # 循环状态的清理入口是 _clear_cycle_state
         cmd._stand_elapsed[1] = .4
         cmd._cycles_this_episode[1] = 5
-        cmd._clear_cycle_state(torch.tensor([0]), also_episode=True)
+        cmd._clear_cycle_state(torch.tensor([0]))
         torch.testing.assert_close(cmd._stand_elapsed, torch.tensor([0., .4]))
         torch.testing.assert_close(cmd._cycles_this_episode, torch.tensor([0, 5]))
 
@@ -370,8 +374,8 @@ class StageRewardTests(unittest.TestCase):
         # 脉冲起点记录的是"门控内候选的上升沿", 与名义段末之差以实际秒计 (早到为负);
         # 阶段时钟在每步开头先加一个 dt, 故起点落在 1.81。
         self.assertAlmostEqual(cmd._s1_onset.item(), 1.81, places=5)
-        self.assertAlmostEqual(cmd._s1_dev_early.item(), 1.81 - .80 * 3., places=5)
-        self.assertAlmostEqual(cmd._s1_dev_late.item(), 1.81 - .80 * 3., places=5)
+        self.assertAlmostEqual(cmd.s1_dev_early.item(), 1.81 - .80 * 3., places=5)
+        self.assertAlmostEqual(cmd.s1_dev_late.item(), 1.81 - .80 * 3., places=5)
         cmd.t_phase[:] = .80 * cmd.time_scale_command
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
@@ -853,53 +857,111 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(order[0], 'sim.reset')
 
     def test_full_episode_reset_clears_cycle_state(self):
-        # [P2] 完整回合重置也必须清循环级状态: 旧实现只动 env._stand_*, 且 _resample_command
-        # 不清 _pending_cycle_reset -> 成功与超时同帧时, 重置后仍会多执行一次部分复位,
-        # 并把新回合误记为发生了循环完成。
+        # [P2] 完整回合重置必须清循环级状态: 旧实现只动 env._stand_*, 且 _resample_command
+        # 不清 _pending_cycle_reset -> 成功与超时同帧时, 重置后仍会多执行一次部分复位。
         env, cmd = make_env([2])
         cmd._stand_elapsed[0] = 1.5
         cmd._stand_vel_integral[0] = .4
         cmd._update_dt = 0.
         cmd.stand_reward_and_pulse()
         self.assertTrue(cmd._pending_cycle_reset[0].item())
-        cmd._cycles_this_episode[0] = 3
-        # 完整回合重置走 command_manager.reset → CommandTerm.reset → _resample_command
-        with patch('mjlab.managers.command_manager.CommandTerm.reset', lambda self, ids: {}):
-            cmd.reset(torch.tensor([0]))
+        env.reset_buf = torch.tensor([True])
+        cmd._update_metrics()                                      # 快照回合重置掩码
+        self.assertTrue(cmd._pending_episode_reset[0].item())
+        cmd._update_command()
         self.assertFalse(cmd._pending_cycle_reset.any())
-        self.assertFalse(cmd._last_cycle_reset.any())
         self.assertFalse(cmd._last_cycle_end_pulse.any())
         self.assertEqual(cmd._stand_elapsed.item(), 0.)
         self.assertEqual(cmd._stand_vel_integral.item(), 0.)
-        self.assertEqual(cmd._cycles_this_episode.item(), 0)      # 回合级计数归零
+        self.assertEqual(cmd._cycles_this_episode.item(), 0)      # 上报之后才归零
 
-    def test_cycle_reset_keeps_episode_cycle_counter(self):
-        # 循环复位**不能**清"本回合循环数", 否则 Cycle/per_episode 永远为 0。
+    def test_completion_event_survives_until_consumed(self):
+        # [P1 回归] _apply_cycle_reset 不得把"本步完成事件"清掉 —— 旧实现写完立刻被
+        # _clear_cycle_state 清成 False, 导致 Cycle/* 恒为 0、回放判不出 DONE。
         env, cmd = make_env([2])
         cmd._stand_elapsed[0] = 1.5
         cmd._stand_vel_integral[0] = 0.
         cmd._update_dt = 0.
         cmd.stand_reward_and_pulse()
-        cmd._cycles_this_episode[0] = 2
-        self.assertEqual(cmd._cycles_this_episode.item(), 2)
-        cmd._update_command()                                      # 循环复位
+        cmd._update_command()                                      # 执行循环复位
         self.assertEqual(cmd.phase.item(), 0)                      # 确实复位了
-        self.assertEqual(cmd._cycles_this_episode.item(), 2)       # 但计数保留
-        self.assertEqual(cmd._stand_elapsed.item(), 0.)
+        self.assertTrue(cmd.cycle_completed_pulse[0].item())       # 但完成事件仍在
+        # 消费者读过之后才被清
+        log = {}
+        cmd._env.extras['log'] = log
+        cmd._update_metrics()
+        self.assertEqual(log['Cycle/completed'], 1.0)
+        self.assertEqual(log['Cycle/per_episode'], 1.0)            # 一次成功 -> 计数 0→1
+        self.assertFalse(cmd.cycle_completed_pulse.any())          # 已消费
+
+    def test_one_completion_increments_counter_exactly_once(self):
+        # 每个循环恰好计一次: 完成事件被消费后不得再计。
+        env, cmd = make_env([2])
+        log = {}
+        env.extras['log'] = log
+        cmd._stand_elapsed[0] = 1.5
+        cmd._stand_vel_integral[0] = 0.
+        cmd._update_dt = 0.
+        cmd.stand_reward_and_pulse()
+        cmd._update_command()
+        cmd._update_metrics()
+        self.assertEqual(cmd._cycles_this_episode.item(), 1)
+        for _ in range(5):                                          # 无新完成 -> 不再增加
+            cmd._update_metrics()
+        self.assertEqual(cmd._cycles_this_episode.item(), 1)
+        self.assertEqual(log['Cycle/completed'], 0.0)
+
+    def test_timeout_reports_final_cycle_count_before_clearing(self):
+        # [P2] 超时回合: 框架顺序是 奖励 → 完整回合重置 → command.compute → _update_metrics,
+        # 所以计数必须在 metrics 里先上报、再归零 —— 否则超时回合读成 0。
+        env, cmd = make_env([2])
+        log = {}
+        env.extras['log'] = log
+        cmd._cycles_this_episode[0] = 3
+        env.reset_buf = torch.tensor([True])                       # 本步超时
+        cmd._update_metrics()
+        self.assertEqual(log['Cycle/per_episode'], 3.0)            # 上报的是最终次数
+        cmd._update_command()
+        self.assertEqual(cmd._cycles_this_episode.item(), 0)       # 之后才归零
+
+    def test_deviation_log_matches_reward_input(self):
+        # [P2] 日志与奖励核必须同源: 旧日志读的是会被后续候选覆盖的缓冲,
+        # 把"严重提前"显示成"接近准时"(实测 -2.39s 显示成 -0.09s)。
+        env, cmd = make_env([0])
+        env.step_dt = .01
+        log = {}
+        env.extras['log'] = log
+        cmd.test_heights[:] = .024
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        cmd._update_command()                                      # 首步即达成 -> 0.01
+        cmd.test_u[:] = torch.tensor([1., 1.])                     # 离开
+        cmd.t_phase[:] = 2.20
+        cmd._update_command()
+        cmd.test_u[:] = torch.tensor([-1., 1.])                    # 重新进入
+        cmd.t_phase[:] = 2.30
+        cmd._update_command()
+        cmd._update_metrics()
+        # 奖励核用的偏差
+        reward_dev = cmd.s1_dev_early.item()
+        self.assertAlmostEqual(reward_dev, .01 - .80 * 3., places=4)
+        # 日志必须给出同一个数, 不得显示成 -0.09
+        self.assertAlmostEqual(log['Progress/s1_dev_s'], reward_dev, places=4)
+        # 首次到达时刻也必须是 0.01
+        self.assertAlmostEqual(log['Data/s1_first_s'], .01, places=4)
 
     def test_lifecycle_boundaries_are_distinct(self):
-        # 两个入口的状态生命周期必须可区分: 重试(清 latch, 保留循环数) /
-        # 循环复位(清 latch 与窗口, 保留循环数) / 回合重置(全清)。
-        _, cmd = make_env([0])
+        # 三种边界的生命周期必须可区分:
+        # 重试(清 latch) / 循环复位(清 latch 与窗口, 保留完成事件与循环数) / 回合重置(全清)。
+        env, cmd = make_env([0])
         cmd._s1_cycle_latched[0] = True
-        cmd._cycles_this_episode[0] = 4
-        # 重试路径: 只清 latch
-        cmd._clear_cycle_state(torch.tensor([0]), also_episode=False)
-        cmd._s1_cycle_latched[0] = True                            # 复原后再验 also_episode
-        cmd._cycles_this_episode[0] = 4
-        cmd._clear_cycle_state(torch.tensor([0]), also_episode=True)
-        self.assertEqual(cmd._cycles_this_episode.item(), 0)
+        cmd._clear_cycle_state(torch.tensor([0]))
         self.assertFalse(cmd._s1_cycle_latched.item())
+        # 循环复位保留完成事件
+        cmd._last_cycle_reset[0] = True
+        cmd._cycles_this_episode[0] = 4
+        cmd._clear_cycle_state(torch.tensor([0]))
+        self.assertTrue(cmd._last_cycle_reset.item())
+        self.assertEqual(cmd._cycles_this_episode.item(), 4)
 
     def test_joint_track_cost_is_order_invariant(self):
         # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,
