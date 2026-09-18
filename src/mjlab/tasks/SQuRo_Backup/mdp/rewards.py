@@ -7,6 +7,7 @@ from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .timing import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S, STAND_STILL_FULL_SPEED
+from .timing import TRACK_REF_MSE_SCALE, TRACK_W_LEG, TRACK_W_NECK, TRACK_W_SPN
 
 if TYPE_CHECKING:
     from mjlab.envs.mdp.actions import JointPositionAction
@@ -176,6 +177,47 @@ def compute_action_ctrl_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor
     excess = (lo - target).clamp(min=0.0) + (target - hi).clamp(min=0.0)
     weight = get_curriculum_reward_weight(env, "weight_action_excess")
     return -weight * excess.mean(dim=1)
+
+
+
+# 加权二次关节跟踪代价 — 复用 mimic_pos 的分组与关节索引, 但用二次核。
+# 与 mimic_pos 的分工: 后者是"跟得准不准"的细粒度形状项, 前者负责在高误差区still有梯度,
+# 让"绕过参考表"持续付出与误差成比例的代价。分组权重只在这里生效, 不改 mimic_pos。
+_JOINT_W: torch.Tensor | None = None
+# 分组按名字判定, 不依赖 action 列序 (F_spine1/F_body 在 0-1, H_spine1/H_body 在 8-9)。
+_SPN_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (0, 1, 8, 9)}
+_NECK_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (2, 3)}
+
+
+def _joint_group_weights(action_term, n_joints: int, device, dtype) -> torch.Tensor:
+    # 按动作项自身的关节顺序构造权重向量 (同名对齐, 不假设列序)。
+    global _JOINT_W
+    if _JOINT_W is None or _JOINT_W.numel() != n_joints or _JOINT_W.device != device:
+        names = list(action_term.target_names)
+        w = torch.full((len(names),), TRACK_W_LEG, device=device, dtype=dtype)
+        for i, jname in enumerate(names):
+            if jname in _SPN_NAMES:
+                w[i] = TRACK_W_SPN
+            elif jname in _NECK_NAMES:
+                w[i] = TRACK_W_NECK
+        _JOINT_W = w
+    return _JOINT_W
+
+
+def compute_joint_track_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
+    joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
+    ref_pos, _ = get_reference_joint_state(env)
+    # 动作项按自身关节顺序排列, 参考表按固定顺序; 用名称重排后再算误差。
+    target_columns = tuple(action_term.target_names.index(_ACTUATED_JOINT_NAMES[i])
+                           for i in range(len(_ACTUATED_JOINT_NAMES)))
+    err = joint_pos[:, target_columns] - ref_pos
+    w = _joint_group_weights(action_term, err.shape[1], err.device, err.dtype)
+    cost = (w * err.square()).mean(dim=1) / TRACK_REF_MSE_SCALE
+    weight = get_curriculum_reward_weight(env, "weight_track_joint")
+    env.extras["log"]["Data/track_joint_cost"] = cost.mean().item()
+    return -weight * cost
 
 
 

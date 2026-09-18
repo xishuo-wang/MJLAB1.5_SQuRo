@@ -7,7 +7,7 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import EARLY_LEAD_FRACTION, P1_END, P2_DURATION, STAND_CONFIRM_DURATION
+from .timing import P1_END, P2_DURATION, STAND_CONFIRM_DURATION
 from .timing import STAND_VEL_MEAN_MAX, WINDOW_LATE_S
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
 from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
@@ -40,8 +40,8 @@ class BackupCommand(CommandTerm):
             value = getattr(cfg, name)
             if not isfinite(value) or value < 0:
                 raise ValueError(f"{name} 必须为有限的非负实际秒数")
-        if not isfinite(float(cfg.early_lead_fraction)) or not 0.0 <= float(cfg.early_lead_fraction) < 1.0:
-            raise ValueError("early_lead_fraction 必须在 [0, 1) 内")
+        if not isfinite(float(cfg.window_late_s)) or float(cfg.window_late_s) < 0.0:
+            raise ValueError("window_late_s 必须为有限的非负实际秒数")
         angle = float(cfg.pose_angle_tolerance_deg)
         if not isfinite(angle) or not 0.0 < angle < 90.0:
             raise ValueError("pose_angle_tolerance_deg 必须为有限的 0 到 90 度之间的角度")
@@ -146,23 +146,24 @@ class BackupCommand(CommandTerm):
     def s2_milestone_pulse(self) -> torch.Tensor:
         return self._last_s2_milestone
 
-    # 里程碑时间质量核的输入: 脉冲起点与名义段末之差(实际秒, 迟为正; NaN = 尚未达成)。
-    # 早侧 σ 要按 λ 折算, 所以调用方必须传 λ 本身 (time_scale), 不能传 expected(=T_nom·λ)。
+    # 里程碑时间质量核的输入: 真实首次到达时刻与名义段末之差(实际秒, 迟为正; NaN = 尚未达成)。
+    # 必须用 _s*_criterion_first(未加任何掩码), 不能用 _s*_onset —— 后者被"参考播完门"夹住,
+    # 恒等于段末, 会让核恒等于 1.0, 等于没有(实测确认过)。
     @property
     def s1_dev_early(self) -> torch.Tensor:
-        return self._s1_dev_early
+        return self._s1_criterion_first - _P1_EXPECT * self.time_scale_command
 
     @property
     def s2_dev_early(self) -> torch.Tensor:
-        return self._s2_dev_early
+        return self._s2_criterion_first - _P2_EXPECT * self.time_scale_command
 
     @property
     def s1_dev_late(self) -> torch.Tensor:
-        return self._s1_dev_late
+        return self._s1_criterion_first - _P1_EXPECT * self.time_scale_command
 
     @property
     def s2_dev_late(self) -> torch.Tensor:
-        return self._s2_dev_late
+        return self._s2_criterion_first - _P2_EXPECT * self.time_scale_command
 
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -480,14 +481,13 @@ class BackupCommand(CommandTerm):
         # 取消阶段回退的理由(策略会挑阶段套利、形成极限环)见技术细节 §2。
         # 早侧门控: 确认计时不得在 EARLY_FRACTION·λ 之前起算, 把"提前到达并保持"的
         # 脉冲起点下限抬起来; 晚侧窗界同时是重试截止。设计依据见技术细节 §7.2.6。
-        # 早侧门控按"距段末的提前量"计算, 不能按段长比例 —— 理由见 timing.EARLY_LEAD_FRACTION。
-        early_lead = float(self.cfg.early_lead_fraction) * lam
-        open1 = (expected1 - early_lead).clamp(min=0.0)
-        open2 = (expected2 - early_lead).clamp(min=0.0)
+        # 可接受区间 = [段末, 段末 + 晚侧余量]: 早侧地板已删除 —— 它被"参考播完门"完全吞噬
+        # (达成时刻恒为 max(真实到达时刻, 段末)), 0.60λ 的地板从未起过作用。
+        # 真正拦"提前到达并保持"的是里程碑时间质量核, 按"真实首次到达时刻"打折。
         close1 = expected1 + float(self.cfg.window_late_s)
         close2 = expected2 + float(self.cfg.window_late_s)
-        gated1 = p1 & (self.t_phase >= open1) & (self.t_phase <= close1)
-        gated2 = p2 & (self.t_phase >= open2) & (self.t_phase <= close2)
+        gated1 = p1 & (self.t_phase <= close1)
+        gated2 = p2 & (self.t_phase <= close2)
         # 门控外的候选不累积确认时长, 避免门控前起算的确认把阶段直接放行。
         self._s1_confirm_elapsed = torch.where(p1 & ~gated1, torch.zeros_like(self._s1_confirm_elapsed), self._s1_confirm_elapsed)
         self._s2_confirm_elapsed = torch.where(p2 & ~gated2, torch.zeros_like(self._s2_confirm_elapsed), self._s2_confirm_elapsed)
@@ -499,7 +499,7 @@ class BackupCommand(CommandTerm):
         advance2 = p2 & s2_confirmed & (self.t_phase >= expected2)
         retry1 = p1 & (self.t_phase > close1) & ~advance1
         retry2 = p2 & (self.t_phase > close2) & ~advance2
-        # 脉冲起点 = 门控内候选的上升沿; 门控开启当步若候选已成立, 起点即门控开启时刻。
+        # 脉冲起点用于诊断与相位推进, 取区间内候选的上升沿。
         gated_ok1 = gated1 & s1_ok
         gated_ok2 = gated2 & s2_ok
         onset1 = gated_ok1 & ~self._last_s1_gated_ok
@@ -665,12 +665,9 @@ class BackupCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (1000.0, 1000.0)   # 不重采样 (episode 内固定)
     debug_vis: bool = False
     fixed_time_scale: float | None = None
-    # 晚侧窗界（实际秒，加在名义段末之后），同时是重试截止；
-    # 早侧地板 = 名义段末 − early_lead_fraction·λ（距段末的提前量，不是段长比例）。
-    # 注意它与"参考播完门 t_phase ≥ 段末"是两件不同的事: 前者允许在段末之前就起算确认,
-    # 后者只管"何时允许切段"; 数值上前者更早, 因此 max(两者) 恒为段末。
+    # 晚侧余量（实际秒，加在名义段末之后），同时是重试截止。
+    # 可接受区间 = [段末, 段末 + window_late_s]；早侧地板已删除(被"参考播完门"吞噬)。
     window_late_s: float = WINDOW_LATE_S
-    early_lead_fraction: float = EARLY_LEAD_FRACTION
     # site 方向夹角容差与连续确认时长（均为实际秒，不乘 λ）。
     pose_angle_tolerance_deg: float = 45.0
     pose_confirm_s: float = 0.10

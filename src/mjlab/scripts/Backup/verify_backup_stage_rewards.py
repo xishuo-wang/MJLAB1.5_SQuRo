@@ -45,6 +45,9 @@ def make_env(phases):
     cmd._pending_cycle_reset = torch.zeros(n, dtype=torch.bool)
     cmd._last_cycle_reset = torch.zeros(n, dtype=torch.bool)
     cmd._last_cycle_end_pulse = torch.zeros(n, dtype=torch.bool)
+    # 未加掩码的真实首次到达时刻 (里程碑时间质量核的输入)
+    cmd._s1_criterion_first = torch.full((n,), float('nan'))
+    cmd._s2_criterion_first = torch.full((n,), float('nan'))
     cmd.test_u = torch.ones(n, 2)
     cmd.test_heights = torch.full((n, 2), .055)
     cmd.test_vel = torch.zeros(n)
@@ -494,23 +497,32 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(cmd.t_phase.sum().item(), 0.)
         self.assertEqual(cmd._s2_confirm_elapsed.sum().item(), 0.)
 
-    def test_p1_gate_blocks_early_arrival(self):
-        # λ=3: P1 门控 = 2.40 − 0.60 = 1.80。0.30λ=0.90 就摆出 S1 也不起算确认。
+    def test_early_arrival_advances_only_at_segment_end(self):
+        # 早侧地板已删除: 0.30λ=0.90 摆出 S1 会正常起算确认(不再被拦), 但推进仍必须等
+        # 参考播完门 0.80λ=2.40 —— 于是"提前到达并保持"的达成时刻恒为 2.40, 与恰好到点
+        # 达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折), 见下一测试。
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
-        for _ in range(100):                             # 推到 1.00s, 仍早于门控
+        for _ in range(10):                              # 0.10s -> 确认已成立
             cmd._update_command()
-        self.assertAlmostEqual(cmd.t_phase.item(), 1.00, places=4)
-        self.assertEqual(cmd._s1_confirm_elapsed.item(), 0.)
+        self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)
+        self.assertEqual(cmd.phase.item(), 0)            # 但不得推进
         self.assertFalse(cmd._last_retry_mask.any())
-        # 晚侧窗界: 一直不达成 -> 过 0.80λ+0.50=2.90 才作废。
-        _, cmd = make_env([0])
-        cmd.test_u[:] = torch.tensor([1., 1.])           # 一直不是 S1 候选
-        cmd.t_phase[:] = .80 * 3. + .50 + .01
+        self.assertAlmostEqual(cmd._s1_criterion_first.item(), .01, places=4)   # 首步即到达(时钟先加 dt)
+        for _ in range(230):
+            cmd._update_command()
+        self.assertAlmostEqual(cmd.t_phase.item(), 2.40, places=4)
         cmd._update_command()
-        torch.testing.assert_close(cmd.retry, torch.tensor([1]))
-        torch.testing.assert_close(cmd._last_retry_mask, torch.tensor([True]))
+        self.assertEqual(cmd.phase.item(), 1)            # 播完才推进
+        self.assertTrue(cmd.s1_milestone_pulse.item())
+        # 晚侧余量: 一直不达成 -> 过 0.80λ+0.50=2.90 才作废。
+        _, c2 = make_env([0])
+        c2.test_u[:] = torch.tensor([1., 1.])            # 一直不是 S1 候选
+        c2.t_phase[:] = .80 * 3. + .50 + .01
+        c2._update_command()
+        torch.testing.assert_close(c2.retry, torch.tensor([1]))
+        torch.testing.assert_close(c2._last_retry_mask, torch.tensor([True]))
 
     def test_p2_window_and_p1_independence(self):
         # P2 窗界 = 0.15λ + window_late_s; 窗内确认即成功, P1 环境不受影响。
@@ -613,40 +625,53 @@ class StageRewardTests(unittest.TestCase):
         w = _CURVES['weight_milestone_s1'][0]
 
         def full_reward_at(dev):
+            # dev 是相对名义段末的偏差; 核的输入是"真实首次到达时刻", 所以反解成时刻写入。
             cmd._last_s1_milestone = torch.tensor([True])
-            cmd._s1_dev_early = torch.tensor([dev])
-            cmd._s1_dev_late = torch.tensor([dev])
+            cmd._s1_criterion_first = torch.tensor([.80 * 3. + dev])
             return rewards.compute_s1_milestone_reward(env).item() * env.step_dt
 
         nominal = full_reward_at(0.)
         torch.testing.assert_close(torch.tensor(nominal), torch.tensor(w))
-        early = full_reward_at(0.30 * 3. - 0.80 * 3.)      # 0.30λ 达成
+        early = full_reward_at(0.30 * 3. - 0.80 * 3.)      # 0.30λ 真实到达
         self.assertLess(early, nominal * .25)
 
-    def test_gate_and_weight_are_both_effective(self):
-        # 两者必须各自独立起作用, 不能互相掩盖。
-        # (a) 只靠核: dev=0 时核为 1 -> 台阶仍在, 说明"必须有门控"。
-        lam = torch.tensor([3.])
-        self.assertAlmostEqual(_milestone_time_quality(torch.tensor([0.]), torch.tensor([0.]), lam).item(), 1., places=6)
-        # (b) 只靠门控: 门控把起算推到 0.60λ, 但"门一开就满分"是台阶; 核把它压成斜坡。
+    def test_arrival_time_kernel_penalizes_early_completion(self):
+        # 核必须对"真实到达时刻"敏感, 而不是被"参考播完门"夹住 —— 后者会让它恒等于 1.0。
+        env, cmd = make_env([0])
+        env.step_dt = .01
+        cmd.test_heights[:] = .024
+        cmd.test_u[:] = torch.tensor([-1., 1.])
+        w = _CURVES['weight_milestone_s1'][0]
+        lam = cmd.time_scale_command
+        onset = cmd._s1_criterion_first
+        # (a) 真实到达 0.30λ -> 核打到 1/5 以下
+        cmd._last_s1_milestone = torch.tensor([True])
+        cmd._s1_criterion_first = torch.tensor([.30 * 3.])
+        r_early = rewards.compute_s1_milestone_reward(env).item() * env.step_dt
+        self.assertLess(r_early, w * .25)
+        # (b) 真实到达正好名义时刻 -> 满分
+        cmd._s1_criterion_first = torch.tensor([.80 * 3.])
+        r_nominal = rewards.compute_s1_milestone_reward(env).item() * env.step_dt
+        torch.testing.assert_close(torch.tensor(r_nominal), torch.tensor(w))
+        # (c) 关键回归: 若 dev 由"被门夹住的确认起算时刻"给出(旧实现), 核会恒等于 1.0。
+        #     这里断言 dev 确实来自 criterion_first, 而不是 onset。
+        self.assertAlmostEqual(cmd.s1_dev_early.item(), .80 * 3. - .80 * 3., places=5)
+        del onset, lam
+
+    def test_segment_end_gate_holds_advance(self):
+        # 推进门仍然必须等参考播完 —— 它保证参考连续, 与"早到是否受罚"是两件事。
         env, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
-        cmd.t_phase[:] = 1.80                              # 门控刚开
         for _ in range(10):
             cmd._update_command()
-        onset = cmd._s1_onset.item()
-        self.assertAlmostEqual(onset, 1.81, places=5)
-        self.assertLess(_milestone_time_quality(cmd._s1_dev_early, cmd._s1_dev_late,
-                                                cmd.time_scale_command).item(), .85)
-        # 门控前不累积确认: 只把时间放到门控之前, 确认计时必须为 0。
-        _, cmd2 = make_env([0])
-        cmd2.test_heights[:] = .024
-        cmd2.test_u[:] = torch.tensor([-1., 1.])
-        cmd2.t_phase[:] = 1.00                             # < 门控 1.80
-        for _ in range(20):
-            cmd2._update_command()
-        self.assertEqual(cmd2._s1_confirm_elapsed.item(), 0.)
+        self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)   # 确认已成立
+        self.assertEqual(cmd.phase.item(), 0)              # 但段末未到, 不得推进
+        for _ in range(230):
+            cmd._update_command()
+        cmd._update_command()
+        self.assertEqual(cmd.phase.item(), 1)
+        self.assertTrue(cmd.s1_milestone_pulse.item())
 
     def test_cycle_reset_is_isolated_to_selected_envs(self):
         # 只复位凑满站立窗口的环境; 其他环境的阶段、时钟与累计量必须原封不动。
