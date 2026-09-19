@@ -153,6 +153,10 @@ def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
 # 获取身体参考轨迹 (时变期望高度 + 走廊中心)，按阶段时间重定时并冻结缓冲期参考。
 # P3 的 z 用解析斜坡取代录制值, 见文件头对 _BODY_TRAJ_PATH 的说明。
 def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
+    lam = cmd_term.command[:, 5].clamp(min=0.1)
+    phase = cmd_term.phase  # type: ignore[attr-defined]
+    t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     cache = _get_body_traj(env.device)
     t_nom = _body_traj_source_time(_stage_t_nom(env))
     idx = torch.searchsorted(cache["t"], t_nom).clamp(1, len(cache["t"]) - 1)
@@ -164,13 +168,15 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
         out.append(v)
     y_f, z_f, y_h, z_h = out
     # P3 起立段: z 从趴平高度线性抬到站立目标, 斜坡时长 = T4 名义时长。
-    # source_t ∈ [0.95, 1.45] 恰好覆盖 T4(source_t = 0.95 + t_phase/λ), 两侧都 clamp,
-    # 故 P1/P2 的 source_t(<0.95) 完全不受影响。
-    u = ((t_nom - _ACTION_END) / STAND_TRANSITION_DURATION).clamp(0.0, 1.0)
+    # 归 P3 必须用 **phase == 2** 判定, 不能用 source_t >= ACTION_END: P2 播完后进入
+    # S2 确认等待段时 _stage_t_nom 会把 source_t 冻结在 0.95, 那样 P2 的末端与等待段
+    # 也会被斜坡覆盖(实测 F/H 参考从 0.0445/0.0503 被改成 0.024/0.024), 污染 P2 奖励
+    # 并破坏归因。斜坡进度同样取自段内时钟, 与录制表查询时间解耦。
+    u = (t_phase / (lam * STAND_TRANSITION_DURATION)).clamp(0.0, 1.0)
     z_ramp = STAND_GROUND_HEIGHT + (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT) * u
-    after_p2 = t_nom >= _ACTION_END
-    z_f = torch.where(after_p2, z_ramp, z_f)
-    z_h = torch.where(after_p2, z_ramp, z_h)
+    in_p3 = phase == 2
+    z_f = torch.where(in_p3, z_ramp, z_f)
+    z_h = torch.where(in_p3, z_ramp, z_h)
     return y_f, z_f, y_h, z_h
 
 

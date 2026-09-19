@@ -465,22 +465,69 @@ class StageRewardTests(unittest.TestCase):
         self.assertLess(kern_prone[-1], .65)
 
     def test_body_height_reference_leaves_p1_p2_untouched(self):
-        # P1/P2 的 source_t < 0.95, 必须仍取录制值(斜坡只在 P3 生效)。
+        # P1/P2 的 z 必须仍取录制值 —— 斜坡只在 **phase == 2** 生效。
+        # 关键回归: 早先用 source_t >= 0.95 判定, 而 P2 播完后 _stage_t_nom 会把 source_t
+        # 冻结在 0.95, 于是 P2 的末端与 S2 确认等待段也被斜坡覆盖(实测 F/H 参考从
+        # 0.0445/0.0503 被改成 0.024/0.024)。这里逐 λ 检查 P2 全段(含等待段)不被改。
         from mjlab.tasks.SQuRo_Backup.mdp import timing as T
-        env, cmd = make_env([0])                      # phase=0 -> P1
+        env, cmd = make_env([0])
         lam = float(cmd.time_scale_command[0])
+        # P1: 录制值特征 zF != zH(两段独立录制), 斜坡会强制相等
         for tp in (0.0, .2 * lam, .5 * lam, .79 * lam):
             cmd.t_phase[:] = tp
             _, zF, _, zH = reference.get_body_reference(env)
-            # 录制值的特征: P1 段 zF ≠ zH(两段独立录制), 而斜坡强制相等
             self.assertNotAlmostEqual(float(zF[0]), float(zH[0]), places=4,
                                       msg="P1 的 z 不应被斜坡覆盖(此时 zF/zH 应各取录制值)")
-        # P3 边界处斜坡起点必须等于趴平高度(即 P3 入口参考高度)
+        # P2 全段: 名义末端(0.15λ) + 超时等待段(t_phase 超过 0.15λ, source_t 冻结在 0.95)。
+        # 注意 P2 名义时长是 0.15λ(λ=3 时 = 0.45s), 不是 0.15s。
+        cmd.phase[:] = 1
+        p2_end = .15 * lam
+        for tp in (0.0, .5 * p2_end, p2_end, p2_end + .30, p2_end + .50 - 1e-3):
+            cmd.t_phase[:] = tp
+            _, zF, _, zH = reference.get_body_reference(env)
+            self.assertNotAlmostEqual(float(zF[0]), T.STAND_GROUND_HEIGHT, places=4,
+                                      msg=f"P2 的 t_phase={tp} 不应被斜坡覆盖")
+            if tp >= p2_end - 1e-6:      # 名义末端与等待段: source_t 冻结在 0.95
+                self.assertAlmostEqual(float(zF[0]), 0.04451, places=3)
+                self.assertAlmostEqual(float(zH[0]), 0.05025, places=3)
+        # P3 才是斜坡: 入口 = 趴平高度, 末端 = 站立目标
         cmd.phase[:] = 2
         cmd.t_phase[:] = 0.
         _, zF3, _, zH3 = reference.get_body_reference(env)
         self.assertAlmostEqual(float(zF3[0]), T.STAND_GROUND_HEIGHT, places=5)
         self.assertAlmostEqual(float(zH3[0]), T.STAND_GROUND_HEIGHT, places=5)
+        cmd.t_phase[:] = T.STAND_TRANSITION_DURATION * lam
+        _, zF3b, _, zH3b = reference.get_body_reference(env)
+        self.assertAlmostEqual(float(zF3b[0]), T.STAND_TARGET_HEIGHT, places=5)
+        self.assertAlmostEqual(float(zH3b[0]), T.STAND_TARGET_HEIGHT, places=5)
+
+    def test_leg_target_cost_is_p3_gated_and_pre_clip(self):
+        # P3 腿部目标跟踪代价: 只在 P3 生效; 且比较的是**限幅前**的目标角(否则超限指令
+        # 会被 MuJoCo 裁到同一位置、彼此不可区分, 这正是它要解决的病)。
+        env, cmd = make_env([0, 1, 2])
+        action = NS(raw_action=torch.zeros(3, 14), scale=1., offset=0.,
+                    target_names=list(_ACTUATED_JOINT_NAMES))
+        env.action_manager = NS(get_term=lambda _: action)
+        with patch.object(rewards, 'get_reference_joint_state',
+                          return_value=(torch.zeros(3, 14), torch.zeros(3, 14))):
+            with patch.dict(_CURVES, weight_leg_target=(1.,)):
+                # 目标全 0 = 参考 -> 代价 0
+                out = rewards.compute_leg_target_cost(env)
+                torch.testing.assert_close(out, torch.tensor([0., 0., 0.]))
+                # 只给 P3(phase==2) 的环境一个偏大的腿目标
+                leg_col = action.target_names.index('HL_hip_joint')
+                action.raw_action[2, leg_col] = 1.5
+                out = rewards.compute_leg_target_cost(env)
+                # env2 在 P3 且腿目标偏离 -> 负值; env0/env1 不在 P3 -> 恒 0
+                self.assertLess(out[2].item(), 0.)
+                self.assertEqual(out[0].item(), 0.)
+                self.assertEqual(out[1].item(), 0.)
+                # 均值除以 8 条腿
+                self.assertAlmostEqual(out[2].item(), -1.5 ** 2 / 8, places=6)
+                # 超出 ctrlrange 的指令必须被计入(限幅前口径): HL_hip 上限 0.8
+                action.raw_action[2, leg_col] = 5.0
+                self.assertAlmostEqual(rewards.compute_leg_target_cost(env)[2].item(),
+                                       -5.0 ** 2 / 8, places=6)
 
     def test_confirmation_wins_before_window_closes(self):
         # 窗界之内确认完成 -> 成功优先, 不因为接近截止而作废。

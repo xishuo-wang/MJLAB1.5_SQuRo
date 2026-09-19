@@ -30,6 +30,9 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_mimic_pos":         (10.0,),
     "weight_mimic_vel":         (5.0,),
     "weight_spine_target":      (2.0,),
+    # P3 腿部目标跟踪代价(仅 P3 生效): 比较限幅前目标与腿部参考, 压制"腿指令长期超
+    # ctrlrange"的饱和行为。权重从 1.0 起调, 标定依据见技术细节 2026-09-19 一节。
+    "weight_leg_target":        (1.0,),
     # 加权二次关节跟踪代价: 补上 mimic_pos 的 exp 核在高误差区(MSE≥0.25)梯度归零的缺口,
     # 让"绕过参考表"持续按误差付钱。权重从 1.0 起调, 标定依据见技术细节开头 2026-09-18 一节。
     "weight_track_joint":       (1.0,),

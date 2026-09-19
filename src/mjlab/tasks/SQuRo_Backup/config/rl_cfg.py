@@ -28,7 +28,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
             use_clipped_value_loss=True,
             clip_param=0.2,
             # 降低探索激励的单变量对照；保持 L1/L2、奖励事件和成功判据不变。
-            entropy_coef=0.003,
+            entropy_coef=0.01,
             num_learning_epochs=5,
             num_mini_batches=4,
             learning_rate=3.0e-4,

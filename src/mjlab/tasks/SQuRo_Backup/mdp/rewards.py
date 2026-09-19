@@ -151,6 +151,23 @@ def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
+# P3 腿部目标跟踪代价 — 只在 P3 生效的前馈项。
+# 为什么需要它(技术细节 2026-09-19): 起立前后腿的实际角约 (-1.500, -0.500), 明显偏离
+# 站立目标 (-0.1, 0.3), 且后腿目标指令**持续超出执行器 ctrlrange**(被 MuJoCo 丢弃),
+# 故 `action_excess` 单调恶化 15 倍。而现有各项都区分不出这种状态:
+#   - mimic_pos 的腿部分量在趴地时只贡献约 0.0009/s, 位置模仿总奖励 7.90/s 几乎全由
+#     脊柱与颈部拿到;
+#   - track_joint 的二次代价全关节合计也只有约 -0.165/s。
+# 与 spine_target 同构: 比较**限幅前**的目标角与参考角, 因此能量化"都被执行器裁到同一
+# 位置、但偏离参考程度不同"的指令, 给出"别把腿指令打到饱和"的直接梯度。
+def compute_leg_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    weight = get_curriculum_reward_weight(env, "weight_leg_target")
+    out = weight * _joint_target_cost(env, _MODEL_INDICES.actuator_leg_ids)
+    return out * (command.phase == 2)
+
+
+
 # 执行器 ctrlrange 张量 (按动作项自身的关节顺序排列), 按名称解析一次后缓存。
 _CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 
