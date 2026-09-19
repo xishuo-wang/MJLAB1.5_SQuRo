@@ -254,13 +254,22 @@ class StageRewardTests(unittest.TestCase):
         self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
 
     def test_stand_still_reward_is_p3_gated_and_linear(self):
+        # 锚点从常量推导, 阈值调整时不必改测试(此前硬编码 "3 rad/s -> 半值",
+        # 把 STAND_STILL_FULL_SPEED 从 6.0 改成 4.5 后立刻失效)。
+        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
         env, cmd = make_env([2, 1, 2])
-        cmd.test_vel[:] = torch.tensor([0., 0., 3.])
+        half = T.STAND_STILL_FULL_SPEED * .5
+        cmd.test_vel[:] = torch.tensor([0., 0., half])
         reward = rewards.compute_stand_still_reward(env)
         weight = _CURVES["weight_stand_still"][0]
         self.assertAlmostEqual(reward[0].item(), weight, places=6)      # 完全静止 -> 满分
         self.assertEqual(reward[1].item(), 0.)                          # 非 P3 -> 0
-        self.assertAlmostEqual(reward[2].item(), weight * .5, places=6)  # 3 rad/s -> 线性核一半
+        self.assertAlmostEqual(reward[2].item(), weight * .5, places=6)  # 半速 -> 线性核一半
+        # 线性核必须在工作区间内可分辨: 站定实测 vel_rms 中位约 1.16, 核值不得已饱和
+        cmd.test_vel[:] = torch.tensor([0., 0., 1.16])
+        r = rewards.compute_stand_still_reward(env)[2].item()
+        self.assertLess(r, weight)
+        self.assertGreater(r, weight * .6)
         # 姿态不达标时不给分: 不存在"不进锥就不被罚"的反向作弊路线(惩罚形式才有)
         cmd.test_u[:] = torch.tensor([-1., 1.])
         self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)
