@@ -511,21 +511,33 @@ TIME_COMPARISON_SCALE     = 3.0
 | `StateMachinePolicy.action_scale` | **从 env_cfg 自动读取**（可显式覆盖） |
 
 `joint_delta = (raw_action × scale + default_offset) − default_offset = scale × raw_action`，
-故 0.3 与 0.5 只差控制分辨率，不影响可达范围——但**受 `clip_actions = 6.0` 约束**。
+故 0.3 与 0.5 只差控制分辨率，不影响可达范围。
+
+**2026-09-19 校正：本节原先声称"受 `clip_actions = 6.0` 约束"——该约束不存在。**
+`config/rl_cfg.py:48` 是 `clip_actions=None`，且是有意为之（MuJoCo 已按 ctrlrange 限幅）。
+因此动作**没有任何外层上界**，唯一约束是 XML 的 ctrlrange。
 
 覆盖性核算（`scripts/Backup/check_action_scale_coverage.py`，期望极值取自参考表）：
 
-| 关节 | 期望极值 | 需要 action@0.3 | 余量 (clip=6.0) |
+| 关节 | 期望极值 | 需要 action@0.3 | 说明 |
 |---|---|---|---|
-| **F_body / H_body** | ∓1.570 / ±1.570 | **5.233** | **1.15×** ← 最紧 |
-| HL_hip / HR_hip | −1.500 | 4.667 | 1.29× |
-| FL/FR_elbow | +0.550 | 2.833 | 2.12× |
-| F_spine1 / H_spine1 | +0.600 | 2.000 | 3.00× |
-| 其余 | — | ≤1.833 | ≥3.27× |
+| **F_body / H_body** | ∓1.570 / ±1.570 | **5.233** | ← 最大，是标称 ±1 的 5.2 倍 |
+| HL_hip / HR_hip | −1.500 | 4.667 | 4.7 倍 |
+| FL/FR_elbow | +0.550 | 2.833 | 2.8 倍 |
+| F_spine1 / H_spine1 | +0.600 | 2.000 | 2.0 倍 |
+| 其余 | — | ≤1.833 | ≥1.8 倍 |
 
-**结论：0.3 可覆盖全部期望极值，最小冗余 1.15×。** 两个扭转关节是唯一逼近 clip 的，
-已由 `tests/test_squro_backup_timing.py::test_action_scale_covers_reference` 断言守护
-（要求每个关节 `clip / 所需 action >= 1.1`），防止后续改动悄悄吃掉余量。
+**结论（已改写）：0.3 能让参考极值落在 ctrlrange 内，但代价是策略必须长期输出
+`|action| ≈ 5`。** 全部 32 份历史策略回放实测：脊柱 `|action|` 最大 4.7~14.1、
+腿部 8.0~**65.2**；`|action| > 0.95` 的步数占比脊柱 24%~90%、腿部 61%~100%。
+即**动作空间名存实亡**，策略学到的是 5 倍于标称的内部增益——输出上任何小抖动都会
+被放大成 ~1.5 rad 的关节角误差。这是 P1 起步瞬态（§7.6）的成因之一。
+
+> 原守护位于 `tests/test_squro_backup_timing.py::test_action_scale_covers_reference`，
+> 但 `tests/` 目录已迁走（回归现为 `scripts/Backup/verify_backup_stage_rewards.py`），
+> 该断言长期失效，余量因此悄悄被吃到 5 倍而无人察觉。现已补回两条断言：
+> `test_reference_extremes_within_actuator_ctrlrange` 与
+> `test_action_scale_exceeds_nominal_unit_range`。
 
 ### 6.2 `_HL_HOLD` 已与手调对齐
 
@@ -739,6 +751,96 @@ TIME_COMPARISON_SCALE     = 3.0
 **不要基于该量写新的物理判断代码**；若必须用四元数，先用 `fit_body_axes.py`
 一类的 site 配准法交叉验证。
 
+### 7.4 动作空间名存实亡：`|action| ≈ 5` 是标称 ±1 的 5 倍
+
+见 §6.1。根因是 `scale=0.3` 与参考幅度（±1.57 rad）不匹配，策略被迫学 5 倍内部增益。
+**已确认 `clip_actions=None` 是当前设计，不是疏漏**；但历史诊断脚本
+`check_action_scale_coverage.py` 曾硬编码 `CLIP=6.0`，据此报出"余量 1.15x"，
+掩盖了真实情况。该脚本现已改为从 RL 配置读取 clip。
+
+**影响范围**：P1 起步瞬态（§7.6）的成因之一；腿部 `|action|` 可达 65，
+长期顶在 ctrlrange 上失去控制权。
+
+**待定方案**（未实施，需单变量实验）：把 `scale` 提到 ~1.6，使参考极值只需
+`|action| ≈ 0.98`；或改为逐关节 `scale = ctrlrange 半宽`，让 `action=1` 恰为本关节行程边界。
+**注意**：这两者都会改变全部阶段的控制增益，P1/P2 已收敛的行为会被打乱，不可与其它改动同批。
+
+### 7.5 里程碑时间质量核对稠密项几乎没有约束力
+
+TensorBoard 的 `Episode_Reward/*` 口径是**回合累计 ÷ `max_episode_length_s`(10 s)**，
+而里程碑是回合内的**一次性事件**，于是被除了 10 倍：
+
+| 项 | 显示值 (1/s) | 每回合累计 |
+|---|---|---|
+| `milestone_s1` | 0.9985 | 9.99 |
+| `milestone_s2` | 1.5107 | 15.1 |
+| `milestone_success` | **0.0401** | **0.40** ← 权重 35，但事件几乎从不触发 |
+
+用 `diag_milestone_ledger.py` 算：提前 0.3 s 在三个里程碑上共损失 **14.71 分累计**，
+换成 TensorBoard 口径只有 **1.47/s**，而单步稠密奖励合计约 25/s。
+**即"早到"的代价被稀释到 ~6%，且是一次性的**，对"每帧都在结算"的密集项几乎没有约束力。
+
+> 阅读 `Episode_Reward/*` 时务必先做这个量纲还原，否则会把"权重 35 的项"
+> 误读成强约束。`milestone_success` = 0.04/s 意味着它基本没被触发过。
+
+### 7.6 P1 起步瞬态的成因链（2026-09-19 结案）
+
+**现象**：λ=2 策略回放中，`F_body` 在 t=0.12 s 就冲到 −1.580（机械极限），
+t=0.20 s 回到 −0.203，之后才跟上参考。视觉上像"回退/重试"。
+
+**逐帧核算结论**（`diag_p1_reward_ledger.py` + `probe_p1_onset.py`）：
+
+| 区段 | 时长 | 脊柱 mse 均值 | exp 核均值 |
+|---|---|---|---|
+| 尖峰段 0–19 帧 | 0.20 s | 0.2943 | 0.3915 |
+| **尖峰后 20–159 帧** | 1.40 s | **0.0028** | **0.9514** |
+
+- **参考本身是干净的**：`slow1_target` 的 T1 段就是 `0.6u / −1.57u` 线性爬升，无回退。
+- **P1 斜坡其实被跟住了**：尖峰后 mse 0.0028（≈0.05 rad）。
+  全段均值 0.0392 是被那 0.2 s 拉高 14 倍的，**不要用全段均值判断 P1 跟踪质量**。
+- **尖峰是策略自己打出来的**：`action × 0.3` 与 `pos` 高度吻合，step 10 的
+  `action = −4.52` → 目标角 −1.357，而参考此刻只要 −0.133。
+  即策略在**第一帧就把目标推到 T1 终点姿态**，参考要到 t_nom=0.65 才到。
+- **它不是"收益 > 惩罚"的理性选择**：相位推进由 `t_phase >= 段末` 硬门控，
+  早到不省时间；实测 S1 确认在 t=1.60（名义正好 1.60）。尖峰是**纯损失**（0.61 分），
+  但损失太小（P1 脊柱分量满分 8.0 的 7.6%），故被保留。
+- **它在训练最早期就存在并随训练加剧**：同一 run 内 500→1000→1500→2999 的尖峰
+  mse 为 0.0019 → 0.4978 → 0.9703 → 1.0397，同时尖峰后误差 0.71 → 0.035。
+  典型的**局部解固化**：早期学到"一步饱和"，之后 2500 轮都在精修这条错误轨迹。
+
+**成因**：`scale=0.3` ⇒ 想跟参考必须输出 `|action| ≈ 5`（§6.1）。于是
+"输出一个把关节顶到底的动作"与"正确跟踪参考"在数值上几乎无法区分，
+局部搜索必然先撞上"一步饱和"。
+
+**排除的假设**：
+
+- ✗ *"参考有回退"* —— 参考单调（回放 CSV 的 `*_ref_pos` 列自洽可证）。
+- ✗ *"奖励没守住斜坡"* —— `mimic_pos`(exp 核, σ_spn=20 → 容差 ±0.22 rad)、
+  `spine_target` 在 P1 都在计费，且已在尖峰段把核压到 0.3915。奖励侧已罚到该罚的程度。
+- ✗ *"环境/执行器物理不允许跟踪"* —— `probe_p1_onset.py` 用手调随动器
+  （`action = (target − default)/scale`）跟踪，全程峰值误差仅 **0.031 rad**，无尖峰。
+- ✗ *"腿部从直立收缩带动躯干"* —— 解耦实测：冻结腿部后脊柱峰值误差
+  0.031 → **0.028**（几乎不变）；冻结脊柱则腿部照走。腿部不是来源。
+- ✗ *"改重置姿态为 HOLD 即可"* —— 见下。
+
+**关于"把重置腿改成 HOLD"**：参考表腿角**从第一帧就是 HOLD**（`reference.py` 中腿在
+`t < 0.95` 直接赋 `_FL_HOLD/_HL_HOLD`，没有斜坡；`_LEG_INIT` 只作为 T4 过渡的目标端），
+而 `apply_fallen_state` 写的是 `LEG_INIT` ⇒ t=0 确有 1.4 rad 阶跃失配（后髋），
+**这个诊断是对的**。但只改重置**不生效**：
+
+- `use_default_offset=True` ⇒ 动作默认偏移取自 `INIT_STATE.joint_pos = LEG_INIT`
+  （`SQuRo_constants.py:53`），故 P1 期间 PD 目标 = `LEG_INIT + 0.3·action`，
+  与参考的 HOLD 差**恒定 1.4 rad**。这个常量偏差与重置姿态无关。
+- 实测（`probe_reset_pose.py --settle-steps`，零动作 50 步）：重置到 HOLD 后，
+  腿会在 **0.2 s 内自己弹回 LEG_INIT**（`HL_hip` 速度峰值 10.7 rad/s，
+  基座 0.0240→0.0275→0.0238）。等于往最关键的 0.2 s 里塞一个新瞬态。
+  重置到 LEG_INIT（= PD 平衡点）则 0.5 s 内纹丝不动。
+- **结论：重置姿态已回退为 LEG_INIT。** 要真正把"腿的起始姿态"改掉，必须**三处同时改**：
+  动作默认偏移（`use_default_offset=False` + 显式 `offset`）、`apply_fallen_state`、
+  以及参考表初值，且需评估对 P3 站立（参考末端要回 LEG_INIT）的反向拉扯。
+
+**待验证的修法**：把 `scale` 提到 ~1.6（见 §7.4），使"跟参考"与"顶到限位"在数值上分开。
+
 ---
 
 ## 8. 已知未解决问题
@@ -754,8 +856,10 @@ TIME_COMPARISON_SCALE     = 3.0
 4. **全量测试在受限环境无法运行**：`mujoco_warp` 的 kernel cache 位于
    `%LOCALAPPDATA%\NVIDIA\warp\Cache`，只读环境下抛大量 `PermissionError`（与代码无关）。
 
-5. **成功判据的安全余量很薄**：`Progress/stand_mean_vel` 3.43 对门限 3.5 只有 2%，
-   且 `Policy/mean_std` 在回升。压 σ 只能靠判据阈值课程（§7.2.4），**动阈值前必须看余量**。
+5. **成功判据的安全余量很薄**：`STAND_VEL_MEAN_MAX` 已由 3.5 放宽到 4.5（理由见
+   `mdp/timing.py` 内注释与技术细节 §7.2.4），确定性回放 `V/T ≈ 1.17`、0 步超 4.5，
+   但**训练采样会被 σ 抬高**。计划后期用课程把 4.5 逐步收回 3.5，届时"站定质量"
+   才成为可报指标；**动该阈值前必须同时看确定性余量与采样余量**。
 
 ---
 
@@ -765,12 +869,17 @@ TIME_COMPARISON_SCALE     = 3.0
 
 | 脚本 | 用途 |
 |---|---|
-| `verify_backup_stage_rewards.py` | **主回归入口**：判据/参考/状态机/奖励的 CPU 单测（22 项，不建环境、不落盘） |
+| `verify_backup_stage_rewards.py` | **主回归入口**：判据/参考/状态机/奖励的 CPU 单测（46 项，不建环境、不落盘） |
 | `verify_backup_config.py` | 配置一致性：`_CURVES` 权重 ↔ env_cfg、参考表 ↔ 手调公式、确认时长两侧一致、ctrlrange ↔ XML |
 | `verify_script_vs_training.py` | 手调脚本与训练环境的参考及 S1/S2 检测逐点对拍（改参考或判据后必跑） |
 | `measure_segment_gravity_truth.py` | **地面真值**：标记 site 测各段正置度（本文档 §4 的验收工具） |
 | `verify_gate_predicates.py` | 验收 `_check_S1`/`_check_S2` 与独立地面真值是否一致（§5.3） |
-| `check_action_scale_coverage.py` | 核算 action scale 对期望极值的覆盖与 clip 冗余（§6.1） |
+| `check_action_scale_coverage.py` | 核算 action scale 对期望极值的覆盖（§6.1）；clip 从 RL 配置读取 |
+| `diag_action_vs_ref.py` | **动作尺度诊断**：扫描全部历史回放 CSV，统计 `|action|` 幅度、超标称占比、P1 提前到位比（§7.4） |
+| `diag_milestone_ledger.py` | **里程碑时间账本**：算"提前 e 秒"在 S1/S2/成功三项上的累计损失（§7.5） |
+| `diag_p1_reward_ledger.py` | **P1 密集奖励账本**：用回放 CSV 逐帧重算 mimic_pos/mimic_vel/spine_target（§7.6） |
+| `probe_p1_onset.py` | P1 起步瞬态解耦探针：`--mode full/legs/spine` 分离脊柱跟踪与腿部收缩（§7.6） |
+| `probe_reset_pose.py` | **重置初态实测**：打印各关节初态角/速度、与参考 t=0 的差、`--settle-steps` 零动作静止测试 |
 | `audit_handtuned_script.py` | 核对 `slow1_target` 分段与状态机相位时钟是否对齐、是否被 auto-reset |
 | `trace_s1_window.py` | 逐帧观察 S1/S2 达成瞬间的关节角与几何条件 |
 | `analyze_righting_attitude.py` | 从回放 CSV 反推姿态、对比手调参考与策略实际 |

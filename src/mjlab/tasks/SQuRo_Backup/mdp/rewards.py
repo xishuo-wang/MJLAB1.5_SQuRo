@@ -131,7 +131,9 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 按名称对齐关节目标成本；raw_action 已经过 RL 外层 ±6 裁剪，但尚未经过 XML 控制限幅。
+# 按名称对齐关节目标成本；raw_action 未经任何外层裁剪 (rl_cfg.clip_actions=None)，也未经 XML 控制限幅。
+# 2026-09-19 校正: 此处原注释称"已过 RL 外层 ±6 裁剪", 但 clip_actions=None 使其不成立 ——
+# 实测脊柱动作可达 ±5.4, 腿部 ±65, 全部直接来自策略输出。
 def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...]) -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
     # 重建限幅前目标；不要读取实际关节角或已经限幅的控制量，否则过量指令会被隐藏。

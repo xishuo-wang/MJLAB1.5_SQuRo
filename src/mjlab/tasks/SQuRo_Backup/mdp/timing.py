@@ -69,3 +69,12 @@ TIME_COMPARISON_SCALE = 3.0
 # 现有身体轨迹文件的采集时序，不随本轮动作时间修改。
 BODY_TRAJ_BUILD_END = 0.65
 BODY_TRAJ_P1_END = 0.80
+
+# 腿部期望角 — 参考表与重置初态共用同一组常量, 禁止各写一份。
+# 依据(2026-09-19): 参考表腿角**从 t=0 第一帧就是 HOLD**(无斜坡, 保持到 t=0.95,
+# 再由 T4 过渡回 LEG_INIT), 而 apply_fallen_state 原先写的是 LEG_INIT —— 于是 t=0
+# 就存在 1.4 rad 的阶跃失配(后髋), 策略必须在 P1 内把腿从直立扫到收缩。
+# 重置改为 HOLD 后 t=0 与参考严格一致。LEG_INIT 仅作为 T4 过渡的目标端保留。
+LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)
+FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
+HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee

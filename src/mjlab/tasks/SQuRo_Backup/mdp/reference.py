@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING
 from .timing import (
     BODY_TRAJ_BUILD_END,
     BODY_TRAJ_P1_END,
+    FL_HOLD,
+    HL_HOLD,
+    LEG_INIT,
     P1_BUILD_DURATION,
     P1_END,
     P2_END,
@@ -37,13 +40,10 @@ _TRANS_END = STAND_TRANSITION_END
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
 _body_traj_cache: dict = {}
 
-# 站立初始腿角 (FL_sh, FL_el, FR_sh, FR_el, HL_hip, HL_knee, HR_hip, HR_knee)
-_LEG_INIT = np.array([0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3], dtype=np.float64)
-
-
-# 腿支撑期望角 — 与手调脚本 (SQuRo_backup_Replay.FL_HOLD / HL_HOLD) 完全一致
-_FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
-_HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
+# 站立初始腿角与支撑腿角统一从 timing 导入 (常量唯一管理处), 不在本文件重复定义。
+_LEG_INIT = np.array(LEG_INIT, dtype=np.float64)
+_FL_HOLD = FL_HOLD
+_HL_HOLD = HL_HOLD
 
 
 # 生成参考表

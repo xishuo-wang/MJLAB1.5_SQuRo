@@ -1084,6 +1084,44 @@ class StageRewardTests(unittest.TestCase):
         self.assertTrue(cmd._last_cycle_reset.item())
         self.assertEqual(cmd._cycles_this_episode.item(), 4)
 
+    def test_reference_extremes_within_actuator_ctrlrange(self):
+        # [scale] 参考表的期望极值必须落在执行器 ctrlrange 内, 否则"参考本身不可达"。
+        # 原守护在 tests/test_squro_backup_timing.py::test_action_scale_covers_reference,
+        # 但 tests/ 目录已迁走, 该断言长期失效 —— 这里补回。
+        import numpy as _np
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import _generate_reference_table
+        from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATOR_CTRL_RANGE
+        _, ref = _generate_reference_table()
+        for k, name in enumerate(_ACTUATED_JOINT_NAMES):
+            lo, hi = _ACTUATOR_CTRL_RANGE[name]
+            rlo, rhi = float(_np.min(ref[:, k])), float(_np.max(ref[:, k]))
+            self.assertGreaterEqual(rlo, lo - 1e-6, f"{name} 参考下界 {rlo:.3f} 超出 ctrlrange {lo:.3f}")
+            self.assertLessEqual(rhi, hi + 1e-6, f"{name} 参考上界 {rhi:.3f} 超出 ctrlrange {hi:.3f}")
+
+    def test_action_scale_exceeds_nominal_unit_range(self):
+        # [scale] 记录"跟踪参考所需的动作幅度"这一事实, 防止它被误当作正常量级。
+        # scale=0.3 时 F_body/H_body 需要 |action|≈5.23 才能到 ctrlrange 极值; 实测策略
+        # 输出 5.4~5.6, 而 rl_cfg.clip_actions=None 表示没有任何外层裁剪兜底。
+        # 若把 scale 提到 ~1.6, 同一目标只需 ≈0.98, 动作才回到标称 ±1 量级。
+        import numpy as _np
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import _generate_reference_table
+        from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATOR_CTRL_RANGE
+        scale = 0.3  # 必须与 env_cfg 的 JointPositionActionCfg.scale 一致
+        _, ref = _generate_reference_table()
+        need_max, worst = 0.0, ''
+        for k, name in enumerate(_ACTUATED_JOINT_NAMES):
+            lo, hi = _ACTUATOR_CTRL_RANGE[name]
+            # 动作 = (参考角 - 默认角)/scale; 默认角取 ctrlrange 中心附近的 0 偏移
+            need = max(abs(float(_np.min(ref[:, k]))), abs(float(_np.max(ref[:, k])))) / scale
+            if need > need_max:
+                need_max, worst = need, name
+        # 标杆: 当前是 5.233 (F_body_joint)。若此断言失败, 说明有人改了 scale 或参考幅度,
+        # 必须同步更新技术细节 §6.1 的结论与 check_action_scale_coverage 的说明。
+        self.assertGreater(need_max, 3.0,
+                           f"最大所需动作 {need_max:.3f} ({worst}) 已回到标称量级, 请更新 §6.1")
+        self.assertLess(need_max, 6.0,
+                        f"最大所需动作 {need_max:.3f} ({worst}) 过大, 标定可能已被改坏")
+
     def test_joint_track_cost_is_order_invariant(self):
         # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,
         # 而权重也按 actions 顺序构造 -> 名称反序时代价从 0 变成 0.239。
