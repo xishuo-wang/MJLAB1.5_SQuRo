@@ -10,6 +10,9 @@ from .timing import (
     P1_END,
     P2_END,
     REFERENCE_TOTAL_TIME,
+    STAND_GROUND_HEIGHT,
+    STAND_TARGET_HEIGHT,
+    STAND_TRANSITION_DURATION,
     STAND_TRANSITION_END,
 )
 
@@ -27,6 +30,10 @@ _TRANS_END = STAND_TRANSITION_END
 
 # 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
 # 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
+# 注意: 该表的 z 只在 P1~P2 使用; P3(起立+站立)的 z 由下方解析斜坡取代, 理由见
+# 技术细节"2026-09-19 训练诊断" §结论 3: 录制表在 T4 中段把期望高度拉回 0.0248(=趴平),
+# 到 1.365 才升到 0.055, 于是"保持趴姿"在该段几乎是最优解、而要求站立的那一小段
+# 反而给出最低核值 —— 参考方向与任务目标相反。y 仍取录制值(目前无人消费)。
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
 _body_traj_cache: dict = {}
 
@@ -144,6 +151,7 @@ def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
 
 
 # 获取身体参考轨迹 (时变期望高度 + 走廊中心)，按阶段时间重定时并冻结缓冲期参考。
+# P3 的 z 用解析斜坡取代录制值, 见文件头对 _BODY_TRAJ_PATH 的说明。
 def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     cache = _get_body_traj(env.device)
     t_nom = _body_traj_source_time(_stage_t_nom(env))
@@ -154,7 +162,16 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     for key in ("yF", "zF", "yH", "zH"):
         v = cache[key][idx_p] + frac * (cache[key][idx] - cache[key][idx_p])
         out.append(v)
-    return out[0], out[1], out[2], out[3]
+    y_f, z_f, y_h, z_h = out
+    # P3 起立段: z 从趴平高度线性抬到站立目标, 斜坡时长 = T4 名义时长。
+    # source_t ∈ [0.95, 1.45] 恰好覆盖 T4(source_t = 0.95 + t_phase/λ), 两侧都 clamp,
+    # 故 P1/P2 的 source_t(<0.95) 完全不受影响。
+    u = ((t_nom - _ACTION_END) / STAND_TRANSITION_DURATION).clamp(0.0, 1.0)
+    z_ramp = STAND_GROUND_HEIGHT + (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT) * u
+    after_p2 = t_nom >= _ACTION_END
+    z_f = torch.where(after_p2, z_ramp, z_f)
+    z_h = torch.where(after_p2, z_ramp, z_h)
+    return y_f, z_f, y_h, z_h
 
 
 

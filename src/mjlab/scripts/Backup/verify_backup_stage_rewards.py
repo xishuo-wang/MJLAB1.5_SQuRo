@@ -436,6 +436,52 @@ class StageRewardTests(unittest.TestCase):
         self.assertTrue(advanced)
         self.assertLess(worst, .1)
 
+    def test_body_height_reference_is_monotone_ramp_in_p3(self):
+        # P3 的期望身体高度改为解析斜坡: 从趴平 0.024 线性抬到站立目标 0.055, 时长 = T4 名义。
+        # 动机(技术细节 2026-09-19 §结论 3): 录制表在 T4 中段把期望拉回 0.0248, 使"保持趴姿"
+        # 几乎最优、而要求站立的那段给出最低核值 —— 参考方向与任务目标相反。
+        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+        env, cmd = make_env([2])                      # phase=2 -> P3
+        lam = float(cmd.time_scale_command[0])
+        t4 = T.STAND_TRANSITION_DURATION * lam
+        zs, kern_prone = [], []
+        for frac in (0.0, .1, .25, .5, .75, .9, 1.0):
+            cmd.t_phase[:] = frac * t4
+            _, zF, _, zH = reference.get_body_reference(env)
+            # F/H 必须给同一条斜坡, 否则 min(zF,zH) 仍被另一段拖住
+            torch.testing.assert_close(zF, zH, atol=1e-5, rtol=0.)
+            zs.append(float(zF[0]))
+            kern_prone.append(float(torch.exp(-500.0 * (zF[0] - T.STAND_GROUND_HEIGHT) ** 2)))
+        # 起点=趴平高度, 终点=站立目标
+        self.assertAlmostEqual(zs[0], T.STAND_GROUND_HEIGHT, places=5)
+        self.assertAlmostEqual(zs[-1], T.STAND_TARGET_HEIGHT, places=5)
+        # 单调抬升
+        for a, b in zip(zs, zs[1:]):
+            self.assertLess(a, b)
+        # 核心断言: 趴姿的核值必须**单调下降** —— 旧参考在中段反而最高(0.966~0.999)
+        for a, b in zip(kern_prone, kern_prone[1:]):
+            self.assertGreater(a, b)
+        self.assertAlmostEqual(kern_prone[0], 1.0, places=4)
+        self.assertLess(kern_prone[-1], .65)
+
+    def test_body_height_reference_leaves_p1_p2_untouched(self):
+        # P1/P2 的 source_t < 0.95, 必须仍取录制值(斜坡只在 P3 生效)。
+        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+        env, cmd = make_env([0])                      # phase=0 -> P1
+        lam = float(cmd.time_scale_command[0])
+        for tp in (0.0, .2 * lam, .5 * lam, .79 * lam):
+            cmd.t_phase[:] = tp
+            _, zF, _, zH = reference.get_body_reference(env)
+            # 录制值的特征: P1 段 zF ≠ zH(两段独立录制), 而斜坡强制相等
+            self.assertNotAlmostEqual(float(zF[0]), float(zH[0]), places=4,
+                                      msg="P1 的 z 不应被斜坡覆盖(此时 zF/zH 应各取录制值)")
+        # P3 边界处斜坡起点必须等于趴平高度(即 P3 入口参考高度)
+        cmd.phase[:] = 2
+        cmd.t_phase[:] = 0.
+        _, zF3, _, zH3 = reference.get_body_reference(env)
+        self.assertAlmostEqual(float(zF3[0]), T.STAND_GROUND_HEIGHT, places=5)
+        self.assertAlmostEqual(float(zH3[0]), T.STAND_GROUND_HEIGHT, places=5)
+
     def test_confirmation_wins_before_window_closes(self):
         # 窗界之内确认完成 -> 成功优先, 不因为接近截止而作废。
         # P2 窗 = [max(0, 0.15λ−0.20λ), 0.15λ+0.50]; λ=1 时门控被 clamp 到段首, 窗界 0.65 才是约束。
