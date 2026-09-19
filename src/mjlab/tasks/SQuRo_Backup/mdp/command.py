@@ -652,6 +652,17 @@ class BackupCommand(CommandTerm):
         # 冻结: 下一步的奖励项读 _last_cycle_end_pulse, 读走即被置回 False(只领一次)。
         self._last_cycle_end_pulse |= confirmed
         self._pending_cycle_reset |= confirmed
+        # 标定日志(不参与判据): 窗口时长、窗口平均速度(判据量本身)与严格几何占比。
+        # §7.2.2 明确要求"先看 stand_mean_vel 离门限多远, 再决定调阈值还是改结构" ——
+        # 这几个量在重写 terminations 时被漏掉, 导致无法判断卡在"速度"还是"几何不维持"。
+        log = getattr(self._env, "extras", {}).get("log") if hasattr(self._env, "extras") else None
+        if log is not None:
+            window = active & running & (self._stand_elapsed > 0.0)
+            count = window.sum().clamp_min(1).to(self._stand_elapsed.dtype)
+            log["Progress/standing"] = (strict & in_p3).float().mean().item()
+            log["Progress/stand_hold"] = self._stand_elapsed.mean().item()
+            log["Progress/stand_mean_vel"] = (
+                torch.where(window, mean_vel, torch.zeros_like(mean_vel)).sum() / count).item()
         return obs_t, obs_v, mean_vel, confirmed
 
     # 消费本步的循环完成脉冲 — 奖励项调用后立刻清零, 保证恰好结算一次。

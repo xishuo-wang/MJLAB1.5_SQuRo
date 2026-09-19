@@ -856,6 +856,25 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(order[-1], 'sim.forward')
         self.assertEqual(order[0], 'sim.reset')
 
+    def test_stand_window_writes_calibration_logs(self):
+        # 仪表守卫: 判据量本身必须被记录 —— §7.2.2 要求"先看 stand_mean_vel 离门限多远,
+        # 再决定调阈值还是改结构"。这几个量曾在重写 terminations 时被漏掉, 只能盲猜。
+        env, cmd = make_env([2, 1])
+        log = {}
+        env.extras['log'] = log
+        cmd.test_vel[:] = torch.tensor([2.0, 0.0])        # env0 抖动, env1 静止
+        cmd._stand_elapsed[0] = 1.6
+        cmd._stand_vel_integral[0] = 1.6 * 2.0
+        cmd._update_dt = .01
+        cmd.stand_reward_and_pulse()
+        for key in ("Progress/standing", "Progress/stand_hold", "Progress/stand_mean_vel"):
+            self.assertIn(key, log, f"{key} 必须被记录")
+        # stand_mean_vel 是判据量本身: env0 的窗口均值应为约 2.0
+        self.assertAlmostEqual(log["Progress/stand_mean_vel"], 2.0, places=3)
+        # stand_hold 是所有环境的均值: env1 从未建窗, 故约为 env0(1.6+dt) 的一半
+        self.assertGreater(log["Progress/stand_hold"], .8)
+        self.assertLess(log["Progress/stand_hold"], .82)
+
     def test_full_episode_reset_clears_cycle_state(self):
         # [P2] 完整回合重置必须清循环级状态: 旧实现只动 env._stand_*, 且 _resample_command
         # 不清 _pending_cycle_reset -> 成功与超时同帧时, 重置后仍会多执行一次部分复位。
