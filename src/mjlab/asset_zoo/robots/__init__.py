@@ -19,3 +19,6 @@ from mjlab.asset_zoo.robots.unitree_go1.go1_constants import (
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
   get_squro_robot_cfg as get_squro_robot_cfg,
 )
+from mjlab.asset_zoo.robots.Sengibot.Sengibot_constants import (
+  get_sengibot_robot_cfg as get_sengibot_robot_cfg,
+)

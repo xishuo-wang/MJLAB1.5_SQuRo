@@ -1,0 +1,436 @@
+<mujoco model="20240517sengibot_urdfall_2 - demo">
+<!-- <mujoco model="sengibot_urdfall_motor"> -->
+  <!-- <compiler angle="radian" meshdir="E:/Software_pro2/mujoco3.1.5/mujoco-3.1.5-windows-x86_64/bin/20240517sengibot_urdfall_2/meshes/"/> -->
+  <compiler angle="radian" meshdir="D:/Code/Model/Sengibot/20240517sengibot_urdfall_2 - demo/meshes/"/>
+  <!-- <compiler angle="radian" meshdir="C:/Users/Starrish/.mujoco/mjpro150/model/20240517sengibot_urdfall_2/meshes/"/> -->
+  <option timestep="2e-3" iterations="200" tolerance="1e-9" cone="elliptic"/>
+
+  <size nconmax="500" njmax="1000"/>
+  
+  <equality>
+    <connect body1="link_upinner" body2="link_upleft0" anchor="0.01639 0.00008 0.02513" solimp="1 1 0.001"/>
+    <connect body1="link_upleft1" body2="link_up_p" anchor="-0.04064 -0.0001 -0.02109" solimp="1 1 0.001"/>
+    <connect body1="link_up_p" body2="link_upright1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="link_downinner" body2="link_downright0" anchor="-0.01232 -0.00002 -0.02735" solimp="1 1 0.001"/>
+    <connect body1="link_downright1" body2="link_down_p" anchor="0.04357 0 0.01407" solimp="1 1 0.001"/>
+    <connect body1="link_down_p" body2="link_downleft1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="Link_LH1" body2="link_LH_upspring1" anchor="0.010 0 -0.00005" solimp="1 1 0.001"/>
+    <connect body1="link_LH_tibia" body2="link_LH_downspring1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="link_LH_tibia" body2="link_LH_femur" anchor="0.00045 0 0.00999" solimp="1 1 0.001"/>
+    <connect body1="link_RH1" body2="link_RH_upspring1" anchor="0.010 0 -0.00005" solimp="1 1 0.001"/>
+    <connect body1="link_RH_tibia" body2="link_RH_downspring1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="link_RH_tibia" body2="link_RH_femur" anchor="0.00045 0 0.00999" solimp="1 1 0.001"/>
+    <connect body1="link_LF1" body2="link_LF_upspring1" anchor="0.00447 0 0.00895" solimp="1 1 0.001"/>
+    <connect body1="link_LF_tibia" body2="link_LF_downspring1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="link_LF_tibia" body2="link_LF_femur" anchor="-0.00876 0 0.00482" solimp="1 1 0.001"/>
+    <connect body1="link_RF1" body2="link_RF_upspring1" anchor="0.00447 0 0.00895" solimp="1 1 0.001"/>
+    <connect body1="link_RF_tibia" body2="link_RF_downspring1" anchor="0 0 0" solimp="1 1 0.001"/>
+    <connect body1="link_RF_tibia" body2="link_RF_femur" anchor="-0.00876 0 0.00482" solimp="1 1 0.001"/>
+  </equality>
+
+  <asset>
+    <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="256" height="256" mark="cross" markrgb=".1 .1 .1"/>
+    <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="10 10" texuniform="true"/>
+  </asset>
+
+  <asset>
+	<hfield name="terrain" nrow="1000" ncol="1000" size="2.5 2.5 0.1 0.01"/>
+  </asset>
+
+  <asset>
+  <!-- "link_downleft0" == 前架；"link_upright0" == 后架 -->
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="link_upleft0" file="link_upleft0.STL"/>
+    <mesh name="link_upleft1" file="link_upleft1.STL"/>
+    <mesh name="link_upright0" file="link_upright0.STL"/>
+    <mesh name="link_upright1" file="link_upright1.STL"/>
+    <mesh name="link_LH_drive" file="link_LH_drive.STL"/>
+    <mesh name="link_LH_upspring0" file="link_LH_upspring0.STL"/>
+    <mesh name="link_LH_upspring1" file="link_LH_upspring1.STL"/>
+    <mesh name="link_LH_downspring0" file="link_LH_downspring0.STL"/>
+    <mesh name="link_LH_downspring1" file="link_LH_downspring1.STL"/>
+    <mesh name="link_LH_femur" file="link_LH_femur.STL"/>
+    <mesh name="Link_LH1" file="Link_LH1.STL"/>
+    <mesh name="link_LH_tibia" file="link_LH_tibia.STL"/>
+    <mesh name="link_RH_drive" file="link_RH_drive.STL"/>
+    <mesh name="link_RH_upspring0" file="link_RH_upspring0.STL"/>
+    <mesh name="link_RH_upspring1" file="link_RH_upspring1.STL"/>
+    <mesh name="link_RH_downspring0" file="link_RH_downspring0.STL"/>
+    <mesh name="link_RH_downspring1" file="link_RH_downspring1.STL"/>
+    <mesh name="link_RH_femur" file="link_RH_femur.STL"/>
+    <mesh name="link_RH1" file="link_RH1.STL"/>
+    <mesh name="link_RH_tibia" file="link_RH_tibia.STL"/>
+    <mesh name="link_up_p" file="link_up_p.STL"/>
+    <mesh name="link_waist_drive" file="link_waist_drive.STL"/>
+    <mesh name="link_upinner" file="link_upinner.STL"/>
+    <mesh name="link_downinner" file="link_downinner.STL"/>
+    <mesh name="link_downleft0" file="link_downleft0.STL"/>		
+    <mesh name="link_downleft1" file="link_downleft1.STL"/>
+    <mesh name="link_LF_drive" file="link_LF_drive.STL"/>
+    <mesh name="link_LF_upspring0" file="link_LF_upspring0.STL"/>
+    <mesh name="link_LF_upspring1" file="link_LF_upspring1.STL"/>
+    <mesh name="link_LF_downspring0" file="link_LF_downspring0.STL"/>
+    <mesh name="link_LF_downspring1" file="link_LF_downspring1.STL"/>
+    <mesh name="link_LF_femur" file="link_LF_femur.STL"/>
+    <mesh name="link_LF1" file="link_LF1.STL"/>
+    <mesh name="link_LF_tibia" file="link_LF_tibia.STL"/>
+    <mesh name="link_RF_drive" file="link_RF_drive.STL"/>
+    <mesh name="link_RF_upspring0" file="link_RF_upspring0.STL"/>
+    <mesh name="link_RF_upspring1" file="link_RF_upspring1.STL"/>
+    <mesh name="link_RF_downspring0" file="link_RF_downspring0.STL"/>
+    <mesh name="link_RF_downspring1" file="link_RF_downspring1.STL"/>
+    <mesh name="link_RF_femur" file="link_RF_femur.STL"/>
+    <mesh name="link_RF1" file="link_RF1.STL"/>
+    <mesh name="link_RF_tibia" file="link_RF_tibia.STL"/>
+    <mesh name="link_downright0" file="link_downright0.STL"/>
+    <mesh name="link_downright1" file="link_downright1.STL"/>
+    <mesh name="link_down_p" file="link_down_p.STL"/>
+  </asset>
+
+  <worldbody>
+    <!-- <geom name="floor" pos="0 0 -0.05" size="10 10 .25" type="plane" material="matplane" margin="1e-5" condim="3" contype="1" friction="0.33 0.01 0.01" solref="-0.01 -10"/> -->
+	<!-- <geom name="floor" type="hfield" hfield="terrain"  pos="2 0 -0.09" margin="1e-5" condim="3" contype="1" friction="0.33 0.01 0.01" solref="0.01 1"/> -->
+	
+	<body name="terrain" pos="0 0 0">
+		<geom name="platform1" pos="0 0 -0.1" size="5.5 0.5 .05" type="box" margin="1e-5" condim="3" contype="1" friction="0.33 0.01 0.01" solref="0.004 1" rgba="0.5 0.5 0.5 1"/>
+		<!-- <geom name="platform2" pos="1.1 0 -0.1" size="0.5 0.5 .05" type="box" margin="1e-5" condim="3" contype="1" friction="0.33 0.01 0.01" solref="0.004 1" rgba="0.3 0.3 0.3 1"/>
+		<geom name="platform3" pos="0.5 0 -0.1" size="0.5 0.5 .02" type="box" margin="1e-5" condim="3" contype="1" friction="0.33 0.01 0.01" solref="0.004 1" rgba="0.1 0.1 0.1 1"/> -->
+		<geom name="site" type="sphere" pos="1 0 -0.05" size="0.005" rgba="1 0 0 1" contype="0" conaffinity="0" />
+	</body>
+	 <!-- 添加一个用于显示质心的浮动 body -->
+    <body name="com_visual" mocap="true" pos="0 0 0">
+        <geom name="com_indicator" type="sphere" size="0.005" rgba="1 0 0 1" contype="0" conaffinity="0" />
+    </body>
+	   <body name="torso" >
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.627451 0.627451 0.627451 1" mesh="base_link"/>
+		  <!-- <inertial pos="-0.00595251259373288 -3.24805489932412E-05 -0.00370810431419302" quat="0.684538 0.684538 -0.177221 0.177221" mass="0.0362511640405869" diaginertia="3.92658e-07 3.1666e-07 9.8528e-08"/> -->
+		  <inertial pos="-7.295E-03 0.026E-03 -0.442E-03" quat="0.684538 0.684538 -0.177221 0.177221" mass="69e-3" diaginertia="3.3448e-05 1.9836e-05 4.2315e-05"/>
+		  <freejoint name="robot"/>
+
+		  <!-- 设置跟随相机 -->
+   	   	  <!-- <camera name="follow_camera" mode='track' pos="0 -0.5 0" euler="1.57 0 0" fovy="45" /> -->
+		  <camera name="follow_camera" mode='track' pos="0 -1.0 0" euler="1.57 0 0" fovy="20" />
+		  <light name="follow_light" mode="track" pos="0 -0.5 0.5" dir="0 0 -1" directional="true" castshadow="false" ambient="0.3 0.3 0.3" diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2" active="true"/>
+		<body name="link_upleft0" pos="0.023934 -8.2545e-05 0.0041101">
+		<!-- <body name="link_upleft0" pos="0.023934 -8.2545e-05 0.0041101"> -->
+		  <inertial pos="-0.00982017 5.3171e-05 0.0176946" quat="0.684538 0.684538 -0.177221 0.177221" mass="0.00375372" diaginertia="3.92658e-07 3.1666e-07 9.8528e-08"/>
+		  <joint name="joint_upleft0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="link_upleft0"/>
+		  <body name="link_upleft1" pos="-0.0117052 0.0001 0.0210911">
+			<inertial pos="-0.0209999 -5e-05 -0.0108986" quat="0.604285 0.367204 0.367204 0.604285" mass="0.00145083" diaginertia="3.20718e-07 3.13852e-07 9.89858e-09"/>
+			<joint name="joint_upleft1" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_upleft1"/>
+		  </body>
+		</body>
+		<body name="link_upright0" pos="-0.039266 -3.25447e-05 -0.00454986">
+		  <!-- <inertial pos="-0.0156007 -1.72727e-05 0.0128909" quat="0.647168 0.647039 -0.285209 0.284903" mass="0.021893e1" diaginertia="1.5299e-05 1.4618e-05 5.51004e-06"/> -->
+		  <inertial pos="-17.457E-03 -0.005E-03 17.581E-03" quat="0.647168 0.647039 -0.285209 0.284903" mass="92e-3" diaginertia="53.225e-06 17.653e-06 52.362e-06"/>
+		  <!-- <joint name="joint_upright0" pos="0 0 0" axis="0 -1 0" range="0 1.047" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+		  <joint name="joint_upright0" pos="0 0 0" axis="0 -1 0" range="0 1.047" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="link_upright0"/>
+		  <body name="link_upright1" pos="0.00539585 -5e-05 0.00870301">
+			<inertial pos="0.00272992 5e-05 -2.15042e-05" quat="0.498027 0.501965 0.501965 0.498027" mass="0.000524864" diaginertia="1.04177e-08 7.9116e-09 3.88156e-09"/>
+			<joint name="joint_upright1" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_upright1"/>
+		  </body>
+		  <body name="link_LH_drive" pos="-0.0189103 0.04525 0.0117244">
+			<inertial pos="0.000249013 -0.00306057 -0.00475959" quat="0.706445 0.0116896 0.00908539 0.707613" mass="0.00161934" diaginertia="1.47502e-07 1.26531e-07 2.79963e-08"/>
+			<joint name="joint_LH_drive" pos="0 0 0" axis="0 1 0" range="-1.0 1.5" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.317647 0.247059 0.207843 1" mesh="link_LH_drive"/>
+			<body name="link_LH_upspring0" pos="0.00967535 0 -0.00744228">
+			  <inertial pos="-0.000129935 -0.001 -0.00286595" quat="0.706925 0.0160168 0.0160168 0.706925" mass="1.485126e-03" diaginertia="1.7741e-09 1.58295e-09 2.38179e-10"/>
+			  <joint name="joint_LH_upspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_upspring0"/>
+			  <body name="link_LH_upspring1" pos="-0.00102354 0 -0.0225768">
+				<inertial pos="0.000199448 -0.001 0.00439942" quat="0.706925 0.016016 0.016016 0.706925" mass="0.001511144" diaginertia="3.20482e-09 2.97472e-09 3.38861e-10"/>
+				<!-- <joint name="joint_LH_upspring1" pos="0 0 0" axis="-0.0452892 0 -0.998974" type="slide" range="-0.03 0.03" damping="0.005" armature="0.00015" limited="true"/> -->
+				<joint name="joint_LH_upspring1" pos="0 0 0" axis="-0.0452892 0 -0.998974" type="slide" range="-0.05 0.05" stiffness="1500" damping="0.0005" armature="0.00005" limited="true" springref="-0.002"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_upspring1"/>
+			  </body>
+			</body>
+			<body name="link_LH_downspring0" pos="-0.000898708 0 -0.0199798">
+			  <inertial pos="-0.00191627 0.00324043 -0.000619387" quat="0.58988 0.441364 0.389924 0.552447" mass="0.001532344" diaginertia="2.85179e-09 2.57389e-09 5.69633e-10"/>
+			  <joint name="joint_LH_downspring0" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_downspring0"/>
+			  <body name="link_LH_downspring1" pos="-0.030449 0 -0.0098417">
+				<inertial pos="0.00485605 0.00400001 0.00156956" quat="0.571741 0.416067 0.416067 0.571741" mass="0.001517678" diaginertia="4.19189e-09 3.96178e-09 3.50164e-10"/>
+				<!-- <joint name="joint_LH_downspring1" pos="0 0 0" axis="-0.951531 0 -0.307553" type="slide" range="-0.03 0.03" damping="0.005" armature="0.00015" limited="true"/> -->
+				<joint name="joint_LH_downspring1" pos="0 0 0" axis="-0.951531 0 -0.307553" type="slide" range="-0.05 0.05" damping="0.0005" armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_downspring1"/>
+			  </body>
+			</body>
+			<body name="link_LH_femur" pos="-0.000898708 0 -0.0199798">
+			  <inertial pos="-0.0149998 0 7.40975e-05" quat="0.498764 0.501233 0.501233 0.498764" mass="0.001061532" diaginertia="3.28664e-08 3.2012e-08 9.96447e-10"/>
+			  <!-- <joint name="joint_LH_femur" pos="0 0 0" axis="0 -1 0" range="-0.3 0.3" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			  <joint name="joint_LH_femur" pos="0 0 0" axis="0 -1 0" range="-3 3" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_femur"/>
+			</body>
+			<body name="Link_LH1" pos="-0.00134806 0 -0.0299697">
+			  <inertial pos="-0.0101495 -0.003 -0.000167372" quat="0.494638 0.505305 0.505305 0.494638" mass="0.000821746" diaginertia="1.29043e-07 1.27809e-07 4.86076e-09"/>
+			  <!-- <joint name="joint_LH1" pos="0 0 0" axis="0 1 0" range="-0.3 0.3" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			  <joint name="joint_LH1" pos="0 0 0" axis="0 1 0" range="-3 3" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="Link_LH1"/>
+			  <body name="link_LH_tibia" pos="-0.0299996 0 0.000148195">
+				<inertial pos="1.51888e-05 0.00119496 -0.00787586" quat="0.71427 0.00661081 0.0245086 0.69941" mass="0.001269622" diaginertia="6.01074e-08 5.8585e-08 2.5425e-09"/>
+				<joint name="joint_LH_tibia" pos="0 0 0" axis="0 -1 0" range="-0.7 0.7" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+				<!-- <geom name="LH_foot" type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_tibia" friction="0.1 0.01 0.01"/> -->
+				<geom name="LH_foot" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LH_tibia" friction="0.1 0.01 0.01"/>
+				<geom name="tibia3_1" type="capsule" pos="0 0.001 0.005" axisangle="0 1 0 0" size="0.003 0.0055 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia3_2" type="capsule" pos="0.0003 0.001 -0.0025" axisangle="0 1 0 -0.25" size="0.0025 0.004 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia3_3" type="capsule" pos="0.0003 0.001 -0.015" axisangle="0 1 0 0.25" size="0.002 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="foot3" type="capsule" pos="-0.001 0.001 -0.02" axisangle="1 0 0 1.57079633" size="0.004 0.0005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+			  </body>
+			</body>
+		  </body>
+		  <body name="link_RH_drive" pos="-0.01891 -0.04525 0.011724">
+			<inertial pos="0.000249013 0.00306057 -0.00475959" quat="0.707613 0.00908538 0.0116896 0.706445" mass="0.00161934" diaginertia="1.47502e-07 1.26531e-07 2.79963e-08"/>
+			<joint name="joint_RH_drive" pos="0 0 0" axis="0 1 0" range="-1.0 1.5" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.317647 0.247059 0.207843 1" mesh="link_RH_drive"/>
+			<body name="link_RH_upspring0" pos="0.0096754 0 -0.0074423">
+			  <inertial pos="-0.000129935 0.000999999 -0.00286595" quat="0.706925 0.0160168 0.0160168 0.706925" mass="1.485126e-03" diaginertia="1.7741e-09 1.58295e-09 2.38179e-10"/>
+			  <joint name="joint_RH_upspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_upspring0"/>
+			  <body name="link_RH_upspring1" pos="-0.0010235 0 -0.022577">
+				<inertial pos="0.000199448 0.000999995 0.00439942" quat="0.706925 0.016016 0.016016 0.706925" mass="0.00151144" diaginertia="3.20482e-09 2.97472e-09 3.38861e-10"/>
+				<!-- <joint name="joint_RH_upspring1" pos="0 0 0" axis="-0.0452892 0 -0.998974" type="slide" range="-0.03 0.03" damping="0.0005"  armature="0.00005" limited="true"/> -->
+				<joint name="joint_RH_upspring1" pos="0 0 0" axis="-0.0452892 0 -0.998974" type="slide" range="-0.03 0.03" stiffness="1500" damping="0.0005"  armature="0.00005" limited="true" springref= "-0.002"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_upspring1"/>
+			  </body>
+			</body>
+			<body name="link_RH_downspring0" pos="-0.00089871 0 -0.01998">
+			  <inertial pos="-0.00191625 -0.00324043 -0.000619374" quat="0.552446 0.389926 0.441365 0.58988" mass="0.001532343" diaginertia="2.85176e-09 2.57387e-09 5.69633e-10"/>
+			  <joint name="joint_RH_downspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_downspring0"/>
+			  <body name="link_RH_downspring1" pos="-0.030449 0 -0.0098417">
+				<inertial pos="0.00485605 -0.00399999 0.00156956" quat="0.571741 0.416067 0.416067 0.571741" mass="0.001517678" diaginertia="4.19189e-09 3.96178e-09 3.50164e-10"/>
+				<joint name="joint_RH_downspring1" pos="0 0 0" axis="-0.951532 0 -0.307551" type="slide" range="-0.03 0.03" damping="0.0005"  armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_downspring1"/>
+			  </body>
+			</body>
+			<body name="link_RH_femur" pos="-0.00089871 0 -0.01998">
+			  <inertial pos="-0.0149998 0 7.40975e-05" quat="0.498764 0.501233 0.501233 0.498764" mass="0.001061532" diaginertia=" 9.96447e-10 3.28664e-08 3.2012e-08"/>
+			  <joint name="joint_RH_femur" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_femur"/>
+			</body>
+			<body name="link_RH1" pos="-0.0013481 0 -0.02997">
+			  <inertial pos="-0.0101495 0.003 -0.000167372" quat="0.494638 0.505305 0.505305 0.494638" mass="0.000821746" diaginertia=" 4.86076e-09 1.29043e-07 1.27809e-07"/>
+			  <!-- <joint name="joint_RH1" pos="0 0 0" axis="0 1 0" range="-0.3 0.3" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			  <joint name="joint_RH1" pos="0 0 0" axis="0 1 0" range="-3 3" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_RH1"/>
+			  <body name="link_RH_tibia" pos="-0.03 0 0.0001482">
+				<inertial pos="1.57079e-05 -0.00118949 -0.00782787" quat="0.699694 0.0242515 0.00677689 0.713998" mass="0.001269622" diaginertia="6.03593e-08 5.88327e-08 2.55745e-09"/>
+				<joint name="joint_RH_tibia" pos="0 0 0" axis="0 1 0" range="-0.7 0.7" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+				<!-- <geom name="RH_foot" type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_tibia" friction="0.1 0.01 0.01"/> -->
+				<geom name="RH_foot" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RH_tibia" friction="0.1 0.01 0.01"/>
+				<geom name="tibia4_1" type="capsule" pos="0 -0.001 0.005" axisangle="0 1 0 0" size="0.003 0.0055 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia4_2" type="capsule" pos="0.0003 -0.001 -0.0025" axisangle="0 1 0 -0.25" size="0.0025 0.004 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia4_3" type="capsule" pos="0.0003 -0.001 -0.015" axisangle="0 1 0 0.25" size="0.002 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="foot4" type="capsule" pos="-0.001 -0.001 -0.02" axisangle="1 0 0 1.57079633" size="0.004 0.0005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+			  </body>
+			</body>
+		  </body>
+		</body>
+		<body name="link_up_p" pos="-0.02841 -8.2545e-05 0.0041101">
+		  <inertial pos="0 4.97246e-05 0" quat="0.707107 0.707107 0 0" mass="0.00253019" diaginertia="1.5413e-07 1.5413e-07 6.45596e-09"/>
+		  <joint name="joint_up_p" pos="0 0 0" axis="1 0 0" type="slide" range="-0.003 0.003" damping="0.0005" armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_up_p"/>
+		</body>
+		<body name="link_waist_drive" pos="-0.006066 -3.2545e-05 -0.0045499">
+		  <inertial pos="0.000589054 0 0.0014254" quat="0.693576 0.137666 0.137666 0.693576" mass="0.00973607" diaginertia="2.70184e-07 1.79814e-07 1.45205e-07"/>
+		  <!-- <joint name="joint_waist_drive" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+		  <joint name="joint_waist_drive" pos="0 0 0" axis="0 -1 0" damping="0.005" type="hinge" armature="0.00015" limited="false"/>
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.839216 0.470588 0.368627 1" mesh="link_waist_drive"/>
+		  <body name="link_upinner" pos="0.00190964 -2.66799e-05 0.00462096">
+			<inertial pos="0.00777753 2.66799e-05 0.0119285" quat="0.677804 0.20145 0.20145 0.677804" mass="0.00151864" diaginertia="1.27249e-07 1.20283e-07 1.02553e-08"/>
+			<!-- <joint name="joint_upinner" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			<!-- 注意：3.14不是pi，这会限制全周运动 -->
+			<joint name="joint_upinner" pos="0 0 0" axis="0 -1 0" damping="0.0005" type="hinge" armature="0.00005" limited="false"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_upinner"/>
+		  </body>
+		  <body name="link_downinner" pos="0.00190964 -2.66799e-05 0.00462096">
+			<inertial pos="-0.00615947 2.66799e-05 -0.013677" quat="0.69134 0.148491 0.148491 0.69134" mass="0.00140744" diaginertia="1.19201e-07 1.13152e-07 9.33241e-09"/>
+			<!-- <joint name="joint_downinner" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			<joint name="joint_downinner" pos="0 0 0" axis="0 -1 0" damping="0.0005" type="hinge" armature="0.00005" limited="false"/>
+			<geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_downinner"/>
+		  </body>
+		</body>
+		<body name="link_downleft0" pos="0.027134 -3.2545e-05 -0.0045499">
+		  <!-- <inertial pos="0.014194 -1.18011e-07 0.00542425" quat="0.645215 0.645215 -0.289302 0.289308" mass="0.0195089e1" diaginertia="9.80811e-06 9.32842e-06 2.47234e-06"/> -->
+		  <inertial pos="14.977E-03 -0.001E-03 13.830E-03" quat="0.645215 0.645215 -0.289302 0.289308" mass="66e-3" diaginertia="46.196e-06 10.560e-06 44.175e-06"/>
+		  <joint name="joint_downleft0" pos="0 0 0" axis="0 -1 0" range="-1.047 0" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="link_downleft0"/>
+		  <body name="link_downleft1" pos="0.00542039 -5e-05 -0.00868775">
+			<inertial pos="-0.00272996 5e-05 1.3875e-05" quat="0.498728 0.501269 0.501269 0.498728" mass="0.000524864" diaginertia="1.04177e-08 7.9116e-09 3.88156e-09"/>
+			<joint name="joint_downleft1" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			<geom type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_downleft1"/>
+		  </body>
+		  <body name="link_LF_drive" pos="0.0188772 0.04525 0.0117777">
+			<inertial pos="0.00296312 -0.00306548 -0.00107607" quat="0.375504 0.597268 0.59975 0.37758" mass="0.00160549" diaginertia="9.35076e-08 7.30732e-08 2.72096e-08"/>
+			<joint name="joint_LF_drive" pos="0 0 0" axis="0 1 0" range="-1.5 0.5" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.317647 0.247059 0.207843 1" mesh="link_LF_drive"/>
+			<body name="link_LF_upspring0" pos="0.0109532 0 0.00538771">
+			  <inertial pos="0.000950602 -0.000999999 -0.000523588" quat="0.359703 0.60878 0.60878 0.359703" mass="1.48034e-03" diaginertia="7.38844e-10 5.47689e-10 2.30324e-10"/>
+			  <joint name="joint_LF_upspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_upspring0"/>
+			  <body name="link_LF_upspring1" pos="0.0136644 0 -0.00752621">
+				<inertial pos="-0.00248462 -0.00100001 0.0013685" quat="0.359705 0.608779 0.608779 0.359705" mass="1.48091e-03" diaginertia="1.57206e-09 1.34195e-09 3.10602e-10"/>
+				<joint name="joint_LF_upspring1" pos="0 0 0" axis="0.875924 0 -0.482449" type="slide" range="-0.03 0.03" stiffness="1000" damping="0.005" armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_upspring1"/>
+			  </body>
+			</body>
+			<body name="link_LF_downspring0" pos="0.0113902 0 -0.006266">
+			  <inertial pos="-0.000291718 0.00324043 -0.00199262" quat="0.706836 0.0830223 0.0195724 0.702216" mass="0.00152343" diaginertia="2.85176e-09 2.57387e-09 5.69633e-10"/>
+			  <joint name="joint_LF_downspring0" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_downspring0"/>
+			  <body name="link_LF_downspring1" pos="-0.00463531 0 -0.0316625">
+				<inertial pos="0.000739239 0.00399999 0.00504958" quat="0.70524 0.0513483 0.0513483 0.70524" mass="0.00157678" diaginertia="4.19189e-09 3.96178e-09 3.50165e-10"/>
+				<joint name="joint_LF_downspring1" pos="0 0 0" axis="-0.144853 0 -0.989453" type="slide" range="-0.03 0.03" damping="0.005"  armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_downspring1"/>
+			  </body>
+			</body>
+			<body name="link_LF_femur" pos="0.0113902 0 -0.006266">
+			  <inertial pos="-0.00669851 0 -0.0134213" quat="0.68825 0.162211 0.162211 0.68825" mass="0.001061532" diaginertia="3.28664e-08 3.2012e-08 9.96447e-10"/>
+			  <joint name="joint_LF_femur" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_femur"/>
+			</body>
+			<body name="link_LF1" pos="0.0201519 0 -0.011086">
+			  <inertial pos="-0.0043374 -0.003 -0.00917755" quat="0.686897 0.167848 0.167848 0.686897" mass="0.001021746" diaginertia="1.29043e-07 1.27809e-07 4.86076e-09"/>
+			  <!-- <joint name="joint_LF1" pos="0 0 0" axis="0 1 0" range="0 0.01" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			  <joint name="joint_LF1" pos="0 0 0" axis="0 1 0" range="-3 3" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF1"/>
+			  <body name="link_LF_tibia" pos="-0.013397 0 -0.0268425">
+				<inertial pos="0.0118113 0.00115348 -0.00556732" quat="0.358343 0.622001 0.595306 0.360993" mass="0.001298703" diaginertia="1.22953e-07 1.20736e-07 3.54553e-09"/>
+				<!-- <joint name="joint_LF_tibia" pos="0 0 0" axis="0 -1 0" range="0 0.01" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+				<joint name="joint_LF_tibia" pos="0 0 0" axis="0 -1 0" range="-3 3" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+				<!-- <geom name="LF_foot" type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_tibia" friction="0.0 0.01 0.01"/> -->
+				<geom name="LF_foot" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_LF_tibia" friction="0.0 0.01 0.01"/>
+			  	<!-- <geom name="foot1" type="sphere" pos="0.026 0 -0.015" size="0.005" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/> -->
+				<geom name="tibia1_1" type="capsule" pos="-0.005 0.001 0.0025" axisangle="0 1 0 2.10" size="0.003 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia1_2" type="capsule" pos="0.005 0.001 -0.0015" axisangle="0 1 0 1.75" size="0.0025 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia1_3" type="capsule" pos="0.02 0.001 -0.01" axisangle="0 1 0 2.25" size="0.002 0.009 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="foot1" type="capsule" pos="0.0263 0.001 -0.0145" axisangle="1 0 0 1.57079633" size="0.004 0.0005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+			  </body>
+			</body>
+		  </body>
+		  <body name="link_RF_drive" pos="0.0188772 -0.04525 0.0117777">
+			<inertial pos="0.00296312 0.00306548 -0.00107607" quat="0.37758 0.59975 0.597268 0.375504" mass="0.00160549" diaginertia="9.35076e-08 7.30732e-08 2.72096e-08"/>
+			<joint name="joint_RF_drive" pos="0 0 0" axis="0 1 0" range="-1.5 0.5" damping="0.005" type="hinge" armature="0.00015" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.317647 0.247059 0.207843 1" mesh="link_RF_drive"/>
+			<body name="link_RF_upspring0" pos="0.0109532 0 0.00538771">
+			  <inertial pos="0.000950602 0.001 -0.000523588" quat="0.359703 0.60878 0.60878 0.359703" mass="1.48034e-03" diaginertia="7.38844e-10 5.47689e-10 2.30324e-10"/>
+			  <joint name="joint_RF_upspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_upspring0"/>
+			  <body name="link_RF_upspring1" pos="0.0136644 0 -0.00752621">
+				<inertial pos="-0.00248462 0.000999995 0.0013685" quat="0.359705 0.608779 0.608779 0.359705" mass="1.48091e-03" diaginertia="1.57206e-09 1.34195e-09 3.10602e-10"/>
+				<joint name="joint_RF_upspring1" pos="0 0 0" axis="0.875924 0 -0.482449" type="slide" range="-0.03 0.03" stiffness="900" damping="0.005"  armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_upspring1"/>
+			  </body>
+			</body>
+			<body name="link_RF_downspring0" pos="0.0113902 0 -0.006266">
+			  <inertial pos="-0.00029173 -0.0032404 -0.0019926" quat="0.702216 0.0195754 0.0830236 0.706836" mass="0.00152343" diaginertia="2.85183e-09 2.57387e-09 5.69634e-10"/>
+			  <joint name="joint_RF_downspring0" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_downspring0"/>
+			  <body name="link_RF_downspring1" pos="-0.00463531 0 -0.0316625">
+				<inertial pos="0.000739239 -0.00400001 0.00504958" quat="0.70524 0.0513483 0.0513483 0.70524" mass="0.00157678" diaginertia="4.19189e-09 3.96178e-09 3.50165e-10"/>
+				<joint name="joint_RF_downspring1" pos="0 0 0" axis="-0.144853 0 -0.989453" type="slide" range="-0.03 0.03" damping="0.005"  armature="0.00005" limited="true"/>
+				<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_downspring1"/>
+			  </body>
+			</body>
+			<body name="link_RF_femur" pos="0.0113902 0 -0.006266">
+			  <inertial pos="-0.00669851 0 -0.0134213" quat="0.68825 0.162211 0.162211 0.68825" mass="0.001061532" diaginertia="3.28664e-08 3.2012e-08 9.96447e-10"/>
+			  <joint name="joint_RF_femur" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_femur"/>
+			</body>
+			<body name="link_RF1" pos="0.0201519 0 -0.011086">
+			  <inertial pos="-0.0043374 0.003 -0.00917755" quat="0.686897 0.167848 0.167848 0.686897" mass="0.001021746" diaginertia="1.29043e-07 1.27809e-07 4.86076e-09"/>
+			  <!-- <joint name="joint_RF1" pos="0 0 0" axis="0 1 0" range="0 0.01" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+			  <joint name="joint_RF1" pos="0 0 0" axis="0 1 0" range="-3 3" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+			  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF1"/>
+			  <body name="link_RF_tibia" pos="-0.013397 0 -0.0268425">
+				<inertial pos="0.0117271 -0.00114843 -0.0055264" quat="0.360982 0.595832 0.621361 0.35859" mass="0.001298703" diaginertia="1.23866e-07 1.21639e-07 3.56745e-09"/>
+				<!-- <joint name="joint_RF_tibia" pos="0 0 0" axis="0 1 0" range="0 0.01" damping="0.005" type="hinge" armature="0.00015" limited="true"/> -->
+				<joint name="joint_RF_tibia" pos="0 0 0" axis="0 1 0" range="-3 3" damping="0.005" type="hinge" armature="0.00005" limited="true"/>
+				<!-- <geom name="RF_foot" type="mesh" contype="1" conaffinity="1" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_tibia" friction="0.0 0.01 0.01"/> -->
+				<geom name="RF_foot" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_RF_tibia" friction="0.0 0.01 0.01"/>
+			  	<!-- <geom name="foot2" type="sphere" pos="0.026 0 -0.015" size="0.005" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/> -->
+				<geom name="tibia2_1" type="capsule" pos="-0.005 -0.001 0.0025" axisangle="0 1 0 2.10" size="0.003 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia2_2" type="capsule" pos="0.005 -0.001 -0.0015" axisangle="0 1 0 1.75" size="0.0025 0.005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="tibia2_3" type="capsule" pos="0.02 -0.001 -0.01" axisangle="0 1 0 2.25" size="0.002 0.009 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+				<geom name="foot2" type="capsule" pos="0.0263 -0.001 -0.0145" axisangle="1 0 0 1.57079633" size="0.004 0.0005 0" rgba="1 0 0 1" contype="1" conaffinity="1" friction="0.0 0.01 0.01" solref="0.004 1"/>
+			  </body>
+			</body>
+		  </body>
+		</body>
+		<body name="link_downright0" pos="-0.036066 1.7455e-05 -0.01321">
+		  <inertial pos="0.016436 -5.3171e-05 -0.011807" quat="0.629172 0.629172 -0.322711 0.322711" mass="0.0037537" diaginertia="3.92659e-07 3.16661e-07 9.8528e-08"/>
+		  <joint name="joint_downright0" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.79216 0.81961 0.93333 1" mesh="link_downright0"/>
+		  <body name="link_downright1" pos="0.0195907 -0.0001 -0.0140731">
+			<inertial pos="0.02064 5e-05 0.0066668" quat="0.571701 0.416122 0.416122 0.571701" mass="0.0020191" diaginertia="3.8175e-07 3.71221e-07 1.38753e-08"/>
+			<joint name="joint_downright1" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" damping="0.0005" type="hinge" armature="0.00005" limited="true"/>
+			<geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_downright1"/>
+		  </body>
+		</body>
+		<body name="link_down_p" pos="0.027094 -8.2593e-05 -0.01321">
+		  <inertial pos="0 4.9725e-05 0" quat="0.707107 0.707107 0 0" mass="0.0025302" diaginertia="1.5413e-07 1.5413e-07 6.456e-09"/>
+		  <joint name="joint_down_p" pos="0 0 0" axis="1 0 0" type="slide" range="-0.1 0.1" damping="0.0005"  armature="0.00005" limited="true"/>
+		  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="1 1 1 1" mesh="link_down_p"/>
+		</body>
+	   </body>
+  </worldbody>
+
+ <!-- <contact>
+	<exclude body1='link_RH_drive' body2='link_upright0'/>
+	<exclude body1='link_RH_drive' body2='torso'/>
+ </contact> -->
+
+ <!-- <tendon>
+    <fixed >
+        <joint joint="joint_LH_drive" coef="1" />
+        <joint joint="joint_RH_drive" coef="-1" />
+    </fixed>
+</tendon> -->
+
+<!-- <equality>
+    <joint joint1="joint_LH_drive" joint2="joint_RH_drive" />
+	<joint joint1="joint_LH_tibia" joint2="joint_RH_tibia" polycoef="0 -1 0 0 0"/>
+</equality> -->
+
+ <actuator>
+    <!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/> -->
+	<motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<!-- <motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/> -->
+	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
+	<!-- 2025.12.11 调换 -->
+
+	<!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
+	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/> -->
+
+	<!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
+	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/> -->
+	
+	
+	
+ </actuator>
+
+ <!-- sensor -->
+ <sensor>
+	<!-- <jointactuatorfrc joint="joint_waist_drive" name="joint_waist_drive_tor"/> -->
+	<!-- <actuatorfrc actuator="joint_waist_drive" name="joint_waist_drive_tor"/> -->
+ </sensor>
+</mujoco>
