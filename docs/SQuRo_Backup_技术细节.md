@@ -835,9 +835,19 @@ t=0.20 s 回到 −0.203，之后才跟上参考。视觉上像"回退/重试"�
   腿会在 **0.2 s 内自己弹回 LEG_INIT**（`HL_hip` 速度峰值 10.7 rad/s，
   基座 0.0240→0.0275→0.0238）。等于往最关键的 0.2 s 里塞一个新瞬态。
   重置到 LEG_INIT（= PD 平衡点）则 0.5 s 内纹丝不动。
-- **结论：重置姿态已回退为 LEG_INIT。** 要真正把"腿的起始姿态"改掉，必须**三处同时改**：
-  动作默认偏移（`use_default_offset=False` + 显式 `offset`）、`apply_fallen_state`、
-  以及参考表初值，且需评估对 P3 站立（参考末端要回 LEG_INIT）的反向拉扯。
+- **结论：已改为"两处同时改"（任务级覆盖，不影响其他任务）**：
+  1. `SQuRo_Backup_env_cfg.py` 用 `dataclasses.replace` 给本任务的 `EntityCfg.init_state`
+     换成 `_backup_init_state()`，把 8 个驱动腿关节设为 HOLD ⇒ **`default_joint_pos` = HOLD**，
+     即零动作目标就是 HOLD。`get_squro_robot_cfg()` 每次返回新 `EntityCfg`，故模块级
+     `INIT_STATE` 不被污染（已实测：`INIT_STATE` 与其他任务仍是 LEG_INIT）。
+     注意 `resolve_expr` 是**先匹配先胜**，腿键必须插在通配 `".*"` **之前**，否则永不生效。
+  2. `apply_fallen_state` 的 `FALLEN_LEG_POSITIONS` 同步为 HOLD（`write_joint_state_to_sim`
+     只写 qpos，是"起点"；`default_joint_pos` 是"终点"，两者必须一致，否则弹簧会把腿拉回）。
+- **未改参考表**：参考表腿角本来就是 HOLD，改它反而会制造失配。
+- **已知代价**：参考的腿在 T4 要从 HOLD 回到 LEG_INIT（站立姿态），于是 1.4 rad 的 gap
+  从 P1 搬到了 P3 —— default=HOLD 时站立需要 `action ≈ 4.67`，而原先 P1 需要 4.67、
+  站立需要 0。**gap 不消失，只是换阶段**；在当前 `scale=0.3` 下无论放哪段都要 ~4.67。
+  要根治仍需 §7.4 的 `scale` 标定。
 
 **待验证的修法**：把 `scale` 提到 ~1.6（见 §7.4），使"跟参考"与"顶到限位"在数值上分开。
 

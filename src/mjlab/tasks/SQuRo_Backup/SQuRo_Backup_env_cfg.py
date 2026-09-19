@@ -18,11 +18,47 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
+from mjlab.tasks.SQuRo_Backup.mdp.timing import FL_HOLD, HL_HOLD
+
+from dataclasses import replace
+
+
+# 本任务专用的初始状态: 8 个驱动腿关节改为参考表 t=0 的支撑角 HOLD。
+#
+# 为什么必须改这里而不是 events.py: 动作项 use_default_offset=True, 其默认偏移取自
+# EntityCfg.init_state.joint_pos -> data.default_joint_pos, 也就是位置伺服的**零动作目标**。
+# P1 期间参考要求 HOLD, 若默认偏移仍是 LEG_INIT, 则 PD 目标与参考差恒定 1.4 rad(后髋):
+#   - default = LEG_INIT 时, P1 需 action≈4.67 才能压住参考, P3 站立需 0;
+#   - default = HOLD   时, P1 需 0, P3 站立需 4.67。gap 不消失, 只是换阶段。
+# 实测(技术细节 §7.6): 只改 events.py 的重置姿态时, 腿会在 0.2 s 内被弹簧拉回 LEG_INIT
+# (HL_hip 速度峰值 10.7 rad/s), 因为 write_joint_state_to_sim 只写 qpos, 不写控制目标。
+#
+# 只覆盖本任务的 cfg 副本: get_squro_robot_cfg() 每次返回新的 EntityCfg, 用 replace 换掉
+# init_state 不会污染模块级的 INIT_STATE, Slalom/Tunnel 不受影响。
+def _backup_init_state(robot_cfg):
+    leg_hold = {
+        "FL_shoulder_joint": FL_HOLD[0],
+        "FL_elbow_joint": FL_HOLD[1],
+        "FR_shoulder_joint": FL_HOLD[0],
+        "FR_elbow_joint": FL_HOLD[1],
+        "HL_hip_joint": HL_HOLD[0],
+        "HL_knee_joint": HL_HOLD[1],
+        "HR_hip_joint": HL_HOLD[0],
+        "HR_knee_joint": HL_HOLD[1],
+    }
+    joint_pos = dict(robot_cfg.init_state.joint_pos or {})
+    # resolve_expr 先匹配先胜, 故通配 ".*" 必须先摘掉, 再把腿键插到它前面, 否则腿键永不生效。
+    catch_all = joint_pos.pop(".*", None)
+    joint_pos.update(leg_hold)
+    if catch_all is not None:
+        joint_pos[".*"] = catch_all
+    return replace(robot_cfg.init_state, joint_pos=joint_pos)
 
 
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # SQuRo 机器人配置
-    SQURO_ROBOT_CFG = get_squro_robot_cfg()
+    # SQuRo 机器人配置 (init_state 按本任务覆盖, 见上方说明)
+    _robot_cfg = get_squro_robot_cfg()
+    SQURO_ROBOT_CFG = replace(_robot_cfg, init_state=_backup_init_state(_robot_cfg))
 
     # 足端碰撞体名称
     foot_names = ("FL", "FR", "HL", "HR")
