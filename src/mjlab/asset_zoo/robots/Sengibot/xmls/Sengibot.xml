@@ -396,36 +396,18 @@
 	<joint joint1="joint_LH_tibia" joint2="joint_RH_tibia" polycoef="0 -1 0 0 0"/>
 </equality> -->
 
+ <!-- 位置伺服：kp=10, kv=0.05；forcerange 沿用原 <motor> 的力矩上限
+      （waist 0.25，其余 0.2），故控制权限与力矩驱动时完全一致。
+      ctrlrange 取关节机械范围，MuJoCo 会把目标角裁到该区间；
+      forcerange 对应 kp*(目标-当前) 的饱和点，误差超过 0.02 rad 即满力矩。 -->
  <actuator>
-    <!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/> -->
-	<motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<!-- <motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/> -->
-	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.2 0.2"/>
-	<!-- 2025.12.11 调换 -->
-
-	<!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/>
-	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.3 0.3"/> -->
-
-	<!-- <motor joint="joint_waist_drive" name="joint_waist_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_RF_drive" name="joint_RF_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_LF_drive" name="joint_LF_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_LH_drive" name="joint_LH_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_RH_drive" name="joint_RH_drive" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/>
-	<motor joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" ctrllimited="true" ctrlrange="-0.25 0.25"/> -->
-	
-	
-	
+	<position joint="joint_waist_drive" name="joint_waist_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-0.25 0.25"/>
+	<position joint="joint_LF_drive" name="joint_LF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/>
+	<position joint="joint_RF_drive" name="joint_RF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/>
+	<position joint="joint_LH_drive" name="joint_LH_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.0 1.5" forcelimited="true" forcerange="-0.2 0.2"/>
+	<position joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/>
+	<position joint="joint_RH_drive" name="joint_RH_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.0 1.5" forcelimited="true" forcerange="-0.2 0.2"/>
+	<position joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/>
  </actuator>
 
  <!-- sensor -->

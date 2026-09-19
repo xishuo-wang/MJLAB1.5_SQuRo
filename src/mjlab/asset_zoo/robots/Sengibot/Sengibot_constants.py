@@ -27,7 +27,9 @@ def get_spec() -> mujoco.MjSpec:
 
 
 # 执行器配置
-# 注意：XML 中只有这 7 个 <motor>，其余关节由 18 个 connect 等式约束驱动
+# 注意：XML 中只有这 7 个 <position>，其余关节由 18 个 connect 等式约束驱动
+# <position> 会被 XmlActuator 识别为 command_field='position',
+# 动作即目标关节角(rad), 任务侧用 JointPositionActionCfg 的 scale/offset 映射
 SENGIBOT_ARTICULATION = EntityArticulationInfoCfg(
     actuators=(
         XmlActuatorCfg(
