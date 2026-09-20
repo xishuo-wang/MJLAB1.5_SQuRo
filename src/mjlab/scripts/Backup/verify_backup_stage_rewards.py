@@ -130,8 +130,43 @@ class StageRewardTests(unittest.TestCase):
     def tearDown(self):
         _MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id = self.ids
 
-    def test_progress_terrain_is_monotone(self):
+    def test_s2_progress_is_p1_gated(self):
+        # [§7.8] progress_s2 在 P1(phase 0) 内必须为 0, 在 P2/P3 恢复; progress_s1 不受影响。
+        # 依据: P1 内它给"提前双正置"发高分, 使抄近路总收益(4.99)高于正确 S1 姿态(4.50),
+        # 地形在鼓励抄近路。关闭后尖峰态(2.84)低于 S1 姿态(3.00), 地形翻转为 S1 占优。
         env, cmd = make_env([0, 1, 2])
+        # 注意: 必须用**前段不倒置**的姿态, 否则 front 因子 (u_F+1)/2 = 0, s2 属性本身即为 0,
+        # 测不出门控。取实测尖峰处的姿态。
+        cmd.test_u[:] = torch.tensor([[0.42, 0.95]] * 3)
+        s2 = rewards.compute_s2_progress_reward(env)
+        s1 = rewards.compute_s1_progress_reward(env)
+        self.assertEqual(s2[0].item(), 0.)                       # P1 关闭
+        self.assertGreater(s2[1].item(), 0.)                     # P2 生效
+        self.assertGreater(s2[2].item(), 0.)                     # P3 生效
+        torch.testing.assert_close(s2[1], s2[2])
+        # progress_s1 必须全程生效(后段翻正是穿过 S1 门控的必要条件, 不能一起关)
+        self.assertTrue((s1 > 0).all())
+        torch.testing.assert_close(s1, s1[:1].expand(3))
+
+    def test_p1_shortcut_no_longer_beats_s1(self):
+        # [§7.8] 关键性质: 在 P1 内, "正确 S1 姿态"的即时区间收益必须不低于"提前双正置"。
+        # 关闭前实测 尖峰 4.99 > S1 4.50; 关闭后应为 尖峰 2.84 < S1 3.00。
+        env, cmd = make_env([0])
+
+        def total(u):
+            cmd.test_u[:] = torch.tensor([u])
+            return (rewards.compute_s1_progress_reward(env)
+                    + rewards.compute_s2_progress_reward(env))[0].item()
+
+        s1_pose = total([-1., 1.])       # 正确的 S1 姿态
+        shortcut = total([0.42, 0.95])   # 实测尖峰处的姿态
+        self.assertGreater(s1_pose, shortcut,
+                           "P1 内正确 S1 的收益必须高于提前双正置")
+
+    def test_progress_terrain_is_monotone(self):
+        # 这里测的是**区间项本身**(command.progress_*)的激励地形, 相位门控在奖励项里
+        # (见 test_s2_progress_is_p1_gated)。所以相位取不触发门控的组合, 保证三个环境同读数。
+        env, cmd = make_env([1, 1, 2])
 
         def total(u):
             cmd.test_u[:] = torch.tensor(u)
@@ -145,7 +180,7 @@ class StageRewardTests(unittest.TestCase):
         wrong_order = total([1., -1.])      # 前段先翻(错误顺序)
 
         for t in (supine, rear_only, side, prone, wrong_order):
-            # 区间项不按阶段门控: 三个环境读数必须相同
+            # 区间项本身不按阶段门控: 三个环境读数必须相同
             torch.testing.assert_close(t, t[:1].expand(3))
             self.assertTrue(torch.isfinite(t).all())
 

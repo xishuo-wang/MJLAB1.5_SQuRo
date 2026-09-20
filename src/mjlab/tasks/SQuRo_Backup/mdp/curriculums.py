@@ -48,6 +48,9 @@ _CURVES: dict[str, tuple[float, ...]] = {
     # progress_s1 推后段、progress_s2 在此之上承担翻正主推力。两项都必须够大,
     # 否则策略会收敛到"撑起来原地扭"的不翻正解 (标定依据见技术细节 §2)。
     "weight_progress_s1":       (3.0,),
+    # 注意: 该权重只在 phase>=1 (P2 及以后) 生效, P1 内被门控关掉。
+    # 理由见 rewards.compute_s2_progress_reward 的注释: P1 内它给"提前双正置"发高分,
+    # 使抄近路的总收益 (4.99) 高于正确的 S1 姿态 (4.50)。P1 内关掉后地形翻转为 S1 占优。
     "weight_progress_s2":       (3.0,),
     "weight_progress_s3":       (3.0,),
     # stand_still 只在 P3 站立几何成立时给分(线性核, vel_rms=0 满分, 6 rad/s 归零);

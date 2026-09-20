@@ -90,11 +90,22 @@ def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# s2区间奖励 — 朝 S2 姿态 (两段都已俯卧) 的连续进度
+# s2区间奖励 — 朝 S2 姿态 (两段都已俯卧) 的连续进度。
+#
+# **P1 内关闭**(phase >= 1 才生效): progress_s2 在前段也转到俯卧时给分, 而它的前置因子
+# 是后段进度, 所以只要后段先立起来, 前段"提前翻过去"就能拿到高分。实测(2026-09-21):
+#   t=0.32 姿态 (+0.42,+0.95)  progress_s1+s2 = 4.99   ← 提前双正置
+#   t=0.80 姿态 (-0.35,+0.94)  progress_s1+s2 = 3.84   ← S1 判决时刻
+#   真正的 S1 姿态 (-1,+1)      progress_s1+s2 = 4.50
+# 即"提前双正置"的总收益比正确的 S1 姿态还高 10%, 奖励地形在鼓励抄近路。
+# P1 内关闭后: 尖峰态 2.84 < S1 姿态 3.00, 地形翻转为 S1 占优, 且只剩 prog_s1(只依赖后段),
+# 仍单调、不引入新悬崖。
+# 不在 P1 关闭 progress_s1: 后段翻正是穿过 S1 门控的必要条件, 关掉会把链路打断
+# (历史记录过"降低 weight_progress_s1 导致不翻正")。
 def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s2")
-    return weight * command.progress_s2
+    return weight * command.progress_s2 * (command.phase >= 1)
 
 
 # P3 站立进度: 只对 P3 生效；前后段同时背部朝上才解锁, 越接近最终站立越大。
