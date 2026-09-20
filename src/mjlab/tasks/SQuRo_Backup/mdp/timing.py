@@ -78,3 +78,17 @@ BODY_TRAJ_P1_END = 0.80
 LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)
 FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
 HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
+
+# 躯干姿态参考的端点与翻正时刻 (技术细节 §7.8)。量是背腹轴的世界 Z 余弦 u:
+# u=-1 仰卧(腹朝上) / u=0 侧立 / u=+1 俯卧(背朝上)。
+# 每段参考 = 先保持仰卧到 HOLD 时刻, 再线性升到 PRONE, 之后保持。
+ATTITUDE_SUPINE_U = -1.0    # 两段都倒置时 (t=0) 的姿态余弦 (实测初态 _pose_cos = -1.000)
+ATTITUDE_PRONE_U = 1.0      # 翻正完成时的姿态余弦
+# 后段 HOLD=0 / 终点 0.30: 实测 u_H 在 t_nom=0.25 已达 0.9, 取 0.30 留余量。
+ATTITUDE_H_HOLD_T = 0.0
+ATTITUDE_H_RIGHTED_T = 0.30
+# 前段 HOLD=0.35 / 终点 P1_END=0.80: **必须保证 t_nom<=0.80 期间前段仍倒置**, 否则与
+# S1 判据("前段倒置")矛盾。实测 u_F 在 t_nom=0.20~0.45 会短暂冲到 -0.2(策略的早翻), 但 0.78
+# 回到 -1.0; 参考不复制这段早翻, 而是要求前段在 P1 内保持倒置、到 P1 末才翻正。
+ATTITUDE_F_HOLD_T = 0.35
+ATTITUDE_F_RIGHTED_T = P1_END

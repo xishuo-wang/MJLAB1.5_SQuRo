@@ -39,6 +39,13 @@ def make_env(phases):
     cmd._pose_cos_threshold = cos(radians(45))
     cmd._pose_cache = None
     cmd._pose_cos_cache = None
+    # 姿态识别观测 (与相位推进解耦, 只写日志)
+    cmd._pose_stage = torch.zeros((n, 2), dtype=torch.long)
+    cmd._early_s2_entered = torch.zeros(n, dtype=torch.bool)
+    cmd._early_s2_elapsed = torch.zeros(n)
+    cmd._early_s2_count = torch.zeros(n)
+    cmd._s1_hold_lost = torch.zeros(n, dtype=torch.bool)
+    cmd._s1_hold_lost_count = torch.zeros(n)
     # 站立窗口现在归 command 所有 (判定必须发生在复位之前)。
     cmd._stand_elapsed = torch.zeros(n)
     cmd._stand_vel_integral = torch.zeros(n)
@@ -1121,6 +1128,41 @@ class StageRewardTests(unittest.TestCase):
                            f"最大所需动作 {need_max:.3f} ({worst}) 已回到标称量级, 请更新 §6.1")
         self.assertLess(need_max, 6.0,
                         f"最大所需动作 {need_max:.3f} ({worst}) 过大, 标定可能已被改坏")
+
+    def test_pose_stage_classification(self):
+        # [§7.8] 姿态识别只写日志: -1/0/+1 分格与 9 格压缩类别。
+        env, cmd = make_env([0, 1, 2])
+        cmd._update_dt = env.step_dt
+        cases = {
+            (-1.0, -1.0): 0,   # 两段倒置
+            (-1.0, 0.0): 1,    # 后段翻正中
+            (-1.0, 1.0): 2,    # S1 姿态
+            (0.0, 1.0): 3,     # 前段翻正中
+            (1.0, 1.0): 4,     # S2 姿态
+            (1.0, -1.0): 5,    # 错误顺序
+        }
+        for (f, h), want in cases.items():
+            cmd.test_u = torch.full((3, 2), float("nan"))
+            cmd.test_u[0] = torch.tensor([f, h])
+            cmd._update_metrics()
+            self.assertEqual(int(cmd._pose_stage[0, 0]), -1 if f < 0 else (1 if f > 0 else 0))
+            self.assertEqual(int(cmd._pose_stage[0, 1]), -1 if h < 0 else (1 if h > 0 else 0))
+
+    def test_early_s2_observed_and_phase_untouched(self):
+        # [§7.8] "P1 内提前到达 S2 姿态"必须被记到, 且**不得**影响相位推进。
+        env, cmd = make_env([0, 0, 0])
+        cmd._update_dt = env.step_dt
+        cmd.test_u = torch.tensor([[1.0, 1.0], [1.0, 1.0], [-1.0, -1.0]])
+        before = cmd.phase.clone()
+        cmd._update_metrics()
+        self.assertEqual(int(cmd._early_s2_count.max()), 1)
+        self.assertAlmostEqual(float(cmd._early_s2_elapsed.max()), env.step_dt, places=6)
+        self.assertEqual(int(cmd._pose_stage[0, 0]), 1)
+        # 相位不得因此推进 (单向 + 段末门控), 也不得回退
+        self.assertTrue(torch.equal(cmd.phase, before))
+        # 已进入过则不再重复计数
+        cmd._update_metrics()
+        self.assertEqual(int(cmd._early_s2_count.max()), 1)
 
     def test_joint_track_cost_is_order_invariant(self):
         # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,

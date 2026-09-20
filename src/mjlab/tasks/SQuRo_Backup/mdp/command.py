@@ -116,6 +116,14 @@ class BackupCommand(CommandTerm):
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
         self._pose_cos_cache: torch.Tensor | None = None
+        # 姿态识别观测 (技术细节 §7.8): 与 phase 分开, 只作指标, 不参与任何推进判定。
+        # early1 = "已进入过 S2 姿态格但 S1 尚未确认"; s1_hold = "S1 确认后仍在 (倒置,正置) 格"。
+        self._pose_stage = torch.zeros((self.num_envs, 2), dtype=torch.long, device=self.device)
+        self._early_s2_entered = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._early_s2_elapsed = torch.zeros(self.num_envs, device=self.device)
+        self._early_s2_count = torch.zeros(self.num_envs, device=self.device)
+        self._s1_hold_lost = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._s1_hold_lost_count = torch.zeros(self.num_envs, device=self.device)
         self._update_dt = 0.0
         self._asset = self._env.scene.entities[cfg.asset_name]
         resolve_model_indices(self._asset)
@@ -249,6 +257,9 @@ class BackupCommand(CommandTerm):
         self._last_s2_gated_ok[env_ids] = False
         self._s1_awarded[env_ids] = False
         self._s2_awarded[env_ids] = False
+        # 姿态识别: 计数按回合清, "本轮是否已进入过" 按循环清 (见 _clear_cycle_state)。
+        self._early_s2_count[env_ids] = 0.0
+        self._s1_hold_lost_count[env_ids] = 0.0
         # 完整回合重置的入口: 由 reset() 调用。只清"每次(重)采样都该回到起点"的字段;
         # 循环级状态(站立窗口/latch/pending)由 _clear_cycle_state 统一清。
         self._clear_cycle_state(env_ids)
@@ -266,6 +277,10 @@ class BackupCommand(CommandTerm):
         self._last_cycle_end_pulse[env_ids] = False
         self._s1_cycle_latched[env_ids] = False
         self._s2_cycle_latched[env_ids] = False
+        # 姿态识别诊断也按循环清 (每个循环重新观察一次提前到位)。
+        self._early_s2_entered[env_ids] = False
+        self._early_s2_elapsed[env_ids] = 0.0
+        self._s1_hold_lost[env_ids] = False
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
@@ -697,6 +712,55 @@ class BackupCommand(CommandTerm):
         # 旧缓冲区(_s*_dev_*)会被后续候选起点覆盖, 把"严重提前"显示成"接近准时"。
         log["Progress/s1_dev_s"] = _mean_valid(self.s1_dev_early)
         log["Progress/s2_dev_s"] = _mean_valid(self.s2_dev_early)
+        # 姿态识别观测量 (技术细节 §7.8): 与相位推进完全解耦, **只写日志**。
+        # 用与门控同一套 ±45° 锥把每段分成 -1=倒置 / 0=过渡 / +1=正置, 且记录"到达顺序"。
+        # 之所以需要它: 相位是单向的(只有 0->1->2), phase_retry 只反映超时、relapse 只反映双倒,
+        # 都抓不到"已到达 S2 姿态又退回 S1 姿态"这种过程信息。
+        # 阈值直接复用 _pose_cos_threshold, 不引入第二套判定标准。
+        pose_cos = self._pose_cos()
+        thr = self._pose_cos_threshold
+        stage = torch.where(pose_cos >= thr, torch.ones_like(pose_cos, dtype=torch.long),
+                            torch.where(pose_cos <= -thr, -torch.ones_like(pose_cos, dtype=torch.long),
+                                        torch.zeros_like(pose_cos, dtype=torch.long)))
+        # NaN(退化向量) 归为 0=未判定, 不参与统计。
+        stage = torch.where(torch.isfinite(pose_cos), stage, torch.zeros_like(stage))
+        self._pose_stage = stage
+        log["Pose/stage_F"] = stage[:, 0].float().mean().item()
+        log["Pose/stage_H"] = stage[:, 1].float().mean().item()
+        # 9 格压缩成一个可上报的类别: 0=两段倒置 1=后段翻正中 2=S1(前倒后正)
+        # 3=前段翻正中 4=两段正置(S2姿态) 5=前正后倒(错误顺序) 6=其他未知
+        both_inv = (stage[:, 0] == -1) & (stage[:, 1] == -1)
+        s1_pose = (stage[:, 0] == -1) & (stage[:, 1] == 1)
+        s2_pose = (stage[:, 0] == 1) & (stage[:, 1] == 1)
+        wrong = (stage[:, 0] == 1) & (stage[:, 1] == -1)
+        cls = torch.full_like(stage[:, 0], 6)
+        cls = torch.where(s2_pose, torch.full_like(cls, 4), cls)
+        cls = torch.where(s1_pose, torch.full_like(cls, 2), cls)
+        cls = torch.where(wrong, torch.full_like(cls, 5), cls)
+        cls = torch.where(both_inv, torch.full_like(cls, 0), cls)
+        # 后段翻正中: 后段已离开倒置但前段仍倒置, 且不是 S1。
+        mid_h = (stage[:, 0] == -1) & (stage[:, 1] == 0)
+        mid_f = (stage[:, 0] == 0) & (stage[:, 1] == 1)
+        cls = torch.where(mid_f, torch.full_like(cls, 3), cls)
+        cls = torch.where(mid_h, torch.full_like(cls, 1), cls)
+        log["Pose/class"] = cls.float().mean().item()
+        # ① P1 内提前到达 S2 姿态: 进入"两段正置"格且 S1 尚未确认。
+        running = self._env.episode_length_buf > 0
+        early = s2_pose & (self.phase == 0) & ~self._s1_awarded & running
+        rising = early & ~self._early_s2_entered
+        self._early_s2_count += rising.float()
+        self._early_s2_entered |= early
+        step = self._update_dt if (self._update_dt > 0.0 and isfinite(self._update_dt)) else 0.0
+        self._early_s2_elapsed += early.float() * step
+        log["Pose/early_s2_frac"] = early.float().mean().item()
+        log["Pose/early_s2_count"] = self._early_s2_count.mean().item()
+        log["Pose/early_s2_elapsed"] = self._early_s2_elapsed.mean().item()
+        # ② S1 确认后丢失 (倒置, 正置) 格: 说明已到达 S1 姿态又离开。
+        lost = (self.phase >= 1) & ~s1_pose & running
+        rising_lost = lost & ~self._s1_hold_lost
+        self._s1_hold_lost_count += rising_lost.float()
+        self._s1_hold_lost |= lost
+        log["Pose/s1_hold_lost_count"] = self._s1_hold_lost_count.mean().item()
         # 循环统计。计数在**完成时**累计(而不是在复位后), 并在完整回合重置之前上报 ——
         # 框架顺序是 奖励 → 完整回合重置 → command.compute → _update_metrics,
         # 所以超时回合若在 reset() 里清零, 这里读到的就是 0(上一版的错)。
