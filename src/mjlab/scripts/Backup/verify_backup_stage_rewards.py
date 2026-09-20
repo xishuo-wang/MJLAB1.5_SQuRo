@@ -1164,6 +1164,54 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_metrics()
         self.assertEqual(int(cmd._early_s2_count.max()), 1)
 
+    def test_attitude_reference_endpoints_and_order(self):
+        # [§7.8] 姿态参考: 起点必须与实测初态一致(两段倒置 = -1); 后段先于前段翻正,
+        # 且后段翻正时前段必须仍满足 S1 的"倒置"判据(u <= -cos45)。
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_body_attitude
+        from mjlab.tasks.SQuRo_Backup.mdp.timing import (
+            ATTITUDE_H_RIGHTED_T, ATTITUDE_F_RIGHTED_T, P1_END)
+        env, cmd = make_env([0])
+        cmd._update_dt = env.step_dt
+        cmd.command_tensor[:, 5] = 1.0          # λ=1, 让 t_nom == t_phase
+        cmd.time_scale_command = cmd.command_tensor[:, 5]
+        cmd.t_phase[:] = 0.0
+        torch.testing.assert_close(get_reference_body_attitude(env),
+                                   torch.tensor([[-1.0, -1.0]]), atol=1e-5, rtol=0)
+        self.assertGreater(ATTITUDE_F_RIGHTED_T, ATTITUDE_H_RIGHTED_T)
+        self.assertLessEqual(ATTITUDE_F_RIGHTED_T, P1_END)
+        cmd.t_phase[:] = ATTITUDE_H_RIGHTED_T
+        u = get_reference_body_attitude(env)
+        torch.testing.assert_close(u[0, 1], torch.tensor(1.0), atol=1e-5, rtol=0)
+        self.assertLessEqual(u[0, 0].item(), -cos(radians(45)) + 1e-6,
+                             "后段翻正时前段必须仍满足倒置判据")
+        # P1 末到达 +1; phase=2 (P3) 下继续保持
+        cmd.t_phase[:] = P1_END
+        torch.testing.assert_close(get_reference_body_attitude(env),
+                                   torch.tensor([[1.0, 1.0]]), atol=1e-5, rtol=0)
+        cmd.phase[:] = 2
+        for t in (0.0, 1.0, 2.0):
+            cmd.t_phase[:] = t
+            torch.testing.assert_close(get_reference_body_attitude(env),
+                                       torch.tensor([[1.0, 1.0]]), atol=1e-5, rtol=0)
+
+    def test_body_attitude_cost_sign_and_zero(self):
+        # [§7.8] 实际姿态等于参考 -> 代价 0; 偏离 -> 负值且随偏离增大; NaN 不得污染。
+        from mjlab.tasks.SQuRo_Backup.mdp import rewards as RW
+        env, cmd = make_env([0])
+        cmd._update_dt = env.step_dt
+        cmd.phase[:] = 2                          # P3: 参考为 (1,1)
+        cmd.t_phase[:] = 0.0
+        cmd.test_u = torch.tensor([[1.0, 1.0]])
+        torch.testing.assert_close(RW.compute_body_attitude_cost(env), torch.zeros(1))
+        cmd.test_u = torch.tensor([[0.0, 1.0]])
+        half = RW.compute_body_attitude_cost(env)
+        cmd.test_u = torch.tensor([[-1.0, 1.0]])
+        full = RW.compute_body_attitude_cost(env)
+        self.assertLess(half.item(), 0.0)
+        self.assertLess(full.item(), half.item())
+        cmd.test_u = torch.tensor([[float("nan"), 1.0]])
+        self.assertTrue(torch.isfinite(RW.compute_body_attitude_cost(env)).all())
+
     def test_joint_track_cost_is_order_invariant(self):
         # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,
         # 而权重也按 actions 顺序构造 -> 名称反序时代价从 0 变成 0.239。

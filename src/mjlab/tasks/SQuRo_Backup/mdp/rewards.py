@@ -4,7 +4,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
-from .reference import get_reference_joint_state, get_body_reference
+from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .timing import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S, STAND_STILL_FULL_SPEED
 from .timing import TRACK_REF_MSE_SCALE, TRACK_W_LEG, TRACK_W_NECK, TRACK_W_SPN
@@ -170,7 +170,27 @@ def compute_leg_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 执行器 ctrlrange 张量 (按动作项自身的关节顺序排列), 按名称解析一次后缓存。
+# 躯干姿态模仿代价 — 跟踪两段背腹轴的世界 Z 余弦 (技术细节 §7.8)。
+#
+# 为什么关节模仿之外还要它: 实测"关节角推不出整体朝向" —— corr(姿态余弦, 对应 body 角)
+# 仅 +0.58, 用 body 角线性拟合姿态余弦的残差 RMS 达 0.48~0.54 (姿态余弦总范围 2.00);
+# 且存在"关节几乎不动、姿态余弦却大幅变化"的帧(整机刚体旋转), 关节参考里没有这个信息。
+# 该项与关节项互补: 关节项管段内构型, 姿态项管整体朝向。
+#
+# 局限(必须知道): 整机刚体旋转时关节无法改变姿态, 此时该项部分不可达 —— 标定权重时
+# 要同时看"该项扣分中来自刚体旋转的比例", 不能只按 MSE 大小加权重。
+def compute_body_attitude_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    ref_u = get_reference_body_attitude(env)
+    # 与门控同源的姿态余弦; 退化向量会返回 NaN, 用 0 兜底避免污染奖励和。
+    actual_u = command._pose_cos()
+    valid = torch.isfinite(actual_u)
+    err = torch.where(valid, actual_u - ref_u, torch.zeros_like(ref_u))
+    weight = get_curriculum_reward_weight(env, "weight_body_att")
+    return -weight * err.square().mean(dim=1)
+
+
+
 _CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 
 

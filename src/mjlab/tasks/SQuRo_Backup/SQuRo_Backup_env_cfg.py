@@ -107,6 +107,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=1.0),
         "leg_target": RewardTermCfg(func=mdp.compute_leg_target_cost, weight=1.0),
         "track_joint": RewardTermCfg(func=mdp.compute_joint_track_cost, weight=1.0),
+        "body_att": RewardTermCfg(func=mdp.compute_body_attitude_cost, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=1.0),
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),

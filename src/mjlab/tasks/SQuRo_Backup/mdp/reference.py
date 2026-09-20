@@ -4,6 +4,12 @@ import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .timing import (
+    ATTITUDE_F_HOLD_T,
+    ATTITUDE_F_RIGHTED_T,
+    ATTITUDE_H_HOLD_T,
+    ATTITUDE_H_RIGHTED_T,
+    ATTITUDE_PRONE_U,
+    ATTITUDE_SUPINE_U,
     BODY_TRAJ_BUILD_END,
     BODY_TRAJ_P1_END,
     FL_HOLD,
@@ -181,7 +187,30 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 
 
 
-# 阶段时间映射到统一名义时间；P2/P3 起点与动作表共享时间常量。
+# 获取参考躯干姿态 (两段背腹轴的世界 Z 余弦, 与 command._pose_cos 同一量)。
+#
+# 为什么参考不能从关节表直接 cos 出来: 实测 t=0 时 cos(F_body_ref)=+1, 而机器人是仰卧(u=-1),
+# 差 180°。原因是 T1 段的关节构型对应"base 转约 40-90° + 前后段反向折 75°", 腹背轴在
+# 该构型下近似水平(u≈0), 而 T1 末 F_body=-1.57 与"前段正置"互斥 —— 翻滚只能发生在 T3(即 P2)。
+# 故姿态参考按"每段从仰卧单调转到俯卧、终点与各自翻正时刻对齐"构造, 时刻由真实滚转定标。
+# 余弦上做线性插值: 该量本身是 cos, 线性插值即"以最短弧长转动", 且端点严格;
+# 换算成角度后中间段变化快, 符合翻正"侧立时角速度最大"的物理特征。
+def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    t_nom = _stage_t_nom(env)  # [N], 已按 λ 缩放的段内名义时间
+    climb = ATTITUDE_PRONE_U - ATTITUDE_SUPINE_U
+
+    def ramp(hold: float, righted: float) -> torch.Tensor:
+        # 先保持仰卧到 hold, 再在 [hold, righted] 内升到俯卧, 之后保持。
+        span = max(righted - hold, 1e-6)
+        prog = ((t_nom - hold) / span).clamp(0.0, 1.0)
+        return ATTITUDE_SUPINE_U + climb * prog
+
+    u_f = ramp(ATTITUDE_F_HOLD_T, ATTITUDE_F_RIGHTED_T)
+    u_h = ramp(ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T)
+    return torch.stack((u_f, u_h), dim=1)
+
+
+
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
