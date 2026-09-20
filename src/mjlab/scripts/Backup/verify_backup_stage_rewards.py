@@ -1074,8 +1074,8 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(reward_dev, .01 - .80 * 3., places=4)
         # 日志必须给出同一个数, 不得显示成 -0.09
         self.assertAlmostEqual(log['Progress/s1_dev_s'], reward_dev, places=4)
-        # 首次到达时刻也必须是 0.01
-        self.assertAlmostEqual(log['Data/s1_first_s'], .01, places=4)
+        # 真实首次到达时刻 = dev + 名义段末, 必须仍是 0.01 (曾用 Data/s1_first_s 上报, 已删)
+        self.assertAlmostEqual(reward_dev + .80 * 3., .01, places=4)
 
     def test_lifecycle_boundaries_are_distinct(self):
         # 三种边界的生命周期必须可区分:

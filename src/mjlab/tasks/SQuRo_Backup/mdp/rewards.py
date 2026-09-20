@@ -76,7 +76,7 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
     # 时序理由(为什么必须在奖励项里判定)见 command.stand_reward_and_pulse 的注释。
     command.stand_reward_and_pulse()
     pulse = command.consume_cycle_end_pulse()
-    env.extras["log"]["Progress/success"] = pulse.float().mean().item()
+    # 曾在此上报 Progress/success, 但它与 command 的 Cycle/completed 是同一个脉冲, 纯冗余, 已删。
     weight = get_curriculum_reward_weight(env, "weight_milestone_success")
     return weight * pulse.float() / env.step_dt
 
@@ -257,7 +257,7 @@ def compute_joint_track_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     w = _joint_group_weights(err.device, err.dtype)
     cost = (w * err.square()).mean(dim=1) / TRACK_REF_MSE_SCALE
     weight = get_curriculum_reward_weight(env, "weight_track_joint")
-    env.extras["log"]["Data/track_joint_cost"] = cost.mean().item()
+    # 曾在此上报 Data/track_joint_cost, 但它就是 Episode_Reward/track_joint(同值乘权重), 已删。
     return -weight * cost
 
 
@@ -313,7 +313,7 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
     r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
     Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
-    env.extras["log"]["Body/height"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
+    # 曾在此上报 Body/height (两段平均高度), 与 Progress/standing + stand_hold 重复, 已删。
     return Reward_height
 
 

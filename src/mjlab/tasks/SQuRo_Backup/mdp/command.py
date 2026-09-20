@@ -702,14 +702,9 @@ class BackupCommand(CommandTerm):
         log["Progress/enter_p2"] = self._s1_awarded.float().mean().item()
         log["Progress/enter_p3"] = self._s2_awarded.float().mean().item()
         log["Progress/relapse"] = self._last_both_inverted.float().mean().item()
-        # 主指标用未过窗的首次达成, 否则"窗内确认时刻"落在窗内大多是规则强制的;
-        # navg 与窗界同量纲(实际秒), 迟为正, 负值即"提前达成"。
-        log["Data/s1_onset_s"] = _mean_valid(self._s1_onset)
-        log["Data/s2_onset_s"] = _mean_valid(self._s2_onset)
-        log["Data/s1_first_s"] = _mean_valid(self._s1_criterion_first)
-        log["Data/s2_first_s"] = _mean_valid(self._s2_criterion_first)
-        # 偏差日志必须与奖励核**同源**: 奖励用的是由 _s*_criterion_first 现算的属性,
-        # 旧缓冲区(_s*_dev_*)会被后续候选起点覆盖, 把"严重提前"显示成"接近准时"。
+        # 主指标直接用未过窗的真实首次达成时刻减去名义段末: 迟为正、负值即"提前达成"。
+        # 曾同时上报 Data/s*_onset_s(过窗后)与 Data/s*_first_s, 但现行门控把两者压到几乎
+        # 同值(都≈段末), 纯冗余, 已删; 需要真实到达时刻时看这里的 dev 即可。
         log["Progress/s1_dev_s"] = _mean_valid(self.s1_dev_early)
         log["Progress/s2_dev_s"] = _mean_valid(self.s2_dev_early)
         # 姿态识别观测量 (技术细节 §7.8): 与相位推进完全解耦, **只写日志**。
@@ -752,7 +747,6 @@ class BackupCommand(CommandTerm):
         self._early_s2_entered |= early
         step = self._update_dt if (self._update_dt > 0.0 and isfinite(self._update_dt)) else 0.0
         self._early_s2_elapsed += early.float() * step
-        log["Pose/early_s2_frac"] = early.float().mean().item()
         log["Pose/early_s2_count"] = self._early_s2_count.mean().item()
         log["Pose/early_s2_elapsed"] = self._early_s2_elapsed.mean().item()
         # ② S1 确认后丢失 (倒置, 正置) 格: 说明已到达 S1 姿态又离开。
@@ -776,9 +770,9 @@ class BackupCommand(CommandTerm):
         reset_buf = getattr(self._env, "reset_buf", None)
         self._pending_episode_reset = (reset_buf.clone() if reset_buf is not None
                                        else torch.zeros_like(completed))
+        # 相位占比: p3 与 Progress/enter_p3 同义, Phase/retry 在相位单向推进后长期为 0,
+        # 两者已删。p2 保留 (它是唯一能看出"卡在 P2"的量)。
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
-        log["Phase/p3"] = (self.phase == 2).float().mean().item()
-        log["Phase/retry"] = self.retry.float().mean().item()
         log["Gate/s1_pose"] = self._last_s1_ok.float().mean().item()
         log["Gate/s2_pose"] = self._last_s2_ok.float().mean().item()
 
