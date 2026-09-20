@@ -1164,35 +1164,80 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_metrics()
         self.assertEqual(int(cmd._early_s2_count.max()), 1)
 
-    def test_attitude_reference_endpoints_and_order(self):
-        # [§7.8] 姿态参考: 起点必须与实测初态一致(两段倒置 = -1); 后段先于前段翻正,
-        # 且后段翻正时前段必须仍满足 S1 的"倒置"判据(u <= -cos45)。
+    def test_attitude_reference_matches_phase_criteria(self):
+        # [§7.8] 姿态参考的边界**必须与阶段推进判据一致**, 否则奖励会鼓励抄近路:
+        # 上一版把前段终点设在 P1_END, 使 P1 末参考变成 (+1,+1) —— 实测"正确 S1"(-1,+1)
+        # 被罚 -2.0/步, 而"提前双正置"代价为 0, 方向完全反了。
+        # 本测试用**判据本身**(cos45 锥)而不是手写常量来卡边界。
         from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_body_attitude
         from mjlab.tasks.SQuRo_Backup.mdp.timing import (
-            ATTITUDE_H_RIGHTED_T, ATTITUDE_F_RIGHTED_T, P1_END)
+            ATTITUDE_F_HOLD_T, ATTITUDE_F_RIGHTED_T,
+            ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T, P1_END, P2_END)
         env, cmd = make_env([0])
         cmd._update_dt = env.step_dt
         cmd.command_tensor[:, 5] = 1.0          # λ=1, 让 t_nom == t_phase
         cmd.time_scale_command = cmd.command_tensor[:, 5]
-        cmd.t_phase[:] = 0.0
-        torch.testing.assert_close(get_reference_body_attitude(env),
-                                   torch.tensor([[-1.0, -1.0]]), atol=1e-5, rtol=0)
+        cone = cos(radians(45))
+
+        def ref(t_phase):
+            cmd.t_phase[:] = t_phase
+            return get_reference_body_attitude(env)[0]
+
+        # 起点: 两段仰卧, 与 apply_fallen_state 的实测初态一致
+        u = ref(0.0)
+        torch.testing.assert_close(u, torch.tensor([-1.0, -1.0]), atol=1e-5, rtol=0)
+        # P1 全段: 前段必须始终满足"倒置"(u <= -cos45), 后段在翻正时刻后为正置
+        # 留 1e-3 浮点余量: H=0.78 时 u(0.80)=-0.765, 距锥界仅 0.06, f32 下需从容差上让一点。
+        tol = 1e-3
+        for t in (0.0, 0.2, 0.4, 0.6, 0.8):
+            u = ref(t)
+            self.assertLessEqual(u[0].item(), -cone + tol,
+                                 f"t_nom={t}: 前段参考必须满足 S1 的倒置判据")
+        # P1 末端必须是 S1 姿态 (-1,+1), 而不是 (+1,+1)
+        u = ref(P1_END)
+        self.assertLessEqual(u[0].item(), -cone + tol, "P1 末端前段必须是倒置")
+        self.assertGreaterEqual(u[1].item(), cone - tol, "P1 末端后段必须是正置")
+        # 后段必须先于前段翻正
         self.assertGreater(ATTITUDE_F_RIGHTED_T, ATTITUDE_H_RIGHTED_T)
-        self.assertLessEqual(ATTITUDE_F_RIGHTED_T, P1_END)
-        cmd.t_phase[:] = ATTITUDE_H_RIGHTED_T
-        u = get_reference_body_attitude(env)
-        torch.testing.assert_close(u[0, 1], torch.tensor(1.0), atol=1e-5, rtol=0)
-        self.assertLessEqual(u[0, 0].item(), -cos(radians(45)) + 1e-6,
-                             "后段翻正时前段必须仍满足倒置判据")
-        # P1 末到达 +1; phase=2 (P3) 下继续保持
-        cmd.t_phase[:] = P1_END
-        torch.testing.assert_close(get_reference_body_attitude(env),
-                                   torch.tensor([[1.0, 1.0]]), atol=1e-5, rtol=0)
+        # 前段翻正过程必须落在 P2 内 (晚于 P1_END, 不晚于 P2_END)
+        self.assertGreaterEqual(ATTITUDE_F_RIGHTED_T, P1_END)
+        self.assertLessEqual(ATTITUDE_F_RIGHTED_T, P2_END)
+        # P1 的缓冲期不泄漏: phase=0 下 t_phase 超过 P1_END 也会被限幅在 P1_END
+        cmd.t_phase[:] = P2_END
+        torch.testing.assert_close(get_reference_body_attitude(env)[0], ref(P1_END),
+                                   atol=1e-6, rtol=0)
+        # P2 末端与 P3: 两段正置并保持 (注意要在对应相位下断言; 缓冲期会限幅)
+        cmd.phase[:] = 1
+        for t in (P2_END, 2.0):
+            u = ref(t)
+            torch.testing.assert_close(u, torch.tensor([1.0, 1.0]), atol=1e-5, rtol=0)
         cmd.phase[:] = 2
         for t in (0.0, 1.0, 2.0):
-            cmd.t_phase[:] = t
-            torch.testing.assert_close(get_reference_body_attitude(env),
-                                       torch.tensor([[1.0, 1.0]]), atol=1e-5, rtol=0)
+            u = ref(t)
+            torch.testing.assert_close(u, torch.tensor([1.0, 1.0]), atol=1e-5, rtol=0)
+
+    def test_body_attitude_does_not_reward_shortcut(self):
+        # [§7.8] 关键性质: 在 P1 末端, "满足 S1 的正确姿态"的代价必须**优于**
+        # "提前双正置", 否则奖励与推进判据互相打架。
+        from mjlab.tasks.SQuRo_Backup.mdp import rewards as RW
+        from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END
+        env, cmd = make_env([0])
+        cmd._update_dt = env.step_dt
+        cmd.command_tensor[:, 5] = 1.0            # λ=1
+        cmd.time_scale_command = cmd.command_tensor[:, 5]
+        cmd.t_phase[:] = P1_END
+        cmd.test_u = torch.tensor([[-1.0, 1.0]])  # 正确 S1
+        correct = RW.compute_body_attitude_cost(env).item()
+        cmd.test_u = torch.tensor([[1.0, 1.0]])   # 提前双正置
+        shortcut = RW.compute_body_attitude_cost(env).item()
+        self.assertGreater(correct, shortcut,
+                           "P1 末端: 正确 S1 的代价必须高于提前双正置(即罚得更少)")
+        # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则缓冲期限幅到 P1_END)
+        from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_END
+        cmd.phase[:] = 1
+        cmd.t_phase[:] = P2_END
+        cmd.test_u = torch.tensor([[1.0, 1.0]])
+        torch.testing.assert_close(RW.compute_body_attitude_cost(env), torch.zeros(1))
 
     def test_body_attitude_cost_sign_and_zero(self):
         # [§7.8] 实际姿态等于参考 -> 代价 0; 偏离 -> 负值且随偏离增大; NaN 不得污染。
