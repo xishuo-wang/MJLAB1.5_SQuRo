@@ -7,6 +7,7 @@ from .config import (
     FL_HOLD,
     HL_HOLD,
     LEG_INIT,
+    P1_END,
     P1_SPAN,
     P2_SPAN,
     REFERENCE_TOTAL_TIME,
@@ -234,8 +235,10 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
     # 缓冲期参考不得泄漏到下一段动作; float32 的起点+段长可能超边界一个 ulp, 需再限幅。
-    # 段内上限用段内口径: P1 是 P1_SPAN(T1+T2), P2 是 T3; 用累计 P1_END 会多播 0.5λ。
-    p1_t = P1_ONSET + t_local_nom.clamp(max=P1_SPAN)
+    # 相位 0 的时钟就是参考表时间: P0 收腿[0,T0] -> T1 -> T2; 播完后冻结在 P1 段末,
+    # 余下的时钟用来等 S1 确认。不可再加 P1_ONSET —— 那会整段跳过 P0, 腿在相位 0 起点
+    # 就直接跳到支撑角, 又变成"边收腿边拧脊柱"(实测确认过)。
+    p1_t = t_local_nom.clamp(max=P1_END)
     p2_t = P2_ONSET + t_local_nom.clamp(max=T3)
     p3_t = P3_ONSET + t_local_nom
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))

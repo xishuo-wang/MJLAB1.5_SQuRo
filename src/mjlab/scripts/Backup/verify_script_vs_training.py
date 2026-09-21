@@ -12,7 +12,6 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.scripts.SQuRo_Backup_Replay import (
     StateMachinePolicy,
     slow1_target,
-    T_OFFSET,
     T_SEG1_END,
     T_SEG2_END,
     T_SEG3_END,
@@ -54,14 +53,17 @@ def cmp_reference() -> bool:
     resolve_model_indices(env.unwrapped.scene.entities["robot"])
 
     # 训练参考表: 用同一套查询接口 (λ=1)
-    tmax = min(T_SEG4_END, T.STAND_TRANSITION_END)
-    ts = np.arange(0.0, T.P2_END + 0.5 + 1e-9, 0.005)
+    # 两条时间轴差一个常量: 参考表 T1 起点在表时间 P1_ONSET(0.50), 手调脚本在 T_OFFSET(1.0),
+    # 且手调脚本的 T_OFFSET 不随 scale 缩放, 故换算关系恒为 手调时刻 = 表时刻 + P1_ONSET。
+    # 用 T_OFFSET + tn 是旧相位映射(P0 未被播放, 表时间 = P1_ONSET + t_phase)下的巧合,
+    # 现在相位 0 的时钟就是表时间, 必须按 P1_ONSET 换算。
+    ts = np.arange(0.0, T.STAND_TRANSITION_END + 1e-9, 0.005)
     errs = []
     rows = []
     for tn in ts:
         # 训练参考: get_reference_joint_state 按 phase/t_phase 查询, 这里直接造一个最小代理
         ref_gym = _ref_table_at(env, tn)
-        ref_hand = np.array(slow1_target(T_OFFSET + tn * 1.0, 1.0))[SPINE_IDX]
+        ref_hand = np.array(slow1_target(tn + T.P1_ONSET, 1.0))[SPINE_IDX]
         e = np.abs(ref_gym - ref_hand).max()
         errs.append(e)
         rows.append((tn, ref_gym, ref_hand, e))

@@ -405,7 +405,9 @@ class StageRewardTests(unittest.TestCase):
         self.assertGreater(vel[3, 10], 0.)
         torch.testing.assert_close(pos[2, [1, 8, 9]], torch.zeros(3), atol=1e-5, rtol=0.)
         cmd.phase[:] = 0
-        cmd.t_phase[:] = 3.
+        # 相位 0 的时钟就是表时间, 故"超过 P1 段末"要越过 P1_END(累计 1.30)名义秒 = 3.9s;
+        # 此时参考被限幅在 P1 段末, 速度按保持段冻结为 0。
+        cmd.t_phase[:] = _P1_END * 3.
         pos, vel = reference.get_reference_joint_state(env)
         torch.testing.assert_close(pos[0, [0, 1, 8, 9]], torch.tensor([.2, -1.57, -.2, 1.57]))
         self.assertEqual(vel.abs().sum(), 0.)
@@ -480,9 +482,10 @@ class StageRewardTests(unittest.TestCase):
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
-        # P1 的段末门控 = (前置收腿段 + P1_END) × λ。相位时钟从送参考时起算, 含前置段。
+        # P1 的段末门控 = (前置收腿段 + P1_END) × λ。相位时钟从送参考时起算: 前 T0 是 P0 收腿,
+        # 到 P1_END 参考播完, 余下 T0 是等 S1 确认的冻结段。
         lam = float(cmd.time_scale_command[0])
-        p1_expect = _P1_END * lam
+        p1_expect = (_PRE_DURATION + _P1_END) * lam
         # 门控之前候选成立也不得推进/结算。
         cmd.t_phase[:] = 2.00
         for _ in range(10):
@@ -545,7 +548,8 @@ class StageRewardTests(unittest.TestCase):
         prev_phase = cmd.phase.item()
         advanced = False
         worst = 0.0
-        for _ in range(400):                       # 覆盖 P1 段末((PRE+P1_END)×λ=3.90s=390 步)与切换
+        # 覆盖 P1 段末与切换那一刻: (T0+P1_END)×λ=5.40s=540 步, 留 60 步余量。
+        for _ in range(600):
             cmd._update_command()
             pos, _ = reference.get_reference_joint_state(env)
             worst = max(worst, (pos - prev).abs().max().item())
@@ -766,7 +770,7 @@ class StageRewardTests(unittest.TestCase):
         # 参考播完门 (PRE_DURATION + P1_END)λ=3.90 —— 于是"提前到达并保持"的达成时刻
         # 恒为段末, 与恰好到点达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折)。
         # 直接设 t_phase 验证语义, 不靠累加步数(浮点边界会让 >= 差一个 ulp 而漏判)。
-        p1_expect = _P1_END * 3.
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
@@ -894,7 +898,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
         w = _CURVES['weight_milestone_s1'][0]
-        p1_expect = _P1_END * 3.
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
 
         def full_reward_at(dev):
             # dev 是相对名义段末的偏差; 核的输入是"真实首次到达时刻", 所以反解成时刻写入。
@@ -916,7 +920,7 @@ class StageRewardTests(unittest.TestCase):
         w = _CURVES['weight_milestone_s1'][0]
         lam = cmd.time_scale_command
         onset = cmd._s1_criterion_first
-        p1_expect = _P1_END * 3.
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         # (a) 真实到达 0.30λ -> 核打到 1/5 以下
         cmd._last_s1_milestone = torch.tensor([True])
         cmd._s1_criterion_first = torch.tensor([.30 * 3.])
@@ -960,7 +964,7 @@ class StageRewardTests(unittest.TestCase):
         env.step_dt = .01
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])            # 候选持续成立, 跨重试不清零
-        cmd.t_phase[:] = _P1_END * 3. + .50   # 正好到 P1 窗界
+        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .50   # 正好到 P1 窗界
         cmd._update_command()                              # 这一步触发重试(未确认)
         self.assertEqual(cmd.retry.item(), 1)
         self.assertTrue(torch.isnan(cmd._s1_criterion_first).item())
@@ -988,7 +992,7 @@ class StageRewardTests(unittest.TestCase):
             cmd._update_command()
         self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)   # 确认已成立
         self.assertEqual(cmd.phase.item(), 0)              # 但段末未到, 不得推进
-        cmd.t_phase[:] = _P1_END * 3. + .10   # 越过段末(余量 > dt)
+        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .10   # 越过段末(余量 > dt)
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
@@ -1182,7 +1186,7 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_command()
         cmd._update_metrics()
         # 奖励核用的偏差
-        p1_expect = _P1_END * 3.
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         reward_dev = cmd.s1_dev_early.item()
         self.assertAlmostEqual(reward_dev, .01 - p1_expect, places=4)
         # 日志必须给出同一个数, 不得显示成 -0.09

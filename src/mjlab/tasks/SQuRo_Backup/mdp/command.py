@@ -8,6 +8,7 @@ from mjlab.managers.command_manager import CommandTerm
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .config import (
     P1_END,
+    PRE_DURATION,
     STAND_CONFIRM_DURATION,
     STAND_GROUND_HEIGHT,
     STAND_TARGET_HEIGHT,
@@ -32,9 +33,10 @@ if TYPE_CHECKING:
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)
-# P1 期望门 = 累计 P1_END (已含前置收腿段 T0): 相位时钟与参考表时间轴同源, 都从送参考那刻起算。
-# 不要写成 PRE_DURATION + P1_END —— P1_END 变成累计口径后会重复计一次 T0, 门被推后 0.5λ。
-_P1_EXPECT = P1_END
+# P1 期望门 = 累计 P1_END + 前置收腿段 T0: 相位 0 的时钟与参考表时间同源, [0,T0] 是 P0 收腿,
+# [T0,P1_END] 是 T1+T2, 之后 P1_END ~ P1_END+T0 参考冻结在 S1 姿态, 用这段时钟等 S1 确认。
+# P1_END 是累计口径(含 T0), 故这里再加一次 T0 得到的是"表末 + 缓冲", 不是重复计时。
+_P1_EXPECT = P1_END + PRE_DURATION
 _P2_EXPECT = T3
 
 
