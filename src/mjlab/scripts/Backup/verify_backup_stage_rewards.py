@@ -128,6 +128,11 @@ def make_env(phases):
     env.make_robot = robot          # 供个别测试替换 data 时保留其余接口
     env.observation_manager = NS(reset=lambda ids: env.reset_calls['obs'].append(list(ids)))
     env.action_manager = NS(reset=lambda ids: env.reset_calls['act'].append(list(ids)))
+    # 让 mock 具备"真实"的关节口径: joint_ids 是**模型**下标(14 个驱动关节),
+    # 而 joint_pos 是全部驱动关节 —— 生产里 joint_pos 有 36 列, 这里用 14 列等价替代,
+    # 关键是把 joint_ids 置成 range(14), 否则脊柱跟踪核的两次索引会维度不匹配。
+    if not _MODEL_INDICES.joint_ids:
+        _MODEL_INDICES.joint_ids = tuple(range(14))
     # 默认让关节角等于参考角("完全跟住参考"), 使脊柱跟踪核 = 1:
     # 姿态进度项会乘这个核, 核非 1 会让地形类断言失去意义(各环境相位不同 -> 参考不同)。
     from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state

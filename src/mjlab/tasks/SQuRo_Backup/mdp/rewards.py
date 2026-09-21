@@ -88,9 +88,10 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 # 乘上本核后: 跟住参考时给全额(2.67~2.93), 抢跑时衰减到 0.09~0.19。详见技术细节 §7.9。
 def _spine_track_kernel(env: "ManagerBasedRlEnv") -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    joint_pos = asset.data.joint_pos
+    # joint_pos 是**全部**关节(36), 而参考表只有 14 个驱动关节: 先用 joint_ids 取到驱动关节,
+    # 再按参考表列下标(0/1/8/9)取脊柱列。两个口径不可互换, 缺一都会维度不匹配。
+    joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
-    # 参考表列即脊柱列下标 (0/1/8/9), 与 _MODEL_INDICES.joint_ids 无关 —— 后者在单测里可能是空的。
     error_spn = (joint_pos - ref_pos)[:, _MODEL_INDICES.actuator_spn_ids]
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
