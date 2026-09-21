@@ -32,11 +32,11 @@ if TYPE_CHECKING:
 # 阶段状态检测阈值
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
-# 阶段预期时长 (名义, ×λ)
-# P1 期望门 = 累计 P1_END + 前置收腿段 T0: 相位 0 的时钟与参考表时间同源, [0,T0] 是 P0 收腿,
-# [T0,P1_END] 是 T1+T2, 之后 P1_END ~ P1_END+T0 参考冻结在 S1 姿态, 用这段时钟等 S1 确认。
-# P1_END 是累计口径(含 T0), 故这里再加一次 T0 得到的是"表末 + 缓冲", 不是重复计时。
+# 阶段预期时长 (名义, ×λ)。三个时刻含义不同, 混用会造成目标冲突, 见技术细节 §7.10:
+# _P1_NOMINAL 奖励基准 = 参考要求到达 S1 的时刻; _P1_EXPECT 推进门 = 冻结等待段走完。
+_P1_NOMINAL = P1_END
 _P1_EXPECT = P1_END + PRE_DURATION
+_P2_NOMINAL = T3
 _P2_EXPECT = T3
 
 
@@ -172,24 +172,23 @@ class BackupCommand(CommandTerm):
     def s2_milestone_pulse(self) -> torch.Tensor:
         return self._last_s2_milestone
 
-    # 里程碑时间质量核的输入: 真实首次到达时刻与名义段末之差(实际秒, 迟为正; NaN = 尚未达成)。
-    # 必须用 _s*_criterion_first(未加任何掩码), 不能用 _s*_onset —— 后者被"参考播完门"夹住,
-    # 恒等于段末, 会让核恒等于 1.0, 等于没有(实测确认过)。
+    # 里程碑时间质量核的输入: 真实首次到达时刻与**参考到达时刻**之差(实际秒, 迟为正; NaN = 未达成)。
+    # 基准必须是 _P*_NOMINAL 而不是推进门 _P*_EXPECT, 否则准时跟参考反而被判早到。
     @property
     def s1_dev_early(self) -> torch.Tensor:
-        return self._s1_criterion_first - _P1_EXPECT * self.time_scale_command
+        return self._s1_criterion_first - _P1_NOMINAL * self.time_scale_command
 
     @property
     def s2_dev_early(self) -> torch.Tensor:
-        return self._s2_criterion_first - _P2_EXPECT * self.time_scale_command
+        return self._s2_criterion_first - _P2_NOMINAL * self.time_scale_command
 
     @property
     def s1_dev_late(self) -> torch.Tensor:
-        return self._s1_criterion_first - _P1_EXPECT * self.time_scale_command
+        return self._s1_criterion_first - _P1_NOMINAL * self.time_scale_command
 
     @property
     def s2_dev_late(self) -> torch.Tensor:
-        return self._s2_criterion_first - _P2_EXPECT * self.time_scale_command
+        return self._s2_criterion_first - _P2_NOMINAL * self.time_scale_command
 
     # 建立 _resample_command / _clear_cycle_state 会写的全部缓冲。
     # 抽出来是为了让"回合重置"与"循环复位"两条路径共用同一份生命周期定义 ——

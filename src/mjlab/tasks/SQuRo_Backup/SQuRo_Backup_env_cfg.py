@@ -161,5 +161,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=5,
-        episode_length_s=10.0,
+        # 一个循环约 2.37λ+站立窗口 秒; λ=4 时约 10.5s, 取 12.0 留出余量, 见技术细节 §7.10。
+        episode_length_s=12.0,
     )
