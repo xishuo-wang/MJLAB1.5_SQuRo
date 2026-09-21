@@ -2,7 +2,7 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING, cast
 from .command import BackupCommand
-from .timing import STAND_CONFIRM_DURATION, STAND_VEL_MEAN_MAX
+from .config import STAND_CONFIRM_DURATION, STAND_VEL_MEAN_MAX
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv

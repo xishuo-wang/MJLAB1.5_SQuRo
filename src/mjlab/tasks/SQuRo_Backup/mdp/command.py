@@ -5,12 +5,23 @@ from typing import TYPE_CHECKING, Tuple
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
-from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import P1_END, P2_DURATION, PRE_DURATION, STAND_CONFIRM_DURATION
-from .timing import STAND_VEL_MEAN_MAX, WINDOW_LATE_S
-from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
-from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
+from .config import (
+    P1_END,
+    STAND_CONFIRM_DURATION,
+    STAND_GROUND_HEIGHT,
+    STAND_TARGET_HEIGHT,
+    STAND_VEL_MEAN_MAX,
+    T3,
+)
+from .curriculums import get_curriculum_time_scale
+
+# 只在本文件使用的站立判据与水印常量 (未跨文件, 故不进 config.py)。
+WINDOW_LATE_S = 0.50          # 段末之后的晚侧余量 (实际秒); 窗上界同时是重试截止
+STAND_UPRIGHT_COS = 0.9       # 判定"正置"的背腹轴余弦下限
+STAND_MIN_HEIGHT = 0.05       # 判定"已站起"的最低躯干高度
+STAND_UPRIGHT_COS_STAY = 0.8  # 维持站立窗口的宽松正置阈值
+STAND_MIN_HEIGHT_STAY = 0.045 # 维持站立窗口的宽松高度阈值
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -21,10 +32,10 @@ if TYPE_CHECKING:
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)
-# P1 期望要含前置收腿段: 相位时钟从送参考那一刻起算, 而参考的前 PRE_DURATION 秒只是收腿。
-_P1_EXPECT = PRE_DURATION + P1_END
-_P2_EXPECT = P2_DURATION
-_MAX_RETRY = 5
+# P1 期望门 = 累计 P1_END (已含前置收腿段 T0): 相位时钟与参考表时间轴同源, 都从送参考那刻起算。
+# 不要写成 PRE_DURATION + P1_END —— P1_END 变成累计口径后会重复计一次 T0, 门被推后 0.5λ。
+_P1_EXPECT = P1_END
+_P2_EXPECT = T3
 
 
 # 对含 NaN 的记录取"有效值均值"; 没有有效值时返回 0 (供条件型日志使用)。
@@ -769,8 +780,7 @@ class BackupCommand(CommandTerm):
         self._last_cycle_reset = torch.zeros_like(completed)
         # 快照本步的回合重置掩码 (单测 mock 可能没有 reset_buf)。
         reset_buf = getattr(self._env, "reset_buf", None)
-        self._pending_episode_reset = (reset_buf.clone() if reset_buf is not None
-                                       else torch.zeros_like(completed))
+        self._pending_episode_reset = (reset_buf.clone() if reset_buf is not None else torch.zeros_like(completed))
         # 相位占比: p3 与 Progress/enter_p3 同义, Phase/retry 在相位单向推进后长期为 0,
         # 两者已删。p2 保留 (它是唯一能看出"卡在 P2"的量)。
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
@@ -787,10 +797,7 @@ class BackupCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (1000.0, 1000.0)   # 不重采样 (episode 内固定)
     debug_vis: bool = False
     fixed_time_scale: float | None = None
-    # 晚侧余量（实际秒，加在名义段末之后），同时是重试截止。
-    # 可接受区间 = [段末, 段末 + window_late_s]；早侧地板已删除(被"参考播完门"吞噬)。
     window_late_s: float = WINDOW_LATE_S
-    # site 方向夹角容差与连续确认时长（均为实际秒，不乘 λ）。
     pose_angle_tolerance_deg: float = 45.0
     pose_confirm_s: float = 0.10
     inverted_confirm_s: float = 0.15

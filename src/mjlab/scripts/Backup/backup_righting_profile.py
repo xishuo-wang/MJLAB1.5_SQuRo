@@ -188,7 +188,7 @@ def main() -> None:
     print(f"  横向左/右极值: {ymin.min():+.4f} / {ymax.max():+.4f}")
     print(f"  → 窄缝下限 = {ey.max():.4f} m ; 低顶棚下限 = {ez.max():.4f} m")
 
-    from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_END
+    from mjlab.tasks.SQuRo_Backup.mdp.config import P2_END
     T = P2_END
     mask = t <= T
     names = ["F_body(前扭转)", "F_spine1(侧摆)", "H_spine1(俯仰)", "H_body(后扭转)"]

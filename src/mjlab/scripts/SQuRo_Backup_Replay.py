@@ -18,7 +18,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Backup.mdp.timing import STAND_CONFIRM_DURATION
+from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_CONFIRM_DURATION
 
 
 
@@ -203,7 +203,7 @@ class StateMachinePolicy:
             # 循环完成由训练环境的 command 维护: 完成帧 done=False(非终止), 所以必须
             # 在这里检查, 而不是在"回合重置"分支里 —— 后者只在 10s 超时才会走到。
             cmd_term = self.env.unwrapped.command_manager.get_term("backup_cmd")
-            if self.phase != "DONE" and bool(cmd_term.cycle_completed_pulse[0]):
+            if self.phase != "DONE" and bool(cmd_term.cycle_completed_pulse[0]): # type: ignore
                 self.stand_t = self.t_phase - STAND_CONFIRM_DURATION
                 self._log(f"训练环境确认稳定站起 (站稳 {STAND_CONFIRM_DURATION}s, P3 内 t≈{self.stand_t:.2f}s) -> 回放结束")
                 self.phase = "DONE"

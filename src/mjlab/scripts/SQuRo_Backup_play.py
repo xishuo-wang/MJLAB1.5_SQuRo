@@ -13,12 +13,13 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Backup.mdp.timing import TIME_COMPARISON_SCALE
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+
 
 
 # 任务配置
 TASK_NAME = "Mjlab-SQuRo-Backup"
+
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,8 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Backup 任务相关配置
-    fixed_time_scale: float | None = 3
+    fixed_time_scale: float | None = 2
+
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -44,6 +46,7 @@ def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
     if m:
         return int(m.group(1))
     return 0
+
 
 
 # 从检查点路径提取视频名称
@@ -64,6 +67,7 @@ def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
 
     video_name = f"{timestamp}_{step}"
     return video_name
+
 
 
 class JointDataRecorder:
@@ -89,6 +93,7 @@ class JointDataRecorder:
         self.foot_names = ['FL', 'FR', 'HL', 'HR']
         self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
         self._foot_site_ids = None
+
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
         record = {'step': float(self.step_count)}
@@ -170,10 +175,8 @@ class JointDataRecorder:
         record['f_body_raw_heading'] = f_body_raw
         record['h_body_raw_heading'] = h_body_raw
         # 物理前向 heading
-        record['f_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(f_body_raw - _math.pi/2)),
-                                                       torch.cos(torch.tensor(f_body_raw - _math.pi/2))).item())
-        record['h_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(h_body_raw + _math.pi/2)),
-                                                       torch.cos(torch.tensor(h_body_raw + _math.pi/2))).item())
+        record['f_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(f_body_raw - _math.pi/2)), torch.cos(torch.tensor(f_body_raw - _math.pi/2))).item())
+        record['h_body_heading'] = float(torch.atan2(torch.sin(torch.tensor(h_body_raw + _math.pi/2)), torch.cos(torch.tensor(h_body_raw + _math.pi/2))).item())
 
         # 基座朝向
         heading = asset.data.heading_w[env_idx]
@@ -214,8 +217,7 @@ class JointDataRecorder:
         # Backup 任务专有: 复位相关状态 (uprightness / F-H body 高度)
         record['uprightness'] = float(asset.data.projected_gravity_b[env_idx, 2].item())
         body_pos_w = asset.data.body_link_pos_w
-        record['height_actual'] = float(0.5 * (body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2]
-                                               + body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2]).item())
+        record['height_actual'] = float(0.5 * (body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2] + body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2]).item())
 
         # 记录后状态与本步事件，避免仅靠参考列猜测 S2、P3 和超时重试。
         term = unwrapped.command_manager.get_term("backup_cmd")
@@ -246,6 +248,7 @@ class JointDataRecorder:
         self.data_records.append(record)
         self.step_count += 1
 
+
     def save_to_csv(self):
         if not self.data_records:
             print("[WARN] 没有数据可保存")
@@ -261,11 +264,13 @@ class JointDataRecorder:
         print(f"[INFO] 记录了 {len(self.data_records)} 步数据，{len(df.columns)} 列")
 
 
+
 class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
     def __init__(self, env, clip_actions=None, data_recorder=None, action_scale=1.0):
         super().__init__(env, clip_actions)
         self.data_recorder = data_recorder
         self.action_scale = action_scale
+
 
     def step(self, actions):
         scaled_actions = actions * self.action_scale
@@ -281,6 +286,7 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
             )
 
         return obs_dict, rew, dones, extras
+
 
 
 def run_play(cfg: PlayConfig):
@@ -433,9 +439,11 @@ def run_play(cfg: PlayConfig):
         env.close()
 
 
+
 def main():
     args = tyro.cli(PlayConfig, description="播放 SQuRo Backup 智能体")
     run_play(args)
+
 
 
 if __name__ == "__main__":

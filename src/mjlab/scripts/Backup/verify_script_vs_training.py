@@ -21,7 +21,8 @@ from mjlab.scripts.SQuRo_Backup_Replay import (
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+from mjlab.tasks.SQuRo_Backup.mdp import config as T
+from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_TRANSITION_END as _STAND_TRANSITION_END
 
 
 # 对拍两件事:
@@ -42,7 +43,7 @@ def cmp_reference() -> bool:
     print("=" * 78)
     print(f"  手调分段边界: T1={T_SEG1_END} T2={T_SEG2_END} T3={T_SEG3_END} T4={T_SEG4_END} (名义秒)")
     print(f"  参考表边界  : P1_END={T.P1_END} P2_END={T.P2_END} "
-          f"TRANS_END={T.STAND_TRANSITION_END} TOTAL={T.REFERENCE_TOTAL_TIME}")
+          f"TRANS_END={_STAND_TRANSITION_END} TOTAL={T.REFERENCE_TOTAL_TIME}")
     print(f"  分段时长    : 手调 T1={T_SEG1_END:.3f} T2={T_SEG2_END-T_SEG1_END:.3f} "
           f"T3={T_SEG3_END-T_SEG2_END:.3f} T4={T_SEG4_END-T_SEG3_END:.3f}")
 
@@ -53,7 +54,7 @@ def cmp_reference() -> bool:
     resolve_model_indices(env.unwrapped.scene.entities["robot"])
 
     # 训练参考表: 用同一套查询接口 (λ=1)
-    tmax = min(T_SEG4_END, T.P2_END + T.STAND_TRANSITION_DURATION)
+    tmax = min(T_SEG4_END, T.STAND_TRANSITION_END)
     ts = np.arange(0.0, T.P2_END + 0.5 + 1e-9, 0.005)
     errs = []
     rows = []

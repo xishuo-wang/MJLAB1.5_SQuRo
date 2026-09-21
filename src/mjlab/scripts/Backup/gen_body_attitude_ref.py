@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import tyro
 
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END, P2_END, REFERENCE_TOTAL_TIME
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END, P2_END, REFERENCE_TOTAL_TIME
 
 # 取哪一份回放: 该 run 的策略在 P3 前完成了一次完整成功循环
 DEFAULT_CSV = "logs/rsl_rl/SQuRo_Backup/2026-09-20_01-40-20/videos/SQuRo_Backup_2999-ts2.00.csv"

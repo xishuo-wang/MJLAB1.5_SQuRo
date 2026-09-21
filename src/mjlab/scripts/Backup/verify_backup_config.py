@@ -5,7 +5,8 @@ sys.path.insert(0, "src")
 from mjlab.tasks.SQuRo_Backup.SQuRo_Backup_env_cfg import SQuRo_Backup_Env_Cfg
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
 from mjlab.tasks.SQuRo_Backup.mdp.reference import _generate_reference_table
-from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+from mjlab.tasks.SQuRo_Backup.mdp import config as T
+from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET, P3_ONSET as _P3_ONSET
 
 # 提交前验收: 权重净值 / 参考表与手调脚本一致性 / 站起确认时长统一
 #
@@ -15,8 +16,8 @@ from mjlab.tasks.SQuRo_Backup.mdp import timing as T
 
 def _hand_at(tn: float) -> tuple[float, float, float, float]:
     # 手调脚本分区公式 (与 slow1_target 同构), 用于独立复算
-    T1, T2, T3 = T.P1_BUILD_DURATION, T.P1_RECOVER_DURATION, T.P2_DURATION
-    T4 = T.STAND_TRANSITION_DURATION
+    T1, T2, T3 = T.T1, T.T2, T.T3
+    T4 = T.T4
     if tn < T1:
         u = tn / T1
         return (0.6 * u, -1.57 * u, 0.6 * u, 1.57 * u)
@@ -60,13 +61,13 @@ def main() -> None:
     import numpy as np
     # 参考表以"送参考那一刻"为 0, 前 PRE_DURATION 是前置收腿段 -> 各段中点的**表时间**
     # 要加 P1_ONSET, 否则会采到前置段(脊柱恒 0)而误报不一致。
-    t1, t2, t3 = T.P1_BUILD_DURATION, T.P1_RECOVER_DURATION, T.P2_DURATION
-    off = T.P1_ONSET
+    t1, t2, t3 = T.T1, T.T2, T.T3
+    off = _P1_ONSET
     checks = [
         ("T1 中", off + t1 / 2),
         ("T2 中", off + t1 + t2 / 2),
         ("T3 中", off + t1 + t2 + t3 / 2),
-        ("T4 中", T.P3_ONSET + T.STAND_TRANSITION_DURATION / 2),
+        ("T4 中", _P3_ONSET + T.T4 / 2),
     ]
     for label, tn in checks:
         i = int(np.argmin(np.abs(t - tn)))
@@ -81,7 +82,7 @@ def main() -> None:
               f"{'OK' if same else '** 不一致 **'}")
 
     print("\n=== 3) 站起确认时长 ===")
-    print(f"  timing.STAND_CONFIRM_DURATION = {T.STAND_CONFIRM_DURATION}")
+    print(f"  config.STAND_CONFIRM_DURATION = {T.STAND_CONFIRM_DURATION}")
     from mjlab.tasks.SQuRo_Backup.mdp.terminations import STAND_CONFIRM_DURATION as D
     from mjlab.scripts.SQuRo_Backup_Replay import STAND_CONFIRM_DURATION as R
     same = D == R == T.STAND_CONFIRM_DURATION

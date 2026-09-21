@@ -8,15 +8,13 @@ from dataclasses import dataclass
 import numpy as np
 import tyro
 
-from mjlab.tasks.SQuRo_Backup.mdp.timing import (
-    P1_BUILD_DURATION,
+from mjlab.tasks.SQuRo_Backup.mdp.config import (
     P1_END,
     P2_END,
-    QUALITY_SIGMA_EARLY_FRAC,
-    QUALITY_SIGMA_LATE_S,
     REFERENCE_TOTAL_TIME,
     STAND_CONFIRM_DURATION,
 )
+from mjlab.tasks.SQuRo_Backup.mdp.rewards import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
 
 

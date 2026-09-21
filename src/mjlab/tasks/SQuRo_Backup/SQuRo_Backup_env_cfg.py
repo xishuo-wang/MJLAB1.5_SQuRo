@@ -20,9 +20,13 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
+# 回放模式下固定的时间缩放 (只在本文件与 SQuRo_Backup_play 的转发处使用, 故不进 config.py)。
+TIME_COMPARISON_SCALE = 3.0
+
+
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置: 初始姿态保持站立角 (LEG_INIT), 即 PD 零动作目标也是站立角。
-    # 收腿动作改由参考轨迹的前置段完成 (见 timing.PRE_DURATION 与 reference._generate_reference_table),
+    # 收腿动作改由参考轨迹的前置段 T0 完成 (见 config.T0 与 reference._generate_reference_table),
     # 这样站立时腿部零动作即可维持, 不必长期顶着一个与弹簧反向的大指令。
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
@@ -104,7 +108,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "backup_cmd": mdp.BackupCommandCfg(
             asset_name="robot",
             debug_vis=play,
-            fixed_time_scale=mdp.TIME_COMPARISON_SCALE if play else None,
+            fixed_time_scale=TIME_COMPARISON_SCALE if play else None,
         )
     }
 

@@ -11,12 +11,18 @@ from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, terminations, event
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
-# 相位时钟含前置收腿段, 故 P1 名义段末是 (PRE_DURATION + P1_END)×λ; 从生产常量导入避免写死。
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END as _P1_END
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_END as _P2_END
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_ONSET as _P2_ONSET
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P3_ONSET as _P3_ONSET
-from mjlab.tasks.SQuRo_Backup.mdp.timing import PRE_DURATION as _PRE_DURATION
+# 相位时钟与参考表同为累计口径(含前置收腿段 T0), 故 P1 名义段末就是 P1_END×λ。
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END as _P1_END
+from mjlab.tasks.SQuRo_Backup.mdp.config import P2_END as _P2_END
+from mjlab.tasks.SQuRo_Backup.mdp.config import PRE_DURATION as _PRE_DURATION
+# 段内口径(不含 T0): 姿态参考与录制身体轨迹表的时刻基准, 比累计口径整整少一个 T0。
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_SPAN as _P1_SPAN
+from mjlab.tasks.SQuRo_Backup.mdp.config import P2_SPAN as _P2_SPAN
+from mjlab.tasks.SQuRo_Backup.mdp.config import T3 as _T3
+from mjlab.tasks.SQuRo_Backup.mdp.config import T4 as _T4
+from mjlab.tasks.SQuRo_Backup.mdp.reference import P2_ONSET as _P2_ONSET
+from mjlab.tasks.SQuRo_Backup.mdp.reference import P3_ONSET as _P3_ONSET
+from mjlab.tasks.SQuRo_Backup.mdp.rewards import STAND_STILL_FULL_SPEED as _STAND_STILL_FULL_SPEED
 
 
 # 构造只含判定所需数据的批量环境，直接调用生产函数。
@@ -343,9 +349,9 @@ class StageRewardTests(unittest.TestCase):
     def test_stand_still_reward_is_p3_gated_and_linear(self):
         # 锚点从常量推导, 阈值调整时不必改测试(此前硬编码 "3 rad/s -> 半值",
         # 把 STAND_STILL_FULL_SPEED 从 6.0 改成 4.5 后立刻失效)。
-        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+        from mjlab.tasks.SQuRo_Backup.mdp import config as T
         env, cmd = make_env([2, 1, 2])
-        half = T.STAND_STILL_FULL_SPEED * .5
+        half = _STAND_STILL_FULL_SPEED * .5
         cmd.test_vel[:] = torch.tensor([0., 0., half])
         reward = rewards.compute_stand_still_reward(env)
         weight = _CURVES["weight_stand_still"][0]
@@ -411,7 +417,7 @@ class StageRewardTests(unittest.TestCase):
         # 端点角值另由 test_p2_boundary_and_p3_is_continuous 逐点锁定。
         env, cmd = make_env([1])
         base = float(cmd.command_tensor[0, 5])
-        t3_actual = (_P2_ONSET - _P1_END) * base      # 该 mock 的 λ 下的实际段长
+        t3_actual = _T3 * base      # 该 mock 的 λ 下的实际段长
         prev_t = None
         for fraction in [.25, .5, .75, .99, 1.]:
             cmd.t_phase[:] = t3_actual * fraction
@@ -476,7 +482,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
         # P1 的段末门控 = (前置收腿段 + P1_END) × λ。相位时钟从送参考时起算, 含前置段。
         lam = float(cmd.time_scale_command[0])
-        p1_expect = (_PRE_DURATION + _P1_END) * lam
+        p1_expect = _P1_END * lam
         # 门控之前候选成立也不得推进/结算。
         cmd.t_phase[:] = 2.00
         for _ in range(10):
@@ -553,10 +559,10 @@ class StageRewardTests(unittest.TestCase):
         # P3 的期望身体高度改为解析斜坡: 从趴平 0.024 线性抬到站立目标 0.055, 时长 = T4 名义。
         # 动机(技术细节 2026-09-19 §结论 3): 录制表在 T4 中段把期望拉回 0.0248, 使"保持趴姿"
         # 几乎最优、而要求站立的那段给出最低核值 —— 参考方向与任务目标相反。
-        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+        from mjlab.tasks.SQuRo_Backup.mdp import config as T
         env, cmd = make_env([2])                      # phase=2 -> P3
         lam = float(cmd.time_scale_command[0])
-        t4 = T.STAND_TRANSITION_DURATION * lam
+        t4 = _T4 * lam
         zs, kern_prone = [], []
         for frac in (0.0, .1, .25, .5, .75, .9, 1.0):
             cmd.t_phase[:] = frac * t4
@@ -582,7 +588,7 @@ class StageRewardTests(unittest.TestCase):
         # 关键回归: 早先用 source_t >= 0.95 判定, 而 P2 播完后 _stage_t_nom 会把 source_t
         # 冻结在 0.95, 于是 P2 的末端与 S2 确认等待段也被斜坡覆盖(实测 F/H 参考从
         # 0.0445/0.0503 被改成 0.024/0.024)。这里逐 λ 检查 P2 全段(含等待段)不被改。
-        from mjlab.tasks.SQuRo_Backup.mdp import timing as T
+        from mjlab.tasks.SQuRo_Backup.mdp import config as T
         env, cmd = make_env([0])
         lam = float(cmd.time_scale_command[0])
         # P1: 录制值特征 zF != zH(两段独立录制), 斜坡会强制相等。
@@ -610,7 +616,7 @@ class StageRewardTests(unittest.TestCase):
         _, zF3, _, zH3 = reference.get_body_reference(env)
         self.assertAlmostEqual(float(zF3[0]), T.STAND_GROUND_HEIGHT, places=5)
         self.assertAlmostEqual(float(zH3[0]), T.STAND_GROUND_HEIGHT, places=5)
-        cmd.t_phase[:] = T.STAND_TRANSITION_DURATION * lam
+        cmd.t_phase[:] = _T4 * lam
         _, zF3b, _, zH3b = reference.get_body_reference(env)
         self.assertAlmostEqual(float(zF3b[0]), T.STAND_TARGET_HEIGHT, places=5)
         self.assertAlmostEqual(float(zH3b[0]), T.STAND_TARGET_HEIGHT, places=5)
@@ -760,7 +766,7 @@ class StageRewardTests(unittest.TestCase):
         # 参考播完门 (PRE_DURATION + P1_END)λ=3.90 —— 于是"提前到达并保持"的达成时刻
         # 恒为段末, 与恰好到点达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折)。
         # 直接设 t_phase 验证语义, 不靠累加步数(浮点边界会让 >= 差一个 ulp 而漏判)。
-        p1_expect = (_PRE_DURATION + _P1_END) * 3.
+        p1_expect = _P1_END * 3.
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
@@ -888,7 +894,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
         w = _CURVES['weight_milestone_s1'][0]
-        p1_expect = (_PRE_DURATION + _P1_END) * 3.
+        p1_expect = _P1_END * 3.
 
         def full_reward_at(dev):
             # dev 是相对名义段末的偏差; 核的输入是"真实首次到达时刻", 所以反解成时刻写入。
@@ -910,7 +916,7 @@ class StageRewardTests(unittest.TestCase):
         w = _CURVES['weight_milestone_s1'][0]
         lam = cmd.time_scale_command
         onset = cmd._s1_criterion_first
-        p1_expect = (_PRE_DURATION + _P1_END) * 3.
+        p1_expect = _P1_END * 3.
         # (a) 真实到达 0.30λ -> 核打到 1/5 以下
         cmd._last_s1_milestone = torch.tensor([True])
         cmd._s1_criterion_first = torch.tensor([.30 * 3.])
@@ -954,7 +960,7 @@ class StageRewardTests(unittest.TestCase):
         env.step_dt = .01
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])            # 候选持续成立, 跨重试不清零
-        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .50   # 正好到 P1 窗界
+        cmd.t_phase[:] = _P1_END * 3. + .50   # 正好到 P1 窗界
         cmd._update_command()                              # 这一步触发重试(未确认)
         self.assertEqual(cmd.retry.item(), 1)
         self.assertTrue(torch.isnan(cmd._s1_criterion_first).item())
@@ -982,7 +988,7 @@ class StageRewardTests(unittest.TestCase):
             cmd._update_command()
         self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)   # 确认已成立
         self.assertEqual(cmd.phase.item(), 0)              # 但段末未到, 不得推进
-        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .10   # 越过段末(余量 > dt)
+        cmd.t_phase[:] = _P1_END * 3. + .10   # 越过段末(余量 > dt)
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
@@ -1176,7 +1182,7 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_command()
         cmd._update_metrics()
         # 奖励核用的偏差
-        p1_expect = (_PRE_DURATION + _P1_END) * 3.
+        p1_expect = _P1_END * 3.
         reward_dev = cmd.s1_dev_early.item()
         self.assertAlmostEqual(reward_dev, .01 - p1_expect, places=4)
         # 日志必须给出同一个数, 不得显示成 -0.09
@@ -1273,20 +1279,21 @@ class StageRewardTests(unittest.TestCase):
 
     def test_attitude_reference_matches_phase_criteria(self):
         # [§7.8] 姿态参考的边界**必须与阶段推进判据一致**, 否则奖励会鼓励抄近路:
-        # 上一版把前段终点设在 P1_END, 使 P1 末参考变成 (+1,+1) —— 实测"正确 S1"(-1,+1)
+        # 若把前段终点设在 P1 段末, P1 末参考就变成 (+1,+1) —— 实测"正确 S1"(-1,+1)
         # 被罚 -2.0/步, 而"提前双正置"代价为 0, 方向完全反了。
         # 本测试用**判据本身**(cos45 锥)而不是手写常量来卡边界。
         from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_body_attitude
-        from mjlab.tasks.SQuRo_Backup.mdp.timing import (
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import (
             ATTITUDE_F_HOLD_T, ATTITUDE_F_RIGHTED_T,
-            ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T, P1_END, P2_END)
+            ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T)
         env, cmd = make_env([0])
         cmd._update_dt = env.step_dt
         cmd.command_tensor[:, 5] = 1.0          # λ=1, 让 t_nom == t_phase
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cone = cos(radians(45))
 
-        # _stage_t_nom 返回**段内**时钟(P1 从 0 起算), 与 ATTITUDE_*_RIGHTED_T 同基准。
+        # _stage_t_nom 返回**累计**表时间, 故 get_reference_body_attitude 内部减去 P1_ONSET;
+        # 下面的 ref(t_rel) 入参是**段内**时刻, 与 ATTITUDE_*_RIGHTED_T 同基准。
         def ref(t_rel):
             cmd.t_phase[:] = t_rel
             return get_reference_body_attitude(env)[0]
@@ -1295,28 +1302,28 @@ class StageRewardTests(unittest.TestCase):
         u = ref(0.0)
         torch.testing.assert_close(u, torch.tensor([-1.0, -1.0]), atol=1e-5, rtol=0)
         # P1 全段: 前段必须始终满足"倒置"(u <= -cos45), 后段在翻正时刻后为正置
-        # 留 1e-3 浮点余量: H=0.78 时 u(0.80)=-0.765, 距锥界仅 0.06, f32 下需从容差上让一点。
+        # 留 1e-3 浮点余量: F_HOLD=0.78 时 u(P1 末)=-0.765, 距锥界仅 0.06, f32 下需从容差上让一点。
         tol = 1e-3
         for t in (0.0, 0.2, 0.4, 0.6, 0.8):
             u = ref(t)
             self.assertLessEqual(u[0].item(), -cone + tol,
                                  f"t_nom={t}: 前段参考必须满足 S1 的倒置判据")
-        # P1 末端必须是 S1 姿态 (-1,+1), 而不是 (+1,+1)
-        u = ref(P1_END)
+        # P1 末端必须是 S1 姿态 (倒置, 正置), 而不是双正置
+        u = ref(_P1_SPAN)
         self.assertLessEqual(u[0].item(), -cone + tol, "P1 末端前段必须是倒置")
         self.assertGreaterEqual(u[1].item(), cone - tol, "P1 末端后段必须是正置")
         # 后段必须先于前段翻正
         self.assertGreater(ATTITUDE_F_RIGHTED_T, ATTITUDE_H_RIGHTED_T)
-        # 前段翻正过程必须落在 P2 内 (晚于 P1_END, 不晚于 P2_END)
-        self.assertGreaterEqual(ATTITUDE_F_RIGHTED_T, P1_END)
-        self.assertLessEqual(ATTITUDE_F_RIGHTED_T, P2_END)
-        # P1 的缓冲期不泄漏: phase=0 下 t_phase 超过 P1_END 也会被限幅在 P1_END
-        cmd.t_phase[:] = P2_END
-        torch.testing.assert_close(get_reference_body_attitude(env)[0], ref(P1_END),
+        # 前段翻正过程必须落在 P2 内 (晚于 P1 段末, 不晚于 P2 段末)
+        self.assertGreaterEqual(ATTITUDE_F_RIGHTED_T, _P1_SPAN)
+        self.assertLessEqual(ATTITUDE_F_RIGHTED_T, _P2_SPAN)
+        # P1 的缓冲期不泄漏: phase=0 下 t_phase 超过 P1 段末也会被限幅在 P1 段末
+        cmd.t_phase[:] = _P2_SPAN
+        torch.testing.assert_close(get_reference_body_attitude(env)[0], ref(_P1_SPAN),
                                    atol=1e-6, rtol=0)
         # P2 末端与 P3: 两段正置并保持 (注意要在对应相位下断言; 缓冲期会限幅)
         cmd.phase[:] = 1
-        for t in (P2_END, 2.0):
+        for t in (_P2_SPAN, 2.0):
             u = ref(t)
             torch.testing.assert_close(u, torch.tensor([1.0, 1.0]), atol=1e-5, rtol=0)
         cmd.phase[:] = 2
@@ -1328,22 +1335,20 @@ class StageRewardTests(unittest.TestCase):
         # [§7.8] 关键性质: 在 P1 末端, "满足 S1 的正确姿态"的代价必须**优于**
         # "提前双正置", 否则奖励与推进判据互相打架。
         from mjlab.tasks.SQuRo_Backup.mdp import rewards as RW
-        from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END
         env, cmd = make_env([0])
         cmd._update_dt = env.step_dt
         cmd.command_tensor[:, 5] = 1.0            # λ=1
         cmd.time_scale_command = cmd.command_tensor[:, 5]
-        cmd.t_phase[:] = P1_END
+        cmd.t_phase[:] = _P1_SPAN                 # 段内口径: P1 末端
         cmd.test_u = torch.tensor([[-1.0, 1.0]])  # 正确 S1
         correct = RW.compute_body_attitude_cost(env).item()
         cmd.test_u = torch.tensor([[1.0, 1.0]])   # 提前双正置
         shortcut = RW.compute_body_attitude_cost(env).item()
         self.assertGreater(correct, shortcut,
                            "P1 末端: 正确 S1 的代价必须高于提前双正置(即罚得更少)")
-        # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则缓冲期限幅到 P1_END)
-        from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_END
+        # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则缓冲期限幅到 P1 段末)
         cmd.phase[:] = 1
-        cmd.t_phase[:] = P2_END
+        cmd.t_phase[:] = _P2_SPAN
         cmd.test_u = torch.tensor([[1.0, 1.0]])
         torch.testing.assert_close(RW.compute_body_attitude_cost(env), torch.zeros(1))
 

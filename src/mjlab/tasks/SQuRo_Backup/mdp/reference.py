@@ -3,45 +3,51 @@ import torch
 import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING
-from .timing import (
-    ATTITUDE_F_HOLD_T,
-    ATTITUDE_F_RIGHTED_T,
-    ATTITUDE_H_HOLD_T,
-    ATTITUDE_H_RIGHTED_T,
-    ATTITUDE_PRONE_U,
-    ATTITUDE_SUPINE_U,
-    BODY_TRAJ_BUILD_END,
-    BODY_TRAJ_P1_END,
+from .config import (
     FL_HOLD,
     HL_HOLD,
     LEG_INIT,
-    P1_BUILD_DURATION,
-    P1_END,
-    P1_ONSET,
-    P2_END,
-    P2_ONSET,
-    P3_ONSET,
-    PRE_DURATION,
-    PRE_TOTAL_TIME,
+    P1_SPAN,
+    P2_SPAN,
     REFERENCE_TOTAL_TIME,
     STAND_GROUND_HEIGHT,
     STAND_TARGET_HEIGHT,
-    STAND_TRANSITION_DURATION,
-    STAND_TRANSITION_END,
+    T0,
+    T1,
+    T2,
+    T3,
+    T4,
 )
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
+# 前置收腿段在参考表时间轴上的绝对位置 (本文件与 verify_backup_config 用)。
+P1_ONSET = T0                                # T1 起点
+P2_ONSET = T0 + T1 + T2                      # T3 起点
+P3_ONSET = T0 + T1 + T2 + T3                 # T4 起点
 
-REF_TOTAL_TIME = PRE_TOTAL_TIME   # 前置收腿 0.50s + 动作 0.95s + 过渡 0.5s + 保持 1.05s
+# 躯干姿态参考的端点与翻正时刻 (量 = 背腹轴世界 Z 余弦 u, -1 仰卧 / +1 俯卧)。
+ATTITUDE_SUPINE_U = -1.0              # 仰卧时的姿态余弦
+ATTITUDE_PRONE_U = 1.0                # 俯卧时的姿态余弦
+ATTITUDE_H_HOLD_T = 0.0               # 后段开始翻正的名义时刻
+ATTITUDE_H_RIGHTED_T = 0.30           # 后段翻正完成 (须早于 P1 段末)
+ATTITUDE_F_HOLD_T = 0.78              # 前段开始翻正 (窗口窄是实测如此)
+ATTITUDE_F_RIGHTED_T = P2_SPAN         # 前段翻正完成 = P2 段末(段内), 使 P1 末参考正好是 S1 姿态
+
+# 录制身体轨迹表的采集时序 (只在本文件用于把新动作时间映射回旧采集时间)。
+BODY_TRAJ_BUILD_END = 0.65            # 录制表中 T1 末端
+BODY_TRAJ_P1_END = 0.80               # 录制表中 P1 末端
+
+# 参考表总长 = 累计口径的 REFERENCE_TOTAL_TIME (前置收腿 0.50 + 动作 0.95 + 过渡 0.50 + 保持 1.05)。
+REF_TOTAL_TIME = REFERENCE_TOTAL_TIME
 _REF_DT = 0.005             # 参考表分辨率 (s)
 _ACTION_END = P3_ONSET      # 三段动作结束 (含前置段后的绝对时刻)
 _SEG1_END = P1_ONSET                        # T1 起点 = 0.50
-_SEG1_TAIL = P1_ONSET + P1_BUILD_DURATION   # T1 末端 = T2 起点 = 1.15
+_SEG1_TAIL = P1_ONSET + T1                   # T1 末端 = T2 起点
 _SEG2_END = P2_ONSET                        # T2 末端 = T3 起点 = 1.30
-_TRANS_END = P3_ONSET + STAND_TRANSITION_DURATION
+_TRANS_END = P3_ONSET + T4
 
 # 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
 # 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
@@ -52,10 +58,7 @@ _TRANS_END = P3_ONSET + STAND_TRANSITION_DURATION
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
 _body_traj_cache: dict = {}
 
-# 站立初始腿角与支撑腿角统一从 timing 导入 (常量唯一管理处), 不在本文件重复定义。
-_LEG_INIT = np.array(LEG_INIT, dtype=np.float64)
-_FL_HOLD = FL_HOLD
-_HL_HOLD = HL_HOLD
+
 
 
 # 生成参考表
@@ -65,22 +68,23 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
     ref = np.zeros((n, 14), dtype=np.float64)
     leg_col = (4, 5, 6, 7, 10, 11, 12, 13)      # MJLAB 中腿列: FL/FR 4-7, HL/HR 10-13
     spn_col = (0, 1, 8, 9)                      # MJLAB 中脊柱列
+    leg_init = np.array(LEG_INIT, dtype=np.float64)
 
     for i, tn in enumerate(t_grid):
-        leg = _LEG_INIT.copy()
+        leg = leg_init.copy()
         f_sp1, f_bd, h_sp1, h_bd = 0.0, 0.0, 0.0, 0.0
         if tn < _SEG1_END:
             # 前置收腿段: 脊柱与颈部保持 0, 腿从 LEG_INIT 线性插到支撑角。
             u = (tn / _SEG1_END) if _SEG1_END > 0.0 else 1.0
             for c in range(8):
-                hold = _FL_HOLD[c % 2] if c < 4 else _HL_HOLD[c % 2]
-                leg[c] = _LEG_INIT[c] + u * (hold - _LEG_INIT[c])
+                hold = FL_HOLD[c % 2] if c < 4 else HL_HOLD[c % 2]
+                leg[c] = leg_init[c] + u * (hold - leg_init[c])
         # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
-        # 下界 _SEG1_END 不可省: 否则前置段会掉进 T4 分支被腿过渡覆盖(实测腿变成 _HL_HOLD[1])。
+        # 下界 _SEG1_END 不可省: 否则前置段会掉进 T4 分支被腿过渡覆盖(实测腿变成 HL_HOLD[1])。
         if _SEG1_END <= tn < _ACTION_END or at_p2_end:
-            leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
+            leg[0], leg[1], leg[2], leg[3] = FL_HOLD[0], FL_HOLD[1], FL_HOLD[0], FL_HOLD[1]
+            leg[4], leg[5], leg[6], leg[7] = HL_HOLD[0], HL_HOLD[1], HL_HOLD[0], HL_HOLD[1]
             if tn < _SEG1_TAIL:
                 u = (tn - _SEG1_END) / (_SEG1_TAIL - _SEG1_END)
                 f_sp1 = 0.6 * u
@@ -102,9 +106,9 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
         elif _ACTION_END <= tn < _TRANS_END:
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
-                leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
+                leg[c] = FL_HOLD[c % 2] + u * (leg_init[c] - FL_HOLD[c % 2])
             for c in range(4, 8):
-                leg[c] = _HL_HOLD[c % 2] + u * (_LEG_INIT[c] - _HL_HOLD[c % 2])
+                leg[c] = HL_HOLD[c % 2] + u * (leg_init[c] - HL_HOLD[c % 2])
             f_sp1 = 0.6 * (1.0 - u)
         # 站立过渡结束后保持站立 (默认腿站立角, 脊柱 0)
 
@@ -161,13 +165,13 @@ def _get_body_traj(device: str) -> dict:
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
     # 传入的是参考表绝对时间; 录制表以 T1 起点为 0, 故先减去 P1_ONSET。
     t_rel = (t_nom - P1_ONSET).clamp(min=0.0)
-    tail = P1_BUILD_DURATION                 # T1 时长 0.65
-    recover_fraction = (t_rel - tail) / (P1_END - tail)
+    tail = T1                                # T1 时长
+    recover_fraction = (t_rel - tail) / (P1_SPAN - tail)
     recover_t = BODY_TRAJ_BUILD_END + recover_fraction * (BODY_TRAJ_P1_END - BODY_TRAJ_BUILD_END)
     return torch.where(
         t_rel < tail,
         t_rel * (BODY_TRAJ_BUILD_END / tail),
-        torch.where(t_rel < P1_END, recover_t, BODY_TRAJ_P1_END + t_rel - P1_END),
+        torch.where(t_rel < P1_SPAN, recover_t, BODY_TRAJ_P1_END + t_rel - P1_SPAN),
     )
 
 
@@ -194,7 +198,7 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     # S2 确认等待段时 _stage_t_nom 会把 source_t 冻结在 0.95, 那样 P2 的末端与等待段
     # 也会被斜坡覆盖(实测 F/H 参考从 0.0445/0.0503 被改成 0.024/0.024), 污染 P2 奖励
     # 并破坏归因。斜坡进度同样取自段内时钟, 与录制表查询时间解耦。
-    u = (t_phase / (lam * STAND_TRANSITION_DURATION)).clamp(0.0, 1.0)
+    u = (t_phase / (lam * T4)).clamp(0.0, 1.0)
     z_ramp = STAND_GROUND_HEIGHT + (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT) * u
     in_p3 = phase == 2
     z_f = torch.where(in_p3, z_ramp, z_f)
@@ -230,8 +234,9 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
     # 缓冲期参考不得泄漏到下一段动作; float32 的起点+段长可能超边界一个 ulp, 需再限幅。
-    p1_t = P1_ONSET + t_local_nom.clamp(max=P1_END)
-    p2_t = P2_ONSET + t_local_nom.clamp(max=P2_END - P1_END)
+    # 段内上限用段内口径: P1 是 P1_SPAN(T1+T2), P2 是 T3; 用累计 P1_END 会多播 0.5λ。
+    p1_t = P1_ONSET + t_local_nom.clamp(max=P1_SPAN)
+    p2_t = P2_ONSET + t_local_nom.clamp(max=T3)
     p3_t = P3_ONSET + t_local_nom
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 

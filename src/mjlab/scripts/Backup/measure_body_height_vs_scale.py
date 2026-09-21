@@ -13,7 +13,7 @@ from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import (
     get_reference_joint_state, _get_body_traj, _stage_t_nom)
-from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END, P2_END
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END, P2_END
 
 # 身体高度参考表的"速度一致性"检查
 # backup_body_traj.npy 声明是 λ=1 开环重放录制的, 但训练用 λ∈[2,4]。

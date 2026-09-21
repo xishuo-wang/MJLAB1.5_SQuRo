@@ -2,6 +2,9 @@ from __future__ import annotations
 import torch
 from typing import Any
 
+# 本文件只留课程学习相关内容 (轮数换算、时间缩放课程、奖励权重曲线);
+# 其余任务配置常量在 config.py。
+
 
 # 100 Hz 初筛配置: 控制周期 0.002 × 5 = 0.01 s, 96 步覆盖 0.96 s。取舍理由见技术细节 §6。
 _STEPS_PER_ITER = 96

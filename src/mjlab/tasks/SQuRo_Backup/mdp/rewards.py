@@ -6,12 +6,22 @@ from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
-from .timing import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S, STAND_STILL_FULL_SPEED
-from .timing import TRACK_REF_MSE_SCALE, TRACK_W_LEG, TRACK_W_NECK, TRACK_W_SPN
+
 
 if TYPE_CHECKING:
     from mjlab.envs.mdp.actions import JointPositionAction
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
+
+
+# 只在本文件使用的奖励核参数 (未跨文件, 故不进 config.py)。
+QUALITY_SIGMA_EARLY_FRAC = 0.40   # 里程碑时间质量核的早侧 σ (按 λ 缩放)
+QUALITY_SIGMA_LATE_S = 0.35       # 里程碑时间质量核的晚侧 σ (绝对秒)
+TRACK_W_SPN = 1.57                # 加权二次跟踪代价的脊柱分组权重
+TRACK_W_LEG = 1.0                 # 同上, 腿部分组
+TRACK_W_NECK = 0.3                # 同上, 颈部
+TRACK_REF_MSE_SCALE = 3.0         # 二次跟踪代价的 MSE 归一化尺度
+STAND_STILL_FULL_SPEED = 4.5      # 站立静止奖励线性核的归零速度
 
 
 
@@ -28,7 +38,7 @@ _BODY_SEG_HALF = 0.025        # 身体段半径 (m, YoZ 截面包络)
 
 
 # 里程碑时间质量核: 达成时刻越接近名义段末, 钱越接近满分。
-# 早侧按 λ 比例(陡)、晚侧按绝对秒(缓)的理由见 mdp/timing.py 的常量注释与技术细节 2026-09-18 一节。
+# 早侧按 λ 比例(陡)、晚侧按绝对秒(缓)的理由见技术细节 2026-09-18 一节。
 # 关键: dev 取自"导致结算的那次确认脉冲的起点", 不是结算时刻 —— 结算时刻被段末门控压在
 # 名义时刻之后, 拿它做核会恒等于满分, 对"提前翻完干等"完全无效。
 def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam: torch.Tensor) -> torch.Tensor:
