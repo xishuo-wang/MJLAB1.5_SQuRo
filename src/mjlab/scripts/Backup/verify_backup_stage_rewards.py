@@ -20,6 +20,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.config import P1_SPAN as _P1_SPAN
 from mjlab.tasks.SQuRo_Backup.mdp.config import P2_SPAN as _P2_SPAN
 from mjlab.tasks.SQuRo_Backup.mdp.config import T3 as _T3
 from mjlab.tasks.SQuRo_Backup.mdp.config import T4 as _T4
+from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.reference import P2_ONSET as _P2_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.reference import P3_ONSET as _P3_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import STAND_STILL_FULL_SPEED as _STAND_STILL_FULL_SPEED
@@ -1296,10 +1297,11 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cone = cos(radians(45))
 
-        # _stage_t_nom 返回**累计**表时间, 故 get_reference_body_attitude 内部减去 P1_ONSET;
-        # 下面的 ref(t_rel) 入参是**段内**时刻, 与 ATTITUDE_*_RIGHTED_T 同基准。
-        def ref(t_rel):
-            cmd.t_phase[:] = t_rel
+        # _stage_t_nom 返回**累计**表时间, 而 get_reference_body_attitude 内部减去 P1_ONSET;
+        # 相位 0 的时钟就是表时间, 故 ref(t_nom) 的入参是"从 T1 起点算"的名义时刻,
+        # 换算成相位时钟要加上 T1 在表上的起点 P1_ONSET。直接用 t_phase=t_nom 会落进 P0 段。
+        def ref(t_nom):
+            cmd.t_phase[:] = _P1_ONSET + t_nom
             return get_reference_body_attitude(env)[0]
 
         # 起点: 两段仰卧, 与 apply_fallen_state 的实测初态一致
@@ -1321,8 +1323,8 @@ class StageRewardTests(unittest.TestCase):
         # 前段翻正过程必须落在 P2 内 (晚于 P1 段末, 不晚于 P2 段末)
         self.assertGreaterEqual(ATTITUDE_F_RIGHTED_T, _P1_SPAN)
         self.assertLessEqual(ATTITUDE_F_RIGHTED_T, _P2_SPAN)
-        # P1 的缓冲期不泄漏: phase=0 下 t_phase 超过 P1 段末也会被限幅在 P1 段末
-        cmd.t_phase[:] = _P2_SPAN
+        # P1 的冻结段不泄漏: phase=0 下时钟越过 P1_END 后参考仍停在 P1 段末
+        cmd.t_phase[:] = _P1_END + .25
         torch.testing.assert_close(get_reference_body_attitude(env)[0], ref(_P1_SPAN),
                                    atol=1e-6, rtol=0)
         # P2 末端与 P3: 两段正置并保持 (注意要在对应相位下断言; 缓冲期会限幅)
@@ -1343,14 +1345,14 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_dt = env.step_dt
         cmd.command_tensor[:, 5] = 1.0            # λ=1
         cmd.time_scale_command = cmd.command_tensor[:, 5]
-        cmd.t_phase[:] = _P1_SPAN                 # 段内口径: P1 末端
+        cmd.t_phase[:] = _P1_ONSET + _P1_SPAN    # 相位时钟 -> P1 段末
         cmd.test_u = torch.tensor([[-1.0, 1.0]])  # 正确 S1
         correct = RW.compute_body_attitude_cost(env).item()
         cmd.test_u = torch.tensor([[1.0, 1.0]])   # 提前双正置
         shortcut = RW.compute_body_attitude_cost(env).item()
         self.assertGreater(correct, shortcut,
                            "P1 末端: 正确 S1 的代价必须高于提前双正置(即罚得更少)")
-        # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则缓冲期限幅到 P1 段末)
+        # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则冻结段停在 P1 段末参考)
         cmd.phase[:] = 1
         cmd.t_phase[:] = _P2_SPAN
         cmd.test_u = torch.tensor([[1.0, 1.0]])
