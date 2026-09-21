@@ -19,7 +19,7 @@ import tyro
 # 动作空间标称边界; JointPositionActionCfg.scale
 ACTION_NOMINAL = 1.0
 ACTION_SCALE = 0.3
-# P1 段长 (s, 名义时间), 与 mdp/timing.py 的 P1_BUILD_DURATION 对应
+# T1 段长 (s, 名义时间), 与 mdp/config.py 的 T1 对应
 P1_BUILD_NOMINAL = 0.65
 # 判定"已到达 T1 终点"的容差 (rad), 参考终点为 ∓1.57
 ENDPOINT_TOL = 0.15

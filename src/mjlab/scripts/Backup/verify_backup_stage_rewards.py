@@ -391,7 +391,7 @@ class StageRewardTests(unittest.TestCase):
 
     def test_p2_boundary_and_p3_is_continuous(self):
         env, cmd = make_env([1, 1, 1, 2])
-        # T3 段时长 λ×P2_DURATION; P2 的段内时钟从 0 起算。
+        # T3 段时长 λ×T3; P2 的段内时钟从 0 起算。
         d = 0.15 * 3.0
         cmd.t_phase[:] = torch.tensor([.43 / .45 * d, .44 / .45 * d, .75 / .45 * d, 0.])
         pos, vel = reference.get_reference_joint_state(env)
