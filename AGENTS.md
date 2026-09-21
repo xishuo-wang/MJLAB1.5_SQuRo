@@ -29,7 +29,6 @@
   `docs` 文档或注释 · `config` 仅改配置 · `exp` 实验记录/日志/checkpoint · `chore` 杂项
 - scope 用模块名：`env` `rl` `mdp` `managers` `sensor` `sim` `viewer` `scripts` `config`
 - 例：`feat(mdp): 实现曲率跟踪命令生成器`、`fix(env): 修正 F_body 坐标系朝向提取`
-- AI 参与的提交加尾注 `自动化测试: AI`
 
 **网络超时**：`git push` 因网络失败时**不要反复重试**，跳过并提示
 "⚠️ 网络超时，已跳过 git push，请手动推送"；本地 commit 保留，等网络恢复一并推送。
