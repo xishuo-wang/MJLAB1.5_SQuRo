@@ -77,6 +77,7 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
                 leg[c] = _LEG_INIT[c] + u * (hold - _LEG_INIT[c])
         # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
+        # 下界 _SEG1_END 不可省: 否则前置段会掉进 T4 分支被腿过渡覆盖(实测腿变成 _HL_HOLD[1])。
         if _SEG1_END <= tn < _ACTION_END or at_p2_end:
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
@@ -203,14 +204,7 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 
 
 # 获取参考躯干姿态 (两段背腹轴的世界 Z 余弦, 与 command._pose_cos 同一量)。
-#
-# 为什么参考不能从关节表直接 cos 出来: 实测 t=0 时 cos(F_body_ref)=+1, 而机器人是仰卧(u=-1),
-# 差 180°。原因是 T1 段的关节构型对应"base 转约 40-90° + 前后段反向折 75°", 腹背轴在
-# 该构型下近似水平(u≈0), 而 T1 末 F_body=-1.57 与"前段正置"互斥 —— 翻滚只能发生在 T3(即 P2)。
-# 故姿态参考按"每段先从仰卧保持、再单调转到俯卧"构造, 边界与阶段判据对齐(见 timing.py)。
-# 插值在**余弦**上做线性: 端点严格且该量本身就是奖励要比较的量。
-# 注意(勿误解): 这不等于"匀速最短弧转动" —— 换算成姿态角后, 角速度在两端最大
-# (实测 进度0->0.1 已转过 37°, 0.4->0.5 只转 13°)。若将来要求等角速度, 应改在角度域插值。
+# 不能由关节表直接 cos 得到, 且在余弦域线性插值(非等角速度); 理由见技术细节 §7.8。
 def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # _stage_t_nom 已是参考表绝对时间; 姿态参考的时间基准是"P1 起点", 故减去 P1_ONSET。
     t_nom = _stage_t_nom(env) - P1_ONSET  # [N], 已按 λ 缩放
@@ -228,11 +222,7 @@ def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 阶段时间映射到**参考表绝对时间**(含前置收腿段)。各段的表起点不同:
-#   P1 段内 [0, P1_END]   -> 表 [PRE_DURATION, P1_END+PRE_DURATION]
-#   P2 段内 [0, P2_END-P1_END] -> 表 [P2_ONSET, P2_END+PRE_DURATION]
-#   P3 段内 [0, ...]      -> 表 [P3_ONSET, ...]
-# 姿态参考的时间基准是"P1 起点", 由 P1_ONSET 换算。
+# 阶段时间映射到参考表绝对时间(含前置收腿段), 各段加自己的表起点。语义见技术细节 §5.4。
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)

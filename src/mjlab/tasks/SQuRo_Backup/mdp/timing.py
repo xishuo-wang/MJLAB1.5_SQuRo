@@ -10,18 +10,14 @@ P2_END = P1_END + P2_DURATION
 STAND_TRANSITION_END = P2_END + STAND_TRANSITION_DURATION
 REFERENCE_TOTAL_TIME = STAND_TRANSITION_END + STAND_HOLD_DURATION
 
-# 前置收腿段 (P0): 脊柱与颈部保持 0, 只把腿从 LEG_INIT 插值到 FL_HOLD/HL_HOLD, 时长 PRE_DURATION。
-# 它不占相位——相位机不变, 只是"进入 P1 的时刻"整体推迟 PRE_DURATION, 且**不设门控**。
-#
-# 实现方式: 只在**查表时间**上加偏移, 不把 P1_END 加大。原因: P1_END 既被当作时间
-# (reference._SEG2_END 的限幅边界) 又被当作语义基准(姿态参考的翻正窗口), 直接改它会把
-# 姿态参考一起带偏。所以上面 P1_END/P2_END/... 仍表示各段**自身时长**, 不含前置段;
-# 下面三个常量给出参考时间轴上的绝对位置, 只有参考表与查表用它们。
+# 前置收腿段 (P0): 脊柱与颈部保持 0, 只把腿从 LEG_INIT 插到支撑角, 时长 PRE_DURATION。
+# 不占相位、不设门控; 只在查表时间上加偏移, 不加大 P1_END(它同时是语义基准)。
+# 各段边界与理由见 docs/SQuRo_Backup_技术细节.md §5.4。
 PRE_DURATION = 0.50
-P1_ONSET = PRE_DURATION                  # T1 起点 = 0.50
-P2_ONSET = PRE_DURATION + P1_END         # T3 起点 = 1.30
-P3_ONSET = PRE_DURATION + P2_END         # T4 起点 = 1.45
-PRE_TOTAL_TIME = PRE_DURATION + REFERENCE_TOTAL_TIME   # 参考表总长 = 3.00
+P1_ONSET = PRE_DURATION                  # T1 起点
+P2_ONSET = PRE_DURATION + P1_END         # T3 起点
+P3_ONSET = PRE_DURATION + P2_END         # T4 起点
+PRE_TOTAL_TIME = PRE_DURATION + REFERENCE_TOTAL_TIME
 
 # 阶段末端额外等待（实际秒，不乘 λ）；S1/S2 达成即推进，超时才重试。
 P1_BUFFER_DURATION = 1.0
@@ -92,31 +88,12 @@ LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)
 FL_HOLD = (-0.28, 0.55)   # FL/FR shoulder, elbow
 HL_HOLD = (-1.50, -0.25)  # HL/HR hip, knee
 
-# 躯干姿态参考的端点与翻正时刻 (技术细节 §7.8)。量是背腹轴的世界 Z 余弦 u:
-# u=-1 仰卧(腹朝上) / u=0 侧立 / u=+1 俯卧(背朝上)。
-# 每段参考 = 先保持仰卧到 HOLD 时刻, 再线性升到俯卧, 之后保持。
-#
-# 边界必须与阶段推进判据一致, 否则奖励会鼓励"抄近路":
-#   P1 起点        (-1,-1)   两段仰卧
-#   P1 末端/等待段 (-1,+1)   S1: 前段倒置 + 后段正置
-#   P2 起点        (-1,+1)   接 S1
-#   P2 末端及 P3   (+1,+1)   S2
-# 曾把前段终点设在 P1_END, 导致 P1 末参考已是 (+1,+1): 实测"正确 S1"被罚 -2.0/步,
-# 而"提前双正置"代价为 0 —— 满足推进条件反而扣分, 方向完全反了。前段的翻正过程
-# 必须安排在 P2 内 (P2_END = 0.95)。
-ATTITUDE_SUPINE_U = -1.0    # 两段都倒置时 (t=0) 的姿态余弦 (实测初态 _pose_cos = -1.000)
-ATTITUDE_PRONE_U = 1.0      # 翻正完成时的姿态余弦
-# 后段 HOLD=0 / 终点 0.30: 实测 u_H 在 t_nom=0.25 已达 0.9, 取 0.30 留余量; 早于 P1_END 即可。
-ATTITUDE_H_HOLD_T = 0.0
+# 躯干姿态参考的端点与翻正时刻 (量 = 背腹轴世界 Z 余弦 u, -1 仰卧 / +1 俯卧)。
+# 边界必须与阶段判据一致, 否则奖励会鼓励抄近路; 标定依据见技术细节 §7.8。
+ATTITUDE_SUPINE_U = -1.0
+ATTITUDE_PRONE_U = 1.0
+ATTITUDE_H_HOLD_T = 0.0                  # 后段: 0 -> 0.30 翻正
 ATTITUDE_H_RIGHTED_T = 0.30
-# 前段 HOLD=0.78 / 终点 P2_END=0.95: **必须保证 P1 全段 (t_nom<=0.80) 前段仍倒置**,
-# 否则与 S1 判据("前段倒置")冲突 —— 这是上一版的错。
-# 该窗口没法更宽: 要求 0.80 处 u_F_ref <= -cos45 且 0.95 处到 +1, 线性斜坡最早只能从 0.78 起
-# (H=0.78 -> u(0.80)=-0.765, 余量 0.06; H=0.75 就只有 -0.50, 落在锥外)。
-# 窗口窄是合理的: 实测前段翻正本来就快 —— 旧 run 的 u_F 从 t_nom≈0.80 的 -1 到 0.93 的 +1,
-# 只用 ~0.13 s (后段用了 0.25 s)。
-# 已知代价(必须先知道再用它训练): 旧 run 在别处成功过, 但它在 t_nom=0.20~0.45 有 26 帧
-# 前段早翻(u_F 实际到 +0.30, 参考要求 -1, err≈+1.3)。按该参考, 这些帧要扣分。
-# 即"前段早翻算不算错"这一判断被固化进了参考, 尚无独立依据 —— 用之前先确认这是想要的。
-ATTITUDE_F_HOLD_T = 0.78
+ATTITUDE_F_HOLD_T = 0.78                 # 前段: 0.78 -> 0.95 翻正(窗口窄是实测如此)
+ATTITUDE_F_RIGHTED_T = P2_END
 ATTITUDE_F_RIGHTED_T = P2_END
