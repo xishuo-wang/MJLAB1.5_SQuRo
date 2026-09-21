@@ -14,41 +14,54 @@ from mjlab.viewer import NativeMujocoViewer
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommandCfg
+from mjlab.tasks.SQuRo_Backup.mdp.command import _P1_EXPECT
 from mjlab.tasks.SQuRo_Backup.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_CONFIRM_DURATION
+from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET, P2_ONSET, P3_ONSET
+# 目标角与分段时长一律从生产常量导入, 本文件不再另立一份 (曾因此与训练侧漂移)。
+from mjlab.tasks.SQuRo_Backup.mdp.config import (
+    FL_HOLD,
+    HL_HOLD,
+    LEG_INIT,
+    P1_END,
+    STAND_CONFIRM_DURATION,
+    T0,
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+)
 
 
 
-FL_HOLD = (-0.28, 0.55)
-HL_HOLD = (-1.50, -0.25)
-LEG_INIT = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3]
-
-T1 = 0.65
-T2 = 0.15
-T3 = 0.15
-T4 = 0.5
-T5 = 1.05
-
-T_SEG1_END = T1
+T_SEG1_END = T1                        # 以下均为"从 T1 起点算"的段末 (不含 P0)
 T_SEG2_END = T_SEG1_END + T2
 T_SEG3_END = T_SEG2_END + T3
 T_SEG4_END = T_SEG3_END + T4
 T_TOTAL = T_SEG4_END + T5
-T_OFFSET = 1.0
+T_OFFSET = 1.0                         # 手调时间轴的固定前导 (P0 之前的静止段)
 
 
 
 def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
     time1 = T_OFFSET
+    time0 = time1 - T0 * scale                 # P0 收腿段起点
     time2 = time1 + T1 * scale
     time3 = time2 + T2 * scale
     time4 = time3 + T3 * scale
     time5_end = time4 + T4 * scale
-    r = [0.0, 0.0, 0.0, 0.0, 0.1, -0.3, 0.1, -0.3, 0.0, 0.0, -0.1, 0.3, -0.1, 0.3]
-    if current_time <= time1:
+    r = [0.0, 0.0, 0.0, 0.0, *LEG_INIT[:4], 0.0, 0.0, *LEG_INIT[4:]]
+    if current_time <= time0:
+        return r
+    if current_time < time1:
+        # P0: 只把腿从站立角插到支撑角, 脊柱与颈保持 0 (与 mdp/reference.py 的 P0 分支同构)
+        u = (current_time - time0) / max(time1 - time0, 1e-9)
+        for c in range(4):
+            r[4 + c] = LEG_INIT[c] + u * (FL_HOLD[c % 2] - LEG_INIT[c])
+            r[10 + c] = LEG_INIT[4 + c] + u * (HL_HOLD[c % 2] - LEG_INIT[4 + c])
         return r
     r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
     r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
@@ -220,7 +233,7 @@ class StateMachinePolicy:
         s2_confirmed = self._update_confirmation("_s2_confirm_t", self._is_S2(), dt)
         inverted_confirmed = self._update_confirmation("_inverted_confirm_t", self._is_both_inverted(), dt)
         if self.phase == "P1":
-            expected = T_SEG2_END * self.lam
+            expected = _P1_EXPECT * self.lam
             close_t = expected + self.window_late_s
             # 与训练同步: 可接受区间 = [段末, 段末+晚侧余量]。段末门控防参考瞬移;
             # 过窗仍未确认则本次尝试作废(重播本段参考)。
@@ -273,18 +286,19 @@ class StateMachinePolicy:
     def __call__(self, obs: Any) -> torch.Tensor:
         del obs
         self._sync_state()
-        # 保留手调参考函数和各段动作时长；只根据已确认的新阶段查询目标。
+        # 保留手调参考函数；各段查询时间按训练参考表换算, 见技术细节 §5.4 的相位 0 语义。
         if self.phase == "P1":
-            tn = min(self.t_phase / self.lam, T_SEG2_END)
+            # 表时间 = clamp(相位时钟/λ, P1_END); 手调轴以 T1 起点为 T_OFFSET, 故再减 P1_ONSET。
+            tn = min(self.t_phase / self.lam, P1_END) - P1_ONSET
             target = slow1_target(T_OFFSET + tn * self.lam, self.lam)
         elif self.phase == "P2":
             # 与手调函数同顺序构造边界；等待时取 T3 左端极限，不能泄漏到 T4。
             # 用户可令 T3 末端与 T4 起点不连续；此处只选择阶段，不改参考公式。
-            start = T_OFFSET + T_SEG2_END * self.lam
+            start = T_OFFSET + (P2_ONSET - P1_ONSET) * self.lam
             end = start + T3 * self.lam
             target = slow1_target(min(start + self.t_phase, nextafter(end, -float("inf"))), self.lam)
         elif self.phase == "P3":
-            start = T_OFFSET + T_SEG3_END * self.lam
+            start = T_OFFSET + (P3_ONSET - P1_ONSET) * self.lam
             target = slow1_target(start + self.t_phase, self.lam)
         else:  # DONE
             target = slow1_target(1e6, self.lam)  # 保持站立

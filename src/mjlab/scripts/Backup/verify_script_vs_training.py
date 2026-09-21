@@ -35,6 +35,11 @@ from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET
 #   手调脚本自身的相位推进与训练 command 的相位推进是否同步。
 
 SPINE_IDX = [0, 1, 8, 9]
+LEG_IDX = [4, 5, 6, 7, 10, 11, 12, 13]
+ALL_IDX = SPINE_IDX + LEG_IDX
+# 参考表存的是 float32, 且比对要走一次线性插值, 故容差不能取 1e-6 (约为 f32 在 1.57 处的
+# 一个 ulp); 1e-5 rad 相对量程仍是 1e-5 量级, 足以发现真实公式分歧。
+REF_TOL = 1e-5
 
 
 def cmp_reference() -> bool:
@@ -54,24 +59,22 @@ def cmp_reference() -> bool:
     resolve_model_indices(env.unwrapped.scene.entities["robot"])
 
     # 训练参考表: 用同一套查询接口 (λ=1)
-    # 两条时间轴差一个常量: 参考表 T1 起点在表时间 P1_ONSET(0.50), 手调脚本在 T_OFFSET(1.0),
-    # 且手调脚本的 T_OFFSET 不随 scale 缩放, 故换算关系恒为 手调时刻 = 表时刻 + P1_ONSET。
-    # 用 T_OFFSET + tn 是旧相位映射(P0 未被播放, 表时间 = P1_ONSET + t_phase)下的巧合,
-    # 现在相位 0 的时钟就是表时间, 必须按 P1_ONSET 换算。
+    # 手调轴以 T1 起点为 T_OFFSET, 参考表以 P1_ONSET 为 T1 起点, 故 手调时刻 = 表时刻 + P1_ONSET。
+    # 全部 14 个关节都参与比对: 只比脊柱无法证明 P0 收腿轨迹一致。
     ts = np.arange(0.0, T.STAND_TRANSITION_END + 1e-9, 0.005)
     errs = []
     rows = []
     for tn in ts:
         # 训练参考: get_reference_joint_state 按 phase/t_phase 查询, 这里直接造一个最小代理
         ref_gym = _ref_table_at(env, tn)
-        ref_hand = np.array(slow1_target(tn + _P1_ONSET, 1.0))[SPINE_IDX]
+        ref_hand = np.array(slow1_target(tn + _P1_ONSET, 1.0))[ALL_IDX]
         e = np.abs(ref_gym - ref_hand).max()
         errs.append(e)
         rows.append((tn, ref_gym, ref_hand, e))
     errs = np.array(errs)
     print(f"\n  采样 {len(ts)} 点, 名义时间 0..{ts[-1]:.3f}s")
-    print(f"  脊柱四关节 |参考表 - 手调| 最大偏差 = {errs.max():.6f} rad")
-    print(f"  偏差 > 1e-6 的点数 = {int((errs > 1e-6).sum())}")
+    print(f"  14 关节(含 P0 收腿段) |参考表 - 手调| 最大偏差 = {errs.max():.6f} rad")
+    print(f"  偏差 > {REF_TOL:g} 的点数 = {int((errs > REF_TOL).sum())}")
     print()
     print(f"  {'t_nom':>6} | {'参考表 F_sp1 F_body H_sp1 H_body':>34} | {'手调 F_sp1 F_body H_sp1 H_body':>34} | {'max|Δ|':>8}")
     for tn, rg, rh, e in rows[::20]:
@@ -79,14 +82,13 @@ def cmp_reference() -> bool:
               f"{rh[0]:+8.3f} {rh[1]:+8.3f} {rh[2]:+8.3f} {rh[3]:+8.3f} | {e:8.6f}")
 
     env.close()
-    ok = bool(errs.max() < 1e-6)
+    ok = bool(errs.max() < REF_TOL)
     print(f"\n  [参考对拍] {'一致' if ok else '** 不一致 **'}")
     return ok
 
 
 # 在给定名义时间 tn 处查询训练参考表 (λ=1, 按 P1/P2/P3 分段)
 def _ref_table_at(env, tn: float) -> np.ndarray:
-    import torch as _t
     cmd = env.unwrapped.command_manager.get_term("backup_cmd")
     if tn < T.P1_END:
         phase, t_local = 0, tn
@@ -98,7 +100,7 @@ def _ref_table_at(env, tn: float) -> np.ndarray:
     cmd.t_phase[:] = t_local
     cmd.command_tensor[:, 5] = 1.0
     pos, _ = get_reference_joint_state(env.unwrapped)
-    return pos[0, SPINE_IDX].detach().cpu().numpy()
+    return pos[0, ALL_IDX].detach().cpu().numpy()
 
 
 def cmp_detection(lam: float) -> bool:
@@ -139,7 +141,7 @@ def cmp_detection(lam: float) -> bool:
             rows.append({
                 "t": pol._elapsed, "ph": pol.phase,
                 "h": (h_s1, h_s2, h_inv), "c": (c_s1, c_s2, c_inv),
-                "cS1": pol._s1_confirm_t, "cINV": pol._inverted_confirm_t,
+                "cph": int(cmd.phase[0]), "cS1": pol._s1_confirm_t, "cINV": pol._inverted_confirm_t,
             })
             if pol.phase == "DONE":
                 break
@@ -171,14 +173,24 @@ def cmp_detection(lam: float) -> bool:
           f"脚本读取值={pol.window_late_s}")
 
     print()
-    print("  相位推进对拍 (手调脚本 phase vs 训练 command phase):")
+    print("  相位推进对拍 (手调脚本 phase vs 训练 command phase, 逐帧):")
+    phase_name = {0: "P1", 1: "P2", 2: "P3"}
     ph_mismatch = 0
+    first_ph_mismatch = None
     for r in rows:
-        c_ph = int(cmd.phase[0])
-        h_ph = {"P1": 0, "P2": 1, "P3": 2}.get(r["ph"], c_ph)
-        if c_ph != h_ph:
+        # 必须用逐帧记录的 cph: 在循环外读 cmd.phase 会拿"最终相位"比"逐帧相位", 恒报不一致。
+        h_ph = {"P1": 0, "P2": 1, "P3": 2}.get(r["ph"], r["cph"])
+        if r["cph"] != h_ph:
             ph_mismatch += 1
+            if first_ph_mismatch is None:
+                first_ph_mismatch = (r["t"], h_ph, r["cph"])
     print(f"    不一致帧数 = {ph_mismatch} / {len(rows)}")
+    if first_ph_mismatch is not None:
+        t0, h_ph, c_ph = first_ph_mismatch
+        print(f"    首个不一致: t={t0:.2f}s 手调={phase_name.get(h_ph, '?')} 训练={phase_name.get(c_ph, '?')}")
+    # 每处相位边界允许 1 帧错位: 手调侧在 env.step 之前推进时钟, 训练 command 在 step 之内,
+    # 两者天生相差一步。超过"边界数×1 帧"才是真的状态机分歧。
+    print(f"    说明: ≤3 帧(三个边界各 1 帧)属固有错位, >3 帧才是状态机分歧")
 
     env.close()
     ok = sum(n_mismatch.values()) == 0
