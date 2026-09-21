@@ -7,7 +7,7 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_curriculum_time_scale
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .timing import P1_END, P2_DURATION, STAND_CONFIRM_DURATION
+from .timing import P1_END, P2_DURATION, PRE_DURATION, STAND_CONFIRM_DURATION
 from .timing import STAND_VEL_MEAN_MAX, WINDOW_LATE_S
 from .timing import STAND_GROUND_HEIGHT, STAND_MIN_HEIGHT, STAND_MIN_HEIGHT_STAY, STAND_TARGET_HEIGHT
 from .timing import STAND_UPRIGHT_COS, STAND_UPRIGHT_COS_STAY
@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)
-_P1_EXPECT = P1_END
+# P1 期望要含前置收腿段: 相位时钟从送参考那一刻起算, 而参考的前 PRE_DURATION 秒只是收腿。
+_P1_EXPECT = PRE_DURATION + P1_END
 _P2_EXPECT = P2_DURATION
 _MAX_RETRY = 5
 

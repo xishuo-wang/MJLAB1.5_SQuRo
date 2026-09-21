@@ -58,17 +58,21 @@ def main() -> None:
     print("\n=== 2) 参考表 vs 手调脚本分区公式 (取各段中点) ===")
     t, ref = _generate_reference_table()
     import numpy as np
+    # 参考表以"送参考那一刻"为 0, 前 PRE_DURATION 是前置收腿段 -> 各段中点的**表时间**
+    # 要加 P1_ONSET, 否则会采到前置段(脊柱恒 0)而误报不一致。
     t1, t2, t3 = T.P1_BUILD_DURATION, T.P1_RECOVER_DURATION, T.P2_DURATION
+    off = T.P1_ONSET
     checks = [
-        ("T1 中", t1 / 2),
-        ("T2 中", t1 + t2 / 2),
-        ("T3 中", t1 + t2 + t3 / 2),
-        ("T4 中", T.P2_END + T.STAND_TRANSITION_DURATION / 2),
+        ("T1 中", off + t1 / 2),
+        ("T2 中", off + t1 + t2 / 2),
+        ("T3 中", off + t1 + t2 + t3 / 2),
+        ("T4 中", T.P3_ONSET + T.STAND_TRANSITION_DURATION / 2),
     ]
     for label, tn in checks:
         i = int(np.argmin(np.abs(t - tn)))
         got = (ref[i, 0], ref[i, 1], ref[i, 8], ref[i, 9])
-        expect = _hand_at(tn)
+        # _hand_at 的入参是"从 T1 起点算"的相对时间, 故表时间要减去 P1_ONSET。
+        expect = _hand_at(tn - off)
         same = all(abs(g - e) < 2e-3 for g, e in zip(got, expect))
         if not same:
             ok = False

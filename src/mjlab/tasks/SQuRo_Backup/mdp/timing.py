@@ -10,6 +10,19 @@ P2_END = P1_END + P2_DURATION
 STAND_TRANSITION_END = P2_END + STAND_TRANSITION_DURATION
 REFERENCE_TOTAL_TIME = STAND_TRANSITION_END + STAND_HOLD_DURATION
 
+# 前置收腿段 (P0): 脊柱与颈部保持 0, 只把腿从 LEG_INIT 插值到 FL_HOLD/HL_HOLD, 时长 PRE_DURATION。
+# 它不占相位——相位机不变, 只是"进入 P1 的时刻"整体推迟 PRE_DURATION, 且**不设门控**。
+#
+# 实现方式: 只在**查表时间**上加偏移, 不把 P1_END 加大。原因: P1_END 既被当作时间
+# (reference._SEG2_END 的限幅边界) 又被当作语义基准(姿态参考的翻正窗口), 直接改它会把
+# 姿态参考一起带偏。所以上面 P1_END/P2_END/... 仍表示各段**自身时长**, 不含前置段;
+# 下面三个常量给出参考时间轴上的绝对位置, 只有参考表与查表用它们。
+PRE_DURATION = 0.50
+P1_ONSET = PRE_DURATION                  # T1 起点 = 0.50
+P2_ONSET = PRE_DURATION + P1_END         # T3 起点 = 1.30
+P3_ONSET = PRE_DURATION + P2_END         # T4 起点 = 1.45
+PRE_TOTAL_TIME = PRE_DURATION + REFERENCE_TOTAL_TIME   # 参考表总长 = 3.00
+
 # 阶段末端额外等待（实际秒，不乘 λ）；S1/S2 达成即推进，超时才重试。
 P1_BUFFER_DURATION = 1.0
 P2_BUFFER_DURATION = 0.3

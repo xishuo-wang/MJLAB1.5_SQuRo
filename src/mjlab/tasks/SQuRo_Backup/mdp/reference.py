@@ -17,7 +17,12 @@ from .timing import (
     LEG_INIT,
     P1_BUILD_DURATION,
     P1_END,
+    P1_ONSET,
     P2_END,
+    P2_ONSET,
+    P3_ONSET,
+    PRE_DURATION,
+    PRE_TOTAL_TIME,
     REFERENCE_TOTAL_TIME,
     STAND_GROUND_HEIGHT,
     STAND_TARGET_HEIGHT,
@@ -30,12 +35,13 @@ if TYPE_CHECKING:
 
 
 
-REF_TOTAL_TIME = REFERENCE_TOTAL_TIME  # 动作 0.95s + 过渡 0.5s + 保持 1.05s
+REF_TOTAL_TIME = PRE_TOTAL_TIME   # 前置收腿 0.50s + 动作 0.95s + 过渡 0.5s + 保持 1.05s
 _REF_DT = 0.005             # 参考表分辨率 (s)
-_ACTION_END = P2_END        # 三段动作结束
-_SEG1_END = P1_BUILD_DURATION
-_SEG2_END = P1_END
-_TRANS_END = STAND_TRANSITION_END
+_ACTION_END = P3_ONSET      # 三段动作结束 (含前置段后的绝对时刻)
+_SEG1_END = P1_ONSET                        # T1 起点 = 0.50
+_SEG1_TAIL = P1_ONSET + P1_BUILD_DURATION   # T1 末端 = T2 起点 = 1.15
+_SEG2_END = P2_ONSET                        # T2 末端 = T3 起点 = 1.30
+_TRANS_END = P3_ONSET + STAND_TRANSITION_DURATION
 
 # 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
 # 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
@@ -63,19 +69,25 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
     for i, tn in enumerate(t_grid):
         leg = _LEG_INIT.copy()
         f_sp1, f_bd, h_sp1, h_bd = 0.0, 0.0, 0.0, 0.0
+        if tn < _SEG1_END:
+            # 前置收腿段: 脊柱与颈部保持 0, 腿从 LEG_INIT 线性插到支撑角。
+            u = (tn / _SEG1_END) if _SEG1_END > 0.0 else 1.0
+            for c in range(8):
+                hold = _FL_HOLD[c % 2] if c < 4 else _HL_HOLD[c % 2]
+                leg[c] = _LEG_INIT[c] + u * (hold - _LEG_INIT[c])
         # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
-        if tn < _ACTION_END or at_p2_end:
+        if _SEG1_END <= tn < _ACTION_END or at_p2_end:
             leg[0], leg[1], leg[2], leg[3] = _FL_HOLD[0], _FL_HOLD[1], _FL_HOLD[0], _FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = _HL_HOLD[0], _HL_HOLD[1], _HL_HOLD[0], _HL_HOLD[1]
-            if tn < _SEG1_END:
-                u = tn / _SEG1_END
+            if tn < _SEG1_TAIL:
+                u = (tn - _SEG1_END) / (_SEG1_TAIL - _SEG1_END)
                 f_sp1 = 0.6 * u
                 f_bd = -1.57 * u
                 h_sp1 = 0.6 * u
                 h_bd = 1.57 * u
             elif tn < _SEG2_END:
-                u = (tn - _SEG1_END) / (_SEG2_END - _SEG1_END)
+                u = (tn - _SEG1_TAIL) / (_SEG2_END - _SEG1_TAIL)
                 f_sp1 = 0.6 - 0.4 * u
                 f_bd = -1.57
                 h_sp1 = 0.6 - 0.8 * u
@@ -86,7 +98,7 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
                 f_bd = -1.57 + 1.57 * u
                 h_sp1 = -0.2 + 0.2 * u
                 h_bd = 1.57 - 1.57 * u
-        elif tn < _TRANS_END:
+        elif _ACTION_END <= tn < _TRANS_END:
             u = (tn - _ACTION_END) / (_TRANS_END - _ACTION_END)
             for c in range(4):
                 leg[c] = _FL_HOLD[c % 2] + u * (_LEG_INIT[c] - _FL_HOLD[c % 2])
@@ -146,12 +158,15 @@ def _get_body_traj(device: str) -> dict:
 
 # 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段 (参考重定时, 不是重新仿真)。
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
-    recover_fraction = (t_nom - _SEG1_END) / (_SEG2_END - _SEG1_END)
+    # 传入的是参考表绝对时间; 录制表以 T1 起点为 0, 故先减去 P1_ONSET。
+    t_rel = (t_nom - P1_ONSET).clamp(min=0.0)
+    tail = P1_BUILD_DURATION                 # T1 时长 0.65
+    recover_fraction = (t_rel - tail) / (P1_END - tail)
     recover_t = BODY_TRAJ_BUILD_END + recover_fraction * (BODY_TRAJ_P1_END - BODY_TRAJ_BUILD_END)
     return torch.where(
-        t_nom < _SEG1_END,
-        t_nom * (BODY_TRAJ_BUILD_END / _SEG1_END),
-        torch.where(t_nom < _SEG2_END, recover_t, BODY_TRAJ_P1_END + t_nom - _SEG2_END),
+        t_rel < tail,
+        t_rel * (BODY_TRAJ_BUILD_END / tail),
+        torch.where(t_rel < P1_END, recover_t, BODY_TRAJ_P1_END + t_rel - P1_END),
     )
 
 
@@ -197,7 +212,8 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 # 注意(勿误解): 这不等于"匀速最短弧转动" —— 换算成姿态角后, 角速度在两端最大
 # (实测 进度0->0.1 已转过 37°, 0.4->0.5 只转 13°)。若将来要求等角速度, 应改在角度域插值。
 def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    t_nom = _stage_t_nom(env)  # [N], 已按 λ 缩放的段内名义时间
+    # _stage_t_nom 已是参考表绝对时间; 姿态参考的时间基准是"P1 起点", 故减去 P1_ONSET。
+    t_nom = _stage_t_nom(env) - P1_ONSET  # [N], 已按 λ 缩放
     climb = ATTITUDE_PRONE_U - ATTITUDE_SUPINE_U
 
     def ramp(hold: float, righted: float) -> torch.Tensor:
@@ -212,6 +228,11 @@ def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
+# 阶段时间映射到**参考表绝对时间**(含前置收腿段)。各段的表起点不同:
+#   P1 段内 [0, P1_END]   -> 表 [PRE_DURATION, P1_END+PRE_DURATION]
+#   P2 段内 [0, P2_END-P1_END] -> 表 [P2_ONSET, P2_END+PRE_DURATION]
+#   P3 段内 [0, ...]      -> 表 [P3_ONSET, ...]
+# 姿态参考的时间基准是"P1 起点", 由 P1_ONSET 换算。
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
@@ -219,9 +240,9 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
     # 缓冲期参考不得泄漏到下一段动作; float32 的起点+段长可能超边界一个 ulp, 需再限幅。
-    p1_t = t_local_nom.clamp(max=_SEG2_END)
-    p2_t = (_SEG2_END + t_local_nom.clamp(max=_ACTION_END - _SEG2_END)).clamp(max=_ACTION_END)
-    p3_t = _ACTION_END + t_local_nom
+    p1_t = P1_ONSET + t_local_nom.clamp(max=P1_END)
+    p2_t = P2_ONSET + t_local_nom.clamp(max=P2_END - P1_END)
+    p3_t = P3_ONSET + t_local_nom
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 
 
@@ -232,6 +253,7 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     cmd = cmd_term.command
     lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale (放慢倍数)
+    # _stage_t_nom 已是参考表绝对时间。
     t_nom = _stage_t_nom(env).clamp(0.0, REF_TOTAL_TIME)  # [N]
     # 精确落在节点时取右侧导数, 尤其 P3 起点不能读到 T3->T4 的跳变速度。
     idx = torch.searchsorted(cache["t"], t_nom, right=True).clamp(1, len(cache["t"]) - 1)

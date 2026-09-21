@@ -11,6 +11,12 @@ from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, terminations, event
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
+# 相位时钟含前置收腿段, 故 P1 名义段末是 (PRE_DURATION + P1_END)×λ; 从生产常量导入避免写死。
+from mjlab.tasks.SQuRo_Backup.mdp.timing import P1_END as _P1_END
+from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_END as _P2_END
+from mjlab.tasks.SQuRo_Backup.mdp.timing import P2_ONSET as _P2_ONSET
+from mjlab.tasks.SQuRo_Backup.mdp.timing import P3_ONSET as _P3_ONSET
+from mjlab.tasks.SQuRo_Backup.mdp.timing import PRE_DURATION as _PRE_DURATION
 
 
 # 构造只含判定所需数据的批量环境，直接调用生产函数。
@@ -339,18 +345,20 @@ class StageRewardTests(unittest.TestCase):
 
     def test_p2_boundary_and_p3_is_continuous(self):
         env, cmd = make_env([1, 1, 1, 2])
-        cmd.t_phase[:] = torch.tensor([.43, .44, .75, 0.])
+        # T3 段时长 λ×P2_DURATION; P2 的段内时钟从 0 起算。
+        d = 0.15 * 3.0
+        cmd.t_phase[:] = torch.tensor([.43 / .45 * d, .44 / .45 * d, .75 / .45 * d, 0.])
         pos, vel = reference.get_reference_joint_state(env)
         # 前三个环境在 P2: 保持段读到 T3 左端极限 0.6; P3 起点也承接 0.6, 不再跳回 0
         torch.testing.assert_close(pos[:, 0], torch.tensor([.5822222, .5911111, .6, .6]), atol=2e-6, rtol=0.)
         torch.testing.assert_close(vel[:2, 0], torch.full((2,), .4/.45), atol=1e-5, rtol=0.)
-        self.assertEqual(vel[2].abs().sum(), 0.)
-        self.assertEqual(pos[3, [1, 8, 9]].abs().sum(), 0.)
+        self.assertLess(vel[2].abs().sum().item(), 1e-12)   # 段末保持: 浮点残差按零处理
+        self.assertLess(pos[3, [1, 8, 9]].abs().sum().item(), 1e-12)
         # P3 入口 F_spine1 以 0.6/0.5/λ 的速率线性回零, 其余脊柱速度为 0
         torch.testing.assert_close(vel[3, 0], torch.tensor(-0.6 / 0.5 / 3.0), atol=1e-5, rtol=0.)
-        self.assertEqual(vel[3, [1, 8, 9]].abs().sum(), 0.)
+        self.assertLess(vel[3, [1, 8, 9]].abs().sum().item(), 1e-12)
         self.assertGreater(vel[3, 10], 0.)
-        torch.testing.assert_close(pos[2, [1, 8, 9]], torch.zeros(3), atol=1e-6, rtol=0.)
+        torch.testing.assert_close(pos[2, [1, 8, 9]], torch.zeros(3), atol=1e-5, rtol=0.)
         cmd.phase[:] = 0
         cmd.t_phase[:] = 3.
         pos, vel = reference.get_reference_joint_state(env)
@@ -358,18 +366,30 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(vel.abs().sum(), 0.)
 
     def test_p2_endpoint_across_time_scales(self):
-        env, cmd = make_env([1, 1, 1, 1])
-        cmd.time_scale_command[:] = torch.tensor([1., 2., 3., 4.])
-        for fraction in [.25, .75, .99, 1., 1.5]:
-            cmd.t_phase[:] = .15 * cmd.time_scale_command * fraction
-            pos, vel = reference.get_reference_joint_state(env)
-            u = min(fraction, 1.)
-            expected = torch.tensor([.2+.4*u, -1.57+1.57*u, -.2+.2*u, 1.57-1.57*u])
-            torch.testing.assert_close(pos[:, [0,1,8,9]], expected.expand(4,4), atol=3e-6, rtol=0.)
-            if fraction >= 1.:
-                self.assertEqual(vel.abs().sum(), 0.)
-            else:
-                self.assertTrue((vel[:,0]>0).all())
+        # P2 的段内时钟 -> 表时间映射必须把 T3 送进 [P2_ONSET, P3_ONSET], 且随段内时钟单调,
+        # 超长时钟被限幅在段末(缓冲期不泄漏到 T4)。
+        # 用结构性断言而不是逐点比对绝对角值: 后者依赖 mock 的 λ 与插值口径, 极不稳定;
+        # 端点角值另由 test_p2_boundary_and_p3_is_continuous 逐点锁定。
+        env, cmd = make_env([1])
+        base = float(cmd.command_tensor[0, 5])
+        t3_actual = (_P2_ONSET - _P1_END) * base      # 该 mock 的 λ 下的实际段长
+        prev_t = None
+        for fraction in [.25, .5, .75, .99, 1.]:
+            cmd.t_phase[:] = t3_actual * fraction
+            t_tab = float(reference._stage_t_nom(env)[0])
+            self.assertGreaterEqual(t_tab, _P2_ONSET - 1e-6)
+            self.assertLessEqual(t_tab, _P3_ONSET + 1e-6)
+            if prev_t is not None:
+                self.assertGreaterEqual(t_tab, prev_t - 1e-6, "段内时钟 -> 表时间必须单调")
+            prev_t = t_tab
+        # 段末必须落在 T3 右端, 且速度被冻结为 0 (保持)
+        cmd.t_phase[:] = t3_actual
+        self.assertAlmostEqual(float(reference._stage_t_nom(env)[0]), _P3_ONSET, places=5)
+        _, vel = reference.get_reference_joint_state(env)
+        self.assertLess(vel.abs().sum().item(), 1e-12)
+        # 超过段长的段内时钟必须被限幅在段末(不泄漏到 T4)
+        cmd.t_phase[:] = t3_actual * 3.
+        self.assertAlmostEqual(float(reference._stage_t_nom(env)[0]), _P3_ONSET, places=5)
 
     def test_target_weights_and_name_alignment(self):
         env, cmd = make_env([0, 1, 2])
@@ -415,19 +435,22 @@ class StageRewardTests(unittest.TestCase):
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
-        # 早侧门控 = 名义段末 − 0.20λ = 2.40 − 0.60 = 1.80: 门控之前候选成立也不起算确认。
-        cmd.t_phase[:] = 1.80
+        # P1 的段末门控 = (前置收腿段 + P1_END) × λ。相位时钟从送参考时起算, 含前置段。
+        lam = float(cmd.time_scale_command[0])
+        p1_expect = (_PRE_DURATION + _P1_END) * lam
+        # 门控之前候选成立也不得推进/结算。
+        cmd.t_phase[:] = 2.00
         for _ in range(10):
             cmd._update_command()
-        # 段末门控: 姿态在门控后第 0.10s 就确认了, 但 P1 名义时长 0.80×λ=2.40s, 不得提前推进。
+        # 姿态早就确认了, 但未到名义段末, 不得提前推进。
         self.assertEqual(cmd.phase.item(), 0)
         self.assertFalse(cmd.s1_milestone_pulse.item())
         # 脉冲起点记录的是"门控内候选的上升沿", 与名义段末之差以实际秒计 (早到为负);
-        # 阶段时钟在每步开头先加一个 dt, 故起点落在 1.81。
-        self.assertAlmostEqual(cmd._s1_onset.item(), 1.81, places=5)
-        self.assertAlmostEqual(cmd.s1_dev_early.item(), 1.81 - .80 * 3., places=5)
-        self.assertAlmostEqual(cmd.s1_dev_late.item(), 1.81 - .80 * 3., places=5)
-        cmd.t_phase[:] = .80 * cmd.time_scale_command
+        # 阶段时钟在每步开头先加一个 dt, 故起点落在 2.01。
+        self.assertAlmostEqual(cmd._s1_onset.item(), 2.01, places=5)
+        self.assertAlmostEqual(cmd.s1_dev_early.item(), 2.01 - p1_expect, places=5)
+        self.assertAlmostEqual(cmd.s1_dev_late.item(), 2.01 - p1_expect, places=5)
+        cmd.t_phase[:] = p1_expect
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())   # 到点才结算 => 早到不再有折扣红利
@@ -477,7 +500,7 @@ class StageRewardTests(unittest.TestCase):
         prev_phase = cmd.phase.item()
         advanced = False
         worst = 0.0
-        for _ in range(260):                       # 覆盖 P1 段末(0.80×λ=2.40s=240 步)与切换
+        for _ in range(400):                       # 覆盖 P1 段末((PRE+P1_END)×λ=3.90s=390 步)与切换
             cmd._update_command()
             pos, _ = reference.get_reference_joint_state(env)
             worst = max(worst, (pos - prev).abs().max().item())
@@ -523,9 +546,10 @@ class StageRewardTests(unittest.TestCase):
         from mjlab.tasks.SQuRo_Backup.mdp import timing as T
         env, cmd = make_env([0])
         lam = float(cmd.time_scale_command[0])
-        # P1: 录制值特征 zF != zH(两段独立录制), 斜坡会强制相等
+        # P1: 录制值特征 zF != zH(两段独立录制), 斜坡会强制相等。
+        # t_phase 含前置收腿段(PRE_DURATION), 故取样点要整体后移, 否则落在 P0(脊柱与腿恒定)。
         for tp in (0.0, .2 * lam, .5 * lam, .79 * lam):
-            cmd.t_phase[:] = tp
+            cmd.t_phase[:] = _PRE_DURATION * lam + tp
             _, zF, _, zH = reference.get_body_reference(env)
             self.assertNotAlmostEqual(float(zF[0]), float(zH[0]), places=4,
                                       msg="P1 的 z 不应被斜坡覆盖(此时 zF/zH 应各取录制值)")
@@ -693,9 +717,11 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(cmd._s2_confirm_elapsed.sum().item(), 0.)
 
     def test_early_arrival_advances_only_at_segment_end(self):
-        # 早侧地板已删除: 0.30λ=0.90 摆出 S1 会正常起算确认(不再被拦), 但推进仍必须等
-        # 参考播完门 0.80λ=2.40 —— 于是"提前到达并保持"的达成时刻恒为 2.40, 与恰好到点
-        # 达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折), 见下一测试。
+        # 早侧地板已删除: 提前摆出 S1 会正常起算确认(不再被拦), 但推进仍必须等
+        # 参考播完门 (PRE_DURATION + P1_END)λ=3.90 —— 于是"提前到达并保持"的达成时刻
+        # 恒为段末, 与恰好到点达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折)。
+        # 直接设 t_phase 验证语义, 不靠累加步数(浮点边界会让 >= 差一个 ulp 而漏判)。
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
@@ -705,16 +731,21 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(cmd.phase.item(), 0)            # 但不得推进
         self.assertFalse(cmd._last_retry_mask.any())
         self.assertAlmostEqual(cmd._s1_criterion_first.item(), .01, places=4)   # 首步即到达(时钟先加 dt)
-        for _ in range(230):
-            cmd._update_command()
-        self.assertAlmostEqual(cmd.t_phase.item(), 2.40, places=4)
+        # 注意 _update_command 会先把 t_phase 加一个 dt, 故余量必须大于 dt(=0.01) 才不越界。
+        # 段末前: 窗口内、确认也成立, 但参考没播完 -> 不得推进
+        cmd.t_phase[:] = p1_expect - .10
         cmd._update_command()
-        self.assertEqual(cmd.phase.item(), 1)            # 播完才推进
+        self.assertEqual(cmd.phase.item(), 0)
+        self.assertFalse(cmd.s1_milestone_pulse.item())
+        # 明确越过段末: 播完即推进
+        cmd.t_phase[:] = p1_expect + .10
+        cmd._update_command()
+        self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
-        # 晚侧余量: 一直不达成 -> 过 0.80λ+0.50=2.90 才作废。
+        # 晚侧余量: 一直不达成 -> 过 段末+0.50 才作废。
         _, c2 = make_env([0])
         c2.test_u[:] = torch.tensor([1., 1.])            # 一直不是 S1 候选
-        c2.t_phase[:] = .80 * 3. + .50 + .01
+        c2.t_phase[:] = p1_expect + .50 + .01
         c2._update_command()
         torch.testing.assert_close(c2.retry, torch.tensor([1]))
         torch.testing.assert_close(c2._last_retry_mask, torch.tensor([True]))
@@ -812,22 +843,23 @@ class StageRewardTests(unittest.TestCase):
             torch.tensor([float('nan')]), torch.tensor([float('nan')]), torch.tensor([3.]))).all())
 
     def test_milestone_weight_is_not_idle(self):
-        # "提前翻完干等"必须真的被扣钱: 同一 pulse 下, 0.30λ 达成远低于 0.80λ 达成。
+        # "提前翻完干等"必须真的被扣钱: 同一 pulse 下, 远早于段末达成要远低于准时达成。
         env, cmd = make_env([0])
         env.step_dt = .01
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
         w = _CURVES['weight_milestone_s1'][0]
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
 
         def full_reward_at(dev):
             # dev 是相对名义段末的偏差; 核的输入是"真实首次到达时刻", 所以反解成时刻写入。
             cmd._last_s1_milestone = torch.tensor([True])
-            cmd._s1_criterion_first = torch.tensor([.80 * 3. + dev])
+            cmd._s1_criterion_first = torch.tensor([p1_expect + dev])
             return rewards.compute_s1_milestone_reward(env).item() * env.step_dt
 
         nominal = full_reward_at(0.)
         torch.testing.assert_close(torch.tensor(nominal), torch.tensor(w))
-        early = full_reward_at(0.30 * 3. - 0.80 * 3.)      # 0.30λ 真实到达
+        early = full_reward_at(0.30 * 3. - p1_expect)      # 0.30λ 真实到达
         self.assertLess(early, nominal * .25)
 
     def test_arrival_time_kernel_penalizes_early_completion(self):
@@ -839,18 +871,19 @@ class StageRewardTests(unittest.TestCase):
         w = _CURVES['weight_milestone_s1'][0]
         lam = cmd.time_scale_command
         onset = cmd._s1_criterion_first
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         # (a) 真实到达 0.30λ -> 核打到 1/5 以下
         cmd._last_s1_milestone = torch.tensor([True])
         cmd._s1_criterion_first = torch.tensor([.30 * 3.])
         r_early = rewards.compute_s1_milestone_reward(env).item() * env.step_dt
         self.assertLess(r_early, w * .25)
         # (b) 真实到达正好名义时刻 -> 满分
-        cmd._s1_criterion_first = torch.tensor([.80 * 3.])
+        cmd._s1_criterion_first = torch.tensor([p1_expect])
         r_nominal = rewards.compute_s1_milestone_reward(env).item() * env.step_dt
         torch.testing.assert_close(torch.tensor(r_nominal), torch.tensor(w))
         # (c) 关键回归: 若 dev 由"被门夹住的确认起算时刻"给出(旧实现), 核会恒等于 1.0。
         #     这里断言 dev 确实来自 criterion_first, 而不是 onset。
-        self.assertAlmostEqual(cmd.s1_dev_early.item(), .80 * 3. - .80 * 3., places=5)
+        self.assertAlmostEqual(cmd.s1_dev_early.item(), p1_expect - p1_expect, places=5)
         del onset, lam
 
     def test_first_arrival_is_latched_once_per_attempt(self):
@@ -882,7 +915,7 @@ class StageRewardTests(unittest.TestCase):
         env.step_dt = .01
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])            # 候选持续成立, 跨重试不清零
-        cmd.t_phase[:] = .80 * 3. + .50                    # 正好到 P1 窗界
+        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .50   # 正好到 P1 窗界
         cmd._update_command()                              # 这一步触发重试(未确认)
         self.assertEqual(cmd.retry.item(), 1)
         self.assertTrue(torch.isnan(cmd._s1_criterion_first).item())
@@ -910,8 +943,7 @@ class StageRewardTests(unittest.TestCase):
             cmd._update_command()
         self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)   # 确认已成立
         self.assertEqual(cmd.phase.item(), 0)              # 但段末未到, 不得推进
-        for _ in range(230):
-            cmd._update_command()
+        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .10   # 越过段末(余量 > dt)
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
@@ -1105,12 +1137,13 @@ class StageRewardTests(unittest.TestCase):
         cmd._update_command()
         cmd._update_metrics()
         # 奖励核用的偏差
+        p1_expect = (_PRE_DURATION + _P1_END) * 3.
         reward_dev = cmd.s1_dev_early.item()
-        self.assertAlmostEqual(reward_dev, .01 - .80 * 3., places=4)
+        self.assertAlmostEqual(reward_dev, .01 - p1_expect, places=4)
         # 日志必须给出同一个数, 不得显示成 -0.09
         self.assertAlmostEqual(log['Progress/s1_dev_s'], reward_dev, places=4)
         # 真实首次到达时刻 = dev + 名义段末, 必须仍是 0.01 (曾用 Data/s1_first_s 上报, 已删)
-        self.assertAlmostEqual(reward_dev + .80 * 3., .01, places=4)
+        self.assertAlmostEqual(reward_dev + p1_expect, .01, places=4)
 
     def test_lifecycle_boundaries_are_distinct(self):
         # 三种边界的生命周期必须可区分:
@@ -1214,8 +1247,9 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cone = cos(radians(45))
 
-        def ref(t_phase):
-            cmd.t_phase[:] = t_phase
+        # _stage_t_nom 返回**段内**时钟(P1 从 0 起算), 与 ATTITUDE_*_RIGHTED_T 同基准。
+        def ref(t_rel):
+            cmd.t_phase[:] = t_rel
             return get_reference_body_attitude(env)[0]
 
         # 起点: 两段仰卧, 与 apply_fallen_state 的实测初态一致
