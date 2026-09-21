@@ -1,7 +1,8 @@
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
-# 执行器关节名称 — 必须与 entity actuator 顺序一致
+
+# 执行器关节名称
 _ACTUATED_JOINT_NAMES = [
     "F_spine1_joint", "F_body_joint",
     "Neck_yaw_joint", "Neck_pitch_joint",
@@ -13,16 +14,18 @@ _ACTUATED_JOINT_NAMES = [
 ]
 
 
+
 # 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACTUATED_JOINT_NAMES))
 
 
-# 躯干朝向标记: 每段一对 (腹面 site, 背面 site), 世界坐标差即该段背腹轴。
-# 见 docs/SQuRo_Backup_技术细节.md §4 —— 不依赖四元数约定, 是姿态判据的唯一可信来源。
+
+# 躯干朝向标记: 见 docs/SQuRo_Backup_技术细节.md §4
 SEGMENT_BELLY_BACK_SITES = (
     ("F_body_belly_site", "F_body_back_site"),
     ("H_body_belly_site", "H_body_back_site"),
 )
+
 
 
 # action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
@@ -33,9 +36,8 @@ _ACTION_SPN_LATERAL_ID = 0          # F_spine1
 _ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
 
 
-# 执行器控制范围 (SQuRo.xml 中 <position ... ctrlrange=...>)，顺序与 _ACTUATED_JOINT_NAMES 一致。
-# ctrllimited="true" 时 MuJoCo 会把 ctrl 直接裁到该区间, 超出指令不产生额外力矩,
-# 动作超限成本依赖这张表。改 XML 必须同步改这里 (verify_backup_config.py 会对拍)。
+
+# 执行器控制范围
 _ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
     "F_spine1_joint":    (-0.6, 0.6),
     "F_body_joint":      (-1.57, 1.57),
@@ -54,6 +56,7 @@ _ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
 }
 
 
+
 class ModelIndices:
     __slots__ = (
         "f_body_id", "h_body_id",
@@ -69,7 +72,6 @@ class ModelIndices:
         self.f_body_id: int = -1
         self.h_body_id: int = -1
         self.foot_site_ids: tuple[int, ...] = ()
-        # ((F 腹面, F 背面), (H 腹面, H 背面))
         self.segment_belly_back_ids: tuple[tuple[int, int], tuple[int, int]] | None = None
         self.joint_ids: tuple[int, ...] = ()
         self.joint_leg_ids: tuple[int, ...] = ()
@@ -82,7 +84,9 @@ class ModelIndices:
         self.actuator_spn_body_ids: tuple[int, ...] = _ACTION_SPN_BODY_IDS
 
 
+
 _MODEL_INDICES = ModelIndices()
+
 
 
 def resolve_model_indices(entity) -> None:

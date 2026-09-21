@@ -20,19 +20,16 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
-# 回放模式下固定的时间缩放 (只在本文件与 SQuRo_Backup_play 的转发处使用, 故不进 config.py)。
-TIME_COMPARISON_SCALE = 3.0
-
 
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # SQuRo 机器人配置: 初始姿态保持站立角 (LEG_INIT), 即 PD 零动作目标也是站立角。
-    # 收腿动作改由参考轨迹的前置段 T0 完成 (见 config.T0 与 reference._generate_reference_table),
-    # 这样站立时腿部零动作即可维持, 不必长期顶着一个与弹簧反向的大指令。
+    # SQuRo 机器人配置:
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
+
 
     # 足端碰撞体名称
     foot_names = ("FL", "FR", "HL", "HR")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+
 
     # 观测空间
     policy_terms = {
@@ -48,12 +45,15 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "backup_cmd"}),
     }
 
+
     critic_terms = {**policy_terms}
+
 
     observations = {
         "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
+
 
     # 动作空间
     actions: dict[str, ActionTermCfg] = {
@@ -65,12 +65,14 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
+
     # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励函数 — 权重一律 1.0, 实际权重见 mdp/curriculums.py 的 _CURVES
+
+    # 奖励函数
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
@@ -97,20 +99,21 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # "corridor":    RewardTermCfg(func=mdp.compute_corridor_reward),
     }
 
-    # 终止条件 — 只有超时。"站稳"已改为非终止的循环完成事件(见 mdp/terminations.py 注释):
-    # 完成即部分复位开始下一次翻正, 回合只在 episode_length_s 上限处截断。
+
+    # 终止条件
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
     }
+
 
     # 命令系统
     commands: dict[str, CommandTermCfg] = {
         "backup_cmd": mdp.BackupCommandCfg(
             asset_name="robot",
             debug_vis=play,
-            fixed_time_scale=TIME_COMPARISON_SCALE if play else None,
         )
     }
+
 
     # 足端接触传感器
     feet_ground_cfg = ContactSensorCfg(
@@ -122,6 +125,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         num_slots=1,
         track_air_time=True,
     )
+
     
     # 完整配置
     return ManagerBasedRlEnvCfg(

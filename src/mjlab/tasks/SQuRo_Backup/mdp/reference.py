@@ -4,6 +4,11 @@ import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .config import (
+    T0,
+    T1,
+    T2,
+    T3,
+    T4,
     FL_HOLD,
     HL_HOLD,
     LEG_INIT,
@@ -13,15 +18,11 @@ from .config import (
     REFERENCE_TOTAL_TIME,
     STAND_GROUND_HEIGHT,
     STAND_TARGET_HEIGHT,
-    T0,
-    T1,
-    T2,
-    T3,
-    T4,
 )
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
 
 
 # 前置收腿段在参考表时间轴上的绝对位置 (本文件与 verify_backup_config 用)。
@@ -50,15 +51,10 @@ _SEG1_TAIL = P1_ONSET + T1                   # T1 末端 = T2 起点
 _SEG2_END = P2_ONSET                        # T2 末端 = T3 起点 = 1.30
 _TRANS_END = P3_ONSET + T4
 
-# 身体轨迹表 (开环重放 λ=1 记录 F/H body 世界 y/z + 站起后理想化):
-# 列: [t_nom, yF, zF, yH, zH] — 用作时变期望高度与走廊参考中心
-# 注意: 该表的 z 只在 P1~P2 使用; P3(起立+站立)的 z 由下方解析斜坡取代, 理由见
-# 技术细节"2026-09-19 训练诊断" §结论 3: 录制表在 T4 中段把期望高度拉回 0.0248(=趴平),
-# 到 1.365 才升到 0.055, 于是"保持趴姿"在该段几乎是最优解、而要求站立的那一小段
-# 反而给出最低核值 —— 参考方向与任务目标相反。y 仍取录制值(目前无人消费)。
+# 身体轨迹表
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
 _body_traj_cache: dict = {}
-
+_table_cache: dict = {}
 
 
 
@@ -125,8 +121,6 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
     return t_grid, ref
 
 
-_table_cache: dict = {}
-
 
 def _get_ref_table(device: str) -> dict:
     if device in _table_cache:
@@ -143,6 +137,7 @@ def _get_ref_table(device: str) -> dict:
     cache = {"t": t_t, "pos": pos_t, "vel": vel_t, "p2_pos": p2_pos, "p2_vel": p2_vel}
     _table_cache[device] = cache
     return cache
+
 
 
 # 加载身体轨迹表 (按设备缓存)
@@ -164,7 +159,6 @@ def _get_body_traj(device: str) -> dict:
 
 # 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段 (参考重定时, 不是重新仿真)。
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
-    # 传入的是参考表绝对时间; 录制表以 T1 起点为 0, 故先减去 P1_ONSET。
     t_rel = (t_nom - P1_ONSET).clamp(min=0.0)
     tail = T1                                # T1 时长
     recover_fraction = (t_rel - tail) / (P1_SPAN - tail)
@@ -177,8 +171,7 @@ def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
 
 
 
-# 获取身体参考轨迹 (时变期望高度 + 走廊中心)，按阶段时间重定时并冻结缓冲期参考。
-# P3 的 z 用解析斜坡取代录制值, 见文件头对 _BODY_TRAJ_PATH 的说明。
+# 获取身体参考轨迹
 def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
@@ -194,11 +187,6 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
         v = cache[key][idx_p] + frac * (cache[key][idx] - cache[key][idx_p])
         out.append(v)
     y_f, z_f, y_h, z_h = out
-    # P3 起立段: z 从趴平高度线性抬到站立目标, 斜坡时长 = T4 名义时长。
-    # 归 P3 必须用 **phase == 2** 判定, 不能用 source_t >= ACTION_END: P2 播完后进入
-    # S2 确认等待段时 _stage_t_nom 会把 source_t 冻结在 0.95, 那样 P2 的末端与等待段
-    # 也会被斜坡覆盖(实测 F/H 参考从 0.0445/0.0503 被改成 0.024/0.024), 污染 P2 奖励
-    # 并破坏归因。斜坡进度同样取自段内时钟, 与录制表查询时间解耦。
     u = (t_phase / (lam * T4)).clamp(0.0, 1.0)
     z_ramp = STAND_GROUND_HEIGHT + (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT) * u
     in_p3 = phase == 2
@@ -208,8 +196,7 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 
 
 
-# 获取参考躯干姿态 (两段背腹轴的世界 Z 余弦, 与 command._pose_cos 同一量)。
-# 不能由关节表直接 cos 得到, 且在余弦域线性插值(非等角速度); 理由见技术细节 §7.8。
+# 获取参考躯干姿态。见技术细节 §7.8。
 def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
     # _stage_t_nom 已是参考表绝对时间; 姿态参考的时间基准是"P1 起点", 故减去 P1_ONSET。
     t_nom = _stage_t_nom(env) - P1_ONSET  # [N], 已按 λ 缩放
@@ -234,10 +221,6 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     phase = cmd_term.phase  # type: ignore[attr-defined]
     t_phase = cmd_term.stage_t  # type: ignore[attr-defined]
     t_local_nom = t_phase / lam
-    # 缓冲期参考不得泄漏到下一段动作; float32 的起点+段长可能超边界一个 ulp, 需再限幅。
-    # 相位 0 的时钟就是参考表时间: P0 收腿[0,T0] -> T1 -> T2; 播完后冻结在 P1 段末,
-    # 余下的时钟用来等 S1 确认。不可再加 P1_ONSET —— 那会整段跳过 P0, 腿在相位 0 起点
-    # 就直接跳到支撑角, 又变成"边收腿边拧脊柱"(实测确认过)。
     p1_t = t_local_nom.clamp(max=P1_END)
     p2_t = P2_ONSET + t_local_nom.clamp(max=T3)
     p3_t = P3_ONSET + t_local_nom

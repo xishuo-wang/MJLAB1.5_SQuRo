@@ -57,11 +57,10 @@ def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam
     return torch.where(valid, q_early * q_late, torch.zeros_like(q_early))
 
 
+
 # s1里程碑奖励
 def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    # 读取每个 episode 的首次里程碑脉冲；转移脉冲仍保留给诊断使用。
-    # 不再单独写日志: 脉冲是 Progress/enter_p2 的导数, 累积量更好读。
     pulse = command.s1_milestone_pulse
     weight = get_curriculum_reward_weight(env, "weight_milestone_s1")
     quality = _milestone_time_quality(command.s1_dev_early, command.s1_dev_late, command.time_scale_command)
@@ -72,7 +71,6 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 # s2里程碑奖励
 def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    # 读取每个 episode 的首次里程碑脉冲；重复回退/重试不再重复奖励。
     pulse = command.s2_milestone_pulse
     weight = get_curriculum_reward_weight(env, "weight_milestone_s2")
     quality = _milestone_time_quality(command.s2_dev_early, command.s2_dev_late, command.time_scale_command)

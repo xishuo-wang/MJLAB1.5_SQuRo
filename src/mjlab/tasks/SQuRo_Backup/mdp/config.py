@@ -1,7 +1,3 @@
-# 跨文件共用的任务配置常量。放这里的判据: **至少被两个生产文件引用**;
-# 只在一个文件里用到的常量直接定义在那个文件里, 不进这里。
-# 取值依据与标定过程见 docs/SQuRo_Backup_技术细节.md。
-
 # 参考轨迹分段时长 (名义秒, 执行时乘以 λ)。相位机只有 P1/P2/P3 三相,
 # 与下面的 T0~T5 段不是一一对应: phase0 = T0+T1+T2, phase1 = T3, phase2 = T4+T5。
 T0 = 0.50                             # 前置收腿段: 腿 LEG_INIT -> HOLD, 脊柱/颈保持 0
@@ -27,7 +23,7 @@ LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)   # 站立状态腿关�
 FL_HOLD = (-0.28, 0.55)               # 前腿收缩状态关节角 (shoulder, elbow)
 HL_HOLD = (-1.50, -0.25)              # 后腿收缩状态关节角 (hip, knee)
 
-STAND_CONFIRM_DURATION = 1.5          # 站立成功所需的连续窗口时长
+STAND_CONFIRM_DURATION = 1.0          # 站立成功所需的连续窗口时长
 STAND_GROUND_HEIGHT = 0.024           # 趴平贴地时的躯干高度
 STAND_TARGET_HEIGHT = 0.055           # 站立目标躯干高度
 STAND_VEL_MEAN_MAX = 4.5              # 站立窗口平均关节速度上限 (判据量)
