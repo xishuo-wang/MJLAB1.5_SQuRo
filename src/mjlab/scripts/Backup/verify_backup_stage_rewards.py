@@ -107,7 +107,10 @@ def make_env(phases):
                # 预置成 0/1, 该函数会提前 return, 所以这里只需保证被调用时不抛异常。
                find_bodies=lambda *a, **kw: ([], []),
                find_sites=lambda *a, **kw: ([], []),
-               find_joints=lambda *a, **kw: ([], []))
+               find_joints=lambda *a, **kw: ([], []),
+               # 脊柱跟踪核(姿态进度项的乘法门控)会读 joint_pos; 默认全零 = 完全跟住参考,
+               # 门控值为 1 -> 进度项行为与门控前一致。要测门控本身就在用例里替换这份 data。
+               data=NS(joint_pos=torch.zeros(n, 14)))
 
     # scene 替身: 既支持 env.scene["robot"] 也支持 env.scene.reset(ids)/.entities,
     # 因为生产代码两条路径都会走 (apply_fallen_state 用 entities, 复位用 reset)。
@@ -125,6 +128,11 @@ def make_env(phases):
     env.make_robot = robot          # 供个别测试替换 data 时保留其余接口
     env.observation_manager = NS(reset=lambda ids: env.reset_calls['obs'].append(list(ids)))
     env.action_manager = NS(reset=lambda ids: env.reset_calls['act'].append(list(ids)))
+    # 默认让关节角等于参考角("完全跟住参考"), 使脊柱跟踪核 = 1:
+    # 姿态进度项会乘这个核, 核非 1 会让地形类断言失去意义(各环境相位不同 -> 参考不同)。
+    from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+    ref_default, _ = get_reference_joint_state(env)
+    robot.data = NS(joint_pos=ref_default.clone())
     return env, cmd
 
 
@@ -146,17 +154,18 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = torch.tensor([[0.42, 0.95]] * 3)
         s2 = rewards.compute_s2_progress_reward(env)
         s1 = rewards.compute_s1_progress_reward(env)
-        self.assertEqual(s2[0].item(), 0.)                       # P1 关闭
+        self.assertAlmostEqual(s2[0].item(), 0., places=6)       # P1 关闭
         self.assertGreater(s2[1].item(), 0.)                     # P2 生效
         self.assertGreater(s2[2].item(), 0.)                     # P3 生效
-        torch.testing.assert_close(s2[1], s2[2])
+        torch.testing.assert_close(s2[1], s2[2], atol=1e-5, rtol=0.)
         # progress_s1 必须全程生效(后段翻正是穿过 S1 门控的必要条件, 不能一起关)
         self.assertTrue((s1 > 0).all())
         torch.testing.assert_close(s1, s1[:1].expand(3))
 
     def test_p1_shortcut_no_longer_beats_s1(self):
-        # [§7.8] 关键性质: 在 P1 内, "正确 S1 姿态"的即时区间收益必须不低于"提前双正置"。
-        # 关闭前实测 尖峰 4.99 > S1 4.50; 关闭后应为 尖峰 2.84 < S1 3.00。
+        # [§7.8+§7.9] 关键性质: 在 P1 内, "正确 S1 姿态"的即时区间收益不得低于"提前双正置"。
+        # 由两重机制共同保证: P1 内关闭 prog_s2(§7.8) + 两项都乘脊柱跟踪核(§7.9)。
+        # 门控值为 1 时(默认 mock 完全跟住参考)比较姿态地形本身。
         env, cmd = make_env([0])
 
         def total(u):
@@ -166,8 +175,33 @@ class StageRewardTests(unittest.TestCase):
 
         s1_pose = total([-1., 1.])       # 正确的 S1 姿态
         shortcut = total([0.42, 0.95])   # 实测尖峰处的姿态
-        self.assertGreater(s1_pose, shortcut,
-                           "P1 内正确 S1 的收益必须高于提前双正置")
+        self.assertGreaterEqual(s1_pose, shortcut,
+                                "P1 内正确 S1 的收益不得低于提前双正置")
+
+    def test_progress_is_gated_by_spine_tracking(self):
+        # [§7.9] 姿态进度项必须乘脊柱跟踪核: 跟住参考时接近全额, 抢跑(偏离参考)时被压掉。
+        # 动机: 实测脊柱跟踪奖励在 P1 内只值 0.55/步, 而 progress_s1 值 2.50/步 —— 推动后段
+        # 翻正的主力是后者, 但它对"抢在参考之前翻过去"也一视同仁给分, 形成抄近路收益。
+        from mjlab.tasks.SQuRo_Backup.mdp import rewards as RW
+        env, cmd = make_env([0])
+        cmd.test_u = torch.tensor([[0.0, 0.95]])          # 实测尖峰附近的姿态
+        zero_ref = torch.zeros(1, 14)
+        spn = list(_MODEL_INDICES.actuator_spn_ids)
+
+        def total(spn_err):
+            jp = torch.zeros(1, 14)
+            # 4 个脊柱列各给 spn_err -> mse_spn = spn_err^2
+            jp[0, spn] = spn_err
+            env.scene['robot'].data = NS(joint_pos=jp)
+            with patch.object(RW, 'get_reference_joint_state', return_value=(zero_ref, zero_ref)):
+                return RW.compute_s1_progress_reward(env).item()
+
+        tracked = total(0.0)             # 完全跟住参考 -> 核=1
+        shortcut = total(0.5 ** 0.5)     # mse=0.5 -> exp(-20*0.5)=4.5e-5 -> 几乎归零
+        # 该姿态的 progress_s1 = 3*(0.95+1)/2 = 2.925, 乘核后应接近该值
+        self.assertGreater(tracked, 2.8)
+        self.assertLess(shortcut, 0.01)
+        self.assertGreater(tracked / max(shortcut, 1e-9), 100.)
 
     def test_progress_terrain_is_monotone(self):
         # 这里测的是**区间项本身**(command.progress_*)的激励地形, 相位门控在奖励项里

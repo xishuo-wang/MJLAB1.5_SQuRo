@@ -82,30 +82,38 @@ def compute_task_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Ten
 
 
 
-# s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度
+# 脊柱跟踪核 (mimic_pos 的脊柱分量同源), 用作姿态进度项的乘法门控。
+# 依据: 实测脊柱跟踪奖励在 P1 内只值 0.55/步, 而 progress_s1 值 2.50/步 —— 推动后段翻正的
+# 主力是 progress_s1, 但它对"抢在参考之前翻过去"也一视同仁给分, 于是形成抄近路收益。
+# 乘上本核后: 跟住参考时给全额(2.67~2.93), 抢跑时衰减到 0.09~0.19。详见技术细节 §7.9。
+def _spine_track_kernel(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    joint_pos = asset.data.joint_pos
+    ref_pos, _ = get_reference_joint_state(env)
+    # 参考表列即脊柱列下标 (0/1/8/9), 与 _MODEL_INDICES.joint_ids 无关 —— 后者在单测里可能是空的。
+    error_spn = (joint_pos - ref_pos)[:, _MODEL_INDICES.actuator_spn_ids]
+    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
+    return torch.exp(-sigma_spn * mse_spn)
+
+
+# s1区间奖励 — 朝 S1 姿态 (前段仰面 + 后段俯卧) 的连续进度。
+# 乘以脊柱跟踪核: 保留"后段必须立起来"的连续激励(不能删, 否则回到"不翻正"局部最优),
+# 但只在跟住参考时才给全额, 消除"抢在参考之前翻过去"的收益。
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s1")
-    return weight * command.progress_s1
+    return weight * command.progress_s1 * _spine_track_kernel(env)
 
 
 
 # s2区间奖励 — 朝 S2 姿态 (两段都已俯卧) 的连续进度。
-#
-# **P1 内关闭**(phase >= 1 才生效): progress_s2 在前段也转到俯卧时给分, 而它的前置因子
-# 是后段进度, 所以只要后段先立起来, 前段"提前翻过去"就能拿到高分。实测(2026-09-21):
-#   t=0.32 姿态 (+0.42,+0.95)  progress_s1+s2 = 4.99   ← 提前双正置
-#   t=0.80 姿态 (-0.35,+0.94)  progress_s1+s2 = 3.84   ← S1 判决时刻
-#   真正的 S1 姿态 (-1,+1)      progress_s1+s2 = 4.50
-# 即"提前双正置"的总收益比正确的 S1 姿态还高 10%, 奖励地形在鼓励抄近路。
-# P1 内关闭后: 尖峰态 2.84 < S1 姿态 3.00, 地形翻转为 S1 占优, 且只剩 prog_s1(只依赖后段),
-# 仍单调、不引入新悬崖。
-# 不在 P1 关闭 progress_s1: 后段翻正是穿过 S1 门控的必要条件, 关掉会把链路打断
-# (历史记录过"降低 weight_progress_s1 导致不翻正")。
+# 双重约束: P1 内关闭(phase>=1 才生效, 否则"提前双正置"最优), 且乘脊柱跟踪核(同 s1)。
+# 两者理由与实测账见技术细节 §7.9。
 def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s2")
-    return weight * command.progress_s2 * (command.phase >= 1)
+    return weight * command.progress_s2 * (command.phase >= 1) * _spine_track_kernel(env)
 
 
 # P3 站立进度: 只对 P3 生效；前后段同时背部朝上才解锁, 越接近最终站立越大。
