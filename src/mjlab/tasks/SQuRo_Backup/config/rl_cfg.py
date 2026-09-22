@@ -3,7 +3,10 @@ from mjlab.rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlPpoAlgorithmCfg,
 )
-from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CORRIDOR_WIDTH_END_ITER,
+    _STEPS_PER_ITER,
+)
 
 
 
@@ -41,7 +44,8 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         experiment_name="SQuRo_Backup",
         save_interval=100,
         num_steps_per_env=_STEPS_PER_ITER,
-        max_iterations=3_000,
+        # 阶段一 0~3000 轮 (无受限空间) + 阶段二 3000~6000 轮 (走廊课程), 见 curriculums。
+        max_iterations=CORRIDOR_WIDTH_END_ITER,
 
         clip_actions=None,
         seed=42,

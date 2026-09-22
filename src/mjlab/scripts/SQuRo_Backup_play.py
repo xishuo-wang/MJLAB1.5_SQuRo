@@ -14,6 +14,13 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CORRIDOR_STAGE2_ITER,
+    _STEPS_PER_ITER,
+    get_curriculum_corridor_width,
+    get_training_phase,
+)
 
 
 
@@ -36,7 +43,11 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Backup 任务相关配置
-    fixed_time_scale: float | None = 2
+    fixed_time_scale: float | None = 1
+    # 受限空间: None = 按检查点轮次自动判定 (阶段一关碰撞, 阶段二开)
+    enable_collision: bool | None = None
+    # 受限空间: None = 按课程取墙间距, 指定则覆盖为固定值
+    corridor_width: float | None = None
 
 
 
@@ -349,11 +360,28 @@ def run_play(cfg: PlayConfig):
         if cfg.fixed_time_scale is not None:
             cmd_cfg.fixed_time_scale = cfg.fixed_time_scale  # type: ignore[attr-defined]
 
+    # 受限空间 — 墙位与碰撞开关都在编译期固化, 必须在建环境之前写进实体配置
+    # (与 Slalom 回放重建杆实体同理; 运行期改 a 或 contype 都无效)
+    train_iter = extract_iter_from_checkpoint(resume_path) if resume_path is not None else 0
+    align_iter = max(0, train_iter - 10)          # 与 env 内部课程口径对齐
+    align_step = align_iter * _STEPS_PER_ITER
+    phase = get_training_phase(align_step)
+    # 阶段一强制关碰撞; 显式传入的 enable_collision 优先
+    corridor_collision = (phase == 1) if cfg.enable_collision is None else bool(cfg.enable_collision)
+    corridor_width = (get_curriculum_corridor_width(align_step)
+                      if cfg.corridor_width is None else float(cfg.corridor_width))
+    ent_cfg = mdp_entity.configure_restricted_space(env_cfg, corridor_width,
+                                                    enable_collision=corridor_collision)
+    print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 iter {CORRIDOR_STAGE2_ITER}), "
+          f"碰撞={'开' if corridor_collision else '关'}, 墙中心 a={corridor_width:.4f} m, "
+          f"实际内侧净宽 {ent_cfg.corridor_width - 2 * ent_cfg.wall_half_thickness:.4f} m")
+
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
     if cfg.fixed_time_scale is not None:
         cmd_suffix_parts.append(f"ts{cfg.fixed_time_scale:.2f}")
-    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
+    cmd_suffix_parts.append(f"a{corridor_width:.2f}")
+    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}"
     if video_name is not None:
         video_name = f"{video_name}{cmd_suffix}"
 
@@ -363,6 +391,11 @@ def run_play(cfg: PlayConfig):
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
+
+    # 对齐课程阶段 (奖励权重等按 common_step_counter 取段)
+    if TRAINED_MODE and align_iter > 0:
+        env.common_step_counter = align_step
+        print(f"[INFO] 课程对齐到 iter {align_iter} (step {align_step})")
 
     if TRAINED_MODE and cfg.fixed_time_scale is not None:
         print(f"[INFO] 固定 time_scale λ = {cfg.fixed_time_scale}")

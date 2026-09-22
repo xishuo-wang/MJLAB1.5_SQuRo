@@ -21,6 +21,17 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 
+# 受限空间开不开: mjwarp 在 put_model 时固化碰撞对, contype 与几何位置运行期都改不了,
+# 所以"阶段一不开碰撞 / 阶段二开"只能反映在这里 —— 切阶段要改本常量并重开训练。
+# 阶段二换更窄的 a 同样需要改 RESTRICTED_SPACE_WIDTH 后重开训练。
+ENABLE_RESTRICTED_SPACE = True
+# None = 跟随课程 (阶段一固定 CORRIDOR_WIDTH_START, 阶段二线性收紧到 CORRIDOR_WIDTH_MIN);
+# 指定数值 = 整个训练固定用这个 a。因为运行期改不了几何, 想真正在阶段二收紧 a,
+# 就得按 a 分档各训一个模型, 那时把这个值填成该档的 a。
+RESTRICTED_SPACE_WIDTH: float | None = None
+
+
+
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置:
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
@@ -69,6 +80,8 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
+        # 受限空间: 环境构造完成时按训练阶段写入碰撞开关 (几何位置已在编译期定好)
+        "init_restricted_space": EventTermCfg(func=mdp.init_restricted_space, mode="startup"),
     }
 
 
@@ -127,12 +140,25 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
 
     
+    # 受限空间: 是否加入实体、间距 a、碰撞开关都在这里定 (编译期固化, 见文件头的说明)
+    restricted_space_entities: dict = {}
+    if ENABLE_RESTRICTED_SPACE:
+        restricted_space_entities["restricted_space"] = mdp.build_restricted_space_cfg(
+            enable_collision=True,
+            corridor_width=(mdp.get_curriculum_corridor_width(0)
+                            if RESTRICTED_SPACE_WIDTH is None
+                            else float(RESTRICTED_SPACE_WIDTH)),
+        )
+
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities={"robot": SQURO_ROBOT_CFG},
+            entities={
+                "robot": SQURO_ROBOT_CFG,
+                **restricted_space_entities,
+            },
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,
