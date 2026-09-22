@@ -6,6 +6,7 @@ from .command import BackupCommand
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
+from .config import STAND_VEL_MEAN_MAX
 
 
 if TYPE_CHECKING:
@@ -21,7 +22,13 @@ TRACK_W_SPN = 1.57                # 加权二次跟踪代价的脊柱分组权�
 TRACK_W_LEG = 1.0                 # 同上, 腿部分组
 TRACK_W_NECK = 0.3                # 同上, 颈部
 TRACK_REF_MSE_SCALE = 3.0         # 二次跟踪代价的 MSE 归一化尺度
-STAND_STILL_FULL_SPEED = 4.5      # 站立静止奖励线性核的归零速度
+# 站立静止奖励线性核的归零速度 = 判据门限 × 该系数。
+# 硬约束: 系数必须 > 1 —— 归零速度若等于或低于判据门限, 奖励的支撑区间就落在
+# "判据本来就会通过"的一侧, 而在"判据拒绝"的速度带里恒为 0, 策略减速拿不到回报
+# (2026-09-22 run 采样到的站立窗口 V/T ≈ 6.4~6.6, 旧值 4.5 在该处恰为 0)。
+# 系数同时决定核的陡度: 越大越平缓、在低速段越接近常数项。校准见技术细节的站立奖励一节。
+STAND_STILL_FULL_SPEED_RATIO = 2.0
+STAND_STILL_FULL_SPEED = STAND_STILL_FULL_SPEED_RATIO * STAND_VEL_MEAN_MAX
 
 
 
@@ -384,16 +391,19 @@ def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 站立静止奖励 — P3 内站立几何成立时, 关节速度 RMS 越接近 0 给分越高(线性核)。
-# 与成功判据共用同一个门控与速度量; 用奖励而非超死区惩罚、用线性核而非 exp 的理由见技术细节 §7.2.4。
+# 站立静止奖励 — P3 内站立窗口成立时, 关节速度 RMS 越接近 0 给分越高(线性核)。
+# 门控用**宽松**的 hold 而不是结算用的 strict: 结算只要求"某一帧几何严格达标",
+# 而稠密奖励要求整段可导 —— 抖动最剧烈的时刻恰恰是几何最容易掉出 strict 的时刻,
+# 用 strict 会把奖励正落在最需要它的那些帧上清零(实测 P3 内 strict 占空比仅 0.71)。
+# 用奖励而非超死区惩罚、用线性核而非 exp 的理由见技术细节的站立奖励一节。
 def compute_stand_still_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
-    _, strict = command.stand_gate()
+    hold, _ = command.stand_gate()
     weight = get_curriculum_reward_weight(env, "weight_stand_still")
     speed = torch.nan_to_num(command.standing_metrics()[2], nan=STAND_STILL_FULL_SPEED,
                              posinf=STAND_STILL_FULL_SPEED, neginf=STAND_STILL_FULL_SPEED)
     still = (1.0 - speed / STAND_STILL_FULL_SPEED).clamp(0.0, 1.0)
-    return weight * (strict & (command.phase == 2)).float() * still
+    return weight * (hold & (command.phase == 2)).float() * still
 
 
 

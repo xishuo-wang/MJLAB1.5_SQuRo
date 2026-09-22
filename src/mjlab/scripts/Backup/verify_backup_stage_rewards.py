@@ -371,6 +371,26 @@ class StageRewardTests(unittest.TestCase):
         r = rewards.compute_stand_still_reward(env)[2].item()
         self.assertLess(r, weight)
         self.assertGreater(r, weight * .6)
+        # 核的支撑区间必须覆盖"判据拒绝"的整个速度带, 否则减速拿不到任何回报:
+        # 2026-09-22 run 采样到的站立窗口 V/T ≈ 6.4~6.6, 旧的归零速度 4.5 在该处恰为 0。
+        # 不变式: 归零速度必须严格高于判据门限, 且覆盖实测工作点。
+        self.assertGreater(_STAND_STILL_FULL_SPEED, T.STAND_VEL_MEAN_MAX)
+        self.assertGreater(_STAND_STILL_FULL_SPEED, 6.6)
+        for v in (5.0, 6.0, 6.6):
+            cmd.test_vel[:] = torch.tensor([0., 0., v])
+            r = rewards.compute_stand_still_reward(env)[2].item()
+            self.assertGreater(r, 0.0, f"速度 {v} rad/s 处必须仍有梯度")
+            self.assertLess(r, weight)
+        # 单调性: 速度越高分越低(否则不是"静止奖励")
+        cmd.test_vel[:] = torch.tensor([0., 0., 3.0])
+        r_low = rewards.compute_stand_still_reward(env)[2].item()
+        cmd.test_vel[:] = torch.tensor([0., 0., 6.0])
+        r_high = rewards.compute_stand_still_reward(env)[2].item()
+        self.assertGreater(r_low, r_high)
+        # 门控用宽松 hold: 几何只掉出 strict(u 在 0.8~0.9 之间)时仍须给分
+        cmd.test_vel[:] = torch.tensor([0., 0., 0.])
+        cmd.test_u[:] = torch.tensor([[1., .85]])
+        self.assertGreater(rewards.compute_stand_still_reward(env)[2].item(), 0.0)
         # 姿态不达标时不给分: 不存在"不进锥就不被罚"的反向作弊路线(惩罚形式才有)
         cmd.test_u[:] = torch.tensor([-1., 1.])
         self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)

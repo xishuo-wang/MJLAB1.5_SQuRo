@@ -60,8 +60,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     # 使抄近路的总收益 (4.99) 高于正确的 S1 姿态 (4.50)。P1 内关掉后地形翻转为 S1 占优。
     "weight_progress_s2":       (3.0,),
     "weight_progress_s3":       (3.0,),
-    # stand_still 只在 P3 站立几何成立时给分(线性核, vel_rms=0 满分, 6 rad/s 归零);
-    # 权重 3.0 与"早到红利"的对冲标定见技术细节 §7.2.4。
+    # stand_still 只在 P3 站立窗口成立时给分(线性核, vel_rms=0 满分, 核的归零速度
+    # = config.STAND_VEL_MEAN_MAX); 权重 3.0 与"早到红利"的对冲标定见技术细节 §7.2.4。
     "weight_stand_still":       (3.0,),
     "weight_action_excess":     (0.5,),
     "weight_smooth_L1_leg":     (0.1, 0.2),
