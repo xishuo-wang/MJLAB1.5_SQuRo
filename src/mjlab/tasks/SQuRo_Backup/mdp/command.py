@@ -693,6 +693,15 @@ class BackupCommand(CommandTerm):
                 torch.where(window, mean_vel, torch.zeros_like(mean_vel)).sum() / count).item()
         return obs_t, obs_v, mean_vel, confirmed
 
+    # 只读: 当前站立窗口的平均关节速度 V/T (判据量本身), 不推进窗口、不产生脉冲。
+    # 供奖励项读判据同一个量; 不要用 stand_reward_and_pulse 代替 —— 它会推进窗口并消费脉冲。
+    def windowed_mean_vel(self) -> torch.Tensor:
+        elapsed = getattr(self, "_stand_elapsed", None)
+        integral = getattr(self, "_stand_vel_integral", None)
+        if elapsed is None or integral is None:
+            return torch.full_like(self.t_phase, float("nan"))
+        return integral / elapsed.clamp_min(torch.finfo(elapsed.dtype).tiny)
+
     # 消费本步的循环完成脉冲 — 奖励项调用后立刻清零, 保证恰好结算一次。
     def consume_cycle_end_pulse(self) -> torch.Tensor:
         pulse = getattr(self, "_last_cycle_end_pulse", None)

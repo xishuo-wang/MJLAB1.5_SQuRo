@@ -14,7 +14,8 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     CORRIDOR_STAGE2_ITER,
-    CORRIDOR_WIDTH_END_ITER,
+    CORRIDOR_TRAIN_END_ITER,
+    CORRIDOR_WIDTH_CONTRACT_END_ITER,
     CORRIDOR_WIDTH_MIN,
     CORRIDOR_WIDTH_START,
     _STEPS_PER_ITER,
@@ -72,17 +73,25 @@ def run_probe(env, ent, start_x: float, steps: int) -> tuple[int, float]:
 def main() -> None:
     cfg = tyro.cli(ProbeCfg)
     print("=" * 92)
-    print("[1] 课程纯函数核对")
-    for it in (0, 2999, 3000, 4500, 6000, 7000):
+    print("[1] 课程纯函数核对 (三段: 固定 0.40 / 3000~5000 收缩 / 5000~6000 保持)")
+    for it in (0, 2999, 3000, 4000, 5000, 6000, 7000):
         a = get_curriculum_corridor_width(it * _STEPS_PER_ITER)
         print(f"  iter {it:>5}  phase {get_training_phase(it * _STEPS_PER_ITER)}  a={a:.4f}")
     assert get_curriculum_corridor_width(0) == CORRIDOR_WIDTH_START
     assert get_curriculum_corridor_width(2999 * _STEPS_PER_ITER) == CORRIDOR_WIDTH_START
-    assert abs(get_curriculum_corridor_width(CORRIDOR_WIDTH_END_ITER * _STEPS_PER_ITER)
+    assert abs(get_curriculum_corridor_width(CORRIDOR_WIDTH_CONTRACT_END_ITER * _STEPS_PER_ITER)
                - CORRIDOR_WIDTH_MIN) < 1e-9
     assert get_curriculum_corridor_width(9999 * _STEPS_PER_ITER) == CORRIDOR_WIDTH_MIN
     assert get_training_phase((CORRIDOR_STAGE2_ITER - 1) * _STEPS_PER_ITER) == 0
     assert get_training_phase(CORRIDOR_STAGE2_ITER * _STEPS_PER_ITER) == 1
+    # 收缩段必须单调不增
+    prev = None
+    for it in range(CORRIDOR_STAGE2_ITER, CORRIDOR_WIDTH_CONTRACT_END_ITER + 1, 100):
+        a = get_curriculum_corridor_width(it * _STEPS_PER_ITER)
+        if prev is not None:
+            assert a <= prev + 1e-12, "收缩段必须单调不增"
+        prev = a
+    assert CORRIDOR_TRAIN_END_ITER == 6000
     print("  纯函数断言通过")
 
     print("\n[2] 墙体几何与净宽口径")

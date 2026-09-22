@@ -391,16 +391,18 @@ def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 站立静止奖励 — P3 内站立窗口成立时, 关节速度 RMS 越接近 0 给分越高(线性核)。
-# 门控用**宽松**的 hold 而不是结算用的 strict: 结算只要求"某一帧几何严格达标",
-# 而稠密奖励要求整段可导 —— 抖动最剧烈的时刻恰恰是几何最容易掉出 strict 的时刻,
-# 用 strict 会把奖励正落在最需要它的那些帧上清零(实测 P3 内 strict 占空比仅 0.71)。
-# 用奖励而非超死区惩罚、用线性核而非 exp 的理由见技术细节的站立奖励一节。
+# 站立静止奖励 — P3 内站立窗口成立时, 窗口平均关节速度 V/T 越接近 0 给分越高(线性核)。
+# 刻意与完成判据**同源**: 判据量的是窗口均值 V/T, 这里就用量它, 而不是瞬时速度 RMS。
+# 瞬时口径的毛病是噪声大时被凸核打折 (训练实测 v≈6.2/std≈3 时 E[核]=0.145, 而 核(V/T)=0.31),
+# 等于对"抖动"二次收费, 且奖励降不到判据真正关心的量上。依据见技术细节的受限空间/站立奖励一节。
+# 门控用宽松的 hold 而不是结算用的 strict: 结算只要求"某一帧几何严格达标", 而稠密奖励要整段可导。
 def compute_stand_still_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     hold, _ = command.stand_gate()
     weight = get_curriculum_reward_weight(env, "weight_stand_still")
-    speed = torch.nan_to_num(command.standing_metrics()[2], nan=STAND_STILL_FULL_SPEED,
+    # 读判据同一个量: 窗口平均关节速度 V/T (只读, 不推进窗口也不消费完成脉冲)
+    mean_vel = command.windowed_mean_vel()
+    speed = torch.nan_to_num(mean_vel, nan=STAND_STILL_FULL_SPEED,
                              posinf=STAND_STILL_FULL_SPEED, neginf=STAND_STILL_FULL_SPEED)
     still = (1.0 - speed / STAND_STILL_FULL_SPEED).clamp(0.0, 1.0)
     return weight * (hold & (command.phase == 2)).float() * still

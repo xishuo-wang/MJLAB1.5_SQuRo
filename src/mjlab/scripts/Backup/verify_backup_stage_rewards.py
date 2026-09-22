@@ -357,43 +357,78 @@ class StageRewardTests(unittest.TestCase):
     def test_stand_still_reward_is_p3_gated_and_linear(self):
         # 锚点从常量推导, 阈值调整时不必改测试(此前硬编码 "3 rad/s -> 半值",
         # 把 STAND_STILL_FULL_SPEED 从 6.0 改成 4.5 后立刻失效)。
+        # 核的输入是**窗口平均关节速度 V/T 的只读读数**, 因此打桩在 windowed_mean_vel 上,
+        # 而不是瞬时 standing_metrics —— 这正是"奖励与判据同源"的守卫点。
         from mjlab.tasks.SQuRo_Backup.mdp import config as T
         env, cmd = make_env([2, 1, 2])
+
+        def stub(v):
+            cmd.windowed_mean_vel = lambda: torch.tensor(v)
+
         half = _STAND_STILL_FULL_SPEED * .5
-        cmd.test_vel[:] = torch.tensor([0., 0., half])
+        stub([0., 0., half])
         reward = rewards.compute_stand_still_reward(env)
         weight = _CURVES["weight_stand_still"][0]
         self.assertAlmostEqual(reward[0].item(), weight, places=6)      # 完全静止 -> 满分
         self.assertEqual(reward[1].item(), 0.)                          # 非 P3 -> 0
         self.assertAlmostEqual(reward[2].item(), weight * .5, places=6)  # 半速 -> 线性核一半
-        # 线性核必须在工作区间内可分辨: 站定实测 vel_rms 中位约 1.16, 核值不得已饱和
-        cmd.test_vel[:] = torch.tensor([0., 0., 1.16])
+        # 线性核必须在工作区间内可分辨: 站定实测 V/T 中位约 1.16, 核值不得已饱和
+        stub([0., 0., 1.16])
         r = rewards.compute_stand_still_reward(env)[2].item()
         self.assertLess(r, weight)
         self.assertGreater(r, weight * .6)
         # 核的支撑区间必须覆盖"判据拒绝"的整个速度带, 否则减速拿不到任何回报:
-        # 2026-09-22 run 采样到的站立窗口 V/T ≈ 6.4~6.6, 旧的归零速度 4.5 在该处恰为 0。
+        # 2026-09-22 run 采样到的站立窗口 V/T ≈ 6.2, 旧的归零速度 4.5 在该处恰为 0。
         # 不变式: 归零速度必须严格高于判据门限, 且覆盖实测工作点。
         self.assertGreater(_STAND_STILL_FULL_SPEED, T.STAND_VEL_MEAN_MAX)
         self.assertGreater(_STAND_STILL_FULL_SPEED, 6.6)
         for v in (5.0, 6.0, 6.6):
-            cmd.test_vel[:] = torch.tensor([0., 0., v])
+            stub([0., 0., v])
             r = rewards.compute_stand_still_reward(env)[2].item()
             self.assertGreater(r, 0.0, f"速度 {v} rad/s 处必须仍有梯度")
             self.assertLess(r, weight)
         # 单调性: 速度越高分越低(否则不是"静止奖励")
-        cmd.test_vel[:] = torch.tensor([0., 0., 3.0])
+        stub([0., 0., 3.0])
         r_low = rewards.compute_stand_still_reward(env)[2].item()
-        cmd.test_vel[:] = torch.tensor([0., 0., 6.0])
+        stub([0., 0., 6.0])
         r_high = rewards.compute_stand_still_reward(env)[2].item()
         self.assertGreater(r_low, r_high)
         # 门控用宽松 hold: 几何只掉出 strict(u 在 0.8~0.9 之间)时仍须给分
-        cmd.test_vel[:] = torch.tensor([0., 0., 0.])
+        stub([0., 0., 0.])
         cmd.test_u[:] = torch.tensor([[1., .85]])
         self.assertGreater(rewards.compute_stand_still_reward(env)[2].item(), 0.0)
         # 姿态不达标时不给分: 不存在"不进锥就不被罚"的反向作弊路线(惩罚形式才有)
         cmd.test_u[:] = torch.tensor([-1., 1.])
         self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)
+
+    def test_stand_still_reward_shares_criterion_quantity(self):
+        # 奖励与判据必须读同一个量: stand_still 的核输入 == 判据用的窗口均值 V/T。
+        # 这条守卫的是"口径漂移"这一历史病灶 (曾用瞬时 v_rms, 噪声大时被凸核打折 2 倍)。
+        env, cmd = make_env([2, 2])
+        cmd.phase[:] = 2
+        cmd.test_u[:] = 1.
+        # 造一个真实的窗口: 前半段抖、后半段静, 使 V/T 落在中间值
+        cmd.test_vel[:] = torch.tensor([6.0, 6.0])
+        for _ in range(50):
+            cmd.stand_reward_and_pulse()
+        cmd.test_vel[:] = torch.tensor([0.0, 0.0])
+        for _ in range(50):
+            cmd.stand_reward_and_pulse()
+        mean_vel = cmd.windowed_mean_vel()
+        # 窗口均值应为 (6.0 + 0.0)/2 = 3.0
+        for i in range(2):
+            self.assertAlmostEqual(mean_vel[i].item(), 3.0, places=4)
+        weight = _CURVES["weight_stand_still"][0]
+        expected = weight * (1.0 - 3.0 / _STAND_STILL_FULL_SPEED)
+        got = rewards.compute_stand_still_reward(env)
+        for i in range(2):
+            self.assertAlmostEqual(got[i].item(), expected, places=4)
+        # 只读性: 奖励项不得推进窗口或消费完成脉冲
+        t_before = cmd._stand_elapsed.clone()
+        pulse_before = cmd._last_cycle_end_pulse.clone()
+        rewards.compute_stand_still_reward(env)
+        self.assertTrue(torch.equal(cmd._stand_elapsed, t_before))
+        self.assertTrue(torch.equal(cmd._last_cycle_end_pulse, pulse_before))
 
     def test_reset_model_writes_fallen_state_only(self):
         # reset_model 现在只写仰卧初态; 站立窗口/循环状态的归属地已迁到 BackupCommand,
