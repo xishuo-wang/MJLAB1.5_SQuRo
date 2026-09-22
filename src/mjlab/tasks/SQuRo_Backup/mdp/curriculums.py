@@ -10,29 +10,30 @@ from typing import Any
 _STEPS_PER_ITER = 96
 
 
-# 训练阶段边界 (iter)
-STAGE1_MID_ITER = 1000             # iter 0-1000:   纯模仿阶段
-STAGE2_MID_ITER = 2000             # iter 1000-2000: 强化竖直/高度引导
-STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊/命令)
+# 训练阶段边界 (iter) — 全任务唯一的阶段划分表, 课程与阶段判断都引用这里。
+# 整体两阶段: STAGE1_* = 无受限空间阶段, STAGE2_* = 受限空间阶段。
+# 命名规则: STAGE<a>_<b>_ITER = 第 a 阶段第 b 小段的**结束轮次**。
+STAGE1_1_ITER = 1000               # iter    0-1000: 纯模仿
+STAGE1_2_ITER = 2000               # iter 1000-2000: 时间缩放课程 (λ 下限 2.0 -> 1.0)
+STAGE1_3_ITER = 3000               # iter 2000-3000: 动作优化 (平滑权重第 2/3 档)
+STAGE2_1_ITER = 5000               # iter 3000-5000: 受限空间课程 (开碰撞, a 0.40 -> 0.20)
+STAGE2_2_ITER = 6000               # iter 5000-6000: 受限空间动作优化 (= 总训练轮数)
 
 
 # 受限空间课程: 两侧墙中心间距 a (m)。实际内侧净宽 = a - 2×墙半厚。
-# 三段: 一阶段固定 0.40 (不开碰撞) / 二阶段线性收到 0.20 / 三阶段保持 0.20。
 # 注意: mjwarp 在 put_model 时固化碰撞对与几何位置, 运行期都改不了 (实测),
-# 所以这个函数给出的是"当前轮次该用哪个 a", 真正生效要靠按 a 重建环境 (见 mdp/entity.py)。
-CORRIDOR_STAGE2_ITER = 3000        # 一阶段结束 / 二阶段开始 (此处开碰撞)
-CORRIDOR_WIDTH_CONTRACT_END_ITER = 5000   # 二阶段收缩结束
-CORRIDOR_TRAIN_END_ITER = 6000      # 三阶段结束 (= 总训练轮数)
-CORRIDOR_WIDTH_START = 0.40        # 一阶段固定值 = 二阶段起点
-CORRIDOR_WIDTH_MIN = 0.20          # 二阶段终点 = 三阶段保持值
+# 所以下面的函数给出的是"当前轮次该用哪个 a", 真正生效要靠按 a 重建环境 (见 mdp/entity.py)。
+CORRIDOR_WIDTH_START = 0.40        # STAGE1 期间固定值 = 受限空间课程起点
+CORRIDOR_WIDTH_MIN = 0.20          # 课程终点 = STAGE2_2 保持值
 
 
-# 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
-_STAGES = (0, 1000,2000)
+# 奖励权重课程的分档边界 (RewardWeightCurriculum 按 iter 取段)。
+# 与上面的阶段表保持"前三个边界一致": 0 ~ STAGE1_1_ITER ~ STAGE1_2_ITER。
+_STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER)
 
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间。λ ~ U[lam_min, TIME_SCALE_MAX],
-# lam_min 在 iter 1000~2000 内由 TIME_SCALE_MIN_START 线性降到 TIME_SCALE_MIN_END。
+# lam_min 在 STAGE1_2 (iter 1000~2000) 内由 TIME_SCALE_MIN_START 线性降到 TIME_SCALE_MIN_END。
 # 上界 4.0 -> 3.0: 一个循环约 2.37λ + 站立窗口(1.0~1.5s), λ=4 需 ~10.5s, 逼近 episode
 # 上限 12s, 且远超价值视野 (~2.9s @ γ=0.99^0.5), 稀疏里程碑项在长 λ 样本上几乎学不到;
 # 收紧上界让全部样本都落在"一个回合至少装得下一次完整循环"的区间内。
@@ -128,27 +129,29 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
 
 
-# 采样命令 time_scale λ (episode 内固定): 返回 [n] 张量
+# 采样命令 time_scale λ (episode 内固定): 返回 [n] 张量。
+# λ 下限在 STAGE1_2 (iter STAGE1_1_ITER ~ STAGE1_2_ITER) 内线性收紧。
 def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.Tensor:
     iter_num = step_counter // _STEPS_PER_ITER
-    progress = min(1.0, max(0.0, (iter_num - STAGE1_MID_ITER) / (STAGE2_MID_ITER - STAGE1_MID_ITER)))
+    span = max(1, STAGE1_2_ITER - STAGE1_1_ITER)
+    progress = min(1.0, max(0.0, (iter_num - STAGE1_1_ITER) / span))
     lam_min = TIME_SCALE_MIN_START - progress * (TIME_SCALE_MIN_START - TIME_SCALE_MIN_END)
     return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)
 
 
-# 受限空间阶段: 0 = 一阶段 (不开碰撞, a 固定), 1 = 二/三阶段 (开碰撞, a 按课程收紧)
+# 受限空间阶段: 0 = STAGE1 (不开碰撞, a 固定), 1 = STAGE2 (开碰撞, a 按课程收紧)
 def get_training_phase(step_counter: int) -> int:
-    return 0 if step_counter // _STEPS_PER_ITER < CORRIDOR_STAGE2_ITER else 1
+    return 0 if step_counter // _STEPS_PER_ITER < STAGE1_3_ITER else 1
 
 
-# 受限空间课程: 两侧墙中心间距 a (m)。三段一张曲线:
-#   iter 0~3000     : a = 0.40 (一阶段, 不开碰撞)
-#   iter 3000~5000  : a 从 0.40 线性收到 0.20 (二阶段)
-#   iter 5000~6000  : a = 0.20 保持 (三阶段)
+# 受限空间课程: 两侧墙中心间距 a (m):
+#   STAGE1  (iter 0 ~ STAGE1_3_ITER)               : a = 0.40 固定, 不开碰撞
+#   STAGE2_1(iter STAGE1_3_ITER ~ STAGE2_1_ITER)   : a 从 0.40 线性收到 0.20, 开碰撞
+#   STAGE2_2(iter STAGE2_1_ITER ~ STAGE2_2_ITER)   : a = 0.20 保持
 def get_curriculum_corridor_width(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
-    if iter_num < CORRIDOR_STAGE2_ITER:
+    if iter_num < STAGE1_3_ITER:
         return CORRIDOR_WIDTH_START
-    span = max(1, CORRIDOR_WIDTH_CONTRACT_END_ITER - CORRIDOR_STAGE2_ITER)
-    progress = min(1.0, (iter_num - CORRIDOR_STAGE2_ITER) / span)
+    span = max(1, STAGE2_1_ITER - STAGE1_3_ITER)
+    progress = min(1.0, (iter_num - STAGE1_3_ITER) / span)
     return CORRIDOR_WIDTH_START - progress * (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN)

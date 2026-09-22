@@ -9,7 +9,7 @@ from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
-    CORRIDOR_STAGE2_ITER,
+    STAGE1_3_ITER,
     _STEPS_PER_ITER,
     get_curriculum_corridor_width,
     get_training_phase,
@@ -71,7 +71,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[WARN] 旧环境关闭失败: {exc}")
         print(f"[INFO] 受限空间重建: a={width:.4f} m (净宽 {width - 0.02:.4f} m), "
               f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
-              f"(阶段边界 {CORRIDOR_STAGE2_ITER}), num_envs={num_envs}")
+              f"(阶段边界 STAGE1_3_ITER={STAGE1_3_ITER}), num_envs={num_envs}")
 
     def save(self, path: str, infos=None):
         super().save(path, infos)

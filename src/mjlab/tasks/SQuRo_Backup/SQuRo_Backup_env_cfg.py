@@ -22,12 +22,10 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 # 受限空间开不开: mjwarp 在 put_model 时固化碰撞对, contype 与几何位置运行期都改不了,
-# 所以"阶段一不开碰撞 / 阶段二开"只能反映在这里 —— 切阶段要改本常量并重开训练。
-# 阶段二换更窄的 a 同样需要改 RESTRICTED_SPACE_WIDTH 后重开训练。
+# 所以"STAGE1 不开碰撞 / STAGE2 开"只能反映在这里 —— 切阶段要改本常量并重开训练。
 ENABLE_RESTRICTED_SPACE = True
-# None = 跟随课程 (阶段一固定 CORRIDOR_WIDTH_START, 阶段二线性收紧到 CORRIDOR_WIDTH_MIN);
-# 指定数值 = 整个训练固定用这个 a。因为运行期改不了几何, 想真正在阶段二收紧 a,
-# 就得按 a 分档各训一个模型, 那时把这个值填成该档的 a。
+# None = 跟随课程 (STAGE1 固定 CORRIDOR_WIDTH_START, STAGE2_1 线性收紧到 CORRIDOR_WIDTH_MIN);
+# 指定数值 = 整个训练固定用这个 a (runner 会在阶段/宽度跨档时自动重建环境, 见 rl/runner.py)。
 RESTRICTED_SPACE_WIDTH: float | None = None
 
 

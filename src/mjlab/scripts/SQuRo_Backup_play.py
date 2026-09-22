@@ -16,7 +16,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
-    CORRIDOR_STAGE2_ITER,
+    STAGE1_3_ITER,
     _STEPS_PER_ITER,
     get_curriculum_corridor_width,
     get_training_phase,
@@ -372,7 +372,7 @@ def run_play(cfg: PlayConfig):
                       if cfg.corridor_width is None else float(cfg.corridor_width))
     ent_cfg = mdp_entity.configure_restricted_space(env_cfg, corridor_width,
                                                     enable_collision=corridor_collision)
-    print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 iter {CORRIDOR_STAGE2_ITER}), "
+    print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 STAGE1_3_ITER={STAGE1_3_ITER}), "
           f"碰撞={'开' if corridor_collision else '关'}, 墙中心 a={corridor_width:.4f} m, "
           f"实际内侧净宽 {ent_cfg.corridor_width - 2 * ent_cfg.wall_half_thickness:.4f} m")
 
