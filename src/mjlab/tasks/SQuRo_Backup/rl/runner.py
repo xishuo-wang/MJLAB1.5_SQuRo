@@ -1,11 +1,23 @@
 import wandb
+from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import (
     attach_metadata_to_onnx,
     get_base_metadata,
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
-from mjlab.tasks.SQuRo_Backup.mdp.curriculums import get_curriculum_corridor_width
+from mjlab.tasks.registry import load_env_cfg
+from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CORRIDOR_STAGE2_ITER,
+    _STEPS_PER_ITER,
+    get_curriculum_corridor_width,
+    get_training_phase,
+)
+
+TASK_NAME = "Mjlab-SQuRo-Backup"
+# 课程宽度变化超过这个量就重建环境 (0.40 -> 0.20 线性收缩 => 约 4 次重建)
+CORRIDOR_REBUILD_TOL = 0.05
 
 
 class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
@@ -13,26 +25,53 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     def __init__(self, env, train_cfg, log_dir=None, device="cpu") -> None:
         super().__init__(env, train_cfg, log_dir, device)
-        # 受限空间的 a 与碰撞开关都在编译期固化, 运行期改不了 (依据见 mdp/entity.py)。
-        # 这里只在课程要求的 a 与固化值不一致时告警一次: 那说明该重建环境了。
-        unwrapped = self.env.unwrapped
-        entity = unwrapped.scene.entities.get("restricted_space")
-        state = {"warned": False}
-        if entity is not None:
-            compiled = float(entity.cfg.corridor_width)
-            original_log = self.logger.log
+        # 受限空间的 a 与碰撞开关在编译期固化, 运行期改不了 (依据见 mdp/entity.py),
+        # 所以课程推进只能靠**重建环境**。这里记录当前已编译的取值, 每轮比对课程。
+        self._corridor_device = device
+        entity = self.env.unwrapped.scene.entities.get("restricted_space")
+        self._corridor_width = float(entity.cfg.corridor_width) if entity is not None else None
+        self._corridor_collision = bool(entity.collision_enabled) if entity is not None else False
+        phase = get_training_phase(int(self.env.unwrapped.common_step_counter))
+        original_log = self.logger.log
 
-            # 训练循环的每轮钩子
-            def log_with_corridor_check(*args, **kwargs):
-                wanted = get_curriculum_corridor_width(int(unwrapped.common_step_counter))
-                if (not state["warned"]) and abs(wanted - compiled) > 1e-6:
-                    state["warned"] = True
-                    print(f"[WARN] 受限空间墙间距已固化在 a={compiled:.4f} m (编译期), "
-                          f"但课程当前要求 a={wanted:.4f} m。运行期无法改动几何, "
-                          f"需要重建环境 (换 env_cfg 里的 corridor_width) 才能生效。")
-                return original_log(*args, **kwargs)
+        # 训练循环的每轮钩子: 阶段切换或课程宽度变化时重建环境
+        def log_with_corridor_stage(*args, **kwargs):
+            if self._corridor_width is not None:
+                step_counter = int(self.env.unwrapped.common_step_counter)
+                want_collision = get_training_phase(step_counter) == 1
+                want_width = get_curriculum_corridor_width(step_counter)
+                if (want_collision != self._corridor_collision
+                        or abs(want_width - self._corridor_width) > CORRIDOR_REBUILD_TOL):
+                    self._rebuild_corridor(step_counter, want_width, want_collision)
+            return original_log(*args, **kwargs)
 
-            self.logger.log = log_with_corridor_check
+        self.logger.log = log_with_corridor_stage
+
+    # 按课程重建受限空间: 换 a 或换碰撞开关都必须重建仿真模型。
+    # 只换环境是安全的: PPO 的 rollout storage 由 (num_envs × num_steps_per_env) 定尺,
+    # 二者不变, 且 PPO 不持有 env 引用 (已确认), 算子与统计量可继续用。
+    def _rebuild_corridor(self, step_counter: int, width: float, collision: bool) -> None:
+        old = self.env
+        num_envs = old.unwrapped.scene.num_envs
+        clip_actions = getattr(old, "clip_actions", None)
+        render_mode = getattr(old.unwrapped, "render_mode", None)
+        env_cfg = load_env_cfg(TASK_NAME)
+        env_cfg.scene.num_envs = num_envs
+        env_cfg.events.pop("init_restricted_space", None)
+        mdp_entity.configure_restricted_space(env_cfg, width, enable_collision=collision)
+        new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._corridor_device,
+                                    render_mode=render_mode)
+        new_env.common_step_counter = step_counter
+        self.env = RslRlVecEnvWrapper(new_env, clip_actions=clip_actions)
+        self._corridor_width = width
+        self._corridor_collision = collision
+        try:
+            old.close()
+        except Exception as exc:  # 旧环境关不掉不应中断训练
+            print(f"[WARN] 旧环境关闭失败: {exc}")
+        print(f"[INFO] 受限空间重建: a={width:.4f} m (净宽 {width - 0.02:.4f} m), "
+              f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
+              f"(阶段边界 {CORRIDOR_STAGE2_ITER}), num_envs={num_envs}")
 
     def save(self, path: str, infos=None):
         super().save(path, infos)

@@ -17,12 +17,14 @@ STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊
 
 
 # 受限空间课程: 两侧墙中心间距 a (m)。实际内侧净宽 = a - 2×墙半厚。
-# 注意: mjwarp 在 put_model 时固化碰撞对, 墙体几何位置运行期改不了 (实测平移后不产生接触),
+# 三段: 一阶段固定 0.40 (不开碰撞) / 二阶段线性收到 0.20 / 三阶段保持 0.20。
+# 注意: mjwarp 在 put_model 时固化碰撞对与几何位置, 运行期都改不了 (实测),
 # 所以这个函数给出的是"当前轮次该用哪个 a", 真正生效要靠按 a 重建环境 (见 mdp/entity.py)。
-CORRIDOR_STAGE2_ITER = 3000        # 阶段二起点 (之前的阶段一不开碰撞)
-CORRIDOR_WIDTH_START = 0.40        # 阶段一起点 = 课程上界
-CORRIDOR_WIDTH_MIN = 0.20          # 课程下界
-CORRIDOR_WIDTH_END_ITER = 6000     # a 线性收到下界的轮次
+CORRIDOR_STAGE2_ITER = 3000        # 一阶段结束 / 二阶段开始 (此处开碰撞)
+CORRIDOR_WIDTH_CONTRACT_END_ITER = 5000   # 二阶段收缩结束
+CORRIDOR_TRAIN_END_ITER = 6000      # 三阶段结束 (= 总训练轮数)
+CORRIDOR_WIDTH_START = 0.40        # 一阶段固定值 = 二阶段起点
+CORRIDOR_WIDTH_MIN = 0.20          # 二阶段终点 = 三阶段保持值
 
 
 # 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
@@ -134,17 +136,19 @@ def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.T
     return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)
 
 
-# 受限空间阶段: 0 = 阶段一 (不开碰撞, 间距固定), 1 = 阶段二 (开始课程)
+# 受限空间阶段: 0 = 一阶段 (不开碰撞, a 固定), 1 = 二/三阶段 (开碰撞, a 按课程收紧)
 def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < CORRIDOR_STAGE2_ITER else 1
 
 
-# 受限空间课程: 两侧墙间距 a (m)。
-# 阶段一恒为 CORRIDOR_WIDTH_START; 阶段二从 CORRIDOR_STAGE2_ITER 起线性收到 CORRIDOR_WIDTH_MIN。
+# 受限空间课程: 两侧墙中心间距 a (m)。三段一张曲线:
+#   iter 0~3000     : a = 0.40 (一阶段, 不开碰撞)
+#   iter 3000~5000  : a 从 0.40 线性收到 0.20 (二阶段)
+#   iter 5000~6000  : a = 0.20 保持 (三阶段)
 def get_curriculum_corridor_width(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < CORRIDOR_STAGE2_ITER:
         return CORRIDOR_WIDTH_START
-    span = max(1, CORRIDOR_WIDTH_END_ITER - CORRIDOR_STAGE2_ITER)
+    span = max(1, CORRIDOR_WIDTH_CONTRACT_END_ITER - CORRIDOR_STAGE2_ITER)
     progress = min(1.0, (iter_num - CORRIDOR_STAGE2_ITER) / span)
     return CORRIDOR_WIDTH_START - progress * (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN)
