@@ -87,4 +87,5 @@ src/mjlab/
 | `docs/SQuRo_Backup_技术细节.md` | 翻正任务**参考手册**：当前配置、原理与标定、踩坑、验收方法 |
 | `docs/SQuRo_Backup_奖励对照.md` | 翻正任务**实验日志**（按时间追加） |
 | `docs/SQuRo_Backup_修改清单.md` | 翻正任务**状态与计划** |
+| `docs/SQuRo_Tunnel_技术细节.md` | 钻洞任务**参考手册**：洞几何、走廊口径、奖励权重、Phase0/1 速度规则、回放与未决问题 |
 | `docs/source/*.rst` | 上游 MJLAB 框架的 Sphinx 文档（与本研究无关，一般不用改） |

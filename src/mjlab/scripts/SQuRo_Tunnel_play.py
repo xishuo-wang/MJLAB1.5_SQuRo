@@ -511,7 +511,6 @@ def run_play(cfg: PlayConfig):
     # 运行查看器
     if cfg.smoke_steps is not None:
         # 无窗自检路径: 直接推 N 步, 打印高度/命令统计, 不启动 viewer
-        action_dim = env.unwrapped.action_space.shape[-1]
         obs_dict = env.reset()
         obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
         for _ in range(cfg.smoke_steps):

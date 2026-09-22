@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
 | **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 已实现，见本文档下半部分 | 本文档 |
-| **SQuRo_Hole**（钻洞） | — | 后续子任务 | — |
+| **SQuRo_Tunnel**（钻洞/越障） | `Mjlab-SQuRo-Tunnel` | 代码就绪（2026-08），**尚未训练** | `docs/SQuRo_Tunnel_技术细节.md` |
 
 **核心创新**：走廊一致性 (Corridor Conformance) 奖励框架 — 将机器人身体建模为两个铰接矩形 (F_body + H_body)，通过可调节宽度的走廊约束统一处理 XoY 平面绕杆和 YoZ 平面钻洞两种场景。
 
@@ -282,6 +282,29 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 
 ---
 
+# SQuRo_Tunnel 任务（钻洞/越障）
+
+直线走廊内连续通过多个门洞式限高障碍（板底离地 0.050 m，洞宽 0.03 m），前躯干（含头部）
+与后躯干分别按沿 X 的方波期望高度压低后通过。沿用 Slalom 框架（5D 命令 + 预计算参考表 +
+走廊一致性奖励），曲率恒为 0，高度变化来自方波轨迹而非转向。
+
+**该任务的完整文档不在本文件**，避免重复维护：
+
+| 文档 | 内容 |
+| --- | --- |
+| `docs/SQuRo_Tunnel_技术细节.md` | 参考手册：洞几何与偏移、走廊判据口径、奖励权重、Phase0/Phase1 速度规则、回放与诊断、踩坑与未决问题 |
+
+常用入口：
+
+```powershell
+uv run train Mjlab-SQuRo-Tunnel --agent.logger tensorboard --agent.max-iterations 4000
+uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --checkpoint_file <ckpt>   # 回放
+uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --agent zero --smoke_steps 50 --no-video   # 无窗自检
+uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 期望高度轨迹图
+```
+
+---
+
 # 踩坑记录
 
 > 通用编码约定（常量唯一管理处、索引不硬编码、动作维度变化的联动清单）见 `AGENTS.md`。
@@ -321,3 +344,14 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 3. **entities 覆盖丢失实体** → 用 `{**orig, **pole}` merge
 4. **可视化用机器人位置做起点** → 改用固定世界原点 (-_INIT_DIST, 0)
 5. **可视化杆重复显示**（红球/圆柱 + 场景杆实体）→ 可视化不再绘制杆, 由场景 PoleEntity 提供（回放时按正确间距重建）
+
+## Tunnel（钻洞）
+
+1. **起点高度与期望高度不一致**：`reset_model` 放 z=0.06, 而站立体心 z≈0.0563、期望高度 0.055。
+2. **走廊判据无上界**：`e` 里先加段半高 → 死区为 0，只约束"中心 vs 期望高度 ±2 cm"，
+   机体上沿与限高板下沿没有硬约束，靠 σ=1000 的高度奖励压低。
+3. **限高板全程无碰撞**（`contype=0`）：穿洞成功没有判据，回放需 `--enable_collision True` 才检验。
+4. **洞 0.03 m 宽装不下 0.07 m 宽的躯干**：N=1 的洞是理想化抽象，按"限高门洞"理解。
+5. **`HEIGHT_LOW=0.02` 可行性未标定**：站立 0.0563 → 低高度 0.02 是 3.6 cm 下降。
+
+详细口径、奖励权重与回放方法见 `docs/SQuRo_Tunnel_技术细节.md`。
