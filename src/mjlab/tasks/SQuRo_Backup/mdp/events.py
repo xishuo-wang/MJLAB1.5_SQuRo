@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
-from .indices import resolve_model_indices
 from .config import LEG_INIT
+from .indices import resolve_model_indices
 
 
 
@@ -42,6 +42,7 @@ def apply_fallen_state(env, env_ids: torch.Tensor) -> None:
         if idx < robot_entity.num_joints:
             joint_pos[:, idx] = JOINT_POSITIONS[i]
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
 
 
 # 重置模型
