@@ -9,13 +9,18 @@ from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_training_phase
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .path import (
+    FRONT_DOWN_OFF,
+    FRONT_UP_OFF,
     HEIGHT_NORMAL,
-    HEIGHT_HOLE,
-    HOLE_NUM,
+    HEIGHT_LOW,
+    REAR_DOWN_OFF,
+    REAR_UP_OFF,
+    TUNNEL_NUM,
+    _height_from_tunnels,
     get_front_center_height,
-    get_holes,
+    get_tunnel_positions,
     get_rear_center_height,
-    sample_hole_positions,
+    sample_tunnel_positions,
 )
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -27,7 +32,7 @@ BASE_VEL = 0.1            # 正常高度基础速度 (m/s)
 VEL_LOW = 0.05            # 单低速度 (m/s): 前肢或后肢任一低高度
 VEL_STOP = 0.0            # 双低速度 (m/s): 前后肢均低高度
 GAIT_FREQ = 1.0           # 步频 (Hz)
-HEIGHT_THRESHOLD = (HEIGHT_NORMAL + HEIGHT_HOLE) / 2  # 高度状态判定阈值 = 0.0375
+HEIGHT_THRESHOLD = (HEIGHT_NORMAL + HEIGHT_LOW) / 2  # 高度状态判定阈值 = 0.0375
 
 # Phase0 高度档 (重构前接近) — 随机采样前后肢高度命令
 PHASE0_HEIGHTS = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]
@@ -61,7 +66,13 @@ class TunnelCommand(CommandTerm):
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # 洞位置缓存 (单 episode 内固定, Phase1 使用)
-        env._tunnel_hole_xs = sample_hole_positions(env, self.num_envs)  # type: ignore[attr-defined]
+        # 回放时 fixed_tunnel_xs 可锁死洞位置, 保证场景限高板与高度轨迹一致
+        fixed_xs = cfg.fixed_tunnel_xs
+        if fixed_xs is not None:
+            rows = torch.tensor(list(fixed_xs), device=self.device, dtype=torch.float32)
+            env._tunnel_xs = rows.unsqueeze(0).expand(self.num_envs, -1).contiguous()  # type: ignore[attr-defined]
+        else:
+            env._tunnel_xs = sample_tunnel_positions(env, self.num_envs)  # type: ignore[attr-defined]
 
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
@@ -153,12 +164,13 @@ class TunnelCommand(CommandTerm):
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
-            # 每 episode 重新采样洞位置 (单 episode 内固定)
-            holes = get_holes(self._env)
-            if holes.shape[1] != HOLE_NUM:
-                holes = torch.zeros(self.num_envs, HOLE_NUM, device=self.device)
-            holes[env_ids] = sample_hole_positions(self._env, len(env_ids))
-            self._env._tunnel_hole_xs = holes  # type: ignore[attr-defined]
+            # 每 episode 重新采样洞位置 (单 episode 内固定); 固定位置模式下沿用同一组洞
+            tunnel_xs = get_tunnel_positions(self._env)
+            if tunnel_xs.shape[1] != TUNNEL_NUM:
+                tunnel_xs = torch.zeros(self.num_envs, TUNNEL_NUM, device=self.device)
+            if self.cfg.fixed_tunnel_xs is None:
+                tunnel_xs[env_ids] = sample_tunnel_positions(self._env, len(env_ids))
+            self._env._tunnel_xs = tunnel_xs  # type: ignore[attr-defined]
             self._resample_command(env_ids)
         return extras
 
@@ -193,10 +205,9 @@ class TunnelCommand(CommandTerm):
         start_x = float(self._start_positions[batch, 0])
         # 绘制当前 episode 前/后肢期望高度轨迹 (从起点起 1.5m, 覆盖多个洞)
         xs = torch.linspace(start_x, start_x + 1.5, 120, device=self.device)
-        holes = get_holes(self._env)[batch : batch + 1]
-        from .path import _height_from_holes, FRONT_DOWN_OFF, FRONT_UP_OFF, REAR_DOWN_OFF, REAR_UP_OFF
-        z_front = _height_from_holes(xs, holes.expand(len(xs), -1), FRONT_DOWN_OFF, FRONT_UP_OFF).cpu().numpy()
-        z_rear = _height_from_holes(xs, holes.expand(len(xs), -1), REAR_DOWN_OFF, REAR_UP_OFF).cpu().numpy()
+        tunnel_xs = get_tunnel_positions(self._env)[batch : batch + 1]
+        z_front = _height_from_tunnels(xs, tunnel_xs.expand(len(xs), -1), FRONT_DOWN_OFF, FRONT_UP_OFF).cpu().numpy()
+        z_rear = _height_from_tunnels(xs, tunnel_xs.expand(len(xs), -1), REAR_DOWN_OFF, REAR_UP_OFF).cpu().numpy()
         xs_np = xs.cpu().numpy()
         for x_i, z_f, z_r in zip(xs_np, z_front, z_rear):
             visualizer.add_sphere(center=np.array([x_i, 0.0, z_f + z_off]), radius=0.004,
@@ -214,6 +225,7 @@ class TunnelCommandCfg(CommandTermCfg):
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     fixed_gait_freq: Optional[float] = None
+    fixed_tunnel_xs: Optional[Tuple[float, ...]] = None   # 锁死洞位置 (回放用), None 则每 episode 采样
 
     @dataclass
     class VizCfg:

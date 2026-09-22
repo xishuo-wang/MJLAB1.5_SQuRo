@@ -6,58 +6,52 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-# ==================== 障碍物 (门洞式洞) 配置 ====================
-# 对齐旧版 hole1 尺寸: 洞宽 3cm, 洞下沿 0.050m
+# 洞 (门洞式限高板) 尺寸: 洞宽 3cm, 下沿高度 0.050m
 OBSTACLE_LENGTH = 0.03       # 洞宽 a (m) = 3cm
-HOLE_BOTTOM = 0.050          # 洞下沿高度 (m) = hole position z = 5cm
-HOLE_THICKNESS = 0.01        # 限高板厚度 (m) = 2*size[2]
+TUNNEL_BOTTOM = 0.050        # 洞下沿高度 (m) = 限高板板底 z
+TUNNEL_THICKNESS = 0.01      # 限高板厚度 (m) = 2*size[2]
 
-# ==================== 期望高度规则 ====================
-HEIGHT_NORMAL = 0.055        # 正常段期望高度 (m) — 对齐 Slalom FIXED_HEIGHT
-HEIGHT_HOLE = 0.02           # 低高度期望 (m)
-TRANSITION_LENGTH = 0.0      # 线性过渡长度 (m): 正常↔低高度 — 方波
+# 期望高度规则
+HEIGHT_NORMAL = 0.055        # 正常段期望高度 (m), 对齐 Slalom FIXED_HEIGHT
+HEIGHT_LOW = 0.02            # 低高度期望 (m)
+TRANSITION_LENGTH = 0.0      # 线性过渡长度 (m): 正常↔低高度, 当前为方波
 
-# ==================== 洞动态采样 (Phase1, 单 episode 内固定) ====================
-HOLE_NUM = 3                 # 每 episode 洞数量 (多个洞)
-HOLE_MIN_X = 0.15            # 第一个洞距机器人起始原点最小距离 (m)
-HOLE_MIN_SPACING = 0.30      # 洞与洞之间最小间距 (m)
-HOLE_MAX_X = 2.0             # 采样 x 上限 (m, 覆盖 episode 距离)
+# 洞动态采样 (Phase1, 单 episode 内固定)
+TUNNEL_NUM = 3               # 每 episode 洞数量
+TUNNEL_MIN_X = 0.15          # 第一个洞距机器人起始原点最小距离 (m)
+TUNNEL_MIN_SPACING = 0.30    # 洞与洞之间最小间距 (m)
+TUNNEL_MAX_X = 2.0           # 采样 x 上限 (m, 覆盖 episode 距离)
 
-# ==================== 轨迹公式偏移 (cm 换算为 m) ====================
-# 前肢中心: 降 x-9cm, 升 x+5+(a/2)
-# 后肢中心: 降 x-4+(a/2), 升 x+4+(a)  ← 降起点 = x-0.04+a/2 = x-0.025
-# 衔接: 前肢中心-后肢中心距离 0.09 → 后肢开始降时前肢刚好开始升 (永无双低)
+# 前肢中心: 降 x-9cm, 升 x+5+(a/2); 后肢中心: 降 x-4+(a/2), 升 x+4+(a)
+# 衔接: 前肢中心-后肢中心距离 0.09, 后肢开始降时前肢刚好开始升
 # 其中 x 为洞左侧位置
 FRONT_DOWN_OFF = 0.09                    # 前肢 降起点相对洞左侧偏移
 FRONT_UP_OFF = 0.05 + 0.5 * OBSTACLE_LENGTH   # 前肢 升起点: +5cm+a/2
-REAR_DOWN_OFF = 0.04 - 0.5 * OBSTACLE_LENGTH # 后肢 降起点: -4cm+a/2 = 0.025
+REAR_DOWN_OFF = 0.04 - 0.5 * OBSTACLE_LENGTH  # 后肢 降起点: -4cm+a/2 = 0.025
 REAR_UP_OFF = 0.04 + OBSTACLE_LENGTH          # 后肢 升起点: +4cm+a
 
-# ==================== 走廊 (高度上下限) ====================
-# 前肢走廊: 用于简化模型中的头部 + 前躯干(前肢)
-CORRIDOR_FRONT_HALF_HEIGHT = 0.025   # 前肢走廊半高 (m)
-# 后肢走廊: 用于简化模型中的后躯干(后肢)
-CORRIDOR_REAR_HALF_HEIGHT = 0.025    # 后肢走廊半高 (m)
-# 身体段半高 (简化模型三段高度均为 50mm)
-BODY_SEG_HALF_HEIGHT = 0.025         # 身体段半高 (m)
+# 走廊 (期望高度上下限)
+CORRIDOR_FRONT_HALF_HEIGHT = 0.025   # 前肢走廊半高 (m), 用于头部 + 前躯干
+CORRIDOR_REAR_HALF_HEIGHT = 0.025    # 后肢走廊半高 (m), 用于后躯干
+BODY_SEG_HALF_HEIGHT = 0.025         # 身体段半高 (m), 简化模型三段同高
 
 
-# 采样洞位置 (洞左侧 x): 第一个洞 >= HOLE_MIN_X, 间距 >= HOLE_MIN_SPACING
-def sample_hole_positions(env: "ManagerBasedRlEnv", n: int) -> torch.Tensor:
+# 采样洞位置 (洞左侧 x): 第一个洞 >= TUNNEL_MIN_X, 间距 >= TUNNEL_MIN_SPACING
+def sample_tunnel_positions(env: "ManagerBasedRlEnv", n: int) -> torch.Tensor:
     device = env.device
-    x_max = HOLE_MAX_X - (HOLE_NUM - 1) * HOLE_MIN_SPACING
-    x0 = torch.rand(n, device=device) * (x_max - HOLE_MIN_X) + HOLE_MIN_X
-    gaps = HOLE_MIN_SPACING + torch.rand(n, HOLE_NUM - 1, device=device) * 0.2
+    x_max = TUNNEL_MAX_X - (TUNNEL_NUM - 1) * TUNNEL_MIN_SPACING
+    x0 = torch.rand(n, device=device) * (x_max - TUNNEL_MIN_X) + TUNNEL_MIN_X
+    gaps = TUNNEL_MIN_SPACING + torch.rand(n, TUNNEL_NUM - 1, device=device) * 0.2
     offsets = torch.cat([torch.zeros(n, 1, device=device), gaps.cumsum(dim=1)], dim=1)
-    return x0.unsqueeze(1) + offsets   # [N, HOLE_NUM] 洞左侧
+    return x0.unsqueeze(1) + offsets   # [N, TUNNEL_NUM] 洞左侧
 
 
-# 获取当前 episode 的洞位置 (env 缓存, 单 episode 内固定); 未采样时用默认单洞 0.185
-def get_holes(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    holes = getattr(env, "_tunnel_hole_xs", None)
-    if holes is None:
-        holes = torch.full((env.num_envs, 1), 0.185, device=env.device)
-    return holes
+# 获取当前 episode 的洞位置 (env 缓存, 单 episode 内固定)
+def get_tunnel_positions(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    tunnels = getattr(env, "_tunnel_xs", None)
+    if tunnels is None:
+        tunnels = torch.full((env.num_envs, 1), 0.185, device=env.device)
+    return tunnels
 
 
 # 获取指定 body_link 的偏航角
@@ -83,24 +77,24 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
 
 
-# 多洞期望高度: xs [N], holes [N, M] (洞左侧), 返回 [N] 期望高度
-def _height_from_holes(xs: torch.Tensor, holes: torch.Tensor,
-                       down_off: float, up_off: float) -> torch.Tensor:
-    down = holes - down_off          # 低区间起点 (洞左侧 - 偏移)
-    up = holes + up_off              # 低区间终点
+# 多洞期望高度: xs [N], tunnel_xs [N, M] (洞左侧), 返回 [N] 期望高度
+def _height_from_tunnels(xs: torch.Tensor, tunnel_xs: torch.Tensor,
+                         down_off: float, up_off: float) -> torch.Tensor:
+    down = tunnel_xs - down_off      # 低区间起点 (洞左侧 - 偏移)
+    up = tunnel_xs + up_off          # 低区间终点
     low_mask = (xs.unsqueeze(1) >= down) & (xs.unsqueeze(1) <= up)  # [N, M]
     any_low = low_mask.any(dim=1)
-    return torch.where(any_low, torch.full_like(xs, HEIGHT_HOLE), torch.full_like(xs, HEIGHT_NORMAL))
+    return torch.where(any_low, torch.full_like(xs, HEIGHT_LOW), torch.full_like(xs, HEIGHT_NORMAL))
 
 
 # 前肢中心期望高度 (按实际 x 查询, 多洞)
 def get_front_center_height(env: "ManagerBasedRlEnv", x: torch.Tensor) -> torch.Tensor:
-    return _height_from_holes(x, get_holes(env), FRONT_DOWN_OFF, FRONT_UP_OFF)
+    return _height_from_tunnels(x, get_tunnel_positions(env), FRONT_DOWN_OFF, FRONT_UP_OFF)
 
 
 # 后肢中心期望高度 (按实际 x 查询, 多洞)
 def get_rear_center_height(env: "ManagerBasedRlEnv", x: torch.Tensor) -> torch.Tensor:
-    return _height_from_holes(x, get_holes(env), REAR_DOWN_OFF, REAR_UP_OFF)
+    return _height_from_tunnels(x, get_tunnel_positions(env), REAR_DOWN_OFF, REAR_UP_OFF)
 
 
 # 获取路径瞬时曲率 — Tunnel 直行, 恒为 0 (对齐 Slalom reference 接口)
