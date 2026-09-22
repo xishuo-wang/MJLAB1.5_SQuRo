@@ -28,7 +28,7 @@ CORRIDOR_WIDTH_MIN = 0.20          # 二阶段终点 = 三阶段保持值
 
 
 # 阶段边界表 (RewardWeightCurriculum 按 iter 取段)
-_STAGES = (0, 3000)
+_STAGES = (0, 1000,2000)
 
 
 # 命令课程: time_scale λ (放慢倍数) 采样区间。λ ~ U[lam_min, TIME_SCALE_MAX],
@@ -75,10 +75,10 @@ _CURVES: dict[str, tuple[float, ...]] = {
     # = config.STAND_VEL_MEAN_MAX); 权重 3.0 与"早到红利"的对冲标定见技术细节 §7.2.4。
     "weight_stand_still":       (3.0,),
     "weight_action_excess":     (0.5,),
-    "weight_smooth_L1_leg":     (0.1, 0.2),
-    "weight_smooth_L1_spn":     (0.2,),
-    "weight_smooth_L2_leg":     (0.1, 0.2),
-    "weight_smooth_L2_spn":     (0.2, ),
+    "weight_smooth_L1_leg":     (0.1, 0.2, 0.4),
+    "weight_smooth_L1_spn":     (0.2, 0.2, 0.4),
+    "weight_smooth_L2_leg":     (0.1, 0.2, 0.4),
+    "weight_smooth_L2_spn":     (0.2, 0.2, 0.4),
     "weight_energy":            (0.1,),
     "sigma_leg_pos":      (10.0,),
     "sigma_spn_pos":      (20.0,),
