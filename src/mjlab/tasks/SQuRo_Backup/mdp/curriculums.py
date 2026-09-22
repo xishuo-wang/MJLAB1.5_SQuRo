@@ -20,8 +20,12 @@ STAGE2_END_ITER = 4000             # iter 2000-4000: 收敛/泛化 (预留走廊
 _STAGES = (0, 1000)
 
 
-# 命令课程: time_scale λ (放慢倍数) 采样区间
-TIME_SCALE_MAX = 4.0
+# 命令课程: time_scale λ (放慢倍数) 采样区间。λ ~ U[lam_min, TIME_SCALE_MAX],
+# lam_min 在 iter 1000~2000 内由 TIME_SCALE_MIN_START 线性降到 TIME_SCALE_MIN_END。
+# 上界 4.0 -> 3.0: 一个循环约 2.37λ + 站立窗口(1.0~1.5s), λ=4 需 ~10.5s, 逼近 episode
+# 上限 12s, 且远超价值视野 (~2.9s @ γ=0.99^0.5), 稀疏里程碑项在长 λ 样本上几乎学不到;
+# 收紧上界让全部样本都落在"一个回合至少装得下一次完整循环"的区间内。
+TIME_SCALE_MAX = 3.0
 TIME_SCALE_MIN_START = 2.0
 TIME_SCALE_MIN_END = 1.0
 
