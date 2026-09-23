@@ -3,6 +3,7 @@ from mjlab.rl import (
   RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
 )
+from mjlab.tasks.SQuRo_Tunnel.mdp.curriculums import PHASE1_START_ITER
 
 
 def SQuRo_Tunnel_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
@@ -39,7 +40,7 @@ def SQuRo_Tunnel_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="mouse_locomotion",
     save_interval=100,
     num_steps_per_env=24,
-    max_iterations=4_000,
+    max_iterations=PHASE1_START_ITER * 2,   # 一阶段 0~3k (随机高度) + 二阶段 3k~6k (受限空间)
     
     clip_actions=3.14,
     seed=42,

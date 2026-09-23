@@ -35,6 +35,17 @@ CORRIDOR_FRONT_HALF_HEIGHT = 0.025   # 前肢走廊半高 (m), 用于头部 + �
 CORRIDOR_REAR_HALF_HEIGHT = 0.025    # 后肢走廊半高 (m), 用于后躯干
 BODY_SEG_HALF_HEIGHT = 0.025         # 身体段半高 (m), 简化模型三段同高
 
+# 两种受限情况 (仅板底下沿不同): 期望低高度由几何推导, 保证通过余量一致
+# 段中心上限 = 板底 - 段半高; 再留 PASS_CLEARANCE 通过余量
+# case2 下沿 0.065 > 站立体心 0.055, 但仍需低头 (上沿 0.080 会撞板底)
+PASS_CLEARANCE = 0.005               # 通过余量 (m), 与 case1 现值一致
+TUNNEL_CASES: tuple[float, ...] = (0.050, 0.065)   # 板底下沿 (m)
+
+
+# 由板底推导低高度期望值 (= 板底 - 段半高 - 通过余量)
+def low_height_for_bottom(plate_bottom: float) -> float:
+    return plate_bottom - BODY_SEG_HALF_HEIGHT - PASS_CLEARANCE
+
 
 # 采样洞位置 (洞左侧 x): 第一个洞 >= TUNNEL_MIN_X, 间距 >= TUNNEL_MIN_SPACING
 def sample_tunnel_positions(env: "ManagerBasedRlEnv", n: int) -> torch.Tensor:

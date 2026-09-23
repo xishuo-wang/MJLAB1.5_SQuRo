@@ -3,8 +3,18 @@
 任务 ID：`Mjlab-SQuRo-Tunnel`（钻洞 / 越障，四足 + 脊柱直行场景）
 代码：`src/mjlab/tasks/SQuRo_Tunnel/`，回放：`src/mjlab/scripts/SQuRo_Tunnel_play.py`
 
-当前状态：**代码就绪，尚未训练**（最后一次代码改动 2026-08-06；`logs/rsl_rl/SQuRo_Tunnel/`
-下无有效实验）。本文件是参考手册；实验数据请在此按时间追加，不要覆盖历史结论。
+当前状态：**参考层已按旧版（`v0801` 虚拟碰撞版）迁移，Phase0 可开训**（2026-09-23）。
+`logs/rsl_rl/SQuRo_Tunnel/2026-09-21_20-23-57/` 有迁移前的 3999 iter 基线 checkpoint（Phase0，
+可在回放脚本里对比）。本文件是参考手册；实验数据请按时间追加，不要覆盖历史结论。
+
+## 0. 阶段划分（2026-09-23 起）
+
+| 阶段 | iter | 内容 | 命令来源 |
+| --- | --- | --- | --- |
+| Phase 0 | 0 ~ 3k | 无障碍物，随机高度命令（前后肢解耦但受配对约束） | `_resample_phase0`，episode 内固定 |
+| Phase 1 | 3k ~ 6k | 受限空间，洞位置采样 + 方波高度轨迹 | `_update_phase1`，每步按实际 x |
+
+边界常量：`curriculums.PHASE1_START_ITER = 3000`，`rl_cfg.max_iterations = 2×3000 = 6000`。
 
 ## 1. 任务定义
 
@@ -12,32 +22,46 @@
 厚 1 cm 的限高板，板下的通行孔从地面一直到板底，机器人必须把**前躯干（含头部）**和
 **后躯干**分别压低到期望高度以下才能穿过去。
 
+两种受限情况的物理语义（2026-09-22 与用户核对）：
+
+| 情况 | 板底下沿 | 要求 | 对应参考 |
+| --- | --- | --- | --- |
+| case1 | 0.050 m | 必须用脊柱（两段躯干不同高，沿 x 依次低头） | 待补：含脊柱的参考表维 |
+| case2 | 0.065 m | 不用脊柱，两段躯干同高、整体压低即可 | 匍匐/低高度档（腿折起来，脊柱静止） |
+
+几何尺度（用户口径）：预计算表的高度 = 躯干重心高度；躯干顶部 = 表高 + 0.024 m。
+正常站立表高 0.055 → 顶部 0.079 m；趴平贴地重心约 0.024 m。所以 case2 的参考高度约
+`0.065 − 0.024 ≈ 0.041 m`，case1 需要沿 path 的高度轨迹（`Viz_Tunnel_Path.png`）。
+
 任务沿用 Slalom 的框架（5D 命令 + 预计算参考表 + 走廊一致性奖励），区别在于：
-曲率恒为 0（`get_path_curvature` 返回全零），期望高度的变化来自沿 X 的方波轨迹而不是转向曲率。
+曲率恒为 0（`get_path_curvature` 返回全零），**参考表的高度维替代了 Slalom 的曲率维**。
 
 ## 2. 文件结构
 
 ```
 src/mjlab/tasks/SQuRo_Tunnel/
 ├── SQuRo_Tunnel_env_cfg.py   # 观测/动作/奖励/终止/场景 (1024 envs, 20 s, decimation=4)
-├── config/{__init__.py, rl_cfg.py}   # 任务注册 + PPO (512-256-128, 4000 iter, 24 steps/env)
+├── config/{__init__.py, rl_cfg.py}   # 任务注册 + PPO (512-256-128, 6000 iter, 24 steps/env)
 ├── mdp/
 │   ├── path.py        # 洞几何常量 + 前/后肢期望高度方波 + 双走廊超额
 │   ├── command.py     # TunnelCommand: 5D 命令 [vel, h_f, h_h, gait, κ=0], Phase0/Phase1
-│   ├── reference.py   # 26κ×50相位×14关节预计算表 (Bio_Data 自带, κ=0 → 只用第 0 bin)
+│   ├── reference.py   # [模式3][高度档4][相位200][14关节] 预计算表 + 速度表
 │   ├── rewards.py     # 模仿/高度/速度/走廊/朝向/动作平滑/能耗
-│   ├── curriculums.py # _FIXED_WEIGHTS (无阶段课程), PHASE1_END_ITER=4000
+│   ├── curriculums.py # _FIXED_WEIGHTS (无阶段课程), PHASE1_START_ITER=3000
 │   ├── events.py      # reset_model: 固定起点 (0,0,0.06), 面朝 +X
 │   ├── terminations.py# check_fallen (root 重力投影 < 0.2)
 │   ├── entity.py      # HoleEntity: 限高板薄板 box (类名保留 Hole*, 泛指"洞")
 │   ├── indices.py     # F/H/head body、site、关节索引统一解析
 │   └── Bio_Data/      # Trot_F.csv / Trot_H.csv (足端 Y/Z 轨迹, IK 生成参考表)
 └── rl/runner.py       # SQuRoOnPolicyRunner (带 ONNX 导出)
+
+src/mjlab/scripts/Tunnel/verify_phase0_baseline.py   # Phase0 基线验证 (表/命令/速度/实测高度)
 ```
 
 数据流：`sample_tunnel_positions`（每 episode 采 3 个洞）→ `get_front/rear_center_height`
 （按实际 x 出方波期望高度）→ `TunnelCommand._update_phase1`（写高度命令 + 速度规则）→
 `compute_height_reward` / `compute_corridor_reward`（跟踪与包络约束）+ `reference.py`（步态参考）。
+Phase0 则跳过 path，直接用随机高度命令查参考表。
 
 ## 3. 坐标与洞几何
 
@@ -108,24 +132,59 @@ r   = exp(−σ_corridor · v²)
 
 ## 6. 训练阶段与速度规则
 
-`PHASE1_END_ITER = 4000`，`_STEPS_PER_ITER = 24`（每 iter 24 步 × 0.02 s ≈ 0.48 s 仿真）。
+`_STEPS_PER_ITER = 24`（每 iter 24 步 × 0.02 s ≈ 0.48 s 仿真），边界见 §0。
 
-Phase 0（iter < 4000，无障碍）：`PHASE0_HEIGHTS = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]`
-独立采样前/后肢高度，`vel = PHASE0_BASE_SPEED(0.25) × min(h_f,h_h)/0.06 × gait_freq`，
-高度命令按 `resampling_time_range=(20,30) s` 周期重采样——而 episode 只有 20 s，
-所以**训练中每集只采样一次，重采样实际不触发**。
+Phase 0（iter < 3000，无障碍）：按**受限模式**采样高度命令，`mode = randint(0,3)` 各 1/3：
 
-Phase 1（iter ≥ 4000，有洞）：`_update_command` 每步用实际 x 查方波，写高度命令与速度：
+| mode | 含义 | h_f | h_h | n（低高度肢数） | 速度 |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 都高 | U{0.04,0.045,0.05,0.055,0.06} | 同 h_f | 0 | `v_base·f·(h/0.06)·2` |
+| 1 | 前低后高 | 0.02 | U{0.04…0.06} | 1 | `v_base·f·(h_h/0.06)·1` |
+| 2 | 前高后低 | U{0.04…0.06} | 0.02 | 1 | `v_base·f·(h_f/0.06)·1` |
 
-| 状态 | 判定 | 速度命令 |
+- **配对约束**：一侧低于 `HEIGHT_LOW_THRESHOLD=0.04` 时另一侧必 ≥0.04；**双低不采样**
+  （低高度肢冻结不动，双腿都冻结则无法前进）。
+- **速度公式**：`v = v_base × 步频 f × 高度缩放 scale × (2 − n)`，`scale = 运动侧高度/0.06`，
+  `v_base = PHASE0_V_BASE = 0.125 m/s`（正常高度 1 Hz；旧版 2 Hz 基准 0.25 折合）。
+  本质是"速度 = 步频 × 步幅"，步幅受高度缩放与参与运动的腿数影响。
+- 高度命令在 episode reset 时采样一次（`resampling_time_range=(20,30) s` ≥ 20 s episode，
+  周期重采样实际不触发）。
+
+Phase 1（iter ≥ 3000，有洞）：`_update_command` 每步用实际 x 查方波，高度命令 = 期望高度，
+速度用同一公式（`n` 由期望高度是否低于 0.04 判定；双低时 `VEL_STOP=0`）：
+
+| 状态 | n | 速度 |
 | --- | --- | --- |
-| 双正常 | `z_ref > 0.0375` 且 `z_ref > 0.0375` | `BASE_VEL=0.1 × gait_freq` |
-| 单低 | 任一肢低 | `VEL_LOW=0.05 × gait_freq` |
-| 双低 | 两肢都低（窗口重叠 0.005 m） | `VEL_STOP=0.0` |
+| 双正常 | 0 | `0.125·f·(h/0.06)·2 = 0.25·f·scale` |
+| 单低 | 1 | `0.125·f·(h/0.06)·1` |
+| 双低 | 2 | `0`（步态相位短暂冻结，"停下来缩一下"） |
 
-速度命令同时驱动 `reference.py` 的相位推进（`phase += gait_freq·dt`），所以双低时步态相位
-会短暂冻结——这正是"停下来缩一下"的预期行为，不是 bug。曲率恒 0，因此参考表只走第 0 个
-曲率 bin，脊柱四关节参考恒为 0、颈 pitch 固定 −0.3。
+速度命令同时驱动 `reference.py` 的相位推进（`phase += gait_freq·dt`）。参考表按
+（模式, 高度档）索引，见 §4a。
+
+### 4a. 参考表（2026-09-23 迁移旧版）
+
+`reference.py` 预计算表为 `[模式 3][高度档 4][相位 200][14 关节]` + 同形状速度表，
+`HEIGHT_LIST = [0.02, 0.04, 0.05, 0.06]`，`BASE_HEIGHT = 0.06`。生成规则（对齐 `v0801` 旧版）：
+
+- 每条腿的目标足端轨迹 = CSV(`Trot_F/H.csv` 的 `Y_mean/Z_mean`，200 点) 的**偏移量按
+  `height_scale = h/0.06` 等比缩放**（x 与 z 同乘），`x_offset` 前 0.0 / 后 −0.01；
+- `h < 0.04` 或该肢处于低模式时**冻结**：`x=0.005`(前)/`0.002`(后)、`z=−0.02`，不缩放；
+- 脊柱四关节参考恒 0（低高度靠腿折起来实现，实测冻结姿态正好对应重心 21.7 mm）；
+- 颈 pitch 固定 −0.3；
+- 速度表 = 位置沿相位的中心差分（相位周期 1），运行时再乘步频；
+- 前腿肘关节 IK 在 `a2 > 2` 时取 `+2π`（旧版口径；旧实现写成 `−2π` 会给出 −11.9 rad 的废值）。
+
+运行时索引：`mode_from_heights(h_f, h_h)` 定模式，前/后肢各自按高度就近取档，前肢关节取前肢档、
+后肢关节取后肢档。实测（`verify_phase0_baseline`，跑完整周期）：
+
+| 模式 | 高度档 | 前重心 | 后重心 | 顶部(前) |
+| --- | --- | --- | --- | --- |
+| 都高 | 0.06 | 51.2 | 53.4 | 75.2 |
+| 都高 | 0.05 | 43.4 | 45.2 | 67.4 |
+| 前低 | 0.055 | 29.6 | 44.3 | 53.6 |
+| 后低 | 0.055 | 38.9 | 25.5 | 62.9 |
+| 任一 | 0.02 | 21.9 | 23.8 | 45.9 |
 
 ## 7. 回放与诊断
 
@@ -134,8 +193,10 @@ Phase 1（iter ≥ 4000，有洞）：`_update_command` 每步用实际 x 查方
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --checkpoint_file logs/rsl_rl/SQuRo_Tunnel/<run>/model_3999.pt
 # 无 checkpoint 自检 (不启动 viewer, 跑 N 步打印高度/期望/奖励)
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --agent zero --smoke_steps 50 --no-video
-# 训练 (必须显式指定 tensorboard)
-uv run train Mjlab-SQuRo-Tunnel --agent.logger tensorboard --agent.max-iterations 4000
+# 训练 (必须显式指定 tensorboard; 一阶段 0~3k, 二阶段 3k~6k)
+uv run train Mjlab-SQuRo-Tunnel --agent.logger tensorboard
+# Phase0 基线验证 (参考表结构 / 命令配对约束 / 速度公式 / 实测躯干高度)
+uv run python -B -m mjlab.scripts.Tunnel.verify_phase0_baseline
 # 期望高度轨迹图 (常量直接取自 path.py)
 uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path
 ```
@@ -152,29 +213,37 @@ CSV（160 列，30 步示例）含关节 pos/vel/acc/torque/ref、足端接触�
 1. **起点高度与期望高度不一致**：`events.reset_model` 把 root 放到 z=0.06，而实测站立
    体心 z=0.0563、期望高度 HEIGHT_NORMAL=0.055 —— 起始就有 5~6 mm 误差，`corridor_front_excess`
    开局即刻为 0.0055，奖励已经打折。候选修法是把 root 初始 z 对齐到站立高度（0.056 左右）。
-2. **Phase0 速度不是常数**：`_resample_phase0` 按 `min(h_f,h_h)/0.06` 连续缩放，且 `fixed_velocity`
-   一旦设置就变成 0（`_get_velocity(base_vel=0.0)`），回放时若同时给了 `--fixed_velocity`
-   与 Phase0 高度会得到零速度，需要用 `--fixed_height_f/h` 固定高度再看速度。
+2. **旧 checkpoint 已不兼容**：`2026-09-21_20-23-57/model_3999.pt` 是迁移前训练的
+   （参考表是"曲率维"版本），迁移后它看到的 `ref_joint_pos/vel` 语义已变，回放只能当历史对照。
 3. **Phase1 命令重采样失效**：`_update_command` 的 Phase1 分支不递减 `time_left`，
    `resampling_time_range` 形同虚设（当前无副作用，但别指望它做事）。
 4. **限高板全程无碰撞**：`env_cfg` 里占位实体 `contype=conaffinity=0`，训练时机器人可以
    直接穿过板；穿洞成功完全靠奖励塑形，没有成功/失败判据，终止只有超时与跌倒。
 5. **走廊上界缺失**：见 §4，机体上沿没有硬约束，若高度奖励权重被调低，策略可能贴板过洞。
-6. **`HEIGHT_LOW = 0.02` 的可行性未标定**：正常站立体心 0.0563，低高度要求 0.02，是
-   3.6 cm 的下降；腿长（前 0.04+0.04、后 0.04+0.036）能否在保持步态的同时压这么低、
-   有没有机体触地，需要实测（建议先跑 Phase0 高度跟踪，再决定是否抬高 `HEIGHT_LOW`）。
-7. **N=1 的洞几何不成立**：0.03 m 宽的孔容不下 0.07 m 宽的躯干，这是简化模型；真实场景
+6. **高度映射未校准（迁移后最重要的一条）**：实测"命令高度 ≠ 实际躯干重心高度"——
+   命令 0.06 实测前 51.2 / 后 53.4，命令 0.05 实测 43.4 / 45.2，**前躯干系统性偏低 8~12 mm**
+   （后躯干接近）。原因是参考轨迹前后不对称（腿长 0.080 vs 0.076、CSV 行程 67.6 vs 55.2 mm、
+   肩髋安装高度不同），不是 `height_scale` 口径问题（两种口径只差 0.3~1.5 mm）。
+   低高度档 0.02 反而是准的：冻结腿姿态实测重心 21.7 mm ≈ 目标 0.02。
+7. **`HEIGHT_LOW = 0.02` 的可行性已核实**：靠腿完全折起来（冻结姿态）可达，实测重心
+   21.7 mm、脚不离地；但**双腿同时压这么低做不到**（对称腿动作实测段中心最低 36~44 mm），
+   所以配对约束（禁止双低）是硬性前提。
+8. **N=1 的洞几何不成立**：0.03 m 宽的孔容不下 0.07 m 宽的躯干，这是简化模型；真实场景
    应把"洞"理解为限高门洞（板下空间），不要按孔洞去调参。
-8. **`Viz_Tunnel_Path.py` 里的 `OBSTACLE_X_LEFT=0.185` 与 baselink 参考偏移（x−14 / x+8+a）
+9. **`Viz_Tunnel_Path.py` 里的 `OBSTACLE_X_LEFT=0.185` 与 baselink 参考偏移（x−14 / x+8+a）
    只用于绘图**，代码中 baselink 已不作为控制点；改轨迹常量时只需改 `path.py`。
+10. **低高度阈值存在两套口径**：参考/配对用 `HEIGHT_LOW_THRESHOLD=0.04`（旧版口径），
+    速度状态判定历史上用 `(0.055+0.02)/2 = 0.0375`；Phase1 现已统一到 0.04。
 
 ## 9. 下一步计划（按优先级）
 
-- [ ] 跑通 Phase0：确认直行速度（命令 0.1 m/s）、步频 1 Hz、高度跟踪在 σ=1000 下可收敛，
-      记录 `Data/height_actual` 与 `Data/vel_actual` 的收敛曲线。
-- [ ] 标定 `HEIGHT_LOW`：从 0.02 逐步抬高（0.025 / 0.03 / 0.035）看机体是否触地，确定可行下界。
+- [ ] 跑通 Phase0（0~3k）：确认三种模式都能学会（都高正常行走 / 单低侧身），
+      观察 `Data/height_actual`、`Data/vel_actual`、`Data/corridor_*_excess` 曲线。
+- [ ] 校准高度映射（踩坑 6）：按 `height_scale` 实测曲线反解标定系数，让前/后躯干
+      都命中命令高度；这是"命令=实际"的前提，也是后续 case1/case2 的基础。
+- [ ] 参考表加"受限情况"维（case1 板底 0.050 需含脊柱、case2 板底 0.065 用匍匐），
+      脊柱轨迹按参数化实现（脊柱 CSV 不在本仓库）。
 - [ ] 修起点高度（踩坑 1）与 Phase1 重采样（踩坑 3），一次只改一件。
-- [ ] Phase1 训练前先用 `--smoke_steps` + `--enable_collision True` 检查低高度轨迹是否真的
-      能不碰板通过，再开 4000 iter 之后的课程。
+- [ ] Phase1 训练前用 `--smoke_steps` + `--enable-collision` 检查低高度轨迹能否不碰板通过。
 - [ ] 奖励权重若要做阶段调整，统一迁到 `mdp/curriculums.py` 的 `_CURVES` 形式，
       与 Slalom/Backup 的常量管理方式对齐。

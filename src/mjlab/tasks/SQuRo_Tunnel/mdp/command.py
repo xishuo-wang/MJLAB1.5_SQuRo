@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import get_training_phase
 from .indices import _MODEL_INDICES, resolve_model_indices
+from .reference import BASE_HEIGHT as BASE_HEIGHT_REF
+from .reference import HEIGHT_LOW_THRESHOLD
+from .reference import MODE_BOTH_HIGH, MODE_FRONT_LOW, MODE_REAR_LOW
 from .path import (
     FRONT_DOWN_OFF,
     FRONT_UP_OFF,
@@ -28,16 +31,15 @@ if TYPE_CHECKING:
 
 
 # 命令配置
-BASE_VEL = 0.1            # 正常高度基础速度 (m/s)
-VEL_LOW = 0.05            # 单低速度 (m/s): 前肢或后肢任一低高度
-VEL_STOP = 0.0            # 双低速度 (m/s): 前后肢均低高度
+BASE_VEL = 0.1            # (旧) 正常高度基础速度, 保留供回放对比
+VEL_LOW = 0.05            # (旧) 单低速度, 保留供回放对比
+VEL_STOP = 0.0            # 双低速度 (m/s): 前后肢均低高度 → 两条腿都冻结, 停止
 GAIT_FREQ = 1.0           # 步频 (Hz)
-HEIGHT_THRESHOLD = (HEIGHT_NORMAL + HEIGHT_LOW) / 2  # 高度状态判定阈值 = 0.0375
 
-# Phase0 高度档 (重构前接近) — 随机采样前后肢高度命令
-PHASE0_HEIGHTS = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]
-PHASE0_BASE_SPEED = 0.25  # Phase0 基础速度 (m/s, 重构前)
-PHASE0_BASE_HEIGHT = 0.06 # Phase0 速度缩放基准高度 (m, 重构前)
+# Phase0 随机高度命令: 采样模式 (0=都高 1=前低后高 2=前高后低), 低高度固定取此值
+PHASE0_HEIGHT_LOW = 0.02
+PHASE0_HEIGHT_HIGH = [0.04, 0.045, 0.05, 0.055, 0.06]   # 高高度档候选
+PHASE0_V_BASE = 0.125     # 正常高度 1 Hz 下的基础速度 (m/s), 旧版 2 Hz 基准 0.25 折合
 
 
 # 5D 命令 [vel_x, height_f, height_h, gait_freq, curvature]
@@ -103,21 +105,28 @@ class TunnelCommand(CommandTerm):
             return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
         return torch.full((n,), GAIT_FREQ, device=self.device)
 
-    # Phase0: 随机采样前后肢高度命令 + 连续速度缩放 (重构前接近)
+    # Phase0: 采样受限模式 (都高/前低/后高) — 一侧低时另一侧必高, 速度 = v_base×f×scale×(2-n)
     def _resample_phase0(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
         device = self.device
-        heights = torch.tensor(PHASE0_HEIGHTS, device=device)
-        idx_f = torch.randint(0, len(heights), (n,), device=device)
-        idx_h = torch.randint(0, len(heights), (n,), device=device)
-        h_f = heights[idx_f]
-        h_h = heights[idx_h]
+        heights = torch.tensor(PHASE0_HEIGHT_HIGH, device=device)
+        # 模式: 0=都高 1=前低后高 2=前高后低 (各 1/3), 双低不采样
+        mode = torch.randint(0, 3, (n,), device=device)
+        high = heights[torch.randint(0, len(PHASE0_HEIGHT_HIGH), (n,), device=device)]
+        low = torch.full((n,), PHASE0_HEIGHT_LOW, device=device)
+        h_f = torch.where(mode == MODE_FRONT_LOW, low, high)
+        h_h = torch.where(mode == MODE_REAR_LOW, low, high)
         self.height_f_command[env_ids] = h_f
         self.height_h_command[env_ids] = h_h
-        # 速度 = 基础速度 × min(hF,hH)/基准高度 (重构前连续缩放)
-        eff_h = torch.minimum(h_f, h_h)
-        vel = PHASE0_BASE_SPEED * eff_h / PHASE0_BASE_HEIGHT
-        self.vel_command[env_ids] = self._get_velocity(n, base_vel=0.0) if self.fixed_velocity is not None else vel * self.gait_freq_command[env_ids]
+        if self.fixed_velocity is not None:
+            self.vel_command[env_ids] = self._get_velocity(n, base_vel=0.0)
+            return
+        # n = 低高度肢体数 (0 或 1); 参与运动那一侧的高度 = 两者中的较高值
+        n_low = (mode > 0).float()
+        moving_h = torch.maximum(h_f, h_h)
+        scale = moving_h / BASE_HEIGHT_REF
+        vel = PHASE0_V_BASE * self.gait_freq_command[env_ids] * scale * (2.0 - n_low)
+        self.vel_command[env_ids] = vel
 
     # Phase1: 初始化高度命令为正常 (每步由轨迹动态覆盖), 速度 = 基础
     def _resample_phase1(self, env_ids: torch.Tensor) -> None:
@@ -150,16 +159,19 @@ class TunnelCommand(CommandTerm):
         z_h_ref = get_rear_center_height(self._env, x_h)
         self.height_f_command[:] = z_f_ref
         self.height_h_command[:] = z_h_ref
-        # 速度规则: 双正常 0.1 / 单低 0.05 / 双低 0
         if self.fixed_velocity is not None:
             self.vel_command[:] = float(self.fixed_velocity)
             return
-        low_f = z_f_ref < HEIGHT_THRESHOLD
-        low_h = z_h_ref < HEIGHT_THRESHOLD
-        vel = torch.where(low_f | low_h, torch.full_like(z_f_ref, VEL_LOW),
-                          torch.full_like(z_f_ref, BASE_VEL))
-        vel = torch.where(low_f & low_h, torch.full_like(z_f_ref, VEL_STOP), vel)
-        self.vel_command[:] = vel * self.gait_freq_command
+        # 速度 = v_base × 步频 × 高度缩放 × (2-n), n = 期望高度低于阈值的肢体数
+        low_f = z_f_ref < HEIGHT_LOW_THRESHOLD
+        low_h = z_h_ref < HEIGHT_LOW_THRESHOLD
+        n_low = low_f.float() + low_h.float()
+        moving_ref = torch.where(low_f, z_h_ref, z_f_ref)
+        moving_h = torch.where(n_low >= 2, z_f_ref, moving_ref)
+        scale = moving_h / BASE_HEIGHT_REF
+        vel = PHASE0_V_BASE * self.gait_freq_command * scale * (2.0 - n_low)
+        vel = torch.where(n_low >= 2, torch.full_like(vel, VEL_STOP), vel)
+        self.vel_command[:] = vel
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
