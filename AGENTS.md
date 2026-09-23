@@ -88,4 +88,5 @@ src/mjlab/
 | `docs/SQuRo_Backup_奖励对照.md` | 翻正任务**实验日志**（按时间追加） |
 | `docs/SQuRo_Backup_修改清单.md` | 翻正任务**状态与计划** |
 | `docs/SQuRo_Tunnel_技术细节.md` | 钻洞任务**参考手册**：洞几何、走廊口径、奖励权重、Phase0/1 速度规则、回放与未决问题 |
+| `docs/SQuRo_Hole_技术细节.md` | 钻洞**虚拟碰撞版**：6D 命令与位移位置表、4 段奖励课程、body_contact 软限高、与 Tunnel 的差异对照 |
 | `docs/source/*.rst` | 上游 MJLAB 框架的 Sphinx 文档（与本研究无关，一般不用改） |

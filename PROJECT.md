@@ -8,7 +8,8 @@
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
 | **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 已实现，见本文档下半部分 | 本文档 |
-| **SQuRo_Tunnel**（钻洞/越障） | `Mjlab-SQuRo-Tunnel` | 代码就绪（2026-08），**尚未训练** | `docs/SQuRo_Tunnel_技术细节.md` |
+| **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
+| **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-07 旧版在 mjlab 1.5 上完整恢复，待训练验证 | `docs/SQuRo_Hole_技术细节.md` |
 
 **核心创新**：走廊一致性 (Corridor Conformance) 奖励框架 — 将机器人身体建模为两个铰接矩形 (F_body + H_body)，通过可调节宽度的走廊约束统一处理 XoY 平面绕杆和 YoZ 平面钻洞两种场景。
 

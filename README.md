@@ -9,7 +9,8 @@
 | --- | --- | --- |
 | **SQuRo_Backup** 仰卧翻正 | `Mjlab-SQuRo-Backup` | 当前主线；翻正已学会，站立抖动已修复并验收 |
 | **SQuRo_Slalom** 连续绕杆 | `Mjlab-SQuRo-Slalom` | 已实现 |
-| **SQuRo_Tunnel** 钻洞/越障 | `Mjlab-SQuRo-Tunnel` | 代码就绪（2026-08），尚未训练 |
+| **SQuRo_Tunnel** 钻洞/越障（参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中 |
+| **SQuRo_Hole** 钻洞/越障（虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 旧版在 mjlab 1.5 上完整恢复，待训练验证 |
 
 ## 快速开始
 
@@ -31,4 +32,5 @@ uv run python -B -m mjlab.scripts.SQuRo_Backup_Replay --visualize none # 手调�
 | `docs/SQuRo_Backup_奖励对照.md` | 翻正任务实验日志 |
 | `docs/SQuRo_Backup_修改清单.md` | 翻正任务状态与计划 |
 | `docs/SQuRo_Tunnel_技术细节.md` | 钻洞任务参考手册（洞几何、走廊口径、奖励权重、回放与未决问题） |
+| `docs/SQuRo_Hole_技术细节.md` | 钻洞虚拟碰撞版手册（6D 命令与位移位置表、4 段课程、body_contact 软限高） |
 | `docs/source/*.rst` | 上游 MJLAB 框架文档（Sphinx，与本研究无关） |
