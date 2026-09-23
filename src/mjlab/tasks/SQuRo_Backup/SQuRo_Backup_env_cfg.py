@@ -185,5 +185,5 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=5,
-        episode_length_s=20.0,
+        episode_length_s=12.0,
     )
