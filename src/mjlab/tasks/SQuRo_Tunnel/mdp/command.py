@@ -25,9 +25,11 @@ from .path import (
     get_rear_center_height,
     sample_tunnel_positions,
 )
+
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
+
 
 
 # 命令配置
@@ -36,17 +38,19 @@ VEL_LOW = 0.05            # (旧) 单低速度, 保留供回放对比
 VEL_STOP = 0.0            # 双低速度 (m/s): 前后肢均低高度 → 两条腿都冻结, 停止
 GAIT_FREQ = 1.0           # 步频 (Hz)
 
+
+
 # Phase0 随机高度命令: 采样模式 (0=都高 1=前低后高 2=前高后低), 低高度固定取此值
 PHASE0_HEIGHT_LOW = 0.02
 PHASE0_HEIGHT_HIGH = [0.04, 0.045, 0.05, 0.055, 0.06]   # 高高度档候选
 PHASE0_V_BASE = 0.125     # 正常高度 1 Hz 下的基础速度 (m/s), 旧版 2 Hz 基准 0.25 折合
 
 
+
 # 5D 命令 [vel_x, height_f, height_h, gait_freq, curvature]
 # Tunnel: 曲率固定 0; Phase0 随机高度命令; Phase1 由高度轨迹动态生成高度与速度
 class TunnelCommand(CommandTerm):
     cfg: "TunnelCommandCfg"
-
     def __init__(self, cfg: "TunnelCommandCfg", env: "ManagerBasedRlEnv"):
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
@@ -81,29 +85,35 @@ class TunnelCommand(CommandTerm):
         t_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
 
+
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
+
 
     def _get_velocity(self, n: int, base_vel: float = BASE_VEL) -> torch.Tensor:
         if self.fixed_velocity is not None:
             return torch.full((n,), float(self.fixed_velocity), device=self.device)
         return torch.full((n,), base_vel, device=self.device)
 
+
     def _get_height_f(self, n: int) -> torch.Tensor:
         if self.fixed_height_f is not None:
             return torch.full((n,), float(self.fixed_height_f), device=self.device)
         return torch.full((n,), HEIGHT_NORMAL, device=self.device)
+
 
     def _get_height_h(self, n: int) -> torch.Tensor:
         if self.fixed_height_h is not None:
             return torch.full((n,), float(self.fixed_height_h), device=self.device)
         return torch.full((n,), HEIGHT_NORMAL, device=self.device)
 
+
     def _get_gait_freq(self, n: int) -> torch.Tensor:
         if self.fixed_gait_freq is not None:
             return torch.full((n,), float(self.fixed_gait_freq), device=self.device)
         return torch.full((n,), GAIT_FREQ, device=self.device)
+
 
     # Phase0: 采样受限模式 (都高/前低/后高) — 一侧低时另一侧必高, 速度 = v_base×f×scale×(2-n)
     def _resample_phase0(self, env_ids: torch.Tensor) -> None:
@@ -128,6 +138,7 @@ class TunnelCommand(CommandTerm):
         vel = PHASE0_V_BASE * self.gait_freq_command[env_ids] * scale * (2.0 - n_low)
         self.vel_command[env_ids] = vel
 
+
     # Phase1: 初始化高度命令为正常 (每步由轨迹动态覆盖), 速度 = 基础
     def _resample_phase1(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -137,6 +148,7 @@ class TunnelCommand(CommandTerm):
         if self.fixed_velocity is None:
             vel = vel * self.gait_freq_command[env_ids]
         self.vel_command[env_ids] = vel
+
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -148,6 +160,7 @@ class TunnelCommand(CommandTerm):
             self._resample_phase0(env_ids)
         else:
             self._resample_phase1(env_ids)
+
 
     # Phase1 每步: 根据前/后肢当前位置的期望高度, 动态更新高度命令与速度
     def _update_phase1(self) -> None:
@@ -173,6 +186,7 @@ class TunnelCommand(CommandTerm):
         vel = torch.where(n_low >= 2, torch.full_like(vel, VEL_STOP), vel)
         self.vel_command[:] = vel
 
+
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
@@ -185,6 +199,7 @@ class TunnelCommand(CommandTerm):
             self._env._tunnel_xs = tunnel_xs  # type: ignore[attr-defined]
             self._resample_command(env_ids)
         return extras
+
 
     def _update_command(self) -> None:
         phase = get_training_phase(self._env.common_step_counter)
@@ -199,8 +214,10 @@ class TunnelCommand(CommandTerm):
                 self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
             self.time_left -= self._env.step_dt
 
+
     def _update_metrics(self) -> None:
         pass
+
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:
@@ -222,10 +239,9 @@ class TunnelCommand(CommandTerm):
         z_rear = _height_from_tunnels(xs, tunnel_xs.expand(len(xs), -1), REAR_DOWN_OFF, REAR_UP_OFF).cpu().numpy()
         xs_np = xs.cpu().numpy()
         for x_i, z_f, z_r in zip(xs_np, z_front, z_rear):
-            visualizer.add_sphere(center=np.array([x_i, 0.0, z_f + z_off]), radius=0.004,
-                                  color=(0.2, 0.6, 1.0, 0.6), label=f"fref_{batch}_{x_i:.3f}")
-            visualizer.add_sphere(center=np.array([x_i, 0.0, z_r + z_off]), radius=0.004,
-                                  color=(1.0, 0.3, 0.3, 0.6), label=f"rref_{batch}_{x_i:.3f}")
+            visualizer.add_sphere(center=np.array([x_i, 0.0, z_f + z_off]), radius=0.004, color=(0.2, 0.6, 1.0, 0.6), label=f"fref_{batch}_{x_i:.3f}")
+            visualizer.add_sphere(center=np.array([x_i, 0.0, z_r + z_off]), radius=0.004, color=(1.0, 0.3, 0.3, 0.6), label=f"rref_{batch}_{x_i:.3f}")
+
 
 
 @dataclass(kw_only=True)
@@ -246,6 +262,7 @@ class TunnelCommandCfg(CommandTermCfg):
 
     viz: VizCfg = field(default_factory=VizCfg)
     class_type: type[CommandTerm] = TunnelCommand
+
 
     def build(self, env: "ManagerBasedRlEnv") -> CommandTerm:
         return self.class_type(self, env)
