@@ -11,6 +11,8 @@ from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, terminations, event
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import get_curriculum_reward_weight
+from mjlab.tasks.SQuRo_Backup.mdp.command import _GROUND_TH
 # 相位时钟与参考表同为累计口径(含前置收腿段 T0), 故 P1 名义段末就是 P1_END×λ。
 from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END as _P1_END
 from mjlab.tasks.SQuRo_Backup.mdp.config import P2_END as _P2_END
@@ -179,6 +181,134 @@ class StageRewardTests(unittest.TestCase):
         # progress_s1 必须全程生效(后段翻正是穿过 S1 门控的必要条件, 不能一起关)
         self.assertTrue((s1 > 0).all())
         torch.testing.assert_close(s1, s1[:1].expand(3))
+
+    # 给 mock 环境装上两段 body 高度。
+    # 必须同时写两份: body_link_pos_w 是塑形项读的, test_heights 是 cmd._body_height (判据) 读的;
+    # 只写一份会让"判据成立"与"塑形取值"落在不同的高度上, 测出来的对齐关系是假的。
+    def _set_body_heights(self, env, fz, hz):
+        n = len(fz)
+        pos = torch.zeros(n, 2, 3)
+        fz_t = torch.as_tensor(fz, dtype=torch.float32)
+        hz_t = torch.as_tensor(hz, dtype=torch.float32)
+        pos[:, 0, 2] = fz_t
+        pos[:, 1, 2] = hz_t
+        env.make_robot.data = NS(joint_pos=env.make_robot.data.joint_pos,
+                                 body_link_pos_w=pos)
+        cmd = env.command_manager.get_term("backup_cmd")
+        cmd.test_heights = torch.stack((fz_t, hz_t), dim=1)
+        return env
+
+    def test_s1_shape_peaks_exactly_at_s1_pose(self):
+        # [§7.12] 塑形项必须在 S1 位形 (前段倒置 u_F=-1, 后段俯卧 u_H=+1, 两段贴地) 取最大值,
+        # 且最大值恰等于权重本身 —— 否则"到达 S1"与"拿满塑形分"不是同一件事。
+        env, cmd = make_env([0])
+        cmd.test_u[:] = torch.tensor([[-1.0, 1.0]])
+        z = _GROUND_TH - 0.005
+        self._set_body_heights(env, [z], [z])
+        r = rewards.compute_s1_shape_reward(env)
+        w = get_curriculum_reward_weight(env, 'weight_s1_shape')
+        self.assertAlmostEqual(r[0].item(), w, places=5)
+
+    def test_s1_shape_is_smooth_and_has_gradient_off_pose(self):
+        # [§7.12] 关键: 位形之外**梯度不为零**。原失效模式是 S1 只由稀疏脉冲给信号,
+        # 随机探索没命中时完全无梯度。这里逐项扰动, 要求值严格下降且悬空处仍 > 0。
+        env, cmd = make_env([0] * 4)
+        cmd.test_u[:] = torch.tensor([[-1.0, 1.0], [0.0, 1.0], [-1.0, 0.0], [-1.0, 1.0]])
+        z_low, z_high = _GROUND_TH - 0.005, _GROUND_TH + 0.015
+        self._set_body_heights(env, [z_low, z_low, z_low, z_high],
+                               [z_low, z_low, z_low, z_high])
+        r = rewards.compute_s1_shape_reward(env)
+        self.assertGreater(r[0].item(), r[1].item())    # 前段偏正置 -> 降
+        self.assertGreater(r[0].item(), r[2].item())    # 后段偏仰面 -> 降
+        self.assertGreater(r[0].item(), r[3].item())    # 悬空 -> 降
+        self.assertGreater(r[3].item(), 0.0)            # 悬空仍有分, 不是 0/1 硬门
+
+    def test_s1_shape_ground_factor_decays_to_zero(self):
+        # 高度因子在 阈值+TOL 处归零, 中段是线性斜坡 (既非阶跃, 也不永不归零)
+        env, cmd = make_env([0] * 3)
+        cmd.test_u[:] = torch.tensor([[-1.0, 1.0]] * 3)
+        z0 = _GROUND_TH - 0.005
+        z_mid = _GROUND_TH + rewards.S1_SHAPE_DEPTH_TOL / 2.0
+        z_far = _GROUND_TH + rewards.S1_SHAPE_DEPTH_TOL * 3.0
+        self._set_body_heights(env, [z0, z_mid, z_far], [z0, z_mid, z_far])
+        r = rewards.compute_s1_shape_reward(env)
+        self.assertAlmostEqual(r[2].item(), 0.0, places=6)
+        self.assertGreater(r[1].item(), 0.0)
+        self.assertLess(r[1].item(), r[0].item())
+
+    def test_s1_shape_is_p1_only(self):
+        # [§7.12 硬约束 3] 只作用于 P1。若 P2/P3 仍有分, 策略可停在 S1 姿态刷分,
+        # 反而堵死 P1 -> P2 —— 正是要避免的断崖/局部最优。
+        env, cmd = make_env([0, 1, 2])
+        cmd.test_u[:] = torch.tensor([[-1.0, 1.0]] * 3)
+        z = _GROUND_TH - 0.005
+        self._set_body_heights(env, [z] * 3, [z] * 3)
+        r = rewards.compute_s1_shape_reward(env)
+        self.assertGreater(r[0].item(), 0.0)
+        self.assertAlmostEqual(r[1].item(), 0.0, places=6)
+        self.assertAlmostEqual(r[2].item(), 0.0, places=6)
+
+    def test_s1_shape_shares_spine_track_gate(self):
+        # [§7.12 硬约束 1] 与 progress_s1 同源: 乘脊柱跟踪核, 防止"抢在参考之前摆出 S1
+        # 姿态"套利 (否则时间表失去约束力 -> S1 回退)。
+        env, cmd = make_env([0])
+        cmd.test_u[:] = torch.tensor([[-1.0, 1.0]])
+        z = _GROUND_TH - 0.005
+        self._set_body_heights(env, [z], [z])
+        on_ref = rewards.compute_s1_shape_reward(env)[0].item()
+        # 把关节角推离参考 -> 脊柱跟踪核衰减 -> 塑形项随之衰减
+        env.make_robot.data = NS(joint_pos=torch.full_like(env.make_robot.data.joint_pos, 3.0),
+                                 body_link_pos_w=env.make_robot.data.body_link_pos_w)
+        off_ref = rewards.compute_s1_shape_reward(env)[0].item()
+        self.assertLess(off_ref, on_ref)
+        self.assertGreaterEqual(off_ref, 0.0)
+
+    def test_s1_shape_peak_stays_below_milestone_scale(self):
+        # [§7.12 硬约束 2] 塑形峰值必须远小于里程碑脉冲 (后者 = weight_milestone_s1/step_dt),
+        # 否则策略会为塑形分拖延 P1, 制造 P1 -> P2 断崖。
+        shape = _CURVES['weight_s1_shape'][0]
+        milestone_per_step = _CURVES['weight_milestone_s1'][0] / 0.01
+        self.assertLess(shape, milestone_per_step / 50.0)
+
+    def test_s1_shape_peak_coincides_with_s1_criterion(self):
+        # [§7.12] 最关键的几何性质: 塑形地形的高值区必须与 _check_S1 的判据区重合。
+        # 否则要么"到了判据点却拿不到塑形分"(塑形无效), 要么"塑形分满了判据还不成立"
+        # (把策略引到一个不算数的位形)。在 (u_F, u_H, z) 网格上扫一遍取最大值点。
+        import itertools
+        env, cmd = make_env([0] * 200)
+        best, best_cfg = -1.0, None
+        s1_vals = []
+        i = 0
+        for uf, uh, z in itertools.product(
+                [-1.0, -0.9, -0.5, 0.0, 0.5, 0.9, 1.0],
+                [-1.0, -0.9, -0.5, 0.0, 0.5, 0.9, 1.0],
+                [_GROUND_TH - 0.01, _GROUND_TH - 0.002, _GROUND_TH + 0.005,
+                 _GROUND_TH + 0.02, _GROUND_TH + 0.06]):
+            cmd.test_u[:] = torch.tensor([[uf, uh]] * 200)
+            self._set_body_heights(env, [z] * 200, [z] * 200)
+            r = rewards.compute_s1_shape_reward(env)[0].item()
+            if r > best:
+                best, best_cfg = r, (uf, uh, z)
+            if cmd._check_S1()[0].item():
+                s1_vals.append(r)
+            i += 1
+        # 峰值点必须落在 S1 判据内 (前段超阈倒置 + 后段超阈正置 + 两段贴地)
+        uf, uh, z = best_cfg
+        thr = cmd._pose_cos_threshold
+        self.assertLessEqual(uf, -thr, f"峰值前段应超阈倒置, 实际 u_F={uf}")
+        self.assertGreaterEqual(uh, thr, f"峰值后段应超阈正置, 实际 u_H={uh}")
+        self.assertLess(z, _GROUND_TH, f"峰值高度应低于贴地阈值, 实际 {z}")
+        # 并直接确认该配置确实被 _check_S1 判为 S1 (清掉姿态缓存, 强制按 test_u 重算)
+        cmd.test_u[:] = torch.tensor([[uf, uh]] * 200)
+        self._set_body_heights(env, [z] * 200, [z] * 200)
+        cmd._pose_cache = None
+        cmd._pose_cos_cache = None
+        self.assertTrue(bool(cmd._check_S1()[0].item()), "塑形峰值点必须满足 S1 判据")
+        # 判据区内每一点的塑形值都接近全局峰值 —— 地形不把策略引到"分高但不算数"的位形。
+        # 容差 90%: 网格是粗扫, 区内最边角的采样点本就不会正好在峰上。
+        self.assertTrue(s1_vals, "扫参里没有任何 S1 判据点, 网格需要加大")
+        self.assertGreater(min(s1_vals), 0.9 * best,
+                           "S1 判据区内的塑形值应接近全局峰值")
 
     def test_p1_shortcut_no_longer_beats_s1(self):
         # [§7.8+§7.9] 关键性质: 在 P1 内, "正确 S1 姿态"的即时区间收益不得低于"提前双正置"。

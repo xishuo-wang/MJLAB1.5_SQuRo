@@ -96,6 +96,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),
         "milestone_success": RewardTermCfg(func=mdp.compute_task_success_milestone_reward, weight=1.0),
         "progress_s1": RewardTermCfg(func=mdp.compute_s1_progress_reward, weight=1.0),
+        "s1_shape": RewardTermCfg(func=mdp.compute_s1_shape_reward, weight=1.0),
         "progress_s2": RewardTermCfg(func=mdp.compute_s2_progress_reward, weight=1.0),
         "progress_s3": RewardTermCfg(func=mdp.compute_s3_progress_reward, weight=1.0),
         "stand_still": RewardTermCfg(func=mdp.compute_stand_still_reward, weight=1.0),

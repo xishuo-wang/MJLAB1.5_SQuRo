@@ -3,6 +3,7 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .command import BackupCommand
+from .command import _GROUND_TH as _S1_GROUND_TH
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
@@ -29,6 +30,9 @@ TRACK_REF_MSE_SCALE = 3.0         # 二次跟踪代价的 MSE 归一化尺度
 # 系数同时决定核的陡度: 越大越平缓、在低速段越接近常数项。校准见技术细节的站立奖励一节。
 STAND_STILL_FULL_SPEED_RATIO = 2.0
 STAND_STILL_FULL_SPEED = STAND_STILL_FULL_SPEED_RATIO * STAND_VEL_MEAN_MAX
+# S1 姿态塑形项: 高度因子的线性衰减宽度 (m)。取 0.02 而不是 0 —— 纯 hinge 在原位形外
+# 梯度为零, 正是"发现不了"的成因; 衰减到 0 的高度 = 阈值 + 本值。标定见技术细节 §7.12。
+S1_SHAPE_DEPTH_TOL = 0.02
 
 
 
@@ -138,6 +142,39 @@ def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     _, progress = command.standing_state()
     weight = get_curriculum_reward_weight(env, "weight_progress_s3")
     return weight * progress * (command.phase == 2)
+
+
+
+# 高度因子: 低于阈值给 1, 之后线性衰减, 到 阈值+TOL 归零。用斜坡而不是 hinge, 是为了在
+# 阈值之外仍留梯度 (见 S1_SHAPE_DEPTH_TOL)。两侧都高出阈值时因子为 0。
+def _s1_ground_factor(z_front: torch.Tensor, z_back: torch.Tensor) -> torch.Tensor:
+    tol = S1_SHAPE_DEPTH_TOL
+    f_front = (1.0 - (z_front - _S1_GROUND_TH).clamp(min=0.0) / tol).clamp(0.0, 1.0)
+    f_back = (1.0 - (z_back - _S1_GROUND_TH).clamp(min=0.0) / tol).clamp(0.0, 1.0)
+    return f_front * f_back
+
+
+
+# S1 姿态塑形奖励 — 把"前段仰面 + 后段俯卧 + 两段贴地"这一窄位形变成连续地形。
+# 动机: S1 是 P1 唯一的出口, 而它只由稀疏里程碑给信号, 实测两次同代码 run 的 S1 候选率
+# 差 260 倍 (1.8% vs 0.007%) —— 命中与否取决于随机探索, 不是策略质量。本项给出全程存在的
+# 梯度, 使"S1 姿态"成为可按下降方向到达的目标, 而不是等一次幸运采样。
+# 四个因子都是 [0,1] 且单调, 乘积的极大值恰在 S1 位形本身, 因此不引入新的局部最优。
+# **只作用于 P1** (phase==0): 推进到 P2 后立刻归零, 否则策略可以停在 S1 姿态刷分,
+# 反而堵死 P1 -> P2 (即"断崖/局部最优"的成因)。乘脊柱跟踪核与 progress_s1 同源, 防止
+# 抢在参考之前摆出 S1 姿态套利。依据与标定见技术细节 §7.12。
+def compute_s1_shape_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    asset: Entity = env.scene["robot"]
+    u = command._get_pose_cos()                      # [env, segment], +1 = 俯卧
+    front_inverted = ((1.0 - u[:, 0]) / 2.0).clamp(0.0, 1.0)
+    back_upright = ((1.0 + u[:, 1]) / 2.0).clamp(0.0, 1.0)
+    heights = asset.data.body_link_pos_w
+    ground = _s1_ground_factor(heights[:, _MODEL_INDICES.f_body_id, 2],
+                               heights[:, _MODEL_INDICES.h_body_id, 2])
+    weight = get_curriculum_reward_weight(env, "weight_s1_shape")
+    shape = front_inverted * back_upright * ground
+    return weight * shape * (command.phase == 0) * _spine_track_kernel(env)
 
 
 
