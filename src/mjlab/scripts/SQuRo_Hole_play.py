@@ -1,4 +1,4 @@
-﻿# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
+# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
 # uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 50 --no-video
 
 import re
@@ -43,6 +43,7 @@ class PlayConfig:
     fixed_velocity: float | None = None
     fixed_height_F: float | None = None
     fixed_height_H: float | None = None
+    enable_collision: bool | None = None   # None = 按 cfg (训练默认关, 阶段 4 才开)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
 
 
@@ -264,6 +265,12 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_height_F = cfg.fixed_height_F  # type: ignore[attr-defined]
         if cfg.fixed_height_H is not None:
             cmd_cfg.fixed_height_H = cfg.fixed_height_H  # type: ignore[attr-defined]
+
+    # 限高板碰撞开关 (编译期固化): 显式传入优先, 否则用 cfg 默认
+    if cfg.enable_collision is not None:
+        from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import configure_hole_collision
+        configure_hole_collision(env_cfg, enable_collision=cfg.enable_collision)
+        print(f"[INFO] 限高板碰撞 = {'开' if cfg.enable_collision else '关'}")
 
     suffix = f"-it{extract_iter_from_checkpoint(resume_path)}" if resume_path else ""
     if video_name is not None:

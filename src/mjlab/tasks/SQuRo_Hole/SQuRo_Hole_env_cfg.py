@@ -29,7 +29,8 @@ HOLE_HALF_WIDTH = 0.1
 HOLE_HALF_THICKNESS = 0.005
 
 
-# 建三块限高板实体 (contype/conaffinity 在编译期固化, 运行期改无效)
+# 建三块限高板实体 (contype/conaffinity 在编译期固化, 运行期改无效;
+# 阶段 3 不开碰撞, 阶段 4 开, 边界处由 runner 重建环境)
 def build_hole_entities(enable_collision: bool) -> dict:
     mask = 1 if enable_collision else 0
     entities: dict = {}
@@ -42,6 +43,19 @@ def build_hole_entities(enable_collision: bool) -> dict:
             conaffinity=mask,
         )
     return entities
+
+
+# 改写环境配置里的限高板碰撞开关 (必须在建环境之前调用; 换开关用)
+def configure_hole_collision(env_cfg, enable_collision: bool) -> None:
+    entities = {k: v for k, v in env_cfg.scene.entities.items()
+                if not k.startswith("hole")}
+    env_cfg.scene.entities = {**entities, **build_hole_entities(enable_collision)}
+
+
+# 当前配置里限高板的碰撞开关 (从实体本身读, 不缓存"以为改成了什么")
+def hole_collision_enabled(env) -> bool:
+    entity = env.scene.entities.get("hole1")
+    return bool(entity is not None and entity.collision_enabled)
 
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -139,8 +153,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             )
         }
 
-    # 完整恢复: 限高板参与碰撞 (mjwarp 在编译期固化碰撞对, 运行期无法开关)
-    entities = {"robot": SQURO_ROBOT_CFG, **build_hole_entities(enable_collision=True)}
+    # 限高板碰撞: 阶段 1~3 编译为关 (阶段 3 只有 body_contact 软约束), 阶段 4 由 runner 重建为开
+    entities = {"robot": SQURO_ROBOT_CFG, **build_hole_entities(enable_collision=False)}
 
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(

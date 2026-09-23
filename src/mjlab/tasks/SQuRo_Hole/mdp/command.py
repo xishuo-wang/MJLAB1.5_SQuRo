@@ -14,10 +14,17 @@ if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 阶段定义 (全局步数): 阶段 1/2 各占 1 个 iter, 其余全部走阶段 3 的位置表
-STAGE1_END = 1 * 24
-STAGE2_END = 1 * 24
-STAGE3_END = 4000 * 24
+# 四阶段课程 (全局步数; 与 rewards 课程阈值 1000/2000/3000 iter 同刻度)
+# 1) 0~1k   随机中等高度 [0.04..0.06], 不开碰撞
+# 2) 1k~2k  随机全高度 (含 0.02, 配对约束), 不开碰撞
+# 3) 2k~3k  位置表 + body_contact 软约束, 实体碰撞关
+# 4) 3k~4k  位置表 + 实体碰撞开 (编译期固化, 由 runner 在边界重建环境)
+STAGE1_END_ITER = 1000
+STAGE2_END_ITER = 2000
+STAGE3_END_ITER = 3000
+STAGE1_END = STAGE1_END_ITER * 24
+STAGE2_END = STAGE2_END_ITER * 24
+STAGE3_END = STAGE3_END_ITER * 24
 
 BASE_HEIGHT = 0.06                     # 基准高度 (m)
 BASE_SPEED = 0.25                      # 基准速度 (m/s, 对应基准高度)
@@ -49,13 +56,20 @@ def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIG
     return target_height / base_height
 
 
-# 按全局步数取命令阶段
+# 按全局步数取命令阶段 (1~4)
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_END:
         return 1
     if step_counter < STAGE2_END:
         return 2
-    return 3
+    if step_counter < STAGE3_END:
+        return 3
+    return 4
+
+
+# 是否跟随位置表: 阶段 3/4
+def stage_uses_schedule(stage: int) -> bool:
+    return stage >= 3
 
 
 # 6D 命令 [vel_x, vel_y, vel_z, height_F, height_H, angle]
@@ -110,15 +124,15 @@ class HoleCommand(CommandTerm):
             return True
         if self.use_height_schedule and self.height_schedule:
             return True
-        return stage == 3
+        return stage_uses_schedule(stage)
 
-    # 取位置/时间表 (cfg 位置表 > cfg 时间表 > 阶段3内置表)
+    # 取位置/时间表 (cfg 位置表 > cfg 时间表 > 阶段3/4 内置表)
     def _get_schedule(self, stage: int) -> List[Tuple[float, float, float]]:
         if self.use_position_schedule and self.position_schedule:
             return self.position_schedule
         if self.use_height_schedule and self.height_schedule:
             return self.height_schedule
-        if stage == 3:
+        if stage_uses_schedule(stage):
             return STAGE3_POSITION_SCHEDULE
         return []
 

@@ -60,6 +60,11 @@ class HoleEntity(Entity):
         else:
             self.disable_collision()
     
+    # 碰撞是否开启 (编译期决定, 运行期不可改)
+    @property
+    def collision_enabled(self) -> bool:
+        return int(self.cfg.contype) > 0
+
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec

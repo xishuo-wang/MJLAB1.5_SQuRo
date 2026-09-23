@@ -5,6 +5,7 @@ import torch
 
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import hole_collision_enabled
 from mjlab.tasks.SQuRo_Hole.mdp.command import (
     HEIGHT_THRESHOLD,
     STAGE3_POSITION_SCHEDULE,
@@ -49,7 +50,9 @@ def check_command() -> None:
     print(f"     reset 后命令: vel_x {float(cmd[0, 0]):.3f} m/s, "
           f"h_F {float(cmd[0, 3]) * 1000:.0f} mm, h_H {float(cmd[0, 4]) * 1000:.0f} mm (期望第一段 20/50)")
     print(f"[3] 命令阶段边界: step 0 → stage {get_current_stage(0)}, "
-          f"step 24 → stage {get_current_stage(24)}, step 72000 → stage {get_current_stage(72000 * 1)}")
+          f"step 24 → stage {get_current_stage(24)}, "
+          f"step 48000 → stage {get_current_stage(48000)}, "
+          f"step 72000 → stage {get_current_stage(72000)}")
 
     # 位移推进查表: 直接把机器人 x 写远, 看命令是否切到下一段
     robot = env.scene["robot"]
@@ -93,6 +96,8 @@ def check_env() -> None:
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     obs = env.reset()
     obs_dict = obs[0] if isinstance(obs, tuple) else obs
+    print(f"     试建环境: 限高板碰撞={hole_collision_enabled(env)} "
+          f"(阶段 1~3 应为 False; 阶段 4 由 runner 重建为 True)")
     print(f"[6] actor 观测 {tuple(obs_dict['actor'].shape)} (期望 201), "
           f"critic {tuple(obs_dict['critic'].shape)}")
     print(f"     动作维度 {env.action_space.shape[-1]}, 参考表被控关节数 {ACTUATOR_NUM}")
@@ -107,8 +112,8 @@ def main() -> None:
     check_command()
     check_curriculum()
     check_env()
-    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位、命令走 8 段位置表、"
-          "碰撞常开、观测 201 维即为 Hole 任务基线")
+    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位、四阶段命令 (1k/2k 随机高度, 3k 位置表)、"
+          "实体碰撞阶段 1~3 关 / 阶段 4 开、观测 201 维即为 Hole 任务基线")
 
 
 if __name__ == "__main__":
