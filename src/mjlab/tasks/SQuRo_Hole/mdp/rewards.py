@@ -10,7 +10,9 @@ from .curriculums import get_curriculum_reward_weight
 from .command import HEIGHT_THRESHOLD, BASE_HEIGHT
 from .reference import (
     F_BODY_ID,
+    FRONT_SEG_SITE_NAMES,
     H_BODY_ID,
+    REAR_SEG_SITE_NAMES,
     REF_FRONT_IDS,
     REF_HIND_IDS,
     REF_SPINE_IDS,
@@ -29,6 +31,19 @@ _REF_COL_FRONT = (0, 1, 2, 3)
 _REF_COL_HIND = (4, 5, 6, 7)
 _REF_COL_SPINE = (8, 9, 10, 11)
 _JOINT_ORDER = REF_FRONT_IDS + REF_HIND_IDS + REF_SPINE_IDS
+
+# 虚拟碰撞采样 site (前段 9 + 后段 9), 首次使用时按名字解析
+_SEG_SITE_IDS: tuple[int, ...] | None = None
+
+
+# 解析前后段的采样 site 索引 (9 + 9)
+def _resolve_seg_sites(asset: Entity) -> tuple[int, ...]:
+    global _SEG_SITE_IDS
+    if _SEG_SITE_IDS is None:
+        site_ids, _ = asset.find_sites(
+            list(FRONT_SEG_SITE_NAMES) + list(REAR_SEG_SITE_NAMES), preserve_order=True)
+        _SEG_SITE_IDS = tuple(site_ids)
+    return _SEG_SITE_IDS
 
 
 # 取 12 个被控关节的实际位置
@@ -224,6 +239,7 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     device = env.device
     num_envs = env.num_envs
+    seg_site_ids = _resolve_seg_sites(asset)
 
     # 三块限高板的 x 区间与板底高度 (与 env_cfg 的 Hole1/2/3 及 docs 对齐)
     obs_x_min = torch.tensor([0.185, 0.5, 1.185], device=device)
@@ -232,17 +248,20 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
     body_x = asset.data.body_link_pos_w[:, [F_BODY_ID, H_BODY_ID], 0]
     in_obs = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
+    assert in_obs.shape[0] == num_envs, (
+        f"[Hole] body_contact 形状不一致: env.num_envs={num_envs}, "
+        f"asset batch={in_obs.shape[0]}, site batch={asset.data.site_pos_w.shape[0]}")
     if not in_obs.any():
         return torch.zeros(num_envs, device=device)
 
     active_z_thresh = in_obs.float() @ obs_z_thresh
-    in_any_obs = in_obs.any(dim=-1)
-    # 每段 9 个采样 site: 前段 [0..8], 后段 [12..20]
-    combined_site_ids = list(range(9)) + list(range(12, 21))
-    all_sites_z = asset.data.site_pos_w[:, combined_site_ids, 2].view(num_envs, 2, 9)
+    # in_any_obs: [N, 2] 每段是否进入任一块板; reshape 成 [N, 2, 1] 以广播到 9 个 site
+    in_any_obs = in_obs.any(dim=-1).reshape(num_envs, 2).unsqueeze(-1)
+    # 每段 9 个采样 site: 按名字解析 (旧版硬编码 index 已随模型变化, 见 docs §5)
+    all_sites_z = asset.data.site_pos_w[:, list(seg_site_ids), 2].view(num_envs, 2, 9)
 
     excess = torch.clamp(all_sites_z - active_z_thresh.unsqueeze(-1), min=0.0)
-    excess = excess * in_any_obs.unsqueeze(-1).unsqueeze(-1)
+    excess = excess * in_any_obs
     total_penalty = excess.sum(dim=(1, 2))
 
     weight = get_curriculum_reward_weight(env, "body_contact")

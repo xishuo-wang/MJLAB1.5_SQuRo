@@ -63,6 +63,11 @@ ACTUATOR_NUM = len(REF_FRONT_IDS) + len(REF_HIND_IDS) + len(REF_SPINE_IDS)
 F_BODY_ID = 4
 H_BODY_ID = 24
 
+# 虚拟碰撞采样 site: 前段 F_body_1..9, 后段 H_body_1..9 (旧版硬编码 0..8 / 12..20 是旧模型布局,
+# 当前模型 12/13 已变成足端 site, 故改为按名字解析, 见 docs §5)
+FRONT_SEG_SITE_NAMES = tuple(f"F_body_{i}_site" for i in range(1, 10))
+REAR_SEG_SITE_NAMES = tuple(f"H_body_{i}_site" for i in range(1, 10))
+
 # 受限模式: 0 = 前后肢都高, 1 = 前肢低, 2 = 后肢低
 NUM_MODES = 3
 
