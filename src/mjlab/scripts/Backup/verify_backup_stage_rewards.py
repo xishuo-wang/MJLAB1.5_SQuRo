@@ -1504,19 +1504,29 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(cfg.corridor_width, C.CORRIDOR_WIDTH_START, places=12)
 
     def test_play_corridor_flag_precedence(self):
-        # 回放的墙宽/碰撞取值优先级: 命令行 > 检查点记录 > 按轮次推算;
-        # 且阶段一必须强制无碰撞 (即使检查点记录里是"开")。
+        # 回放的墙宽/碰撞取值优先级: 命令行 > 检查点记录 > 按轮次推算。
+        # 检查点记录优先于阶段推算 —— 记录是训练当时真实编译生效的值，而"阶段"是拿文件名
+        # 轮次猜的，改名或恰好落在阶段边界上就会猜错。
         import mjlab.scripts.SQuRo_Backup_play as play
         from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
         Cfg = NS
 
-        # 阶段一: 检查点记录说"开碰撞", 也必须回放成无碰撞
+        # 阶段一 + 记录说"无碰撞": 回放成无碰撞 (2999 的 pt 走无碰撞实现)
+        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
+                                    {"corridor_width": 0.40, "corridor_collision": False},
+                                    phase=0, align_iter=2999)
+        self.assertAlmostEqual(got[0], 0.40, places=12)
+        self.assertIs(got[1], False)
+        self.assertEqual(got[2], "检查点记录")
+        self.assertEqual(got[3], "检查点记录")
+
+        # 阶段一但记录说"开碰撞": 以记录为准 (记录是实际编译值, 阶段是猜的)
         got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
                                     {"corridor_width": 0.5, "corridor_collision": True},
                                     phase=0, align_iter=100)
-        self.assertEqual(got[0], 0.5)
-        self.assertIs(got[1], False)
-        self.assertEqual(got[3], "阶段一强制关")
+        self.assertAlmostEqual(got[0], 0.5, places=12)
+        self.assertIs(got[1], True)
+        self.assertEqual(got[3], "检查点记录")
 
         # 阶段二: 用检查点记录的实际值, 而不是按轮次反推
         got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
@@ -1525,7 +1535,7 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(got[0], 0.3499, places=6)
         self.assertEqual(got[2], "检查点记录")
 
-        # 命令行覆盖一切
+        # 命令行覆盖一切 (回放脚本的开关必须能压过自动配置)
         got = play.resolve_corridor(Cfg(corridor_width=0.25, enable_collision=False),
                                     {"corridor_width": 0.5, "corridor_collision": True},
                                     phase=1, align_iter=4000)
@@ -1534,12 +1544,19 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(got[2], "命令行")
         self.assertEqual(got[3], "命令行")
 
+        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=True),
+                                    {"corridor_width": 0.5, "corridor_collision": False},
+                                    phase=0, align_iter=100)
+        self.assertIs(got[1], True)
+        self.assertEqual(got[3], "命令行")
+
         # 无检查点记录时按轮次推算 (2999 的 pt 属于阶段一 ⇒ 无碰撞)
         got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
                                     {}, phase=0, align_iter=2989)
         self.assertAlmostEqual(got[0], C.CORRIDOR_WIDTH_START, places=12)
         self.assertIs(got[1], False)
         self.assertEqual(got[2], "按轮次推算")
+        self.assertEqual(got[3], "阶段一默认关")
 
 
 if __name__ == '__main__':

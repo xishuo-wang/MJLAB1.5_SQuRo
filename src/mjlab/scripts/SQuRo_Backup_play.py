@@ -44,7 +44,7 @@ class PlayConfig:
     record_data: bool = True
     # Backup 任务相关配置
     fixed_time_scale: float | None = 1
-    # 受限空间: None = 按检查点轮次自动判定 (阶段一关碰撞, 阶段二开)
+    # 受限空间: None = 自动 (命令行 > 检查点记录 > 按轮次推算), 显式值可直接压过自动配置
     enable_collision: bool | None = None
     # 受限空间: None = 按课程取墙间距, 指定则覆盖为固定值
     corridor_width: float | None = None
@@ -61,10 +61,11 @@ def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
 
 
 # 解析回放该用的墙宽与碰撞开关。优先顺序:
-#   1. 命令行显式指定 (--corridor-width / --enable-collision)
+#   1. 命令行显式指定 (--corridor-width / --enable-collision) —— 开关必须能压过自动配置
 #   2. 检查点里保存的实际编译值 (训练时真实生效的配置)
 #   3. 按轮次推算的课程档位
-# 阶段一 (phase==0) 是硬约束: 无论检查点写了什么都必须无碰撞。
+# 检查点记录要压过阶段推算: "阶段"是拿文件名轮次猜的, 而记录是当时真正编译进仿真的值。
+# 阶段一(3k 轮前)无碰撞由训练侧保证 (该阶段检查点记录的碰撞恒为 False)。
 def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[float, bool, str, str]:
     if cfg.corridor_width is not None:
         width, width_src = float(cfg.corridor_width), "命令行"
@@ -72,12 +73,15 @@ def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[flo
         width, width_src = float(saved["corridor_width"]), "检查点记录"
     else:
         width, width_src = get_corridor_width_for_iter(align_iter), "按轮次推算"
+    # 碰撞: 命令行 > 检查点记录 > 按阶段推算。
+    # 检查点记录优先于阶段推算: 记录是训练当时**真实编译生效**的值, 而"阶段"是靠文件名
+    # 轮次减 10 猜出来的, 检查点被改名或恰在阶段边界上就会猜错。
     if cfg.enable_collision is not None:
         collision, coll_src = bool(cfg.enable_collision), "命令行"
-    elif phase == 0:
-        collision, coll_src = False, "阶段一强制关"
     elif saved.get("corridor_collision") is not None:
         collision, coll_src = bool(saved["corridor_collision"]), "检查点记录"
+    elif phase == 0:
+        collision, coll_src = False, "阶段一默认关"
     else:
         collision, coll_src = True, "阶段二默认开"
     return width, collision, width_src, coll_src
@@ -87,14 +91,24 @@ def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[flo
 # 读取检查点里保存的受限空间实际编译值 (宽墙/碰撞开关), 供回放精确复现。
 # 不要用轮次反推: 训练走的是离散档位, 反推会与实际物理配置不一致。
 def read_corridor_state(checkpoint_path: Path) -> dict:
+    return _read_infos(checkpoint_path).get("corridor_state") or {}
+
+
+
+# 读取检查点里记录的 env_state (含训练时的 common_step_counter), 比文件名轮次可靠
+def read_env_state(checkpoint_path: Path) -> dict:
+    return _read_infos(checkpoint_path).get("env_state") or {}
+
+
+
+def _read_infos(checkpoint_path: Path) -> dict:
     try:
         loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     except Exception as exc:
-        print(f"[WARN] 读取检查点受限空间状态失败, 将按轮次推算: {exc}")
+        print(f"[WARN] 读取检查点信息失败, 将按文件名轮次推算: {exc}")
         return {}
     infos = loaded.get("infos") or {}
-    state = infos.get("corridor_state")
-    return state if isinstance(state, dict) else {}
+    return infos if isinstance(infos, dict) else {}
 
 
 
@@ -403,6 +417,10 @@ def run_play(cfg: PlayConfig):
     # 取值优先顺序: 命令行显式指定 > 检查点里保存的实际编译值 > 按轮次推算的课程档位。
     train_iter = extract_iter_from_checkpoint(resume_path) if resume_path is not None else 0
     align_iter = max(0, train_iter - 10)          # 与 env 内部课程口径对齐
+    # 检查点记录了训练时的 common_step_counter 时以它为准 (比文件名可靠)
+    env_state = read_env_state(resume_path) if resume_path is not None else {}
+    if env_state.get("common_step_counter") is not None:
+        align_iter = int(env_state["common_step_counter"]) // _STEPS_PER_ITER
     align_step = align_iter * _STEPS_PER_ITER
     phase = get_training_phase(align_step)
     saved = read_corridor_state(resume_path) if resume_path is not None else {}
