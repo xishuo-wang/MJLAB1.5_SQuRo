@@ -1,6 +1,7 @@
 from mjlab.envs.mdp import * 
 
 from .command import * 
+from .config import *
 from .curriculums import *
 from .events import *  
 from .entity import *
