@@ -1,11 +1,13 @@
 # 训练循环内受限空间重建回归：不建真环境，用假 env/wrapper 跑一次真实的 learn()。
-# 覆盖三个曾在审查中发现失效的环节：重建时机、新环境接管 common_step_counter、观测刷新与统计清零。
+# **关键**：假环境里放的是真的 RestrictedSpaceEntityCfg，所以断言读的是"实际编译进仿真的
+# 配置"，而不是 runner 自己缓存的变量 —— 只查 runner 变量会把"变量对、环境错"测成通过。
 import unittest
 from unittest.mock import patch
 
 import torch
 
 from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
+from mjlab.tasks.SQuRo_Backup.mdp import entity as E
 from mjlab.tasks.SQuRo_Backup.rl import runner as runner_mod
 from mjlab.tasks.SQuRo_Backup.rl.runner import SQuRoBackupOnPolicyRunner
 
@@ -14,18 +16,33 @@ from mjlab.tasks.SQuRo_Backup.rl.runner import SQuRoBackupOnPolicyRunner
 EVENTS: list[str] = []
 
 
+def compiled_state(env) -> tuple[float, bool]:
+    # 读"实际编译值"的唯一合法途径：场景实体本身 (宽度取自 cfg, 碰撞取自 contype)
+    ent = env.unwrapped.scene.entities["restricted_space"]
+    return float(ent.cfg.corridor_width), bool(ent.collision_enabled)
+
+
 class FakeEnv:
     # 裸环境：只提供 runner 与包装器真正读到的接口
-    def __init__(self, step_count: int = 0, tag: str = "initial"):
+    def __init__(self, step_count: int = 0, tag: str = "initial",
+                 width: float = E.DEFAULT_CORRIDOR_WIDTH, collision: bool = False,
+                 fixed: bool = False):
         self.device = "cpu"
         self.num_envs = 2
         self.max_episode_length = 1000
         self.episode_length_buf = torch.zeros(2, dtype=torch.long)
         self.render_mode = None
         self.tag = tag
+        # 真的实体：用生产代码建, 所以断言读到的就是"编译进仿真的配置"
+        cfg = E.build_restricted_space_cfg(enable_collision=collision,
+                                           corridor_width=width, fixed_width=fixed)
+        entity = cfg.build()
         self._state = type("U", (), {
             "common_step_counter": step_count,
-            "scene": type("S", (), {"num_envs": 2})(),
+            "scene": type("S", (), {
+                "num_envs": 2,
+                "entities": {"restricted_space": entity},
+            })(),
             "render_mode": None,
             "cfg": "CFG",
         })()
@@ -33,6 +50,10 @@ class FakeEnv:
     @property
     def unwrapped(self):
         return self._state
+
+    @property
+    def scene(self):
+        return self._state.scene
 
     @property
     def common_step_counter(self):
@@ -71,6 +92,10 @@ class FakeWrapper:
     @property
     def unwrapped(self):
         return self.env
+
+    @property
+    def scene(self):
+        return self.env.scene
 
     @property
     def common_step_counter(self):
@@ -141,10 +166,13 @@ class FakeLogger:
         pass
 
 
-# 重建模板需要 scene.num_envs 与 events 两个接口
+# 重建模板：需要 scene.num_envs、scene.entities 与 events 三个接口
 def fake_env_cfg():
     return type("Cfg", (), {
-        "scene": type("S", (), {"num_envs": 2})(),
+        "scene": type("S", (), {
+            "num_envs": 2,
+            "entities": {"restricted_space": E.build_restricted_space_cfg(True, 0.40)},
+        })(),
         "events": {"init_restricted_space": None, "reset_all": None},
     })()
 
@@ -155,31 +183,39 @@ class CorridorRebuildTest(unittest.TestCase):
         self.built: list[FakeEnv] = []
 
     def _ctor(self, cfg=None, device=None, render_mode=None):
-        env = FakeEnv(tag=f"new{len(self.built)}")
+        # 模拟真实编译：按 configure_restricted_space 写进 env_cfg 的值建实体
+        ent_cfg = cfg.scene.entities["restricted_space"]
+        env = FakeEnv(tag=f"new{len(self.built)}",
+                      width=float(ent_cfg.corridor_width),
+                      collision=bool(ent_cfg.contype > 0),
+                      fixed=bool(ent_cfg.fixed_width))
         self.built.append(env)
         return env
 
     def _patches(self):
+        # 真的 configure_restricted_space：让假重建路径与生产代码写的是同一份 env_cfg
         return (
             patch.object(runner_mod, "RslRlVecEnvWrapper", FakeWrapper),
             patch.object(runner_mod, "ManagerBasedRlEnv", self._ctor),
-            patch.object(runner_mod.mdp_entity, "configure_restricted_space",
-                         lambda *a, **k: None),
         )
 
     # 直接给实例灌属性，绕过真实父类 __init__（不建环境）
     def _build(self, start_iter: int, width: float, collision: bool,
-               fixed: bool = False) -> SQuRoBackupOnPolicyRunner:
+               fixed: bool = False, fixed_by_cli: bool | None = None
+               ) -> SQuRoBackupOnPolicyRunner:
         r = SQuRoBackupOnPolicyRunner.__new__(SQuRoBackupOnPolicyRunner)
         r._corridor_device = "cpu"
         r._corridor_env_cfg = fake_env_cfg()
         r._corridor_num_envs = 2
         r._corridor_clip_actions = None
         r._corridor_render_mode = None
-        r._corridor_width = width
-        r._corridor_collision = collision
+        r._corridor_start_width = width
         r._corridor_fixed = fixed
-        r.env = FakeWrapper(FakeEnv(step_count=start_iter * C._STEPS_PER_ITER, tag="old"))
+        r._corridor_fixed_by_cli = fixed if fixed_by_cli is None else fixed_by_cli
+        # 启动环境按 width/collision 编译 (与 env_cfg 初始配置同源)
+        r.env = FakeWrapper(FakeEnv(step_count=start_iter * C._STEPS_PER_ITER,
+                                    tag="old", width=width, collision=collision,
+                                    fixed=fixed))
         r.alg = FakeAlg()
         r.logger = FakeLogger()
         r.cfg = {
@@ -197,20 +233,20 @@ class CorridorRebuildTest(unittest.TestCase):
 
     def test_no_rebuild_before_stage_boundary(self):
         r = self._build(2990, 0.40, False)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(6)
         self.assertEqual(len(self.built), 0)
-        self.assertEqual((r._corridor_width, r._corridor_collision), (0.40, False))
+        self.assertEqual(compiled_state(r.env), (0.40, False))
 
     def test_rebuild_opens_collision_across_stage_boundary(self):
         # 训练只调用一次 learn(6000)，阶段切换发生在循环内部 —— 只在入口判断会漏掉
         r = self._build(2990, 0.40, False)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(12)
         self.assertEqual(len(self.built), 1)
-        self.assertIs(r._corridor_collision, True)
+        self.assertEqual(compiled_state(r.env), (0.40, True))
         close_at = next(i for i, e in enumerate(EVENTS) if e.startswith("close("))
         self.assertTrue(any(e.startswith("get_obs(new") for e in EVENTS[close_at:]),
                         "重建后必须重新取观测，旧环境的 obs 不能继续用")
@@ -218,8 +254,8 @@ class CorridorRebuildTest(unittest.TestCase):
     def test_counter_survives_rebuild(self):
         # 新环境从 0 起算；不接管计数器会在下一轮读到阶段一，把刚开的碰撞又关回去
         r = self._build(2990, 0.40, False)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(12)
             counter = int(r.env.unwrapped.common_step_counter)
         self.assertEqual(len(self.built), 1, "不得反复重建")
@@ -229,19 +265,19 @@ class CorridorRebuildTest(unittest.TestCase):
     def test_rebuild_follows_width_ladder(self):
         # 0.35 -> 0.30 的切档点实测在 iter 3750 (相邻档中点)
         r = self._build(3749, 0.35, True)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(2)
         self.assertEqual(len(self.built), 1)
-        self.assertAlmostEqual(r._corridor_width,
-                               C.get_corridor_width_for_iter(3750), places=12)
-        self.assertAlmostEqual(r._corridor_width, C.CORRIDOR_WIDTH_LADDER[2], places=12)
+        expected = C.get_corridor_width_for_iter(3750)
+        self.assertAlmostEqual(expected, C.CORRIDOR_WIDTH_LADDER[2], places=12)
+        self.assertAlmostEqual(compiled_state(r.env)[0], expected, places=12)
 
     def test_logger_accumulators_cleared_on_rebuild(self):
         # 重建会中断所有在跑的回合，不清零就会跨重建拼接统计
         r = self._build(2999, 0.40, False)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(2)
         self.assertEqual(r.logger.cur_reward_sum[0].item(), 0.0)
         self.assertEqual(r.logger.cur_episode_length[0].item(), 0.0)
@@ -250,77 +286,100 @@ class CorridorRebuildTest(unittest.TestCase):
     def test_fixed_width_still_switches_collision(self):
         # 锁死宽度时宽度判断走不到，碰撞判断必须放在 fixed 分支之外
         r = self._build(2999, 0.30, False, fixed=True)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(2)
         self.assertEqual(len(self.built), 1)
-        self.assertIs(r._corridor_collision, True)
-        self.assertAlmostEqual(r._corridor_width, 0.30, places=12)
+        self.assertEqual(compiled_state(r.env), (0.30, True))
 
     def test_fixed_width_single_rebuild_per_boundary(self):
         # 宽度锁死时重建后不应再因宽度差反复重建
         r = self._build(2999, 0.30, False, fixed=True)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3:
+        p1, p2 = self._patches()
+        with p1, p2:
             r.learn(24)
         self.assertEqual(len(self.built), 1)
 
-    # 续训：检查点记录的编译期状态要能盖过启动配置，并保证首采前环境与记录一致
-    def test_load_restores_recorded_state(self):
-        r = self._build(0, 0.40, False)
-        saved_iter = 4000
-        saved_width = C.get_corridor_width_for_iter(saved_iter)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3, self._fake_checkpoint(saved_iter, saved_width, True):
-            infos = r.load("model_x.pt")
-        # 记录与按轮次推算一致 ⇒ 无需重建，但状态必须已被记录覆盖
-        self.assertEqual(len(self.built), 0)
-        self.assertAlmostEqual(r._corridor_width, saved_width, places=12)
-        self.assertIs(r._corridor_collision, True)
-        self.assertEqual(infos["corridor_state"]["corridor_collision"], True)
-        self.assertGreaterEqual(int(r.env.unwrapped.common_step_counter),
-                                C.STAGE1_3_ITER * C._STEPS_PER_ITER)
-
-    def test_load_rebuilds_when_record_disagrees_with_iteration(self):
-        # 记录自相矛盾时（轮次在阶段一却记着开碰撞，例如手动改过 tag 的检查点），
-        # 以**轮次推算**为准，并在首次采样前重建过来。
+    # 审查场景：记录与课程目标一致、但环境里编译的不是这个值 ⇒ 必须按**实际编译值**判定重建
+    def test_load_rebuilds_even_when_record_matches_target(self):
+        saved_iter = 3750
+        width = C.get_corridor_width_for_iter(saved_iter)
+        self.assertAlmostEqual(width, 0.30, places=12)
+        # 启动环境编译成 0.40；检查点记录 0.30 ⇒ 记录与目标一致，但环境是 0.40
         r = self._build(0, 0.40, True)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3, self._fake_checkpoint(2999, 0.40, True):
-            r.load("model_x.pt")
-        self.assertEqual(len(self.built), 1)
-        self.assertIs(r._corridor_collision, False)
-        self.assertEqual(C.get_training_phase(int(r.env.unwrapped.common_step_counter)), 0)
+        p1, p2 = self._patches()
+        with p1, p2, self._fake_checkpoint(saved_iter, width, True):
+            infos = r.load("model_x.pt")
+        cw, cc = compiled_state(r.env)
+        self.assertAlmostEqual(cw, width, places=12,
+                               msg="续训后实际编译的墙宽必须是记录值, 不是启动时的 0.40")
+        self.assertIs(cc, True)
+        self.assertAlmostEqual(float(infos["corridor_state"]["corridor_width"]),
+                               width, places=12)
 
     def test_load_without_record_falls_back_to_iteration(self):
         # 老检查点没有 corridor_state：按恢复后的轮次推算，而不是留在启动配置上
         r = self._build(0, 0.40, False)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3, self._fake_checkpoint(4000, None, None):
+        p1, p2 = self._patches()
+        with p1, p2, self._fake_checkpoint(4000, None, None):
             r.load("model_x.pt")
-        self.assertEqual(len(self.built), 1)
-        self.assertIs(r._corridor_collision, True)
-        self.assertAlmostEqual(r._corridor_width,
-                               C.get_corridor_width_for_iter(4000), places=12)
+        self.assertEqual(compiled_state(r.env),
+                         (C.get_corridor_width_for_iter(4000), True))
 
     def test_load_matching_state_does_not_rebuild(self):
-        # 检查点状态与当前编译配置一致时不要白重建一次
+        # 环境本来就编译成了目标值 ⇒ 不要白重建一次
         width = C.get_corridor_width_for_iter(4000)
         r = self._build(0, width, True)
-        p1, p2, p3 = self._patches()
-        with p1, p2, p3, self._fake_checkpoint(4000, width, True):
+        p1, p2 = self._patches()
+        with p1, p2, self._fake_checkpoint(4000, width, True):
             r.load("model_x.pt")
         self.assertEqual(len(self.built), 0)
+        self.assertEqual(compiled_state(r.env), (width, True))
+
+    def test_load_actor_only_keeps_compiled_env(self):
+        # 回放加载 (load_cfg={"actor": True}): 回放入口已按记录把墙编译好了,
+        # 这里重建会把查看器手里的 env 换掉 (查看器不接管 runner.env), 必须不重建。
+        r = self._build(2999, 0.40, False)
+        p1, p2 = self._patches()
+        with p1, p2, self._fake_checkpoint(4000, 0.30, True):
+            r.load("model_x.pt", load_cfg={"actor": True})
+        self.assertEqual(len(self.built), 0, "回放加载不得重建环境")
+        cw, cc = compiled_state(r.env)
+        self.assertAlmostEqual(cw, 0.40, places=12)
+        self.assertIs(cc, False, "回放必须保留入口已编译好的无碰撞配置")
+        self.assertEqual(EVENTS.count("close(old)"), 0, "回放加载不得关闭入口的环境")
+
+    # 锁死宽度续训：记录里的标记要生效, 且模板宽度同步成记录值
+    def test_load_restores_fixed_width_mode(self):
+        saved_iter, saved_width = 4000, 0.30
+        r = self._build(0, 0.40, True)          # 启动: 非锁死, 0.40
+        p1, p2 = self._patches()
+        with p1, p2, self._fake_checkpoint(saved_iter, saved_width, True, fixed=True):
+            r.load("model_x.pt")
+        cw, cc = compiled_state(r.env)
+        self.assertAlmostEqual(cw, saved_width, places=12,
+                               msg="锁死模式下应按记录的宽度重建, 而不是启动宽度")
+        self.assertIs(cc, True)
+
+    # 命令行显式给了宽度就不该被记录里的锁死标记带跑
+    def test_cli_fixed_width_wins_over_record(self):
+        r = self._build(0, 0.25, False, fixed=True, fixed_by_cli=True)
+        p1, p2 = self._patches()
+        # 记录说"非锁死、4000 轮的档位", 但本次命令行锁死 0.25 ⇒ 目标仍是 0.25
+        with p1, p2, self._fake_checkpoint(4000, 0.35, True, fixed=False):
+            r.load("model_x.pt")
+        cw, _ = compiled_state(r.env)
+        self.assertAlmostEqual(cw, 0.25, places=12,
+                               msg="命令行锁死宽度优先于检查点记录的锁死标记")
+        self.assertTrue(r._corridor_fixed)
 
     # 伪造检查点：torch.load 返回的最小可用结构（父类只读这几个键）
-    def _fake_checkpoint(self, it: int, width, collision):
+    def _fake_checkpoint(self, it: int, width, collision, fixed: bool = False):
+        state = {"corridor_width": width, "corridor_collision": collision,
+                 "corridor_fixed": fixed}
         infos = {
             "env_state": {"common_step_counter": it * C._STEPS_PER_ITER},
-            "corridor_state": {
-                "corridor_width": width,
-                "corridor_collision": collision,
-                "corridor_fixed": False,
-            },
+            "corridor_state": state,
         }
         payload = {"iter": it, "infos": infos, "model_state_dict": {}}
         return patch.object(runner_mod.torch, "load", lambda *a, **k: payload)

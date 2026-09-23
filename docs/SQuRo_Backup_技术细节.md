@@ -1114,6 +1114,13 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    `cur_episode_length` / `cur_ereward_sum` / `cur_ireward_sum`。重建会中断所有在跑的回合，
    不清就会把重建前后的半截回合拼成一条，`Episode_Reward/*` 与 `Episode_Termination/*` 都会被污染。
    字段名以 `rsl_rl.utils.logger.Logger` 为准（**没有** `ep_infos` 这个字段，写错会静默失效）。
+7. **判据一律比"目标 vs 实际编译值"，绝不比 runner 自己的缓存**。实际编译值只有一个来源：
+   `env.unwrapped.scene.entities["restricted_space"]`（宽度取 `cfg.corridor_width`、碰撞取
+   `collision_enabled`，即 `contype > 0`）。曾经把"当前宽度/碰撞"缓存成 `_corridor_width`
+   /`_corridor_collision` 再拿来比较，`load()` 里用检查点记录覆盖这两个缓存之后，判据就认为
+   "已经是目标值、无需重建"，而**真实环境还是启动时编译的那版** —— 训练会在错误的物理环境里
+   继续跑，并把这个错误值再写回下一个检查点。凡是"我以为我改成了什么"和"环境里到底是什么"
+   可能脱节的地方，都必须读后者。
 
 **回放取值优先级**（`SQuRo_Backup_play.resolve_corridor`）：命令行显式指定 > 检查点里保存的
 实际编译值（`save()` 写入 `infos["corridor_state"]`，含 `corridor_width/corridor_collision/
@@ -1123,9 +1130,19 @@ corridor_fixed`）> 按轮次推算的档位。**命令行开关必须能压过�
 `corridor_collision=False` 保证**的（用户硬约束第 3 条），而不是靠 `phase==0` 强制覆盖。
 不要用文件名轮次减 10 去反推实际墙宽 —— 训练走的是离散档位。
 
-**续训（`load()`）**：父类只恢复 `common_step_counter`，本任务的 `load()` 进一步在**首次采样前**
-把墙体配置对齐到检查点记录（缺失时按恢复后的轮次推算）。检查点状态与当前编译配置一致时
-不重建；记录自相矛盾时以轮次推算为准。
+**`load()` 的两条互斥路径**（两者都由 `load_cfg` 区分，不要合并）：
+
+| 场景 | 调用 | 行为 |
+|---|---|---|
+| 续训 | `train.py` → `runner.load(path)` | 恢复轮次 + **重建**到课程/记录对应的编译配置 |
+| 回放/推理 | `play.py` / `*_play.py` / 诊断脚本 → `load(path, load_cfg={"actor": True})` | 只加载模型参数, **不重建、不关 env** |
+
+回放路径必须跳过重建：回放入口（`resolve_corridor`）已经按"命令行 > 记录 > 轮次"把墙编译好了，
+而且查看器持有的是**外部变量 `env`**、并不接管 `runner.env` —— 一旦 `load()` 重建并 `close()`
+原环境，查看器/录制包装就会和 runner 手里的环境脱节（实际探针确认旧环境被 `close()` 了一次）。
+反过来，续训必须重建，判据见第 7 条：记录只用来恢复 `fixed_width` 标记与锁死模板，
+**不参与判据比较**。锁死宽度还有优先级：显式给的 `RESTRICTED_SPACE_WIDTH`（命令行意图）
+高于检查点记录里的锁死标记。
 
 **env_cfg 的初始配置按阶段决定**：`enable_collision = get_training_phase(0) == 1`。
 曾经硬编码 `True`，导致阶段一的首轮采样带着碰撞跑，要等第一次重建才回到无碰撞。
@@ -1138,9 +1155,13 @@ corridor_fixed`）> 按轮次推算的档位。**命令行开关必须能压过�
 **验收**：
 - `verify_corridor_wiring`（真环境，带失败断言）：档位表末档可达下界且实际宽度单调不增、
   阶段一默认配置必须无碰撞、墙位与净宽口径、编译期开碰撞必须产生接触、关碰撞必须为 0。
-- `verify_backup_corridor_rebuild`（假 env/wrapper，跑真实 `learn()` 主循环，11 条）：跨阶段边界
+- `verify_backup_corridor_rebuild`（假 env/wrapper，跑真实 `learn()` 主循环，13 条）：跨阶段边界
   必须真的重建且重新取观测、计数器必须被新环境接管（否则"开了又关"反复重建）、锁死宽度时
-  阶段边界仍要切碰撞、宽档切换、统计清零、以及 `load()` 的三种续训情形。
+  阶段边界仍要切碰撞、宽档切换、统计清零、以及 `load()` 的六种情形（记录与目标一致但环境
+  未编译成该值 / 无记录 / 已一致 / 回放 actor-only 不重建 / 锁死模式恢复 / 命令行锁死优先）。
+  **断言一律读 `scene.entities` 里的实际编译值**，不读 runner 变量 —— 只读 runner 变量会把
+  "变量对、环境错"测成通过（这正是上一轮 11 条用例漏掉续训 bug 的原因，已用变异测试确认
+  修好后旧写法会红）。
 - `verify_backup_stage_rewards` 另有档位可达性、阶段一默认无碰撞、回放取值优先级用例。
 
 **尚未端到端验证**：重建环境发生在训练中途，本机无法跑完整 6000 轮训练验证它与 PPO
@@ -1198,7 +1219,7 @@ corridor_fixed`）> 按轮次推算的档位。**命令行开关必须能压过�
 | 脚本 | 用途 |
 |---|---|
 | `verify_backup_stage_rewards.py` | **主回归入口**：判据/参考/状态机/奖励的 CPU 单测（58 项，不建环境、不落盘） |
-| `verify_backup_corridor_rebuild.py` | **训练循环回归**：假 env/wrapper 跑真实 `learn()`，守重建时机/计数器接管/观测刷新/统计清零/续训对齐（11 项，不建真环境） |
+| `verify_backup_corridor_rebuild.py` | **训练循环回归**：假 env/wrapper 跑真实 `learn()`，守重建时机/计数器接管/观测刷新/统计清零/续训与回放两条加载路径（13 项，不建真环境；断言读实际编译值） |
 | `verify_backup_config.py` | 配置一致性：`_CURVES` 权重 ↔ env_cfg、参考表 ↔ 手调公式、确认时长两侧一致、ctrlrange ↔ XML |
 | `verify_script_vs_training.py` | 手调脚本与训练环境的参考及 S1/S2 检测逐点对拍（改参考或判据后必跑） |
 | `measure_segment_gravity_truth.py` | **地面真值**：标记 site 测各段正置度（本文档 §4 的验收工具） |
@@ -1225,7 +1246,7 @@ corridor_fixed`）> 按轮次推算的档位。**命令行开关必须能压过�
 # 主回归（58 项，必须全绿）
 uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards
 
-# 训练循环回归（11 项，重建时机与续训对齐）
+# 训练循环回归（13 项，重建时机、续训与回放两条加载路径）
 uv run python -B -m mjlab.scripts.Backup.verify_backup_corridor_rebuild
 
 # 受限空间真环境接线验收（建环境，需可用 CUDA）

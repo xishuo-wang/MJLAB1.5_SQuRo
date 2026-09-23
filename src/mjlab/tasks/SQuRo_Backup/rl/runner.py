@@ -35,27 +35,44 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._corridor_clip_actions = getattr(env, "clip_actions", None)
         self._corridor_render_mode = getattr(env.unwrapped, "render_mode", None)
         entity = env.unwrapped.scene.entities.get("restricted_space")
-        self._corridor_width = float(entity.cfg.corridor_width) if entity is not None else None
-        self._corridor_collision = bool(entity.collision_enabled) if entity is not None else False
-        # 显式指定宽度时训练全程锁死, 不跟随课程
+        # 启动时编译进仿真的墙宽 (锁死宽度模式的模板), 以及该锁死是否来自显式指定
+        self._corridor_start_width = (
+            float(entity.cfg.corridor_width) if entity is not None else None)
         self._corridor_fixed = entity is not None and entity.cfg.fixed_width
+        # 显式指定宽度 (RESTRICTED_SPACE_WIDTH) 属于命令行意图, 优先于检查点记录里的锁死标记
+        self._corridor_fixed_by_cli = self._corridor_fixed
 
-    # 当前轮次该用的 (宽度, 是否开碰撞); 锁死宽度模式下宽度不变
-    def _corridor_target(self) -> tuple[float, bool]:
+    # 当前**实际编译进仿真**的 (宽度, 碰撞开关), 唯一来源是场景里的实体本身。
+    # 不要另存一份缓存来做比较: 缓存只记录"我们以为改成了什么", 一旦与真实环境脱节
+    # (例如加载检查点后直接改了缓存), 判据会认为"无需重建"而让训练跑在错误的物理环境里。
+    def _corridor_compiled_state(self) -> tuple[float | None, bool | None]:
+        entity = self.env.unwrapped.scene.entities.get("restricted_space")
+        if entity is None:
+            return None, None
+        return float(entity.cfg.corridor_width), bool(entity.collision_enabled)
+
+    # 当前轮次该用的 (宽度, 是否开碰撞); 锁死宽度模式下宽度保持启动值
+    def _corridor_target(self) -> tuple[float | None, bool]:
         step_counter = int(self.env.unwrapped.common_step_counter)
-        iter_num = step_counter // _STEPS_PER_ITER
         collision = get_training_phase(step_counter) == 1
-        width = (self._corridor_width if self._corridor_fixed
-                 else get_corridor_width_for_iter(iter_num))
-        return float(width), collision
+        if self._corridor_fixed:
+            return self._corridor_start_width, collision
+        iter_num = step_counter // _STEPS_PER_ITER
+        return float(get_corridor_width_for_iter(iter_num)), collision
 
-    # 是否需要重建: 碰撞开关变化, 或 (非锁死宽度时) 宽度档位变化。
-    # 碰撞判断必须放在 fixed 分支之外 —— 阶段边界处即使宽度锁死也要重建以打开碰撞。
+    # 是否需要重建: 目标与**实际编译值**不一致 (碰撞开关变化, 或宽度不一致)。
+    # 必须拿 compiled_width 比, 不能只在非锁死模式下比: 续训从"非锁死档位"切进"锁死某个 a"
+    # 时目标宽度也变了, 漏掉就会继续跑在错误的墙宽里 (审查发现的续训问题第二种形态)。
     def _corridor_change_needed(self) -> bool:
         width, collision = self._corridor_target()
-        if collision != self._corridor_collision:
+        compiled_width, compiled_collision = self._corridor_compiled_state()
+        if compiled_collision is None:
+            return False
+        if collision != compiled_collision:
             return True
-        return (not self._corridor_fixed) and abs(width - self._corridor_width) > 1e-9
+        if width is None or compiled_width is None:
+            return False
+        return abs(width - compiled_width) > 1e-9
 
     # 清掉"未结束回合"的累计。环境重建会中断所有在跑的回合, 不清就会跨重建拼接统计。
     def _clear_logger_episode_state(self) -> None:
@@ -74,6 +91,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     def _apply_corridor_rebuild(self, refresh_obs: bool) -> "torch.Tensor | None":
         step_counter = int(self.env.unwrapped.common_step_counter)
         width, collision = self._corridor_target()
+        if width is None:
+            return None
         old = self.env
         env_cfg = copy.deepcopy(self._corridor_env_cfg)
         env_cfg.scene.num_envs = self._corridor_num_envs
@@ -88,8 +107,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._corridor_clip_actions)
         # 包装器 reset 之后再把计数器写一次 (reset 可能把它归零), 然后才允许取观测
         self.env.unwrapped.common_step_counter = step_counter
-        self._corridor_width = width
-        self._corridor_collision = collision
         self._clear_logger_episode_state()
         try:
             old.close()
@@ -108,7 +125,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self.env.episode_length_buf = torch.randint_like(
                 self.env.episode_length_buf, high=int(self.env.max_episode_length))
 
-        if self._corridor_width is not None and self._corridor_change_needed():
+        if self._corridor_start_width is not None and self._corridor_change_needed():
             self._apply_corridor_rebuild(refresh_obs=False)
 
         obs = self.env.get_observations().to(self.device)
@@ -124,7 +141,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         total_it = start_it + num_learning_iterations
         for it in range(start_it, total_it):
             # 受限空间: 每轮采样前检查课程档位/阶段, 需要就重建并刷新观测
-            if self._corridor_width is not None and self._corridor_change_needed():
+            if self._corridor_start_width is not None and self._corridor_change_needed():
                 obs = self._apply_corridor_rebuild(refresh_obs=True)
             start = time.time()
             with torch.inference_mode():
@@ -172,32 +189,40 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self.logger.stop_logging_writer()
 
     # 续训: 父类只恢复 common_step_counter, 这里进一步在**首次采样前**把墙体配置对齐到
-    # 检查点记录的实际编译值 (缺失时按恢复后的轮次推算), 而不是等下一轮日志钩子。
+    # 恢复出来的轮次所对应的编译配置 (启动 env 编译的是 iter 0 的配置, 直接续训会跑错物理环境)。
+    # load_cfg={"actor": True} 是回放/推理加载: 回放入口已按检查点记录把墙编译好了,
+    # 这里再重建会把查看器手里那个 env 换掉 (查看器不接管 runner.env), 必须直接跳过。
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
              map_location: str | None = None) -> dict:
         infos = super().load(path, load_cfg, strict, map_location)
-        if self._corridor_width is None:
+        if self._corridor_start_width is None:
+            return infos
+        if (load_cfg or {}).get("actor"):
+            print("[INFO] 回放加载 (load_cfg.actor=True): 保留入口已编译好的墙体配置, 不重建环境")
             return infos
         saved = (infos or {}).get("corridor_state") or {}
-        want_width = saved.get("corridor_width")
-        want_collision = saved.get("corridor_collision")
-        if want_width is not None:
-            self._corridor_width = float(want_width)
-            self._corridor_fixed = bool(saved.get("corridor_fixed", self._corridor_fixed))
-        if want_collision is not None:
-            self._corridor_collision = bool(want_collision)
-        # 与检查点记录 (或按轮次推算) 不一致时, 在首次采样前重建
+        # 锁死宽度模式: 显式指定宽度 (命令行) 优先; 否则沿用检查点记录的标记, 并同步模型宽度,
+        # 因为锁死模式下课程档位恒为"启动宽度", 模板不换就会按错误的 a 重建。
+        if not self._corridor_fixed_by_cli and saved.get("corridor_fixed") is not None:
+            self._corridor_fixed = bool(saved["corridor_fixed"])
+            if self._corridor_fixed and saved.get("corridor_width") is not None:
+                self._corridor_start_width = float(saved["corridor_width"])
+        # 判据只比较"课程/锁死目标 vs 实际编译值", 不看记录: 记录本身就是当时真实编译的值,
+        # 若拿它去覆盖当前值再比较, 就会把"环境其实没编译成这个值"掩盖过去 (曾经的真 bug)。
+        # 轮次已由父类从检查点恢复, 目标自然与记录一致; 不一致说明记录与轮次自相矛盾, 以轮次为准。
         if self._corridor_change_needed():
-            print(f"[INFO] 续训: 检查点墙体状态与当前编译配置不一致, 首次采样前重建 "
-                  f"(记录 a={want_width}, 碰撞={want_collision})")
+            compiled = self._corridor_compiled_state()
+            print(f"[INFO] 续训: 实际编译配置 {compiled} 与课程目标 "
+                  f"{self._corridor_target()} 不一致, 首次采样前重建")
             self._apply_corridor_rebuild(refresh_obs=False)
         return infos
 
-    # 检查点里记录实际生效的墙宽与碰撞开关, 供续训与回放精确复现 (不要用轮次反推)
+    # 检查点里记录**实际编译生效**的墙宽与碰撞开关, 供续训与回放精确复现 (不要用轮次反推)
     def save(self, path: str, infos=None):
+        width, collision = self._corridor_compiled_state()
         extra = {
-            "corridor_width": self._corridor_width,
-            "corridor_collision": self._corridor_collision,
+            "corridor_width": width,
+            "corridor_collision": collision,
             "corridor_fixed": self._corridor_fixed,
         }
         super().save(path, infos={**(infos or {}), "corridor_state": extra})
