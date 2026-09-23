@@ -91,8 +91,28 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
    硬编码区间：x ∈ [0.185, 0.215] / [0.5, 0.7] / [1.185, 1.215]，
    板底阈值 0.045 / 0.07 / 0.045（= 板底 − 5 mm）。权重 0 → 1 在第 3 段课程（iter 2000）打开。
 2. **限高板实体碰撞**：本恢复版把三块板的 `contype/conaffinity` 设为 1（旧版训练是 0，只有
-   `body_contact` 生效；回放才有实体碰撞）。注意 mjwarp 在 `put_model` 时固化碰撞对，
+   `body_contact` 生效；回放才有碰撞）。注意 mjwarp 在 `put_model` 时固化碰撞对，
    **运行期改 contype 无效**，所以"开不开碰撞"必须在编译前定好（`build_hole_entities`）。
+
+### 采样 site 的语义（2026-09-23 与用户核对）
+
+18 个采样点是 **F_body_1..9 / H_body_1..9**，按 body 局部坐标分布在上/下表面：
+
+```
+F 段局部 z ∈ {+0.008, −0.010, −0.028}   H 段局部 z ∈ {−0.010, +0.008, +0.026}
+```
+
+模型里 body 的 `+Z` 指向世界 **−Z**，因此世界系下 `+0.008` 的那一面朝上。实测
+"body 中心 → 采样点"恒定 **+22 mm**，即这些点落在躯干**上表面**——判据 `z_site > 板底阈值`
+就是"躯干上表面不得高于板底"，语义正确（不要把它当成需要扣除的偏置）。
+
+标定自洽性验证：要穿过板底 0.045 的 Hole1，上表面需 ≤0.045 → body 中心 ≤0.023 m，
+正好落在参考表最低高度档 0.02（0.02 + 0.022 = 0.042 < 0.045）。所以低高度档 0.02 与
+阈值 0.045 是配套标定的，不要单独改其中一个。
+
+**索引解析**：不要硬编码 site id。旧版的"后段 = 12..20"是**旧模型布局**，当前模型
+12/13 是 FL/FR_elbow（足端），H_body 段在 14..22。用 `mdp/indices.py` 的
+`resolve_model_indices()` + `_MODEL_INDICES.front_seg_site_ids / rear_seg_site_ids`。
 
 ## 6. 奖励与课程（4 段）
 
@@ -124,11 +144,13 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 | 1 | 任务 ID | `Mjlab-Mouse` | `Mjlab-SQuRo-Hole` | 与仓库其余任务命名统一；`40fdb98` 里注册名与包名不一致（导入 `SQuRo_Hole` 但树是 `SQuRo_Tunnel`），属于坏状态 |
 | 2 | 命令/类名 | `mouse_cmd` / `MouseCommand` / `MouseOnPolicyRunner` / `experiment_name="mouse_locomotion"` | `hole_cmd` / `HoleCommand` / `SQuRoHoleOnPolicyRunner` / `"SQuRo_Hole"` | 按"全面重命名为 Hole"；旧 checkpoint 的日志目录名因此对不上 |
 | 3 | 足端 CSV | 绝对路径 `D:\Code\Mouse-MuJoCo\...\FL_Smooth.csv`（列 `X/Z`） | 仓库内 `mdp/Bio_Data/Trot_F.csv`（列 `Y_mean/Z_mean`），`fps` 仍取 60 | 旧路径不在本机；数值口径不变 |
-| 4 | 关节/body 索引 | 硬编码 `[6,8,12,14,24,26,30,32,1,3,21,23]`、body 4/24 | 保留同样索引，但集中为常量（`_JOINT_ORDER`、`F_BODY_ID`、`H_BODY_ID`） | 经模型核对索引完全对应（见下）；`AGENTS.md` 要求索引集中管理 |
-| 5 | 实体碰撞 | 训练 contype=0、回放 1 | **训练与回放都开**（`build_hole_entities(enable_collision=True)`） | 用户要求"完整恢复碰撞" |
-| 6 | 课程开关 `enable_holes` | 阶段3 置 True 并调 `HoleEntity.enable_collision()` | 删除 | 该开关挂在 `weight=0.0` 的奖励项上（mjlab 不调用），旧版从未生效；且运行期改 contype 无效 |
-| 7 | episode 长度 | 20 s（4000 步 @200 Hz） | 同 | 保持 |
-| 8 | `update_curriculum` 钩子 | 注册为 `weight=0.0` 的奖励项 | 删除 | 同上，从未执行 |
+| 4 | 关节/body 索引 | 硬编码 `[6,8,12,14,24,26,30,32,1,3,21,23]`、body 4/24 | 保留同样索引，但集中到 `mdp/indices.py` 解析（`resolve_model_indices()`） | 经模型核对索引完全对应（见下）；`AGENTS.md` 要求索引不硬编码 |
+| 5 | 虚拟碰撞 site | 硬编码"后段 = site 12..20" | `indices.py` 按名字解析：前段 `F_body_1..9`（0..8）、后段 `H_body_1..9`（14..22） | 旧编号是旧模型布局，当前 12/13 已变为足端 site，照搬会把脚算进后躯干 |
+| 6 | `body_contact` 广播 | `in_obs.any(dim=-1)` 当 `[N]` 用 | `.reshape(num_envs, 2).unsqueeze(-1)` | `any(dim=-1)` 得到的是 `[N,2]`（每段是否在板内），原写法会抛 batch 不匹配 |
+| 7 | 实体碰撞 | 训练 contype=0、回放 1 | **训练与回放都开**（`build_hole_entities(enable_collision=True)`） | 用户要求"完整恢复碰撞" |
+| 8 | 课程开关 `enable_holes` | 阶段3 置 True 并调 `HoleEntity.enable_collision()` | 删除 | 该开关挂在 `weight=0.0` 的奖励项上（mjlab 不调用），旧版从未生效；且运行期改 contype 无效 |
+| 9 | episode 长度 | 20 s（4000 步 @200 Hz） | 同 | 保持 |
+| 10 | `update_curriculum` 钩子 | 注册为 `weight=0.0` 的奖励项 | 删除 | 同上，从未执行 |
 
 索引核对（`robot.joint_names`，36 个关节）：`6=FL_shoulder, 8=FL_elbow, 12=FR_shoulder,
 14=FR_elbow, 24=HL_hip, 26=HL_knee, 30=HR_hip, 32=HR_knee, 1=F_spine1, 3=F_body,
@@ -161,9 +183,27 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 3. **`body_contact` 的 x 区间是硬编码的**：与三块板位置绑定（0.2/0.6/1.2）。
    若改板位置，必须同步改 `rewards.py` 里的 `obs_x_min/obs_x_max/obs_z_thresh` 与
    `env_cfg.HOLE_LAYOUT`。
-4. **速度与高度绑定**：`min(h_F,h_H)=0.02` 时速度只有 0.083 m/s，而 200 Hz 下步态 2 Hz；
-   参考轨迹一个周期约 77 mm（Tunnel 迁移时实测），与命令速度差约 1.6 倍，可能存在跟踪偏差。
-5. **索引口径**：本任务保留旧版硬编码关节索引以与旧 checkpoint/日志一致；若要迁到
-   `indices.py` 解析口径，需要同时改 `reference.py`/`rewards.py`/`observations.py` 三处并重训。
-6. **未注册项**：旧版还有 `energy/cot/joint_acc/base_y_offset/limits/action_acc` 六个函数未注册，
+4. **速度与高度绑定**：`min(h_F,h_H)=0.02` 时命令速度 0.083 m/s，而参考步态（2 Hz × ≈77 mm
+   / 周期）自身"走"出来是 0.154 m/s；命令低于步态能力 → 足端打滑，命令高于（如 0.04 档的
+   0.167 m/s）→ 需要加速摆腿。实测命令 0.188 m/s 时策略基本不动甚至跌倒。
+5. **训练起步困难（2026-09-23 观测）**：40 iter 短训显示 episode 长度仅 ≈400/4000 步、
+   `fallen` ≈1.6~1.8 次/回合、实测速度 0.008~0.023 m/s；起点为站立（躯干 60 mm）而位置表
+   第一段要求前肢低 0.02（参考上表面 0.042），初始状态与参考姿态差 0.25~0.75 rad/关节，
+   且 σ=1000 的高度核在 34 mm 误差下奖励≈0，缺乏中间引导。候选处置见 §10。
+6. **索引口径**：关节索引仍是旧版数值（`indices.py` 里 `REF_FRONT_IDS` 等），与旧 checkpoint
+   一致；site 索引已改为按名字解析。若后续要改关节编号，需同步 `reference.py`/`rewards.py`/
+   `observations.py` 并重训。
+7. **未注册项**：旧版还有 `energy/cot/joint_acc/base_y_offset/limits/action_acc` 六个函数未注册，
    恢复版只保留了注册项 + energy/cot（作为可选项，未注册）；如需启用请显式加入 `env_cfg.rewards`。
+
+## 10. 下一步候选（按优先级）
+
+- [ ] **起点姿态对齐**：把 `events.reset_model` 的初始关节角改为参考表在相位 0 的姿态
+      （或让位置表第一段从"都高"开始），消除"出生即要求大幅下蹲"的落差。
+- [ ] **命令速度与步态能力对齐**：把 `BASE_SPEED` 从 0.25 下调到 ≈0.15（2 Hz 下参考自走
+      0.154 m/s），或改成 `速度 = 步频 × 步幅` 的显式形式。
+- [ ] **`body_contact` 权重提前**：既然实体碰撞常开，软约束可在第 1 段就给 0.2~0.5，
+      让策略尽早知道"不能撞板"。
+- [ ] **高度奖励的中间引导**：σ=1000 的 exp 核在误差 >5 mm 时几乎为 0；可考虑用
+      `exp(-σ·err²)` + 线性项混合，或在课程早期降低 σ（旧版第 1 段用 500）。
+

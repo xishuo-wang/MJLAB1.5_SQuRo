@@ -1,4 +1,4 @@
-# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
+﻿# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
 # uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 50 --no-video
 
 import re
@@ -16,9 +16,8 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.command import HEIGHT_THRESHOLD
+from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
-    F_BODY_ID,
-    H_BODY_ID,
     get_reference_joint_pos,
     get_reference_joint_vel,
 )
@@ -124,6 +123,7 @@ class JointDataRecorder:
         record = {'step': float(self.step_count)}
         unwrapped = env.unwrapped
         asset = unwrapped.scene["robot"]
+        resolve_model_indices(asset)
         idx = 0
 
         if actions is not None:
@@ -152,8 +152,8 @@ class JointDataRecorder:
         record['base_vel_z'] = float(asset.data.root_link_lin_vel_w[idx, 2].item())
 
         # 前后躯干高度 (奖励口径: F_body / H_body)
-        f_height = float(asset.data.body_link_pos_w[idx, F_BODY_ID, 2].item())
-        h_height = float(asset.data.body_link_pos_w[idx, H_BODY_ID, 2].item())
+        f_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.f_body_id, 2].item())
+        h_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.h_body_id, 2].item())
         record['F_body_height'] = f_height
         record['H_body_height'] = h_height
 
@@ -332,8 +332,8 @@ def run_play(cfg: PlayConfig):
         print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
         print(f"[INFO] 命令: vel_x {float(cmds[:, 0].mean()):.3f} m/s, "
               f"h_F {float(cmds[:, 3].mean()) * 1000:.1f} mm, h_H {float(cmds[:, 4].mean()) * 1000:.1f} mm")
-        print(f"[INFO] 实测: 前躯干 {float(robot.data.body_link_pos_w[0, F_BODY_ID, 2]) * 1000:.1f} mm, "
-              f"后躯干 {float(robot.data.body_link_pos_w[0, H_BODY_ID, 2]) * 1000:.1f} mm, "
+        print(f"[INFO] 实测: 前躯干 {float(robot.data.body_link_pos_w[0, _MODEL_INDICES.f_body_id, 2]) * 1000:.1f} mm, "
+              f"后躯干 {float(robot.data.body_link_pos_w[0, _MODEL_INDICES.h_body_id, 2]) * 1000:.1f} mm, "
               f"位移 {float(robot.data.root_link_pos_w[0, 0]) * 1000:.1f} mm")
         print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")  # type: ignore
         if data_recorder:

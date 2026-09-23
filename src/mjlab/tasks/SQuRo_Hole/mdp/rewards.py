@@ -8,42 +8,23 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from typing import TYPE_CHECKING
 from .curriculums import get_curriculum_reward_weight
 from .command import HEIGHT_THRESHOLD, BASE_HEIGHT
-from .reference import (
-    F_BODY_ID,
-    FRONT_SEG_SITE_NAMES,
-    H_BODY_ID,
-    REAR_SEG_SITE_NAMES,
+from .indices import (
+    FOOT_SITE_NAMES,
     REF_FRONT_IDS,
     REF_HIND_IDS,
     REF_SPINE_IDS,
-    get_reference_joint_pos,
-    get_reference_joint_vel,
+    _MODEL_INDICES,
+    resolve_model_indices,
 )
+from .reference import get_reference_joint_pos, get_reference_joint_vel
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-_FOOT_SITE_NAMES = ["FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site"]
 
 # 参考表列口径: 前腿 4 + 后腿 4 + 脊柱 4 = 12 个被控关节
-_REF_COL_FRONT = (0, 1, 2, 3)
-_REF_COL_HIND = (4, 5, 6, 7)
-_REF_COL_SPINE = (8, 9, 10, 11)
 _JOINT_ORDER = REF_FRONT_IDS + REF_HIND_IDS + REF_SPINE_IDS
-
-# 虚拟碰撞采样 site (前段 9 + 后段 9), 首次使用时按名字解析
-_SEG_SITE_IDS: tuple[int, ...] | None = None
-
-
-# 解析前后段的采样 site 索引 (9 + 9)
-def _resolve_seg_sites(asset: Entity) -> tuple[int, ...]:
-    global _SEG_SITE_IDS
-    if _SEG_SITE_IDS is None:
-        site_ids, _ = asset.find_sites(
-            list(FRONT_SEG_SITE_NAMES) + list(REAR_SEG_SITE_NAMES), preserve_order=True)
-        _SEG_SITE_IDS = tuple(site_ids)
-    return _SEG_SITE_IDS
 
 
 # 取 12 个被控关节的实际位置
@@ -104,8 +85,8 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     body_pos_w = asset.data.body_link_pos_w
-    f_body_height = body_pos_w[:, F_BODY_ID, 2]
-    h_body_height = body_pos_w[:, H_BODY_ID, 2]
+    f_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    h_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
     base_height = asset.data.root_link_pos_w[:, 2]
 
     cmd_term = env.command_manager._terms["hole_cmd"]  # type: ignore[union-attr]
@@ -138,8 +119,8 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv,
     height_H = cmd_term.command[:, 4]
     mode0 = (height_F >= HEIGHT_THRESHOLD) & (height_H >= HEIGHT_THRESHOLD)
 
-    foot_site_ids, _ = asset.find_sites(_FOOT_SITE_NAMES, preserve_order=True)
-    foot_z = asset.data.site_pos_w[:, list(foot_site_ids), 2]
+    resolve_model_indices(asset)
+    foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
     base_height = asset.data.root_link_pos_w[:, 2]
     swing_target = base_height / BASE_HEIGHT * target_base_height
     err = torch.abs(foot_z - swing_target.unsqueeze(1))
@@ -187,8 +168,8 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     height_F = cmd_term.command[:, 3]
     height_H = cmd_term.command[:, 4]
 
-    f_body_quat = asset.data.body_link_quat_w[:, F_BODY_ID]
-    h_body_quat = asset.data.body_link_quat_w[:, H_BODY_ID]
+    f_body_quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.f_body_id]
+    h_body_quat = asset.data.body_link_quat_w[:, _MODEL_INDICES.h_body_id]
     f_roll = _quaternion_to_roll(f_body_quat)
     h_roll = _quaternion_to_roll(h_body_quat)
 
@@ -239,14 +220,14 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     device = env.device
     num_envs = env.num_envs
-    seg_site_ids = _resolve_seg_sites(asset)
+    resolve_model_indices(asset)
 
     # 三块限高板的 x 区间与板底高度 (与 env_cfg 的 Hole1/2/3 及 docs 对齐)
     obs_x_min = torch.tensor([0.185, 0.5, 1.185], device=device)
     obs_x_max = torch.tensor([0.215, 0.7, 1.215], device=device)
     obs_z_thresh = torch.tensor([0.045, 0.07, 0.045], device=device)
 
-    body_x = asset.data.body_link_pos_w[:, [F_BODY_ID, H_BODY_ID], 0]
+    body_x = asset.data.body_link_pos_w[:, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
     in_obs = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
     assert in_obs.shape[0] == num_envs, (
         f"[Hole] body_contact 形状不一致: env.num_envs={num_envs}, "
@@ -257,8 +238,9 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     active_z_thresh = in_obs.float() @ obs_z_thresh
     # in_any_obs: [N, 2] 每段是否进入任一块板; reshape 成 [N, 2, 1] 以广播到 9 个 site
     in_any_obs = in_obs.any(dim=-1).reshape(num_envs, 2).unsqueeze(-1)
-    # 每段 9 个采样 site: 按名字解析 (旧版硬编码 index 已随模型变化, 见 docs §5)
-    all_sites_z = asset.data.site_pos_w[:, list(seg_site_ids), 2].view(num_envs, 2, 9)
+    # 每段 9 个采样点 (前段 F_body_1..9 / 后段 H_body_1..9), 索引由 indices.py 解析
+    seg_site_ids = list(_MODEL_INDICES.front_seg_site_ids) + list(_MODEL_INDICES.rear_seg_site_ids)
+    all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2].view(num_envs, 2, 9)
 
     excess = torch.clamp(all_sites_z - active_z_thresh.unsqueeze(-1), min=0.0)
     excess = excess * in_any_obs

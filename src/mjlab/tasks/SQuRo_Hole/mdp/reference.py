@@ -5,6 +5,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
+from .indices import (
+    REF_FRONT_IDS,
+    REF_HIND_IDS,
+    REF_SPINE_IDS,
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -52,21 +59,8 @@ CYCLOID_PARAMS = {
     },
 }
 
-# 关节列口径: 与 indices.py 的执行器顺序一致 (14 维: 参考表只有 12 个被控关节)
-REF_FRONT_IDS = (4, 5, 6, 7)      # FL/FR shoulder, elbow
-REF_HIND_IDS = (10, 11, 12, 13)   # HL/HR hip, knee
-REF_SPINE_IDS = (0, 1, 8, 9)      # F_spine1, F_body, H_spine1, H_body
-REF_NECK_IDS = (2, 3)             # Neck_yaw, Neck_pitch
+# 关节列口径: 见 indices.py (参考表只覆盖 12 个被控关节: 前腿 4 + 后腿 4 + 脊柱 4)
 ACTUATOR_NUM = len(REF_FRONT_IDS) + len(REF_HIND_IDS) + len(REF_SPINE_IDS)
-
-# body 索引 (旧版口径硬编码; 经模型核对: F_body_Link=4, H_body_Link=24)
-F_BODY_ID = 4
-H_BODY_ID = 24
-
-# 虚拟碰撞采样 site: 前段 F_body_1..9, 后段 H_body_1..9 (旧版硬编码 0..8 / 12..20 是旧模型布局,
-# 当前模型 12/13 已变成足端 site, 故改为按名字解析, 见 docs §5)
-FRONT_SEG_SITE_NAMES = tuple(f"F_body_{i}_site" for i in range(1, 10))
-REAR_SEG_SITE_NAMES = tuple(f"H_body_{i}_site" for i in range(1, 10))
 
 # 受限模式: 0 = 前后肢都高, 1 = 前肢低, 2 = 后肢低
 NUM_MODES = 3
@@ -364,6 +358,8 @@ def get_reference_joint_vel(env: "ManagerBasedRlEnv", goal_height: float | None 
 # 内部: 按 (模式, 高度档, 相位) 查表并拼成 12 维参考
 def _get_reference_state(env: "ManagerBasedRlEnv",
                          goal_height: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    resolve_model_indices(env.scene["robot"])
+
     if getattr(env, "_ref_phase", None) is None:
         env._ref_phase = torch.zeros(env.num_envs, device=env.device)  # type: ignore[attr-defined]
 
