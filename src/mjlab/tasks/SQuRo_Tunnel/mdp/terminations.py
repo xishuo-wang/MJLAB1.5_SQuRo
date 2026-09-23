@@ -1,8 +1,10 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
+
 
 
 # 终止条件

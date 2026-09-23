@@ -18,16 +18,18 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
-from mjlab.tasks.SQuRo_Tunnel.mdp.path import OBSTACLE_LENGTH, TUNNEL_BOTTOM
+
 
 
 def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
+
     # 足端碰撞体名称
     foot_names = ("FL", "FR", "HL", "HR")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+
 
     # 观测空间
     policy_terms = {
@@ -45,14 +47,17 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "tunnel_cmd"}),
     }
 
+
     critic_terms = {**policy_terms}
+
 
     observations = {
         "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-    # 动作空间 — 14个执行器位置控制
+
+    # 动作空间
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -62,10 +67,12 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
+
     # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
+
 
     # 奖励函数
     rewards = {
@@ -80,11 +87,25 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
     }
 
+
     # 终止条件
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
     }
+
+
+    # 命令 — 5D [vel_x, height_f, height_h, gait_freq, curvature], 曲率固定 0
+    commands: dict[str, CommandTermCfg] = {
+        "tunnel_cmd": mdp.TunnelCommandCfg(
+            asset_name="robot",
+            resampling_time_range=(20.0, 30.0),
+            debug_vis=play,
+            viz=mdp.TunnelCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
+        )
+    }
+
+
 
     # 足端接触传感器
     feet_ground_cfg = ContactSensorCfg(
@@ -97,27 +118,19 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-    # 命令 — 5D [vel_x, height_f, height_h, gait_freq, curvature], 曲率固定 0
-    commands: dict[str, CommandTermCfg] = {
-        "tunnel_cmd": mdp.TunnelCommandCfg(
-            asset_name="robot",
-            resampling_time_range=(20.0, 30.0),
-            debug_vis=play,
-            viz=mdp.TunnelCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
-        )
-    }
 
     # 占位洞实体 (门洞限高板, 训练全程无碰撞; Phase1 洞位置动态采样, 实体仅作视觉示意)
     tunnel_x_center = 0.30
     tunnel_entities: dict = {
         "tunnel1": mdp.HoleEntityCfg(
             name="tunnel1",
-            position=(tunnel_x_center, 0.0, TUNNEL_BOTTOM),
-            size=(OBSTACLE_LENGTH / 2, 0.1, 0.005),
+            position=(tunnel_x_center, 0.0, mdp.TUNNEL_BOTTOM),
+            size=(mdp.OBSTACLE_LENGTH / 2, 0.1, 0.005),
             contype=0,
             conaffinity=0,
         )
     }
+
 
     # 完整配置
     return ManagerBasedRlEnvCfg(
@@ -148,8 +161,8 @@ def SQuRo_Tunnel_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             njmax=300,
             mujoco=MujocoCfg(
                 timestep=0.005,
-                iterations=10,
-                ls_iterations=20,
+                iterations=100,
+                ls_iterations=50,
             ),
         ),
         decimation=4,

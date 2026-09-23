@@ -1,6 +1,8 @@
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-# 执行器关节名称 — 必须与 entity actuator 顺序一致
+
+
+# 执行器关节名称
 _ACTUATED_JOINT_NAMES = [
     "F_spine1_joint", "F_body_joint",
     "Neck_yaw_joint", "Neck_pitch_joint",
@@ -11,15 +13,20 @@ _ACTUATED_JOINT_NAMES = [
     "HR_hip_joint", "HR_knee_joint",
 ]
 
+
+
 # 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACTUATED_JOINT_NAMES))
 
-# action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
+
+
+# action 张量中的腿/脊柱/颈部列索引
 _ACTION_LEG_IDS  = (4, 5, 6, 7, 10, 11, 12, 13)
 _ACTION_SPN_IDS  = (0, 1, 8, 9)
 _ACTION_NECK_IDS = (2, 3)           # Neck_yaw, Neck_pitch
 _ACTION_SPN_LATERAL_ID = 0          # F_spine1
 _ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
+
 
 
 class ModelIndices:
@@ -31,6 +38,7 @@ class ModelIndices:
         "actuator_leg_ids", "actuator_spn_ids", "actuator_neck_ids",
         "actuator_spn_lateral_id", "actuator_spn_body_ids",
     )
+
 
     def __init__(self):
         self.head_body_id: int = -1     # 头部 (Neck_pitch_Link)
@@ -48,28 +56,24 @@ class ModelIndices:
         self.actuator_spn_body_ids: tuple[int, ...] = _ACTION_SPN_BODY_IDS
 
 
+
 _MODEL_INDICES = ModelIndices()
+
 
 
 def resolve_model_indices(entity) -> None:
     if _MODEL_INDICES.f_body_id >= 0:
         return
 
-    body_ids, body_names = entity.find_bodies(
-        ["F_body_Link", "H_body_Link", "Neck_pitch_Link"], preserve_order=True
-    )
+    body_ids, body_names = entity.find_bodies(["F_body_Link", "H_body_Link", "Neck_pitch_Link"], preserve_order=True)
     _MODEL_INDICES.f_body_id = body_ids[0]
     _MODEL_INDICES.h_body_id = body_ids[1]
     _MODEL_INDICES.head_body_id = body_ids[2]
 
-    site_ids, _ = entity.find_sites(
-        ["FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site"]
-    )
+    site_ids, _ = entity.find_sites(["FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site"])
     _MODEL_INDICES.foot_site_ids = tuple(site_ids)
 
-    joint_ids, joint_names = entity.find_joints(
-        _ACTUATED_JOINT_NAMES, preserve_order=True
-    )
+    joint_ids, joint_names = entity.find_joints(_ACTUATED_JOINT_NAMES, preserve_order=True)
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
     # 腿: 位置 4-7, 10-13; 脊柱: 0-1, 8-9; 颈: 2-3
     _MODEL_INDICES.joint_leg_ids  = tuple(joint_ids[4:8]) + tuple(joint_ids[10:14])
