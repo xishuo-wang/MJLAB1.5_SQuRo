@@ -21,11 +21,11 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 
-# 受限空间开不开: mjwarp 在 put_model 时固化碰撞对, contype 与几何位置运行期都改不了,
-# 所以"STAGE1 不开碰撞 / STAGE2 开"只能反映在这里 —— 切阶段要改本常量并重开训练。
+# 受限空间开关: mjwarp 在 put_model 时固化碰撞对与几何位置, 运行期都改不了,
+# 所以"STAGE1 不开碰撞 / STAGE2 开"只能靠编译期取值实现 (见 mdp/entity.py)。
 ENABLE_RESTRICTED_SPACE = True
-# None = 跟随课程 (STAGE1 固定 CORRIDOR_WIDTH_START, STAGE2_1 线性收紧到 CORRIDOR_WIDTH_MIN);
-# 指定数值 = 整个训练固定用这个 a (runner 会在阶段/宽度跨档时自动重建环境, 见 rl/runner.py)。
+# 初始墙宽: None = 按当前阶段取课程值 (STAGE1 得到 CORRIDOR_WIDTH_START);
+# 指定数值 = 从一开始就用这个 a, 且**全程锁死** (runner 不再为宽度变化重建环境)。
 RESTRICTED_SPACE_WIDTH: float | None = None
 
 
@@ -141,11 +141,14 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 受限空间: 是否加入实体、间距 a、碰撞开关都在这里定 (编译期固化, 见文件头的说明)
     restricted_space_entities: dict = {}
     if ENABLE_RESTRICTED_SPACE:
+        # 初始配置**按当前阶段**决定: STAGE1 必须从第一帧起就不开碰撞 (硬编码 True 会让
+        # 首轮采样带着碰撞跑, 与阶段一语义不符)。锁死宽度时额外打 fixed_width 标记。
         restricted_space_entities["restricted_space"] = mdp.build_restricted_space_cfg(
-            enable_collision=True,
-            corridor_width=(mdp.get_curriculum_corridor_width(0)
+            enable_collision=mdp.get_training_phase(0) == 1,
+            corridor_width=(mdp.get_corridor_width_for_iter(0)
                             if RESTRICTED_SPACE_WIDTH is None
                             else float(RESTRICTED_SPACE_WIDTH)),
+            fixed_width=RESTRICTED_SPACE_WIDTH is not None,
         )
 
     # 完整配置

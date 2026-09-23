@@ -1466,6 +1466,81 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(w[4].item(), R.TRACK_W_LEG, places=6)    # FL_shoulder
         self.assertAlmostEqual(w[8].item(), R.TRACK_W_SPN, places=6)    # H_spine1
 
+    def test_corridor_ladder_reaches_target_width(self):
+        # 受限空间的墙宽课程被量化成离散档位 (几何只能在编译期定)。
+        # 这条守卫的是"末档必须恰好等于下界" —— 曾经用"变化超过 0.05 才重建"的阈值判据,
+        # 最后剩 0.0497 的差值永远不触发, 课程实际停在 0.2497 而不是 0.20。
+        from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
+        self.assertAlmostEqual(C.CORRIDOR_WIDTH_LADDER[0], C.CORRIDOR_WIDTH_START, places=12)
+        self.assertAlmostEqual(C.CORRIDOR_WIDTH_LADDER[-1], C.CORRIDOR_WIDTH_MIN, places=12)
+        # 末段任意轮次的实际编译宽度都必须等于下界
+        for it in (C.STAGE2_1_ITER, (C.STAGE2_1_ITER + C.STAGE2_2_ITER) // 2,
+                   C.STAGE2_2_ITER - 1, C.STAGE2_2_ITER + 500):
+            self.assertAlmostEqual(C.get_corridor_width_for_iter(it), C.CORRIDOR_WIDTH_MIN,
+                                   places=12)
+        # 实际编译宽度全程单调不增, 且都在档位表里
+        prev = None
+        for it in range(0, C.STAGE2_2_ITER, 50):
+            w = C.get_corridor_width_for_iter(it)
+            self.assertIn(w, C.CORRIDOR_WIDTH_LADDER)
+            if prev is not None:
+                self.assertLessEqual(w, prev + 1e-12)
+            prev = w
+        # 阶段一边界必须落在第一个档位上
+        self.assertAlmostEqual(C.get_corridor_width_for_iter(C.STAGE1_3_ITER - 1),
+                               C.CORRIDOR_WIDTH_START, places=12)
+
+    def test_corridor_stage1_is_collision_free_by_default(self):
+        # 阶段一的 env_cfg 必须从第一帧起就是"无碰撞": 曾经硬编码 enable_collision=True,
+        # 导致首轮采样带着碰撞跑, 要等第一次日志钩子才重建回无碰撞。
+        from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
+        from mjlab.tasks.SQuRo_Backup.mdp.entity import build_restricted_space_cfg
+        cfg = build_restricted_space_cfg(
+            enable_collision=C.get_training_phase(0) == 1,
+            corridor_width=C.get_corridor_width_for_iter(0),
+        )
+        self.assertEqual(cfg.contype, 0)
+        self.assertEqual(cfg.conaffinity, 0)
+        self.assertAlmostEqual(cfg.corridor_width, C.CORRIDOR_WIDTH_START, places=12)
+
+    def test_play_corridor_flag_precedence(self):
+        # 回放的墙宽/碰撞取值优先级: 命令行 > 检查点记录 > 按轮次推算;
+        # 且阶段一必须强制无碰撞 (即使检查点记录里是"开")。
+        import mjlab.scripts.SQuRo_Backup_play as play
+        from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
+        Cfg = NS
+
+        # 阶段一: 检查点记录说"开碰撞", 也必须回放成无碰撞
+        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
+                                    {"corridor_width": 0.5, "corridor_collision": True},
+                                    phase=0, align_iter=100)
+        self.assertEqual(got[0], 0.5)
+        self.assertIs(got[1], False)
+        self.assertEqual(got[3], "阶段一强制关")
+
+        # 阶段二: 用检查点记录的实际值, 而不是按轮次反推
+        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
+                                    {"corridor_width": 0.3499, "corridor_collision": True},
+                                    phase=1, align_iter=4000)
+        self.assertAlmostEqual(got[0], 0.3499, places=6)
+        self.assertEqual(got[2], "检查点记录")
+
+        # 命令行覆盖一切
+        got = play.resolve_corridor(Cfg(corridor_width=0.25, enable_collision=False),
+                                    {"corridor_width": 0.5, "corridor_collision": True},
+                                    phase=1, align_iter=4000)
+        self.assertAlmostEqual(got[0], 0.25, places=12)
+        self.assertIs(got[1], False)
+        self.assertEqual(got[2], "命令行")
+        self.assertEqual(got[3], "命令行")
+
+        # 无检查点记录时按轮次推算 (2999 的 pt 属于阶段一 ⇒ 无碰撞)
+        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
+                                    {}, phase=0, align_iter=2989)
+        self.assertAlmostEqual(got[0], C.CORRIDOR_WIDTH_START, places=12)
+        self.assertIs(got[1], False)
+        self.assertEqual(got[2], "按轮次推算")
+
 
 if __name__ == '__main__':
     unittest.main()

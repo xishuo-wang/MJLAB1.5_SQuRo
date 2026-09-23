@@ -144,10 +144,12 @@ def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < STAGE1_3_ITER else 1
 
 
-# 受限空间课程: 两侧墙中心间距 a (m):
+# 受限空间课程: 两侧墙中心间距 a (m) 关于轮次的**连续**取值:
 #   STAGE1  (iter 0 ~ STAGE1_3_ITER)               : a = 0.40 固定, 不开碰撞
 #   STAGE2_1(iter STAGE1_3_ITER ~ STAGE2_1_ITER)   : a 从 0.40 线性收到 0.20, 开碰撞
 #   STAGE2_2(iter STAGE2_1_ITER ~ STAGE2_2_ITER)   : a = 0.20 保持
+# 注意: 几何只能在编译期定, 实际生效的宽度是下面 CORRIDOR_WIDTH_LADDER 里的离散档位,
+#       **不要**用本函数去推算"训练当时真正的墙宽", 那要用 get_corridor_width_for_iter。
 def get_curriculum_corridor_width(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < STAGE1_3_ITER:
@@ -155,3 +157,21 @@ def get_curriculum_corridor_width(step_counter: int) -> float:
     span = max(1, STAGE2_1_ITER - STAGE1_3_ITER)
     progress = min(1.0, (iter_num - STAGE1_3_ITER) / span)
     return CORRIDOR_WIDTH_START - progress * (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN)
+
+
+# 实际生效的宽度档位 (m)。墙体几何只能在编译期定, 所以课程被量化成这几档;
+# 末档**必须**恰好等于 CORRIDOR_WIDTH_MIN, 否则课程永远到不了目标宽度。
+CORRIDOR_WIDTH_LEVELS = 5
+CORRIDOR_WIDTH_LADDER: tuple[float, ...] = tuple(
+    CORRIDOR_WIDTH_MIN
+    + (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN) * (CORRIDOR_WIDTH_LEVELS - 1 - i)
+    / (CORRIDOR_WIDTH_LEVELS - 1)
+    for i in range(CORRIDOR_WIDTH_LEVELS)
+)
+
+
+# 该轮次实际编译生效的墙间距 (从档位表里选最接近的), 训练与回放必须共用这一个口径。
+def get_corridor_width_for_iter(iter_num: int) -> float:
+    step_counter = iter_num * _STEPS_PER_ITER
+    wanted = get_curriculum_corridor_width(step_counter)
+    return min(CORRIDOR_WIDTH_LADDER, key=lambda w: abs(w - wanted))

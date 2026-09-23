@@ -1085,15 +1085,37 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    （会静默改到别的几何上，症状就是"开关看着没生效"）。必须经 `indexing.geom_ids` 换算。
 
 **因此的落地方式**：`a` 与碰撞开关都是 `env_cfg` 的一部分（与 Slalom 的 `PoleEntity` 同理），
-换 `a` 或切阶段都要**重建环境**。为此 `rl/runner.py` 在每个训练轮与课程比对，差值超过
-`CORRIDOR_REBUILD_TOL=0.05` 或碰撞开关变化时重建 env（0.40→0.20 收缩约触发 4 次）；
-只换 env 是安全的：PPO 的 rollout storage 由 `num_envs × num_steps_per_env` 定尺、二者不变，
-且 **PPO 不持有 env 引用**（已确认 `PPO.__init__` 无 `env` 参数）。
-env_cfg 顶部常量 `ENABLE_RESTRICTED_SPACE` / `RESTRICTED_SPACE_WIDTH`（`None` = 跟随课程）
-仍可让单次训练锁死一个 `a`。
+换 `a` 或切阶段都要**重建环境**。修好后的实现有四个要点：
+
+1. **宽度用离散档位表**（`CORRIDOR_WIDTH_LADDER = (0.40, 0.35, 0.30, 0.25, 0.20)`），
+   由 `get_corridor_width_for_iter(iter)` 选档。**末档必须恰好等于 `CORRIDOR_WIDTH_MIN`**。
+   曾用"宽度变化 > `CORRIDOR_REBUILD_TOL=0.05` 才重建"的阈值判据，结果最后只剩 0.0497 的
+   差值永不触发，课程实际停在 **0.2497** 而不是 0.20。训练与回放**必须共用**这个函数，
+   否则两边物理配置不一致。
+2. **重建放在 `learn()` 的开头、取观测之前**。父类 `learn()` 在循环外用局部变量
+   `obs = self.env.get_observations()` 缓存观测，在 `logger.log` 钩子里换环境会让下一步动作
+   拿**旧环境**的观测去打**新环境**。所以钩子只标记 `_corridor_pending`，真正的替换在
+   `learn()` override 里发生（此时 `super().learn()` 会重新取观测）。
+3. **重建模板用本次启动的 `env_cfg` 深拷贝**，不能重新 `load_env_cfg()` —— 那样会把命令行
+   覆盖（`fixed_time_scale` / `episode_length_s` / sim 参数 / seed）全部退回注册配置。
+4. **`RESTRICTED_SPACE_WIDTH` 给数值 = 全程锁死该 `a`**（实体带 `fixed_width` 标记，runner 不
+   再为宽度变化重建）；但**碰撞开关仍按阶段切**，阶段边界处即使宽度锁死也要重建一次。
+   只换 env 是安全的：PPO 的 rollout storage 由 `num_envs × num_steps_per_env` 定尺、二者不变，
+   且 **PPO 不持有 env 引用**（已确认 `PPO.__init__` 无 `env` 参数）。实测重建代价
+   约 0.3~0.4 s、显存增量 ~10 MB（1024 环境），可忽略。
+
+**回放取值优先级**（`SQuRo_Backup_play.resolve_corridor`）：命令行显式指定 > 检查点里保存的
+实际编译值（`save()` 写入 `infos["corridor_state"]`）> 按轮次推算的档位。
+**阶段一是硬约束**：`phase==0` 时无论检查点写了什么都强制无碰撞，所以 `model_2999.pt`
+一定按"无碰撞"回放。不要用文件名轮次减 10 去反推实际墙宽 —— 训练走的是离散档位。
+
+**env_cfg 的初始配置按阶段决定**：`enable_collision = get_training_phase(0) == 1`。
+曾经硬编码 `True`，导致阶段一的首轮采样带着碰撞跑，要等第一次日志钩子才重建回无碰撞。
 
 **验收**：`uv run python -B -m mjlab.scripts.Backup.verify_corridor_wiring`（带失败断言：
-三段课程取值与收缩单调性、墙位与净宽口径、编译期开碰撞必须产生接触、关碰撞必须为 0）。
+档位表末档可达下界且实际宽度单调不增、阶段一默认配置必须无碰撞、墙位与净宽口径、
+编译期开碰撞必须产生接触、关碰撞必须为 0）。主回归另有 3 条用例守档位可达性、
+阶段一默认无碰撞、以及回放取值优先级。
 
 **尚未端到端验证**：重建环境发生在训练中途，本机无法跑完整 6000 轮训练验证它与 PPO
 统计量的交互；短程验证时请盯 `Train/mean_reward` 与 `Loss/*` 在 iter 3000 前后是否连续。

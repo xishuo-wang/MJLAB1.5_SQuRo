@@ -13,12 +13,14 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CORRIDOR_WIDTH_LADDER,
     CORRIDOR_WIDTH_MIN,
     CORRIDOR_WIDTH_START,
     STAGE1_3_ITER,
     STAGE2_1_ITER,
     STAGE2_2_ITER,
     _STEPS_PER_ITER,
+    get_corridor_width_for_iter,
     get_curriculum_corridor_width,
     get_training_phase,
 )
@@ -72,19 +74,20 @@ def run_probe(env, ent, start_x: float, steps: int) -> tuple[int, float]:
 
 def main() -> None:
     cfg = tyro.cli(ProbeCfg)
-    print("=" * 92)
-    print(f"[1] 课程纯函数核对 (STAGE1 固定 {CORRIDOR_WIDTH_START:.2f} / "
+    print("=" * 94)
+    print(f"[1] 课程与档位表 (STAGE1 固定 {CORRIDOR_WIDTH_START:.2f} / "
           f"STAGE2_1 {STAGE1_3_ITER}~{STAGE2_1_ITER} 收缩 / STAGE2_2 保持 {CORRIDOR_WIDTH_MIN:.2f})")
-    for it in (0, 2999, 3000, 4000, 5000, 6000, 7000):
-        a = get_curriculum_corridor_width(it * _STEPS_PER_ITER)
-        print(f"  iter {it:>5}  phase {get_training_phase(it * _STEPS_PER_ITER)}  a={a:.4f}")
+    print(f"  档位表: {[round(w, 4) for w in CORRIDOR_WIDTH_LADDER]}")
+    for it in (0, 2999, 3000, 3500, 4000, 4500, 5000, 6000):
+        print(f"  iter {it:>5}  phase {get_training_phase(it * _STEPS_PER_ITER)}  "
+              f"连续课程 a={get_curriculum_corridor_width(it * _STEPS_PER_ITER):.4f}  "
+              f"实际编译 a={get_corridor_width_for_iter(it):.4f}")
+    assert abs(CORRIDOR_WIDTH_LADDER[0] - CORRIDOR_WIDTH_START) < 1e-12
+    assert abs(CORRIDOR_WIDTH_LADDER[-1] - CORRIDOR_WIDTH_MIN) < 1e-12, \
+        "档位表末档必须恰好等于 CORRIDOR_WIDTH_MIN, 否则课程到不了目标"
     assert get_curriculum_corridor_width(0) == CORRIDOR_WIDTH_START
-    assert get_curriculum_corridor_width((STAGE1_3_ITER - 1) * _STEPS_PER_ITER) == CORRIDOR_WIDTH_START
     assert abs(get_curriculum_corridor_width(STAGE2_1_ITER * _STEPS_PER_ITER)
                - CORRIDOR_WIDTH_MIN) < 1e-9
-    assert get_curriculum_corridor_width(9999 * _STEPS_PER_ITER) == CORRIDOR_WIDTH_MIN
-    assert get_training_phase((STAGE1_3_ITER - 1) * _STEPS_PER_ITER) == 0
-    assert get_training_phase(STAGE1_3_ITER * _STEPS_PER_ITER) == 1
     # 收缩段必须单调不增
     prev = None
     for it in range(STAGE1_3_ITER, STAGE2_1_ITER + 1, 100):
@@ -92,11 +95,33 @@ def main() -> None:
         if prev is not None:
             assert a <= prev + 1e-12, "收缩段必须单调不增"
         prev = a
+        # 实际编译宽度也必须单调不增, 且最终到达下界
+    prev = None
+    for it in range(STAGE1_3_ITER, STAGE2_2_ITER, 100):
+        w = get_corridor_width_for_iter(it)
+        if prev is not None:
+            assert w <= prev + 1e-12, "实际编译宽度必须单调不增"
+        prev = w
+    for it in (STAGE2_1_ITER, (STAGE2_1_ITER + STAGE2_2_ITER) // 2, STAGE2_2_ITER - 1):
+        assert abs(get_corridor_width_for_iter(it) - CORRIDOR_WIDTH_MIN) < 1e-12, \
+            f"iter {it} 的实际编译宽度未到达下界 {CORRIDOR_WIDTH_MIN}"
     assert STAGE2_2_ITER == 6000
-    print("  纯函数断言通过")
+    assert get_training_phase((STAGE1_3_ITER - 1) * _STEPS_PER_ITER) == 0
+    assert get_training_phase(STAGE1_3_ITER * _STEPS_PER_ITER) == 1
+    print("  档位/阶段断言通过 (末档可达下界, 实际宽度单调不增)")
 
-    print("\n[2] 墙体几何与净宽口径")
-    for width in (0.40, 0.20):
+    print("\n[2] 阶段一的初始碰撞状态必须与阶段语义一致 (STAGE1 = 关碰撞, 第一帧起)")
+    env_cfg = load_backup_env_cfg()
+    ent_cfg = dict(env_cfg.scene.entities)["restricted_space"]
+    print(f"  默认 env_cfg: a={ent_cfg.corridor_width:.4f} contype={ent_cfg.contype} "
+          f"conaffinity={ent_cfg.conaffinity} fixed_width={ent_cfg.fixed_width}")
+    assert ent_cfg.contype == 0 and ent_cfg.conaffinity == 0, \
+        "STAGE1 的默认配置必须编译成不开碰撞 (否则首轮采样会带着碰撞跑)"
+    assert abs(ent_cfg.corridor_width - CORRIDOR_WIDTH_START) < 1e-12
+    print("  默认配置断言通过")
+
+    print("\n[3] 墙体几何与净宽口径")
+    for width in (CORRIDOR_WIDTH_START, CORRIDOR_WIDTH_MIN):
         env = make_env(cfg, width, collision=False)
         ent = env.scene.entities["restricted_space"]
         xs = [float(env.sim.mj_data.geom_xpos[g][0]) for g in ent.wall_geom_ids]
@@ -105,7 +130,7 @@ def main() -> None:
         assert abs(abs(xs[1]) - width / 2) < 1e-4, "墙中心未落在 ±a/2"
         assert abs(ent.clear_width - (width - 2 * WALL_HALF_THICKNESS)) < 1e-9
 
-    print(f"\n[3] 碰撞是否真的生效 (机器人搬到墙中心 x=±{cfg.test_width/2:.3f}, 跑 {cfg.steps} 步)")
+    print(f"\n[4] 碰撞是否真的生效 (机器人搬到墙中心 x=±{cfg.test_width/2:.3f}, 跑 {cfg.steps} 步)")
     # 编译期开碰撞 + 几何重叠 => 必须有墙接触
     env_on = make_env(cfg, cfg.test_width, collision=True)
     ent_on = env_on.scene.entities["restricted_space"]

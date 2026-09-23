@@ -18,7 +18,7 @@ from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
     _STEPS_PER_ITER,
-    get_curriculum_corridor_width,
+    get_corridor_width_for_iter,
     get_training_phase,
 )
 
@@ -57,6 +57,44 @@ def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
     if m:
         return int(m.group(1))
     return 0
+
+
+
+# 解析回放该用的墙宽与碰撞开关。优先顺序:
+#   1. 命令行显式指定 (--corridor-width / --enable-collision)
+#   2. 检查点里保存的实际编译值 (训练时真实生效的配置)
+#   3. 按轮次推算的课程档位
+# 阶段一 (phase==0) 是硬约束: 无论检查点写了什么都必须无碰撞。
+def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[float, bool, str, str]:
+    if cfg.corridor_width is not None:
+        width, width_src = float(cfg.corridor_width), "命令行"
+    elif saved.get("corridor_width") is not None:
+        width, width_src = float(saved["corridor_width"]), "检查点记录"
+    else:
+        width, width_src = get_corridor_width_for_iter(align_iter), "按轮次推算"
+    if cfg.enable_collision is not None:
+        collision, coll_src = bool(cfg.enable_collision), "命令行"
+    elif phase == 0:
+        collision, coll_src = False, "阶段一强制关"
+    elif saved.get("corridor_collision") is not None:
+        collision, coll_src = bool(saved["corridor_collision"]), "检查点记录"
+    else:
+        collision, coll_src = True, "阶段二默认开"
+    return width, collision, width_src, coll_src
+
+
+
+# 读取检查点里保存的受限空间实际编译值 (宽墙/碰撞开关), 供回放精确复现。
+# 不要用轮次反推: 训练走的是离散档位, 反推会与实际物理配置不一致。
+def read_corridor_state(checkpoint_path: Path) -> dict:
+    try:
+        loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+    except Exception as exc:
+        print(f"[WARN] 读取检查点受限空间状态失败, 将按轮次推算: {exc}")
+        return {}
+    infos = loaded.get("infos") or {}
+    state = infos.get("corridor_state")
+    return state if isinstance(state, dict) else {}
 
 
 
@@ -362,18 +400,19 @@ def run_play(cfg: PlayConfig):
 
     # 受限空间 — 墙位与碰撞开关都在编译期固化, 必须在建环境之前写进实体配置
     # (与 Slalom 回放重建杆实体同理; 运行期改 a 或 contype 都无效)
+    # 取值优先顺序: 命令行显式指定 > 检查点里保存的实际编译值 > 按轮次推算的课程档位。
     train_iter = extract_iter_from_checkpoint(resume_path) if resume_path is not None else 0
     align_iter = max(0, train_iter - 10)          # 与 env 内部课程口径对齐
     align_step = align_iter * _STEPS_PER_ITER
     phase = get_training_phase(align_step)
-    # 阶段一强制关碰撞; 显式传入的 enable_collision 优先
-    corridor_collision = (phase == 1) if cfg.enable_collision is None else bool(cfg.enable_collision)
-    corridor_width = (get_curriculum_corridor_width(align_step)
-                      if cfg.corridor_width is None else float(cfg.corridor_width))
+    saved = read_corridor_state(resume_path) if resume_path is not None else {}
+    corridor_width, corridor_collision, width_src, coll_src = resolve_corridor(
+        cfg, saved, phase, align_iter)
     ent_cfg = mdp_entity.configure_restricted_space(env_cfg, corridor_width,
                                                     enable_collision=corridor_collision)
     print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 STAGE1_3_ITER={STAGE1_3_ITER}), "
-          f"碰撞={'开' if corridor_collision else '关'}, 墙中心 a={corridor_width:.4f} m, "
+          f"碰撞={'开' if corridor_collision else '关'} [{coll_src}], "
+          f"墙中心 a={corridor_width:.4f} m [{width_src}], "
           f"实际内侧净宽 {ent_cfg.corridor_width - 2 * ent_cfg.wall_half_thickness:.4f} m")
 
     # 构建命令后缀（用于视频和CSV文件名）

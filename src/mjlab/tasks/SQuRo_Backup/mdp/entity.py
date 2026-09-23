@@ -28,6 +28,8 @@ class RestrictedSpaceEntityCfg(EntityCfg):
     # 所以这两个值就是"这面墙到底碰不碰"的唯一开关, 必须在编译前定好。
     contype: int = 1
     conaffinity: int = 1
+    # True = 本次训练的墙宽全程锁死 (不跟随课程), runner 不会为宽度变化重建环境
+    fixed_width: bool = False
 
     def build(self) -> "RestrictedSpaceEntity":
         return RestrictedSpaceEntity(cfg=self)
@@ -94,20 +96,25 @@ class RestrictedSpaceEntity(Entity):
 #     重建 CUDA graph) 后, 机器人放到新墙位接触数为 0。所以"移动墙来收紧走廊"不可行,
 #     换 a 必须重建环境。
 # 结论: a 与碰撞开关都是 env_cfg 的一部分, 与 Slalom 的 PoleEntity 用法一致。
-def build_restricted_space_cfg(enable_collision: bool, corridor_width: float) -> RestrictedSpaceEntityCfg:
+def build_restricted_space_cfg(enable_collision: bool, corridor_width: float,
+                               fixed_width: bool = False) -> RestrictedSpaceEntityCfg:
     value = 1 if enable_collision else 0
     return RestrictedSpaceEntityCfg(
         name="restricted_space",
         corridor_width=float(corridor_width),
         contype=value,
         conaffinity=value,
+        fixed_width=bool(fixed_width),
     )
 
 
 
 # 按指定间距改写场景里的受限空间实体 (必须在建环境之前调用; 换 a 用)
-def configure_restricted_space(env_cfg, corridor_width: float, enable_collision: bool = True) -> RestrictedSpaceEntityCfg:
-    cfg = build_restricted_space_cfg(enable_collision=enable_collision, corridor_width=corridor_width)
+def configure_restricted_space(env_cfg, corridor_width: float, enable_collision: bool = True,
+                               fixed_width: bool = False) -> RestrictedSpaceEntityCfg:
+    cfg = build_restricted_space_cfg(enable_collision=enable_collision,
+                                     corridor_width=corridor_width,
+                                     fixed_width=fixed_width)
     entities = dict(env_cfg.scene.entities)  # type: ignore[union-attr]
     entities["restricted_space"] = cfg
     env_cfg.scene.entities = entities  # type: ignore[union-attr]
