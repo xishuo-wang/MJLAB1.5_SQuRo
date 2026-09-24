@@ -270,10 +270,9 @@ def compute_leg_pose_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return -weight * mse * (command.phase == 2)
 
 
-# 上报三个口径的腿构型误差, 全部按 P3 筛选; 无样本时记 NaN (不要用 0 冒充"无误差")。
-#   _p3   : P3 全段 (与新奖励的门控一致, 衡量"新奖励对应的误差")
-#   _hold : P3 保持段 (t_phase >= λ·T4, 衡量"最终站姿")
-#   _hold_frac : 保持段帧数占 P3 帧数的比例 —— 没有它就无法判断读数是否可信
+# 上报腿构型误差, 全部按 P3 筛选, 并同时上报样本数。
+# 无样本时必须**省略误差键**而不是写 NaN —— Logger 跨步用 torch.mean 聚合, 缺键会被跳过,
+# 一个 NaN 步会把整轮读数一起抹掉。口径与实测见技术细节 §7.13。
 def _log_leg_pose(env: "ManagerBasedRlEnv", command: BackupCommand,
                   mse: torch.Tensor) -> None:
     log = getattr(env, "extras", {}).get("log") if hasattr(env, "extras") else None
@@ -285,11 +284,14 @@ def _log_leg_pose(env: "ManagerBasedRlEnv", command: BackupCommand,
     in_hold = in_p3 & (command.t_phase >= lam * T4)
     n_p3 = int(in_p3.sum())
     n_hold = int(in_hold.sum())
-    log["Data/leg_pose_rmse_p3"] = (
-        float(rmse[in_p3].mean().item()) if n_p3 > 0 else float("nan"))
-    log["Data/leg_pose_rmse_hold"] = (
-        float(rmse[in_hold].mean().item()) if n_hold > 0 else float("nan"))
-    log["Data/leg_pose_hold_frac"] = (float(n_hold) / n_p3) if n_p3 > 0 else float("nan")
+    if n_p3 > 0:
+        log["Data/leg_pose_rmse_p3"] = float(rmse[in_p3].mean().item())
+        log["Data/leg_pose_hold_frac"] = float(n_hold) / n_p3
+    if n_hold > 0:
+        log["Data/leg_pose_rmse_hold"] = float(rmse[in_hold].mean().item())
+    # 样本数逐帧上报: 为 0 与"该帧没有这个键"是两件事, 读数可信度靠它判断。
+    log["Data/leg_pose_n_p3"] = float(n_p3)
+    log["Data/leg_pose_n_hold"] = float(n_hold)
 
 
 # 躯干姿态模仿代价 — 跟踪两段背腹轴的世界 Z 余弦 (技术细节 §7.8)。

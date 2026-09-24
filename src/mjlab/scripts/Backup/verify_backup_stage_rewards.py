@@ -351,15 +351,33 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.0, places=6)
         self.assertEqual(log["Data/leg_pose_hold_frac"], 0.0)   # t_phase=0 < λ·T4
 
-    def test_leg_pose_logging_nan_when_no_p3_samples(self):
-        # [§7.13] 没有 P3 样本时必须记 NaN, 不能用 0 冒充"误差为零"
+    def test_leg_pose_logging_omits_keys_when_no_samples(self):
+        # [§7.13] 没有 P3 样本时必须**省略**误差键 (既不是 0 也不是 NaN), 样本数记 0。
+        # 理由: Logger 跨步 torch.mean 聚合, 缺键会被跳过, 而一个 NaN 步会把整轮读数抹掉。
         env, cmd = make_env([0])
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 1.0)
         rewards.compute_leg_pose_cost(env)
         log = env.extras["log"]
-        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_p3"]))
-        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_hold"]))
-        self.assertTrue(math.isnan(log["Data/leg_pose_hold_frac"]))
+        self.assertNotIn("Data/leg_pose_rmse_p3", log)
+        self.assertNotIn("Data/leg_pose_rmse_hold", log)
+        self.assertNotIn("Data/leg_pose_hold_frac", log)
+        self.assertEqual(log["Data/leg_pose_n_p3"], 0.0)
+        self.assertEqual(log["Data/leg_pose_n_hold"], 0.0)
+
+    def test_leg_pose_logging_reports_sample_counts(self):
+        # [§7.13] 有样本时三个误差键齐全, 且样本数与门控一致 —— 读数可信度靠它判断。
+        env, cmd = make_env([2, 2, 0])
+        cmd.command_tensor[:, 5] = 3.0
+        cmd.time_scale_command = cmd.command_tensor[:, 5]
+        cmd.t_phase = torch.tensor([2.0, 1.0, 0.0])      # λ·T4 = 1.5, 故只有 env0 在保持段
+        env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
+        rewards.compute_leg_pose_cost(env)
+        log = env.extras["log"]
+        self.assertEqual(log["Data/leg_pose_n_p3"], 2.0)
+        self.assertEqual(log["Data/leg_pose_n_hold"], 1.0)
+        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.5, places=6)
+        for key in ("Data/leg_pose_rmse_p3", "Data/leg_pose_rmse_hold"):
+            self.assertTrue(math.isfinite(log[key]), f"{key} 必须有限, 实际 {log[key]}")
 
     def test_leg_pose_hold_split(self):
         # [§7.13] 保持段口径: t_phase ≥ λ·T4 才计入 _hold; λ=3 时 1.0 < 1.5 不算, 2.0 算。
@@ -386,8 +404,9 @@ class StageRewardTests(unittest.TestCase):
         rewards.compute_leg_pose_cost(env)
         log = env.extras["log"]
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
-        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_hold"]))
+        self.assertNotIn("Data/leg_pose_rmse_hold", log)    # 无保持段样本 -> 省略键
         self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.0, places=6)
+        self.assertEqual(log["Data/leg_pose_n_hold"], 0.0)
 
     def test_leg_pose_reads_actual_angles_not_commands(self):
         # [§7.13] 与 leg_target 的分工: 本项读**实际**关节角, 不读 raw_action。
