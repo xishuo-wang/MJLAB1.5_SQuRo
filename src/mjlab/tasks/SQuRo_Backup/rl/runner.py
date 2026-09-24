@@ -41,6 +41,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._corridor_fixed = entity is not None and entity.cfg.fixed_width
         # 显式指定宽度 (RESTRICTED_SPACE_WIDTH) 属于命令行意图, 优先于检查点记录里的锁死标记
         self._corridor_fixed_by_cli = self._corridor_fixed
+        # learn() 入口的回合相位随机化开关: 重建发生在循环内部, 必须遵守同一次调用的语义。
+        # 默认 False = 与 learn() 签名默认值一致; load() 触发的重建早于 learn(), 此时不随机化,
+        # 随后的 learn(True) 会补上。
+        self._randomize_ep_len = False
 
     # 当前**实际编译进仿真**的 (宽度, 碰撞开关), 唯一来源是场景里的实体本身。
     # 不要另存一份缓存来做比较: 缓存只记录"我们以为改成了什么", 一旦与真实环境脱节
@@ -115,8 +119,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._corridor_clip_actions)
         # 包装器 reset 之后再把计数器写一次 (reset 可能把它归零), 然后才允许取观测
         self.env.unwrapped.common_step_counter = step_counter
-        # 与计数器同理: 新环境的回合相位是全 0, 三个调用点都要经过这里补打散
-        self._randomize_episode_phase()
+        # 与计数器同理, 但必须遵守 learn() 入口的开关: 关闭时保持调用方要求的固定回合长度
+        if self._randomize_ep_len:
+            self._randomize_episode_phase()
         self._clear_logger_episode_state()
         try:
             old.close()
@@ -131,7 +136,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 受限空间重建。不能只重写入口 —— 训练只调用一次 learn(6000), 阶段切换发生在循环内部。
     # 重建后必须重新取观测: obs 是循环里的局部变量, 换环境后旧观测属于旧环境。
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
-        if init_at_random_ep_len:
+        # 记住入口开关: 重建发生在循环内部, 必须遵守同一次调用的语义
+        self._randomize_ep_len = bool(init_at_random_ep_len)
+        if self._randomize_ep_len:
             self._randomize_episode_phase()
 
         if self._corridor_start_width is not None and self._corridor_change_needed():

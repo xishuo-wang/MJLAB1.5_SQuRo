@@ -221,6 +221,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r._corridor_start_width = width
         r._corridor_fixed = fixed
         r._corridor_fixed_by_cli = fixed if fixed_by_cli is None else fixed_by_cli
+        r._randomize_ep_len = False
         # 启动环境按 width/collision 编译 (与 env_cfg 初始配置同源)
         r.env = FakeWrapper(FakeEnv(step_count=start_iter * C._STEPS_PER_ITER,
                                     tag="old", width=width, collision=collision,
@@ -299,11 +300,24 @@ class CorridorRebuildTest(unittest.TestCase):
         r = self._build(2999, 0.40, False)
         p1, p2 = self._patches()
         with p1, p2:
-            r.learn(2)
+            r.learn(2, init_at_random_ep_len=True)
         self.assertEqual(len(self.built), 1)
         buf = r.env.unwrapped.episode_length_buf
         self.assertGreater(int(buf.sum()), 0, "重建后必须重新随机化回合计时, 不能停在全体 0")
         self.assertNotEqual(int(buf[0]), int(buf[1]), "各环境的回合相位必须被打散")
+
+    # 开关关闭时必须保持调用方要求的固定回合长度：重建不得擅自改变回合计时。
+    # 标准训练入口传 True, 因此这一条只影响固定时长的诊断/消融入口。
+    def test_rebuild_respects_disabled_episode_randomization(self):
+        torch.manual_seed(7)
+        r = self._build(2999, 0.40, False)
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(2)                           # init_at_random_ep_len 默认 False
+        self.assertEqual(len(self.built), 1)
+        buf = r.env.unwrapped.episode_length_buf
+        self.assertEqual(int(buf.sum()), 0, "开关关闭时重建不得随机化回合计时")
+        self.assertFalse(r._randomize_ep_len)
 
     # 重建模板只能改课程控制的两个量；直接新建默认 cfg 会把自定义墙体尺寸悄悄改回默认值
     # （实测墙高 0.25/半长 1.0/半厚 0.03 被恢复成 0.10/0.30/0.01）。
