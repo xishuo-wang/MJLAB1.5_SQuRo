@@ -305,6 +305,24 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertGreater(int(buf.sum()), 0, "重建后必须重新随机化回合计时, 不能停在全体 0")
         self.assertNotEqual(int(buf[0]), int(buf[1]), "各环境的回合相位必须被打散")
 
+    # 重建模板只能改课程控制的两个量；直接新建默认 cfg 会把自定义墙体尺寸悄悄改回默认值
+    # （实测墙高 0.25/半长 1.0/半厚 0.03 被恢复成 0.10/0.30/0.01）。
+    def test_rebuild_preserves_custom_wall_dimensions(self):
+        custom = E.RestrictedSpaceEntityCfg(
+            name="restricted_space", corridor_width=0.40,
+            wall_height=0.25, wall_half_length=1.0, wall_half_thickness=0.03)
+        cfg = type("Cfg", (), {
+            "scene": type("S", (), {"entities": {"restricted_space": custom}})(),
+            "events": {},
+        })()
+        out = E.configure_restricted_space(cfg, 0.30, enable_collision=True)
+        self.assertAlmostEqual(out.corridor_width, 0.30, places=12)
+        self.assertEqual(out.contype, 1, "课程仍必须能改碰撞开关")
+        self.assertEqual(out.conaffinity, 1)
+        self.assertEqual(
+            (out.wall_height, out.wall_half_length, out.wall_half_thickness),
+            (0.25, 1.0, 0.03), "自定义墙体尺寸不得被重置为默认值")
+
     def test_fixed_width_still_switches_collision(self):
         # 锁死宽度时宽度判断走不到，碰撞判断必须放在 fixed 分支之外
         r = self._build(2999, 0.30, False, fixed=True)

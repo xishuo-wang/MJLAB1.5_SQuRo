@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mujoco
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 
 
@@ -115,7 +115,14 @@ def configure_restricted_space(env_cfg, corridor_width: float, enable_collision:
     cfg = build_restricted_space_cfg(enable_collision=enable_collision,
                                      corridor_width=corridor_width,
                                      fixed_width=fixed_width)
-    entities = dict(env_cfg.scene.entities)  # type: ignore[union-attr]
+    existing = dict(env_cfg.scene.entities).get("restricted_space")
+    # 只改课程控制的两个量, 其余尺寸 (墙高/半长/半厚/配色) 必须沿用启动配置 ——
+    # 直接新建默认 cfg 会把自定义墙体尺寸悄悄改回默认值。见技术细节 §7.11 第 9 条。
+    if isinstance(existing, RestrictedSpaceEntityCfg):
+        cfg = replace(existing, corridor_width=cfg.corridor_width,
+                      contype=cfg.contype, conaffinity=cfg.conaffinity,
+                      fixed_width=cfg.fixed_width)
+    entities = dict(env_cfg.scene.entities)
     entities["restricted_space"] = cfg
-    env_cfg.scene.entities = entities  # type: ignore[union-attr]
+    env_cfg.scene.entities = entities
     return cfg
