@@ -35,7 +35,6 @@ STAND_STILL_FULL_SPEED = STAND_STILL_FULL_SPEED_RATIO * STAND_VEL_MEAN_MAX
 S1_SHAPE_DEPTH_TOL = 0.02
 
 
-
 _STAND_UP_THRESHOLD = 0.8     # 站起奖励: 竖直度下限 (身体基本竖直才给站直奖励)
 _TARGET_HEIGHT = 0.055        # 站直目标高度 (m, 与命令 height_f/h 一致)
 # 跌倒滞留惩罚阈值
@@ -240,6 +239,39 @@ def compute_leg_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     out = weight * _joint_target_cost(env, _MODEL_INDICES.actuator_leg_ids)
     return out * (command.phase == 2)
 
+
+
+# P3 实际腿构型代价 — 直接约束"机器人实际摆成了什么样", 与 leg_target 互补:
+#   leg_target 管"策略要求执行器去哪里"(指令), 本项管"腿最终停在哪个角度"(实际)。
+#   实测 5999 保持段: 实际腿 MSE 0.41~0.60, 其中 3 个关节的指令**全程超出 ctrlrange**
+#   (FL_shoulder/FR_elbow/HL_knee 17/17 帧), 8 个关节合计 74% 的帧力矩饱和 —— 即
+#   策略在持续要求一个做不到的构型, 实际角被 forcerange 钉住。所以两项都必须有。
+# 三个设计要点, 缺一个都会失效:
+#   1. 读**实际** joint_pos, 不读 raw_action —— 否则与 leg_target 重复, 管不住被顶歪的情况;
+#   2. 只对 8 个腿关节取均值, 不混入脊柱/颈部 —— 否则腿部误差被稀释 (track_joint 就是 14 关节
+#      平均再除 3, 同误差下只有约 -0.05, 实测形同虚设);
+#   3. 不乘指数跟踪核, 也不要求先满足站立几何 —— 指数核在 MSE≈0.4 处已衰减到 0.02,
+#      正是最需要它的时候没有信号。
+# 门控用**整个 P3**(phase==2) 而不是"过渡结束后": 成功结算不要求 P3 过渡已播完, 大 λ 下
+# 存在"提前完成窗口并复位、根本没被后置约束管到"的路径。P3 内跟踪时变参考即可 —— 过渡段
+# 跟踪的是收缩位→站立位的插值, 不会要求腿立刻到 LEG_INIT。依据见技术细节 §7.13。
+def compute_leg_pose_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
+    asset: Entity = env.scene["robot"]
+    leg_ids = _MODEL_INDICES.actuator_leg_ids
+    actual = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids][:, leg_ids]
+    ref_pos, _ = get_reference_joint_state(env)
+    error = actual - ref_pos[:, leg_ids]
+    mse = torch.mean(error.square(), dim=1)
+    weight = get_curriculum_reward_weight(env, "weight_leg_pose")
+    # 只上报实际构型误差 (列序与 joint_pos 同源, 不涉及执行器口径)。
+    # 力矩饱和率**不做运行时上报**: 真实模型的关节列含浮动基, 执行器列序与之不同,
+    # 运行期对齐容易写错且写错会把训练打挂。该量在离线诊断里从回放 CSV 的 torque 列直接算,
+    # 实测 P3 保持段为 74% (见技术细节 §7.13), 需要复测时用 CSV_Anaylsis 流程。
+    log = getattr(env, "extras", {}).get("log") if hasattr(env, "extras") else None
+    if log is not None:
+        log["Data/leg_pose_rmse"] = float(mse.mean().sqrt().item())
+    return -weight * mse * (command.phase == 2)
 
 
 # 躯干姿态模仿代价 — 跟踪两段背腹轴的世界 Z 余弦 (技术细节 §7.8)。

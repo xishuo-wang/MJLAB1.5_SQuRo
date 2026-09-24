@@ -270,6 +270,72 @@ class StageRewardTests(unittest.TestCase):
         milestone_per_step = _CURVES['weight_milestone_s1'][0] / 0.01
         self.assertLess(shape, milestone_per_step / 50.0)
 
+    # 把 mock 的关节角设成"参考 + 指定偏差"; cols=腿列时只偏腿, cols=脊柱列时只偏脊柱
+    def _set_joint_error(self, env, cols, value):
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+        ref, _ = get_reference_joint_state(env)
+        q = ref.clone()
+        for c in cols:
+            q[:, c] += value
+        n = q.shape[0]
+        # 一次性重建 data: 腿构型项读 joint_pos, 其诊断读 actuator_force(与 joint_pos 同口径)
+        env.make_robot.data = NS(joint_pos=q,
+                                 body_link_pos_w=torch.zeros(n, 2, 3),
+                                 actuator_force=torch.zeros(n, 14))
+        return env
+
+    def test_leg_pose_is_p3_only(self):
+        # [§7.13] 只作用于 P3。若 P1/P2 也生效, 翻正动作会被"要求站立构型"惩罚,
+        # 形成局部最优 (与 s2_progress 当初必须在 P1 关闭同一个道理)。
+        env, cmd = make_env([0, 1, 2])
+        self._set_joint_error(env, [4, 5, 10, 11], 0.5)
+        r = rewards.compute_leg_pose_cost(env)
+        self.assertAlmostEqual(r[0].item(), 0.0, places=6)
+        self.assertAlmostEqual(r[1].item(), 0.0, places=6)
+        self.assertLess(r[2].item(), 0.0)
+
+    def test_leg_pose_magnitude_is_quadratic_in_error(self):
+        # [§7.13] 二次代价: 误差翻倍 -> 代价 ×4。保证大误差有强信号 (指数核在高误差区恰好失效)。
+        env, cmd = make_env([2, 2])
+        env = self._set_joint_error(env, [4, 5, 10, 11], 0.3)
+        r1 = rewards.compute_leg_pose_cost(env)[0].item()
+        env = self._set_joint_error(env, [4, 5, 10, 11], 0.6)
+        r2 = rewards.compute_leg_pose_cost(env)[0].item()
+        self.assertAlmostEqual(r2 / r1, 4.0, places=4)
+
+    def test_leg_pose_averages_only_leg_joints(self):
+        # [§7.13] 必须只平均 8 个腿关节。若像 track_joint 那样 14 关节平均再除常数,
+        # 同样大小的腿部误差会被稀释到几乎无信号 (实测同误差下只有约 -0.05)。
+        env, cmd = make_env([2, 2])
+        # 环境 A: 腿有误差; 环境 B: 脊柱有同样误差。腿项对 A 的惩罚必须远大于对 B 的
+        env = self._set_joint_error(env, [4, 5, 10, 11], 0.5)
+        a = rewards.compute_leg_pose_cost(env)[0].item()
+        env = self._set_joint_error(env, [0, 1, 8, 9], 0.5)
+        b = rewards.compute_leg_pose_cost(env)[0].item()
+        self.assertLess(a, -0.1)                       # 腿误差必须被"看见"
+        self.assertAlmostEqual(b, 0.0, places=6)       # 脊柱误差完全不影响腿项
+
+    def test_leg_pose_reads_actual_angles_not_commands(self):
+        # [§7.13] 与 leg_target 的分工: 本项读**实际**关节角, 不读 raw_action。
+        # 判据: 只改指令 (动作项) 而关节角不变时, 本项取值必须完全不变。
+        env, cmd = make_env([2])
+        env = self._set_joint_error(env, [4, 5, 10, 11], 0.4)
+        before = rewards.compute_leg_pose_cost(env)[0].item()
+        fake_action = NS(raw_action=torch.full((1, 14), 9.0), scale=0.3,
+                         offset=torch.zeros(14),
+                         target_names=[n.replace('_joint', '') for n in _ACTUATED_JOINT_NAMES])
+        env.action_manager = NS(get_term=lambda _: fake_action)
+        after = rewards.compute_leg_pose_cost(env)[0].item()
+        self.assertAlmostEqual(before, after, places=6)
+
+    def test_leg_pose_stays_below_posture_rewards(self):
+        # [§7.13] 量级: 实测保持段腿 MSE≈0.41, 该项约 -0.81/步 (Episode_Reward 口径约 -1.6/s)。
+        # 必须比 height(5.0)、mimic_pos(10.0) 小一个量级左右, 否则会压过过程跟踪。
+        w = _CURVES['weight_leg_pose'][0]
+        self.assertGreater(w, 0.0)
+        self.assertLess(w * 0.41, _CURVES['weight_height'][0])
+        self.assertLess(w * 0.41, _CURVES['weight_mimic_pos'][0])
+
     def test_s1_shape_peak_coincides_with_s1_criterion(self):
         # [§7.12] 最关键的几何性质: 塑形地形的高值区必须与 _check_S1 的判据区重合。
         # 否则要么"到了判据点却拿不到塑形分"(塑形无效), 要么"塑形分满了判据还不成立"
