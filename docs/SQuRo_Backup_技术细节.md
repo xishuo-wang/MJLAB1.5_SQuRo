@@ -1085,7 +1085,7 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    （会静默改到别的几何上，症状就是"开关看着没生效"）。必须经 `indexing.geom_ids` 换算。
 
 **因此的落地方式**：`a` 与碰撞开关都是 `env_cfg` 的一部分（与 Slalom 的 `PoleEntity` 同理），
-换 `a` 或切阶段都要**重建环境**。修好后的实现有四个要点：
+换 `a` 或切阶段都要**重建环境**。修好后的实现有八个要点：
 
 1. **宽度用离散档位表**（`CORRIDOR_WIDTH_LADDER = (0.40, 0.35, 0.30, 0.25, 0.20)`），
    由 `get_corridor_width_for_iter(iter)` 选档。**末档必须恰好等于 `CORRIDOR_WIDTH_MIN`**。
@@ -1121,6 +1121,23 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    "已经是目标值、无需重建"，而**真实环境还是启动时编译的那版** —— 训练会在错误的物理环境里
    继续跑，并把这个错误值再写回下一个检查点。凡是"我以为我改成了什么"和"环境里到底是什么"
    可能脱节的地方，都必须读后者。
+8. **重建后必须重新打散回合计时（`episode_length_buf`）**。换 `a` / 切碰撞都要新建环境，而
+   `RslRlVecEnvWrapper.__init__` 会 `reset()` 把**全体环境**的回合计数归零；本任务只有 `timeout`
+   一种终止，所有环境步长相同 ⇒ 从此**全部环境永久同进同出**，`init_at_random_ep_len`
+   （`scripts/train.py` 传入）只在 `learn()` 入口生效一次，不会补做。
+   实测 run `2026-09-23_18-24-30`：重建前 `Mean reward` 每轮都变，重建后变成 **12~13 轮的台阶**
+   并一直持续到 6000 轮；`Progress/enter_p2` 从平稳常数 0.70 变成同一回合内 **0.0000 → 1.0000**
+   的振荡（峰值比重建前更高，说明**能力没有下降**）。
+   **比"批量内相位多样性下降"更麻烦的是口径**：所有"全环境瞬时平均"指标（`Progress/*`、
+   `Gate/*`、`Cycle/per_episode`、`Progress/stand_hold`）从平稳常数变成相位抽签值，用固定间隔
+   采样就可能每次都落在同一相位上。曾据此误判"iter 3000 起训练崩溃 1200 轮"，实际情况是
+   100 轮 = 8 个回合恰好整数倍、采样被锁死在"刚全体复位"那一瞬，读到的 0.000 是构造出来的。
+   ⇒ **跨这一步前后比较 `Progress/*` 必须换成回合结束口径**：`Episode_Reward/*` 由
+   `reward_manager.reset()` 在回合结束时对刚结束的环境求均值，与相位无关，是唯一安全的来源。
+   实现：`runner._randomize_episode_phase()` 由 `learn()` 入口与 `_apply_corridor_rebuild`
+   共用（后者覆盖循环内重建与 `load()` 两个调用点）；回归
+   `verify_backup_corridor_rebuild.test_rebuild_randomizes_episode_phase` 已做变异确认
+   （去掉该调用即报"重建后必须重新随机化回合计时"）。
 
 **回放取值优先级**（`SQuRo_Backup_play.resolve_corridor`）：命令行显式指定 > 检查点里保存的
 实际编译值（`save()` 写入 `infos["corridor_state"]`，含 `corridor_width/corridor_collision/

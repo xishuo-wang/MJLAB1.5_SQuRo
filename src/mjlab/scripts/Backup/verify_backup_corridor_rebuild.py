@@ -86,8 +86,17 @@ class FakeWrapper:
         self.num_envs = env.num_envs
         self.device = env.device
         self.max_episode_length = env.max_episode_length
-        self.episode_length_buf = env.episode_length_buf
         env.reset()
+
+    # 必须像真包装器一样用 property 转发到裸环境, 否则写入只落在假包装器上,
+    # "重建后回合计时是否被打散"这类断言会读到与生产代码不同的对象。
+    @property
+    def episode_length_buf(self):
+        return self.env.episode_length_buf
+
+    @episode_length_buf.setter
+    def episode_length_buf(self, value):
+        self.env.episode_length_buf = value
 
     @property
     def unwrapped(self):
@@ -282,6 +291,19 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(r.logger.cur_reward_sum[0].item(), 0.0)
         self.assertEqual(r.logger.cur_episode_length[0].item(), 0.0)
         self.assertEqual(r.logger.ep_extras, [])
+
+    # 新环境的 episode_length_buf 全为 0；本任务只有 timeout 一种终止，不打散回合计时就会让
+    # 全部环境永久同进同出（每轮 rollout 只覆盖一个任务相位，全环境瞬时平均指标随之失真）。
+    def test_rebuild_randomizes_episode_phase(self):
+        torch.manual_seed(7)                     # 固定 RNG，避免 2 个环境随机撞成同值
+        r = self._build(2999, 0.40, False)
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(2)
+        self.assertEqual(len(self.built), 1)
+        buf = r.env.unwrapped.episode_length_buf
+        self.assertGreater(int(buf.sum()), 0, "重建后必须重新随机化回合计时, 不能停在全体 0")
+        self.assertNotEqual(int(buf[0]), int(buf[1]), "各环境的回合相位必须被打散")
 
     def test_fixed_width_still_switches_collision(self):
         # 锁死宽度时宽度判断走不到，碰撞判断必须放在 fixed 分支之外

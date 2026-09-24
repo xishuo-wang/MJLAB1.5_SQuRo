@@ -87,6 +87,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             if buf is not None:
                 buf.zero_()
 
+    # 打散各环境的回合计时 (回合相位随机化), 与 learn() 入口的 init_at_random_ep_len 同一语义。
+    # 新环境的 episode_length_buf 全为 0 而本任务只有 timeout 一种终止, 不打散就会让全部环境
+    # 永久同进同出: 每轮 rollout 只覆盖一个任务相位, Progress/*、Gate/* 变成随回合周期振荡的
+    # 相位抽签值。依据与实测见技术细节 §7.11 第 8 条。
+    def _randomize_episode_phase(self) -> None:
+        self.env.episode_length_buf = torch.randint_like(
+            self.env.episode_length_buf, high=int(self.env.max_episode_length))
+
     # 重建环境, 并按需重新取观测 (换环境后旧 obs 属于旧环境, 必须作废)
     def _apply_corridor_rebuild(self, refresh_obs: bool) -> "torch.Tensor | None":
         step_counter = int(self.env.unwrapped.common_step_counter)
@@ -107,6 +115,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._corridor_clip_actions)
         # 包装器 reset 之后再把计数器写一次 (reset 可能把它归零), 然后才允许取观测
         self.env.unwrapped.common_step_counter = step_counter
+        # 与计数器同理: 新环境的回合相位是全 0, 三个调用点都要经过这里补打散
+        self._randomize_episode_phase()
         self._clear_logger_episode_state()
         try:
             old.close()
@@ -122,8 +132,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 重建后必须重新取观测: obs 是循环里的局部变量, 换环境后旧观测属于旧环境。
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
         if init_at_random_ep_len:
-            self.env.episode_length_buf = torch.randint_like(
-                self.env.episode_length_buf, high=int(self.env.max_episode_length))
+            self._randomize_episode_phase()
 
         if self._corridor_start_width is not None and self._corridor_change_needed():
             self._apply_corridor_rebuild(refresh_obs=False)
