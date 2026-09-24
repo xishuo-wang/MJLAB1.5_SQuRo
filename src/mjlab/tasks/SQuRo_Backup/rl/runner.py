@@ -109,6 +109,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         env_cfg = copy.deepcopy(self._corridor_env_cfg)
         env_cfg.scene.num_envs = self._corridor_num_envs
         env_cfg.events.pop("init_restricted_space", None)
+        # 重建不是新实验的开始: 清掉 seed, 否则 ManagerBasedRlEnv.__init__ 会调 seed_rng ->
+        # torch.manual_seed 复位全部设备的 RNG, 影响策略采样与 PPO 抽样。见 §7.11 第 10 条。
+        env_cfg.seed = None
         mdp_entity.configure_restricted_space(env_cfg, width, enable_collision=collision)
         new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._corridor_device,
                                     render_mode=self._corridor_render_mode)

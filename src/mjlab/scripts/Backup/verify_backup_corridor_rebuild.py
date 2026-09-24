@@ -183,6 +183,7 @@ def fake_env_cfg():
             "entities": {"restricted_space": E.build_restricted_space_cfg(True, 0.40)},
         })(),
         "events": {"init_restricted_space": None, "reset_all": None},
+        "seed": 42,
     })()
 
 
@@ -190,9 +191,11 @@ class CorridorRebuildTest(unittest.TestCase):
     def setUp(self):
         EVENTS.clear()
         self.built: list[FakeEnv] = []
+        self.seen_seed: list = []
 
     def _ctor(self, cfg=None, device=None, render_mode=None):
         # 模拟真实编译：按 configure_restricted_space 写进 env_cfg 的值建实体
+        self.seen_seed.append(getattr(cfg, "seed", "MISSING"))
         ent_cfg = cfg.scene.entities["restricted_space"]
         env = FakeEnv(tag=f"new{len(self.built)}",
                       width=float(ent_cfg.corridor_width),
@@ -336,6 +339,17 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(
             (out.wall_height, out.wall_half_length, out.wall_half_thickness),
             (0.25, 1.0, 0.03), "自定义墙体尺寸不得被重置为默认值")
+
+    # 重建不是新实验的开始: 不能按 env_cfg.seed 重新播种 —— ManagerBasedRlEnv.__init__ 会调
+    # seed_rng -> torch.manual_seed (全设备) + random/np/wp, 把"换墙距"和"复位所有随机流"绑在一起。
+    def test_rebuild_does_not_reseed_rng(self):
+        r = self._build(2999, 0.40, False)
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(2, init_at_random_ep_len=True)
+        self.assertEqual(len(self.built), 1)
+        self.assertEqual(self.seen_seed, [None],
+                         "重建模板必须清掉 seed, 否则新环境会重新播种全局随机流")
 
     def test_fixed_width_still_switches_collision(self):
         # 锁死宽度时宽度判断走不到，碰撞判断必须放在 fixed 分支之外

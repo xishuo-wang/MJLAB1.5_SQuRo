@@ -1085,7 +1085,7 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    （会静默改到别的几何上，症状就是"开关看着没生效"）。必须经 `indexing.geom_ids` 换算。
 
 **因此的落地方式**：`a` 与碰撞开关都是 `env_cfg` 的一部分（与 Slalom 的 `PoleEntity` 同理），
-换 `a` 或切阶段都要**重建环境**。修好后的实现有八个要点：
+换 `a` 或切阶段都要**重建环境**。修好后的实现有十个要点：
 
 1. **宽度用离散档位表**（`CORRIDOR_WIDTH_LADDER = (0.40, 0.35, 0.30, 0.25, 0.20)`），
    由 `get_corridor_width_for_iter(iter)` 选档。**末档必须恰好等于 `CORRIDOR_WIDTH_MIN`**。
@@ -1135,9 +1135,27 @@ P0 收腿段加入后相位 0 的时钟被拉长为 `P1_END + T0 = 1.80λ`，其
    ⇒ **跨这一步前后比较 `Progress/*` 必须换成回合结束口径**：`Episode_Reward/*` 由
    `reward_manager.reset()` 在回合结束时对刚结束的环境求均值，与相位无关，是唯一安全的来源。
    实现：`runner._randomize_episode_phase()` 由 `learn()` 入口与 `_apply_corridor_rebuild`
-   共用（后者覆盖循环内重建与 `load()` 两个调用点）；回归
-   `verify_backup_corridor_rebuild.test_rebuild_randomizes_episode_phase` 已做变异确认
-   （去掉该调用即报"重建后必须重新随机化回合计时"）。
+   共用（后者覆盖循环内重建与 `load()` 两个调用点），并**遵守 `learn(init_at_random_ep_len=...)`
+   入口开关**（见第 10 条）；回归 `verify_backup_corridor_rebuild.test_rebuild_randomizes_episode_phase`
+   已做变异确认（去掉该调用即报"重建后必须重新随机化回合计时"）。
+   **注意它只打散"超时时刻"，不打散"任务阶段"**：重建瞬间全体环境仍是
+   `phase=P1 / t_phase=0`（`_reset_idx` 会调 `command_manager.reset`），相位要靠各环境不同的
+   剩余超时才逐渐铺开，约需一个回合（12.5 轮）。因此重建后**仍会先经过一段"全部没有 P3 样本"
+   的过渡期**，`Data/leg_pose_*` 的 NaN 触发条件并未被这一条消除（要靠 §7.13 的"省略键"解决）。
+9. **重建模板不得丢失启动时的自定义墙体尺寸**。`configure_restricted_space` 只覆盖课程控制的
+   `corridor_width` 与 `contype/conaffinity`（外加 `fixed_width`），墙高 / 半长 / 半厚 / 配色
+   一律沿用启动配置（`dataclasses.replace`）。曾直接新建默认 `RestrictedSpaceEntityCfg`，
+   实测把墙高 0.25 / 半长 1.0 / 半厚 0.03 恢复成 0.10 / 0.30 / 0.01 —— **当前用默认墙体时无
+   影响，一旦以后加高加长，阶段一与阶段二就会跑在两套不同的墙里**。
+10. **重建不是新实验的开始：既不重新播种，也不擅自改回合计时**。
+   `env_cfg` 是从启动模板深拷贝的，保留 `seed`；而 `ManagerBasedRlEnv.__init__` 见 `seed` 非空
+   就调 `seed_rng` → `torch.manual_seed`（**全设备**）+ `random` / `numpy` / `wp.rand_init`。
+   于是"换墙距"顺带复位了策略采样与 PPO 抽样的随机流，破坏单变量归因。修法：重建模板置
+   `env_cfg.seed = None`（首次启动仍按命令行 seed 播种）。
+   同理，回合计时随机化必须遵守 `learn()` 入口的开关：入口传 `False`（固定时长的诊断/消融）时
+   重建**不得**改变回合计时。实现为 `runner._randomize_ep_len`（默认 `False`，与 `learn()` 签名
+   一致；`load()` 触发的重建早于 `learn()`，此时不随机化，随后 `learn(True)` 会补上）。
+   影响量级**未知**（随机流是连续流，不能按"重建后 96 步"估算），但这是受控实验的必要条件。
 
 **回放取值优先级**（`SQuRo_Backup_play.resolve_corridor`）：命令行显式指定 > 检查点里保存的
 实际编译值（`save()` 写入 `infos["corridor_state"]`，含 `corridor_width/corridor_collision/
