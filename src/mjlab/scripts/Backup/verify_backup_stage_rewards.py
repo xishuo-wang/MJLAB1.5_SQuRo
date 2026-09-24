@@ -1,5 +1,6 @@
 # 阶段奖励、参考边界与站立判定回归；不创建环境、不修改训练数据。
 import unittest
+import math
 from math import cos, radians
 from types import SimpleNamespace as NS
 from unittest.mock import patch
@@ -304,16 +305,89 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(r2 / r1, 4.0, places=4)
 
     def test_leg_pose_averages_only_leg_joints(self):
-        # [§7.13] 必须只平均 8 个腿关节。若像 track_joint 那样 14 关节平均再除常数,
-        # 同样大小的腿部误差会被稀释到几乎无信号 (实测同误差下只有约 -0.05)。
+        # [§7.13] 分母口径必须精确: 4 个腿关节各偏 0.5 rad、权重 2.0 时, 结果必须**恰好**是
+        # 2.0 × (4×0.25)/8 = −0.25。只断言 "<−0.1" 守不住分母 (换成 14 关节平均也会通过)。
+        env, cmd = make_env([2])
+        leg_cols = list(_MODEL_INDICES.actuator_leg_ids)[:4]
+        env = self._set_joint_error(env, leg_cols, 0.5)
+        r = rewards.compute_leg_pose_cost(env)[0].item()
+        self.assertAlmostEqual(r, -0.25, places=6)
+
+    def test_leg_pose_denominator_is_eight(self):
+        # [§7.13] 8 个腿关节全偏 0.5 rad ⇒ 2.0 × 0.25 = −0.5 (与上一条一起夹住分母 = 8)
+        env, cmd = make_env([2])
+        env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
+        r = rewards.compute_leg_pose_cost(env)[0].item()
+        self.assertAlmostEqual(r, -0.5, places=6)
+
+    def test_leg_pose_average_is_per_env_not_global(self):
+        # [§7.13] 逐环境求均值: 两条环境误差不同时, 读数必须各自独立 (不能被跨环境平均掉)
         env, cmd = make_env([2, 2])
-        # 环境 A: 腿有误差; 环境 B: 脊柱有同样误差。腿项对 A 的惩罚必须远大于对 B 的
-        env = self._set_joint_error(env, [4, 5, 10, 11], 0.5)
-        a = rewards.compute_leg_pose_cost(env)[0].item()
-        env = self._set_joint_error(env, [0, 1, 8, 9], 0.5)
-        b = rewards.compute_leg_pose_cost(env)[0].item()
-        self.assertLess(a, -0.1)                       # 腿误差必须被"看见"
-        self.assertAlmostEqual(b, 0.0, places=6)       # 脊柱误差完全不影响腿项
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+        ref, _ = get_reference_joint_state(env)
+        q = ref.clone()
+        for c in _MODEL_INDICES.actuator_leg_ids:
+            q[0, c] += 0.5     # 环境0: 8 腿全偏 0.5 -> -0.5
+            q[1, c] += 1.0     # 环境1: 8 腿全偏 1.0 -> -2.0
+        env.make_robot.data = NS(joint_pos=q, body_link_pos_w=torch.zeros(2, 2, 3))
+        r = rewards.compute_leg_pose_cost(env)
+        self.assertAlmostEqual(r[0].item(), -0.5, places=6)
+        self.assertAlmostEqual(r[1].item(), -2.0, places=6)
+
+    def test_leg_pose_logging_is_p3_filtered(self):
+        # [§7.13] 日志必须与奖励同门控。全相位平均会让"P1 腿错 1 rad"与"P3 腿错 1 rad"
+        # 读数相同, 无法据此判断站姿 —— 这是实测发现的诊断缺陷。
+        env, cmd = make_env([0, 2])
+        # 环境0 在 P1 且腿错 1.0; 环境1 在 P3 且腿完全准确
+        from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
+        ref, _ = get_reference_joint_state(env)
+        q = ref.clone()
+        for c in _MODEL_INDICES.actuator_leg_ids:
+            q[0, c] += 1.0
+        env.make_robot.data = NS(joint_pos=q, body_link_pos_w=torch.zeros(2, 2, 3))
+        rewards.compute_leg_pose_cost(env)
+        log = env.extras["log"]
+        # P3 只有一个环境且它完全准确 -> 读数必须是 0, 不能被 P1 的 1.0 污染
+        self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.0, places=6)
+        self.assertEqual(log["Data/leg_pose_hold_frac"], 0.0)   # t_phase=0 < λ·T4
+
+    def test_leg_pose_logging_nan_when_no_p3_samples(self):
+        # [§7.13] 没有 P3 样本时必须记 NaN, 不能用 0 冒充"误差为零"
+        env, cmd = make_env([0])
+        env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 1.0)
+        rewards.compute_leg_pose_cost(env)
+        log = env.extras["log"]
+        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_p3"]))
+        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_hold"]))
+        self.assertTrue(math.isnan(log["Data/leg_pose_hold_frac"]))
+
+    def test_leg_pose_hold_split(self):
+        # [§7.13] 保持段口径: t_phase ≥ λ·T4 才计入 _hold; λ=3 时 1.0 < 1.5 不算, 2.0 算。
+        # 两个环境同帧比较, 误差都精确设为 0.5 —— 这样读数差异只能来自门控而不是参考漂移。
+        # 参考角是 (λ, t_phase) 的函数, 所以必须先定住两者再设误差。
+        env, cmd = make_env([2, 2])
+        cmd.command_tensor[:, 5] = 3.0
+        cmd.time_scale_command = cmd.command_tensor[:, 5]
+        cmd.t_phase = torch.tensor([1.0, 2.0])
+        env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
+        rewards.compute_leg_pose_cost(env)
+        log = env.extras["log"]
+        self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
+        self.assertAlmostEqual(log["Data/leg_pose_rmse_hold"], 0.5, places=6)   # 只有 env1
+        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.5, places=6)   # 1/2
+
+    def test_leg_pose_hold_excluded_before_transition(self):
+        # [§7.13] 过渡未结束时不得计入保持段 (否则 λ 大时会用早期帧冒充终末站姿)
+        env, cmd = make_env([2])
+        cmd.command_tensor[:, 5] = 3.0
+        cmd.time_scale_command = cmd.command_tensor[:, 5]
+        cmd.t_phase = torch.tensor([1.0])           # < λ·T4 = 1.5
+        env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
+        rewards.compute_leg_pose_cost(env)
+        log = env.extras["log"]
+        self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
+        self.assertTrue(math.isnan(log["Data/leg_pose_rmse_hold"]))
+        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.0, places=6)
 
     def test_leg_pose_reads_actual_angles_not_commands(self):
         # [§7.13] 与 leg_target 的分工: 本项读**实际**关节角, 不读 raw_action。

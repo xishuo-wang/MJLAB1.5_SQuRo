@@ -7,7 +7,7 @@ from .command import _GROUND_TH as _S1_GROUND_TH
 from .curriculums import get_curriculum_reward_weight
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
-from .config import STAND_VEL_MEAN_MAX
+from .config import STAND_VEL_MEAN_MAX, T4
 
 
 if TYPE_CHECKING:
@@ -264,14 +264,32 @@ def compute_leg_pose_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     error = actual - ref_pos[:, leg_ids]
     mse = torch.mean(error.square(), dim=1)
     weight = get_curriculum_reward_weight(env, "weight_leg_pose")
-    # 只上报实际构型误差 (列序与 joint_pos 同源, 不涉及执行器口径)。
-    # 力矩饱和率**不做运行时上报**: 真实模型的关节列含浮动基, 执行器列序与之不同,
-    # 运行期对齐容易写错且写错会把训练打挂。该量在离线诊断里从回放 CSV 的 torque 列直接算,
-    # 实测 P3 保持段为 74% (见技术细节 §7.13), 需要复测时用 CSV_Anaylsis 流程。
-    log = getattr(env, "extras", {}).get("log") if hasattr(env, "extras") else None
-    if log is not None:
-        log["Data/leg_pose_rmse"] = float(mse.mean().sqrt().item())
+    # 诊断量必须与奖励同门控 —— 否则同一读数可以对应完全不同的站姿质量
+    # (P1 腿错 1 rad 与 P3 腿错 1 rad 在"全相位平均"下读数相同)。见技术细节 §7.13。
+    _log_leg_pose(env, command, mse)
     return -weight * mse * (command.phase == 2)
+
+
+# 上报三个口径的腿构型误差, 全部按 P3 筛选; 无样本时记 NaN (不要用 0 冒充"无误差")。
+#   _p3   : P3 全段 (与新奖励的门控一致, 衡量"新奖励对应的误差")
+#   _hold : P3 保持段 (t_phase >= λ·T4, 衡量"最终站姿")
+#   _hold_frac : 保持段帧数占 P3 帧数的比例 —— 没有它就无法判断读数是否可信
+def _log_leg_pose(env: "ManagerBasedRlEnv", command: BackupCommand,
+                  mse: torch.Tensor) -> None:
+    log = getattr(env, "extras", {}).get("log") if hasattr(env, "extras") else None
+    if log is None:
+        return
+    rmse = mse.sqrt()
+    in_p3 = command.phase == 2
+    lam = command.time_scale_command.clamp(min=0.1)
+    in_hold = in_p3 & (command.t_phase >= lam * T4)
+    n_p3 = int(in_p3.sum())
+    n_hold = int(in_hold.sum())
+    log["Data/leg_pose_rmse_p3"] = (
+        float(rmse[in_p3].mean().item()) if n_p3 > 0 else float("nan"))
+    log["Data/leg_pose_rmse_hold"] = (
+        float(rmse[in_hold].mean().item()) if n_hold > 0 else float("nan"))
+    log["Data/leg_pose_hold_frac"] = (float(n_hold) / n_p3) if n_p3 > 0 else float("nan")
 
 
 # 躯干姿态模仿代价 — 跟踪两段背腹轴的世界 Z 余弦 (技术细节 §7.8)。
