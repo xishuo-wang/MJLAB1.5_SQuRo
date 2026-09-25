@@ -326,7 +326,7 @@ class CorridorRebuildTest(unittest.TestCase):
     # （实测墙高 0.25/半长 1.0/半厚 0.03 被恢复成 0.10/0.30/0.01）。
     def test_rebuild_preserves_custom_wall_dimensions(self):
         custom = E.RestrictedSpaceEntityCfg(
-            name="restricted_space", corridor_width=0.40,
+            name="restricted_space", wall_x_neg=-0.20, wall_x_pos=0.20,
             wall_height=0.25, wall_half_length=1.0, wall_half_thickness=0.03)
         cfg = type("Cfg", (), {
             "scene": type("S", (), {"entities": {"restricted_space": custom}})(),
@@ -339,6 +339,25 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(
             (out.wall_height, out.wall_half_length, out.wall_half_thickness),
             (0.25, 1.0, 0.03), "自定义墙体尺寸不得被重置为默认值")
+
+    # 墙位是原语、间距是派生量：不对称配置必须能被正确表达，且两种写法不能混用
+    # （历史上"a=0.40"与"负侧墙位 −0.40"混用会得到完全不同的几何）。
+    def test_wall_pair_is_primitive_and_width_is_derived(self):
+        cfg = E.build_restricted_space_cfg(True, wall_x_neg=-0.20, wall_x_pos=0.08)
+        self.assertAlmostEqual(cfg.corridor_width, 0.28, places=12)
+        self.assertAlmostEqual(cfg.clear_width, 0.26, places=12)
+        sym = E.build_restricted_space_cfg(True, corridor_width=0.40)
+        self.assertAlmostEqual(sym.wall_x_neg, -0.20, places=12)
+        self.assertAlmostEqual(sym.wall_x_pos, 0.20, places=12)
+
+    def test_mixed_wall_arguments_are_rejected(self):
+        with self.assertRaises(ValueError):
+            E.build_restricted_space_cfg(True, corridor_width=0.40,
+                                         wall_x_neg=-0.20, wall_x_pos=0.08)
+        with self.assertRaises(ValueError):
+            E.build_restricted_space_cfg(True, wall_x_neg=-0.20)   # 必须成对
+        with self.assertRaises(ValueError):
+            E.build_restricted_space_cfg(True, wall_x_neg=0.10, wall_x_pos=-0.10)
 
     # 重建不是新实验的开始: 不能按 env_cfg.seed 重新播种 —— ManagerBasedRlEnv.__init__ 会调
     # seed_rng -> torch.manual_seed (全设备) + random/np/wp, 把"换墙距"和"复位所有随机流"绑在一起。
