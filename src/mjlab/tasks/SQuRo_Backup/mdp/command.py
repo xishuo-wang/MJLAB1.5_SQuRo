@@ -128,6 +128,20 @@ class BackupCommand(CommandTerm):
         self._last_cycle_end_pulse = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s1_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._s2_awarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # 回合级统计 (供墙位课程的门控使用)。与循环级状态严格分开:
+        #   完成脉冲产生时立刻置位 (在 stand_reward_and_pulse 里), 循环复位**不清**;
+        #   回合结束时发布一次 (env_id, valid, success) 再清零。
+        # 为什么不能复用 _cycles_this_episode: 它在 _update_metrics 里加的是**上一步**的
+        # _last_cycle_reset, 而 _update_metrics 跑在 _reset_idx 之前、_update_command 之后 ——
+        # "成功与 timeout 同一步"的那个循环会被计到下一个回合里, 从回合统计中丢失。
+        # valid = 该环境自(重)建以来不是第 1 个回合: 重建会随机化回合计时, 首个回合可能被
+        # 截短, 没有拿到完整 12 s 机会, 算失败会系统性压低新墙位的完成率。
+        self._ep_index = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._ep_had_success = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._ep_cycle_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._ep_seq = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._last_ep_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_ep_success = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
         self._pose_cos_cache: torch.Tensor | None = None
         # 姿态识别观测 (技术细节 §7.8): 与 phase 分开, 只作指标, 不参与任何推进判定。
@@ -224,6 +238,13 @@ class BackupCommand(CommandTerm):
         if not hasattr(self, "_pose_cache"):
             self._pose_cache = None
             self._pose_cos_cache = None
+        if not hasattr(self, "_ep_index"):
+            self._ep_index = torch.zeros_like(self.phase)
+            self._ep_had_success = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._ep_cycle_count = torch.zeros_like(self.phase)
+            self._ep_seq = torch.zeros_like(self.phase)
+            self._last_ep_valid = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_ep_success = torch.zeros_like(self.phase, dtype=torch.bool)
 
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -298,6 +319,15 @@ class BackupCommand(CommandTerm):
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
+            # 回合结束: 先发布本回合结果 (valid/success), 再走常规的重采样。
+            # 首个回合 (自上一次重建以来) 标记为无效, 见 __init__ 里的说明。
+            valid = self._ep_index[env_ids] >= 1
+            self._last_ep_valid[env_ids] = valid
+            self._last_ep_success[env_ids] = self._ep_had_success[env_ids] & valid
+            self._ep_seq[env_ids] += 1
+            self._ep_index[env_ids] += 1
+            self._ep_had_success[env_ids] = False
+            self._ep_cycle_count[env_ids] = 0
             self._resample_command(env_ids)
         return extras
 
@@ -677,6 +707,9 @@ class BackupCommand(CommandTerm):
         # 每个循环只能完成一次: 窗口在复位前一直保持"已攒满", 不加这道锁的话在"完成帧"
         # 与"复位帧"之间(以及同一帧内重复结算时)会反复结算同一个循环。
         confirmed = confirmed & ~self._pending_cycle_reset
+        # 回合级统计的唯一产生点: 就在这里置位, 循环复位不清 (见 __init__ 的说明)。
+        self._ep_had_success |= confirmed
+        self._ep_cycle_count += confirmed.long()
         # 冻结: 下一步的奖励项读 _last_cycle_end_pulse, 读走即被置回 False(只领一次)。
         self._last_cycle_end_pulse |= confirmed
         self._pending_cycle_reset |= confirmed

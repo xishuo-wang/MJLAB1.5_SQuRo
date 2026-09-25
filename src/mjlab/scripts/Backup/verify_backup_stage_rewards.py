@@ -82,6 +82,17 @@ def make_env(phases):
     cmd._s2_cycle_latched = torch.zeros(n, dtype=torch.bool)
     cmd._cycles_this_episode = torch.zeros(n, dtype=torch.long)
     cmd._pending_episode_reset = torch.zeros(n, dtype=torch.bool)
+    # 回合级统计 (墙位课程门控用): 与循环级状态分开, 循环复位不清
+    cmd._ep_index = torch.zeros(n, dtype=torch.long)
+    cmd._ep_had_success = torch.zeros(n, dtype=torch.bool)
+    cmd._ep_cycle_count = torch.zeros(n, dtype=torch.long)
+    cmd._ep_seq = torch.zeros(n, dtype=torch.long)
+    cmd._last_ep_valid = torch.zeros(n, dtype=torch.bool)
+    cmd._last_ep_success = torch.zeros(n, dtype=torch.bool)
+    # CommandTerm.reset 需要的基类状态 (单测会直接调 cmd.reset)
+    cmd.metrics = {}
+    cmd.command_counter = torch.zeros(n, dtype=torch.long)
+    cmd.time_left = torch.full((n,), 1.0e3)
     cmd._s1_onset = torch.full((n,), float('nan'))
     cmd._s2_onset = torch.full((n,), float('nan'))
     env.reset_buf = torch.zeros(n, dtype=torch.bool)
@@ -642,6 +653,44 @@ class StageRewardTests(unittest.TestCase):
         for _ in range(_STAND_STEPS - 1):
             self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
         self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
+
+    # 回合级统计 (墙位课程门控的输入): 完成脉冲产生点立即置位; 循环复位不清;
+    # 回合结束发布一次并清零; 首个回合 (自重建以来) 标记无效。
+    def test_episode_stats_are_published_on_episode_end(self):
+        env, cmd = make_env([2, 2])
+        cmd.test_u[:] = torch.tensor([[1., 1.], [-1., 1.]])     # 只有 env0 能站稳
+        for _ in range(_STAND_STEPS - 1):
+            cmd.stand_reward_and_pulse()
+        self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
+        self.assertTrue(bool(cmd._ep_had_success[0]))
+        self.assertFalse(bool(cmd._ep_had_success[1]))
+        self.assertEqual(int(cmd._ep_cycle_count[0]), 1)
+
+        cmd._clear_cycle_state(torch.arange(2))                  # 模拟循环复位
+        self.assertTrue(bool(cmd._ep_had_success[0]), "循环复位不得清掉回合级成功标志")
+
+        cmd.reset(torch.arange(2))                              # 第 1 个回合: 可能被截短 -> 无效
+        self.assertFalse(bool(cmd._last_ep_valid[0]))
+        self.assertFalse(bool(cmd._last_ep_success[0]), "无效回合即使成功也不算数")
+        self.assertEqual(int(cmd._ep_seq[0]), 1)
+        self.assertFalse(bool(cmd._ep_had_success[0]), "发布后必须清零")
+
+        cmd.reset(torch.arange(2))                              # 第 2 个回合起才是有效回合
+        self.assertTrue(bool(cmd._last_ep_valid[0]))
+        self.assertFalse(bool(cmd._last_ep_success[0]))
+        self.assertEqual(int(cmd._ep_index[0]), 2)
+
+    # 关键边界 (审查发现): "成功与 timeout 同一步" 时 _cycles_this_episode 还来不及计入 ——
+    # 它在 _update_metrics 里加的是**上一步**的 _last_cycle_reset, 而 _update_metrics 跑在
+    # _reset_idx 之前。所以门控不能读 _cycles_this_episode, 必须读回合级标志。
+    def test_episode_success_flag_precedes_cycle_counter(self):
+        env, cmd = make_env([2])
+        for _ in range(_STAND_STEPS - 1):
+            cmd.stand_reward_and_pulse()
+        self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
+        self.assertEqual(int(cmd._cycles_this_episode[0]), 0,
+                         "_cycles_this_episode 此刻必然还是 0 —— 不能拿它当门控来源")
+        self.assertTrue(bool(cmd._ep_had_success[0]), "回合级标志必须已经置位")
 
     def test_stand_still_reward_is_p3_gated_and_linear(self):
         # 锚点从常量推导, 阈值调整时不必改测试(此前硬编码 "3 rad/s -> 半值",
