@@ -266,13 +266,16 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
         for it in range(start_it, total_it):
-            # 顺序要紧: **先**把物理环境对齐到当前档位/阶段, **再**吸收回合结果与判门控。
-            # 反过来的话, 开碰撞那一刻会拿"无碰撞物理下的成绩"直接缩档 (审查 P1),
-            # 且驻留计时不会被重置。重建本身会清空窗口并重置驻留起点。
-            if self._corridor_start_walls is not None and self._corridor_change_needed():
-                obs = self._apply_corridor_rebuild(refresh_obs=True)
+            # 顺序要紧, 三件事的分工:
+            #   1) 先吸收本轮之前结束的回合 (此时物理仍是它们实际经历的那套);
+            #   2) 再判门控 —— 由"物理必须已与当前档位一致"这条不变量保证, 开碰撞那一步
+            #      (iter 3000) 不可能拿无碰撞成绩缩档 (审查 P1), 因此判门控可以放在重建之前;
+            #   3) 判完之后**立刻**重建, 让升级当轮生效 —— 放到下一轮的话本轮采样仍跑在旧墙位,
+            #      而 Curriculum/level 已记成新档位 (审查: "升级晚一轮生效")。
             self._ingest_episode_results()
             self._maybe_promote(it)
+            if self._corridor_start_walls is not None and self._corridor_change_needed():
+                obs = self._apply_corridor_rebuild(refresh_obs=True)
             self._log_curriculum(it)
             start = time.time()
             with torch.inference_mode():

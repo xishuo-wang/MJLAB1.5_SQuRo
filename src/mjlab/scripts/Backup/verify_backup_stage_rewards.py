@@ -40,7 +40,8 @@ def make_env(phases):
     n = len(phases)
     cmd = object.__new__(BackupCommand)
     env = NS(device='cpu', num_envs=n, common_step_counter=0, step_dt=0.01,
-             episode_length_buf=torch.ones(n, dtype=torch.long), extras={'log': {}})
+             episode_length_buf=torch.ones(n, dtype=torch.long), extras={'log': {}},
+             max_episode_length=1200)
     cmd._env = env
     cmd.cfg = BackupCommandCfg()
     cmd.phase = torch.tensor(phases)
@@ -682,25 +683,50 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(float(cmd.time_scale_command[0]), 2.5, places=12)
         self.assertAlmostEqual(float(cmd.command[0, 5]), 2.5, places=12)
 
-    # 初始化/手动 reset 不是回合结束 (审查 P2): 包装器构造时会调 env.reset(), 若把它当成一个
-    # 已结束的回合, 就会把随后"首个可能被截短的回合"误标为有效。真实环境已复现:
-    # 初始化后 _ep_index=1, 随后一步 timeout 的首个短回合被判 valid。
-    # 判据用 episode_length_buf: 真实 timeout 时它在 _reset_idx 清零点之前仍 > 0。
-    def test_init_reset_is_not_an_episode_end(self):
+    # 初始化/中途手动 reset 都不是回合结束: 正常结束的唯一判据是 episode_length_buf 达到
+    # 回合上限 (本任务只有 timeout 一种终止)。`> 0` 只说明回合已开始, 不够 —— 真环境已复现
+    # "只跑 3 步再手动 reset 仍发布 valid"。初始化若被当成回合, 还会提前消耗掉"首个回合无效"
+    # 的名额, 使随后被随机计时截短的首个回合被误判为有效。
+    def test_only_timeout_counts_as_a_complete_episode(self):
         env, cmd = make_env([0, 0])
-        env.episode_length_buf = torch.zeros(2, dtype=torch.long)     # 构造/手动 reset: buf=0
-        cmd.reset(torch.arange(2))
+        all_ids = torch.arange(2)
+        env.episode_length_buf = torch.zeros(2, dtype=torch.long)      # 包装器初始化
+        cmd.reset(all_ids)
         self.assertEqual(int(cmd._ep_seq[0]), 0, "初始化 reset 不得发布回合结果")
         self.assertEqual(int(cmd._ep_index[0]), 0, "初始化 reset 不得占用'首个回合'名额")
-        # 首个真实回合 (被随机化计时截短, 几步就 timeout) 结束 -> 必须无效
-        env.episode_length_buf = torch.tensor([7, 7], dtype=torch.long)
-        cmd.reset(torch.arange(2))
-        self.assertEqual(int(cmd._ep_seq[0]), 1)
-        self.assertFalse(bool(cmd._last_ep_valid[0]), "首个真实回合必须无效 (可能被截短)")
-        # 第二个回合起才是有效回合
+        # 中途手动 reset (只跑了 3 步) 也不是完整回合
+        env.episode_length_buf = torch.tensor([3, 3], dtype=torch.long)
+        cmd.reset(all_ids)
+        self.assertEqual(int(cmd._ep_seq[0]), 0, "中途手动 reset 不得发布回合结果")
+        self.assertEqual(int(cmd._ep_index[0]), 0)
+        # 正常 timeout (buf 达到上限) 才发布; 首个正常回合仍标无效 (可能被随机计时截短)
         env.episode_length_buf = torch.tensor([1200, 1200], dtype=torch.long)
-        cmd.reset(torch.arange(2))
+        cmd.reset(all_ids)
+        self.assertEqual(int(cmd._ep_seq[0]), 1)
+        self.assertFalse(bool(cmd._last_ep_valid[0]))
+        self.assertFalse(bool(cmd._last_ep_success[0]), "无效回合即使成功也不算数")
+        # 第二个正常回合起才是有效回合
+        cmd.reset(all_ids)
         self.assertTrue(bool(cmd._last_ep_valid[0]))
+        self.assertEqual(int(cmd._ep_index[0]), 2)
+
+    # 中途重置只清进行中的累积, 不得把成功状态泄漏到下一个回合
+    def test_mid_episode_reset_clears_in_progress_success(self):
+        env, cmd = make_env([2])
+        env.episode_length_buf = torch.tensor([1200], dtype=torch.long)
+        cmd.reset(torch.arange(1))                     # 消耗掉"首个回合无效"名额
+        cmd.phase[:] = 2                               # _resample_command 会把 phase 归零
+        for _ in range(_STAND_STEPS):
+            cmd.stand_reward_and_pulse()
+        self.assertTrue(bool(cmd._ep_had_success[0]))
+        env.episode_length_buf = torch.tensor([3], dtype=torch.long)   # 中途手动 reset
+        cmd.reset(torch.arange(1))
+        self.assertFalse(bool(cmd._ep_had_success[0]), "中途重置必须清掉进行中的成功状态")
+        self.assertEqual(int(cmd._ep_cycle_count[0]), 0)
+        cmd.phase[:] = 2
+        env.episode_length_buf = torch.tensor([1200], dtype=torch.long)
+        cmd.reset(torch.arange(1))
+        self.assertFalse(bool(cmd._last_ep_success[0]), "被重置的那个回合不算完成")
 
     # 回合结束发布一次并清零; 首个回合 (自重建以来) 标记无效。
     # 回合级统计 (墙位课程门控的输入): 完成脉冲产生点立即置位; 循环复位不清;
@@ -718,6 +744,7 @@ class StageRewardTests(unittest.TestCase):
         cmd._clear_cycle_state(torch.arange(2))                  # 模拟循环复位
         self.assertTrue(bool(cmd._ep_had_success[0]), "循环复位不得清掉回合级成功标志")
 
+        env.episode_length_buf = torch.tensor([1200, 1200], dtype=torch.long)   # 正常 timeout
         cmd.reset(torch.arange(2))                              # 第 1 个回合: 可能被截短 -> 无效
         self.assertFalse(bool(cmd._last_ep_valid[0]))
         self.assertFalse(bool(cmd._last_ep_success[0]), "无效回合即使成功也不算数")

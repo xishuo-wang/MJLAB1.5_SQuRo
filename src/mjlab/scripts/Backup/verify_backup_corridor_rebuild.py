@@ -452,6 +452,44 @@ class CorridorRebuildTest(unittest.TestCase):
         r._cur_level_iter = 0
         self.assertFalse(r._maybe_promote(4000), "物理未对齐时不得推进")
 
+    # 升级必须**当轮**生效: 判门控之后立刻重建, 否则本轮采样仍跑在旧墙位上, 而
+    # Curriculum/level 已经记成新档位 —— 档位与实际物理错开一轮 (审查: "升级晚一轮生效")。
+    def test_promotion_takes_effect_in_the_same_iteration(self):
+        r = self._build(3100, self._level0(), True)
+        r._cur_level_iter = 3000                       # 驻留已满
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        r._w_succ[:] = True
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(1)                                 # 只跑 3100 这一轮
+        self.assertEqual(r._cur_level, 1, "本轮应已升级")
+        self.assertEqual(len(self.built), 1, "升级当轮就必须重建到新档位")
+        self.assertEqual(compiled_state(r.env),
+                         (C.get_wall_positions_for_level(1), True),
+                         "升级当轮编译值必须已是新档位的墙位")
+
+    # 更强的一条: 升级当轮**第一次 act() 之前**实际墙位就必须已是新档位 ——
+    # "当轮晚些时候才重建"同样会被这条抓住。
+    def test_promotion_rebuilds_before_the_first_act(self):
+        r = self._build(3100, self._level0(), True)
+        r._cur_level_iter = 3000
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        r._w_succ[:] = True
+        seen: list = []
+        orig_act = r.alg.act
+
+        def act(obs):
+            seen.append(compiled_state(r.env))
+            return orig_act(obs)
+
+        r.alg.act = act
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(1)
+        self.assertTrue(seen, "本轮必须至少采样一次")
+        self.assertEqual(seen[0], (C.get_wall_positions_for_level(1), True),
+                         "升级当轮第一次 act() 之前, 实际墙位必须已是新档位")
+
     def test_ingest_fills_window_from_published_episodes(self):
         r = self._build(3000, self._level0(), True)
         cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
