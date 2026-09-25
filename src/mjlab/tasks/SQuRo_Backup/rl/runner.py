@@ -65,17 +65,17 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 而且旧墙位的成绩本来也不能用于新墙位升级。
     def _reset_curriculum_window(self) -> None:
         n, w = self._corridor_num_envs, CURRICULUM_WINDOW_EPISODES
-        self._w_valid = torch.zeros(n, w, dtype=torch.bool)
         self._w_succ = torch.zeros(n, w, dtype=torch.bool)
         self._w_head = torch.zeros(n, dtype=torch.long)
         self._w_fill = torch.zeros(n, dtype=torch.long)
         self._ep_seq_seen = torch.zeros(n, dtype=torch.long)
 
     # 拉取本轮新发布的回合结果, 更新每环境的滑动窗口。
-    # 每个环境一轮内最多结束 1 个有效回合 (有效回合恒为 1200 步 > 一轮 96 步), 所以按序号
-    # 取增量不会漏事件。
+    # **无效回合只推进已消费序号, 不占窗口槽位、不加填充量** —— 否则"1 个无效 + 2 个有效"
+    # 会被判成"3 个有效回合已攒满"(审查 P2 已复现)。窗口只存有效完整回合, 故分母即 _w_fill 合计。
+    # 每个环境一轮内最多结束 1 个有效回合 (有效回合恒为 1200 步 > 一轮 96 步), 按序号取增量不漏事件。
     def _ingest_episode_results(self) -> None:
-        if not hasattr(self, "_w_valid"):
+        if not hasattr(self, "_w_succ"):
             self._reset_curriculum_window()
         cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
         seq = cmd._ep_seq.detach().to("cpu")
@@ -83,17 +83,19 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if not bool(new.any()):
             return
         idx = new.nonzero(as_tuple=False).squeeze(-1)
-        head = self._w_head[idx]
-        self._w_valid[idx, head] = cmd._last_ep_valid.detach().to("cpu")[idx]
-        self._w_succ[idx, head] = cmd._last_ep_success.detach().to("cpu")[idx]
-        self._w_head[idx] = (head + 1) % CURRICULUM_WINDOW_EPISODES
-        self._w_fill[idx] = torch.clamp(self._w_fill[idx] + 1, max=CURRICULUM_WINDOW_EPISODES)
+        keep = idx[cmd._last_ep_valid.detach().to("cpu")[idx]]
+        if len(keep) > 0:
+            head = self._w_head[keep]
+            self._w_succ[keep, head] = cmd._last_ep_success.detach().to("cpu")[keep]
+            self._w_head[keep] = (head + 1) % CURRICULUM_WINDOW_EPISODES
+            self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1,
+                                            max=CURRICULUM_WINDOW_EPISODES)
         self._ep_seq_seen[idx] = seq[idx]
 
     # 门控量: 窗口内"至少完成一次翻正"的有效回合占比。
     # 用比值而不是均值: 均值 (每回合平均循环数) 比"回合占比"更松, 会提前放行。
     def _curriculum_metrics(self) -> tuple[float, bool, int]:
-        n_valid = int(self._w_valid.sum())
+        n_valid = int(self._w_fill.sum())
         n_succ = int(self._w_succ.sum())
         p = (n_succ / n_valid) if n_valid > 0 else float("nan")
         ready = bool((self._w_fill >= CURRICULUM_WINDOW_EPISODES).all())
@@ -106,6 +108,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if it < CURRICULUM_START_ITER:
             return False
         if it - self._cur_level_iter < CURRICULUM_MIN_DWELL_ITER:
+            return False
+        # 不变量: 物理环境必须已与当前档位一致才允许推进, 否则会拿"旧物理下的成绩"缩档
+        # —— 典型场景就是 iter 3000 刚开碰撞那一步 (审查 P1)。
+        if self._corridor_change_needed():
             return False
         p, ready, n_valid = self._curriculum_metrics()
         if not ready or not (p >= CURRICULUM_GATE_P_DONE):
@@ -220,8 +226,11 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 与计数器同理, 但必须遵守 learn() 入口的开关: 关闭时保持调用方要求的固定回合长度
         if self._randomize_ep_len:
             self._randomize_episode_phase()
-        # 新环境的回合发布序号从 0 重新开始, 窗口必须一起清 (否则门控永久饿死)
+        # 新环境的回合发布序号从 0 重新开始, 窗口必须一起清 (否则门控永久饿死);
+        # 驻留计时也必须重置到重建这一刻 —— 物理换了 (开碰撞 / 换墙位), 旧物理下的驻留时间
+        # 不能算进新配置 (审查 P1: 否则开墙后仅 50 轮就允许缩档)。
         self._reset_curriculum_window()
+        self._cur_level_iter = step_counter // _STEPS_PER_ITER
         self._clear_logger_episode_state()
         try:
             old.close()
@@ -257,15 +266,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
         for it in range(start_it, total_it):
-            # 墙位课程: 先吸收本轮新结束的回合, 再判门控; 推进只改档位索引, 随后的
-            # _corridor_change_needed() 会因为墙位不一致而重建。顺序保证"PPO 更新已结束、
-            # 下一轮采样之前"换档 (与重建同处一轮的起点)。
+            # 顺序要紧: **先**把物理环境对齐到当前档位/阶段, **再**吸收回合结果与判门控。
+            # 反过来的话, 开碰撞那一刻会拿"无碰撞物理下的成绩"直接缩档 (审查 P1),
+            # 且驻留计时不会被重置。重建本身会清空窗口并重置驻留起点。
+            if self._corridor_start_walls is not None and self._corridor_change_needed():
+                obs = self._apply_corridor_rebuild(refresh_obs=True)
             self._ingest_episode_results()
             self._maybe_promote(it)
             self._log_curriculum(it)
-            # 受限空间: 每轮采样前检查课程档位/阶段, 需要就重建并刷新观测
-            if self._corridor_start_walls is not None and self._corridor_change_needed():
-                obs = self._apply_corridor_rebuild(refresh_obs=True)
             start = time.time()
             with torch.inference_mode():
                 for _ in range(self.cfg["num_steps_per_env"]):

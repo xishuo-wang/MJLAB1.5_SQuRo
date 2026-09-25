@@ -343,15 +343,21 @@ class BackupCommand(CommandTerm):
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
-            # 回合结束: 先发布本回合结果 (valid/success), 再走常规的重采样。
-            # 首个回合 (自上一次重建以来) 标记为无效, 见 __init__ 里的说明。
-            valid = self._ep_index[env_ids] >= 1
-            self._last_ep_valid[env_ids] = valid
-            self._last_ep_success[env_ids] = self._ep_had_success[env_ids] & valid
-            self._ep_seq[env_ids] += 1
-            self._ep_index[env_ids] += 1
-            self._ep_had_success[env_ids] = False
-            self._ep_cycle_count[env_ids] = 0
+            # 只有**真实回合结束**才发布结果。初始化与手动 reset 也走这条路径 (包装器构造时
+            # 就会调 env.reset()), 而它们的 episode_length_buf 是 0 —— 真实 timeout 时该值
+            # 直到 _reset_idx 末尾才被清零, 而 command_manager.reset 在那之前, 所以这里读到的
+            # 仍是 max_episode_length。若把初始化当成一个回合, 就会提前消耗掉"首个回合无效"
+            # 的名额, 使随后被随机计时截短的首个回合被误判为有效 (真环境已复现)。
+            ended = self._env.episode_length_buf[env_ids] > 0
+            ids = env_ids[ended]
+            if len(ids) > 0:
+                valid = self._ep_index[ids] >= 1
+                self._last_ep_valid[ids] = valid
+                self._last_ep_success[ids] = self._ep_had_success[ids] & valid
+                self._ep_seq[ids] += 1
+                self._ep_index[ids] += 1
+                self._ep_had_success[ids] = False
+                self._ep_cycle_count[ids] = 0
             self._resample_command(env_ids)
         return extras
 

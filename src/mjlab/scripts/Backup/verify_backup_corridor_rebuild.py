@@ -29,11 +29,11 @@ class FakeCommand:
         self._last_ep_valid = torch.zeros(n, dtype=torch.bool)
         self._last_ep_success = torch.zeros(n, dtype=torch.bool)
 
-    # 模拟"这些环境又结束了一个有效回合"
-    def publish(self, env_ids, success) -> None:
+    # 模拟"这些环境又结束了一个回合"; valid=False 表示被重建截短/初始化等无效回合
+    def publish(self, env_ids, success, valid: bool = True) -> None:
         for i, ok in zip(env_ids, success):
-            self._last_ep_valid[i] = True
-            self._last_ep_success[i] = bool(ok)
+            self._last_ep_valid[i] = bool(valid)
+            self._last_ep_success[i] = bool(ok) and bool(valid)
             self._ep_seq[i] += 1
 
 
@@ -318,14 +318,13 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(compiled_state(r.env), (C.get_wall_positions_for_level(2), True))
         self.assertAlmostEqual(C.get_wall_positions_for_level(2)[1], C.WALL_X_POS, places=12)
 
-    # 门控三要素: 最短驻留、窗口填满、p_done 达标 —— 缺一不可
+    # 门控三要素: 最短驻留、窗口填满、p_done 达标 —— 缺一不可 (窗口只装有效回合)
     def test_promotion_requires_dwell_window_and_gate(self):
         r = self._build(3000, self._level0(), True)
         n_slot = 2 * C.CURRICULUM_WINDOW_EPISODES      # 2 个环境 × 窗口长度
 
         def fill(n_succ_slots, level_iter):
             r._cur_level_iter = level_iter
-            r._w_valid[:] = True
             r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
             r._w_succ[:] = False
             if n_succ_slots:
@@ -354,9 +353,9 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertAlmostEqual(r._cur_level_history[-1]["p_done"], 4 / 6, places=6)
 
     def test_promotion_blocked_before_start_iter_and_in_fixed_mode(self):
-        r = self._build(C.CURRICULUM_START_ITER - 10, self._level0(), True)
+        # 计数器与轮次必须一致: 物理对齐守卫会比 common_step_counter 推出的阶段
+        r = self._build(C.CURRICULUM_START_ITER, self._level0(), True)
         r._cur_level_iter = 0
-        r._w_valid[:] = True
         r._w_succ[:] = True
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         self.assertFalse(r._maybe_promote(C.CURRICULUM_START_ITER - 1), "起始轮数之前不得推进")
@@ -364,7 +363,6 @@ class CorridorRebuildTest(unittest.TestCase):
         # 锁死模式 (诊断/消融) 永不推进
         r2 = self._build(5000, (-0.125, 0.125), True, fixed=True)
         r2._cur_level_iter = 0
-        r2._w_valid[:] = True
         r2._w_succ[:] = True
         r2._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         self.assertFalse(r2._maybe_promote(5000))
@@ -409,6 +407,50 @@ class CorridorRebuildTest(unittest.TestCase):
         # 没有 writer 时不得报错 (回放/诊断入口)
         r.logger.writer = None
         r._log_curriculum(3002)
+
+    # 开墙那一刻不得凭"无碰撞成绩"缩档 (审查 P1): 必须先以第 0 档 + 开碰撞重建, 清空旧成绩,
+    # 并把驻留起点重置到开墙那一刻, 之后才允许按能力推进。
+    def test_collision_switch_does_not_promote_on_collision_free_record(self):
+        r = self._build(2999, self._level0(), False)
+        # 无碰撞期间窗口已攒满且完成率 100%
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        r._w_succ[:] = True
+        r._cur_level_iter = 0
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(4)
+        self.assertEqual(r._cur_level, 0, "开墙那一刻不得升级 (旧成绩来自无碰撞物理)")
+        self.assertEqual(compiled_state(r.env), (self._level0(), True),
+                         "必须先以第 0 档 + 开碰撞重建")
+        self.assertEqual(len(self.built), 1)
+        self.assertGreaterEqual(r._cur_level_iter, C.CURRICULUM_START_ITER,
+                                "驻留起点必须重置到开墙那一刻")
+        self.assertEqual(int(r._w_fill.sum()), 0, "开墙必须清空旧物理下的成绩")
+
+    # 无效回合不得占用"有效回合"窗口槽位 (审查 P2): 否则 1 无效 + 2 有效就会被判为窗口已满
+    def test_invalid_episode_does_not_fill_window(self):
+        r = self._build(3000, self._level0(), True)
+        cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
+        cmd.publish([0, 1], [True, True], valid=False)
+        r._ingest_episode_results()
+        self.assertEqual(int(r._w_fill.sum()), 0, "无效回合不得占用窗口槽位")
+        self.assertEqual(int(r._ep_seq_seen[0]), 1, "无效回合仍必须推进已消费序号")
+        for _ in range(C.CURRICULUM_WINDOW_EPISODES):
+            cmd.publish([0, 1], [True, False])
+            r._ingest_episode_results()
+        self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)
+        p, ready, n_valid = r._curriculum_metrics()
+        self.assertTrue(ready)
+        self.assertEqual(n_valid, 2 * C.CURRICULUM_WINDOW_EPISODES,
+                         "分母只能是有效回合数")
+
+    # 物理环境尚未与当前档位一致时不得推进 (不变量: 只在"已编译配置 == 目标配置"时推进)
+    def test_promotion_requires_physics_to_match_level(self):
+        r = self._build(4000, self._level0(), False)     # 目标要开碰撞, 实际关着
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        r._w_succ[:] = True
+        r._cur_level_iter = 0
+        self.assertFalse(r._maybe_promote(4000), "物理未对齐时不得推进")
 
     def test_ingest_fills_window_from_published_episodes(self):
         r = self._build(3000, self._level0(), True)

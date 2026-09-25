@@ -682,6 +682,27 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(float(cmd.time_scale_command[0]), 2.5, places=12)
         self.assertAlmostEqual(float(cmd.command[0, 5]), 2.5, places=12)
 
+    # 初始化/手动 reset 不是回合结束 (审查 P2): 包装器构造时会调 env.reset(), 若把它当成一个
+    # 已结束的回合, 就会把随后"首个可能被截短的回合"误标为有效。真实环境已复现:
+    # 初始化后 _ep_index=1, 随后一步 timeout 的首个短回合被判 valid。
+    # 判据用 episode_length_buf: 真实 timeout 时它在 _reset_idx 清零点之前仍 > 0。
+    def test_init_reset_is_not_an_episode_end(self):
+        env, cmd = make_env([0, 0])
+        env.episode_length_buf = torch.zeros(2, dtype=torch.long)     # 构造/手动 reset: buf=0
+        cmd.reset(torch.arange(2))
+        self.assertEqual(int(cmd._ep_seq[0]), 0, "初始化 reset 不得发布回合结果")
+        self.assertEqual(int(cmd._ep_index[0]), 0, "初始化 reset 不得占用'首个回合'名额")
+        # 首个真实回合 (被随机化计时截短, 几步就 timeout) 结束 -> 必须无效
+        env.episode_length_buf = torch.tensor([7, 7], dtype=torch.long)
+        cmd.reset(torch.arange(2))
+        self.assertEqual(int(cmd._ep_seq[0]), 1)
+        self.assertFalse(bool(cmd._last_ep_valid[0]), "首个真实回合必须无效 (可能被截短)")
+        # 第二个回合起才是有效回合
+        env.episode_length_buf = torch.tensor([1200, 1200], dtype=torch.long)
+        cmd.reset(torch.arange(2))
+        self.assertTrue(bool(cmd._last_ep_valid[0]))
+
+    # 回合结束发布一次并清零; 首个回合 (自重建以来) 标记无效。
     # 回合级统计 (墙位课程门控的输入): 完成脉冲产生点立即置位; 循环复位不清;
     # 回合结束发布一次并清零; 首个回合 (自重建以来) 标记无效。
     def test_episode_stats_are_published_on_episode_end(self):
