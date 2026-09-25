@@ -132,6 +132,15 @@ def main() -> None:
         assert abs(xs[0] - walls[0]) < 1e-4, "−X 墙中心未落在 wall_x_neg"
         assert abs(xs[1] - walls[1]) < 1e-4, "+X 墙中心未落在 wall_x_pos"
         assert abs(ent.clear_width - (walls[1] - walls[0] - 2 * WALL_HALF_THICKNESS)) < 1e-9
+        # 墙位观测必须等于**实际编译值** (策略靠它区分各档; 各档的重置姿态完全相同)
+        cmd_term = env.command_manager.get_term("backup_cmd")
+        cmd0 = cmd_term.command[0]
+        assert cmd_term.command.shape[-1] == 9, "命令张量必须是 9 维 (末两维为墙位观测)"
+        # 命令张量是 float32, 容差按 float32 给
+        assert abs(float(cmd0[7]) - walls[0]) < 1e-6, "观测里的 −X 墙位与实际编译值不一致"
+        assert abs(float(cmd0[8]) - walls[1]) < 1e-6, "观测里的 +X 墙位与实际编译值不一致"
+        print(f"    命令张量 {cmd_term.command.shape[-1]} 维, "
+              f"墙位观测 ({float(cmd0[7]):+.4f}, {float(cmd0[8]):+.4f}) 与实际编译值一致")
 
     print(f"\n[4] 碰撞是否真的生效 (机器人搬到墙中心 x=±{cfg.test_width/2:.3f}, 跑 {cfg.steps} 步)")
     # 编译期开碰撞 + 几何重叠 => 必须有墙接触

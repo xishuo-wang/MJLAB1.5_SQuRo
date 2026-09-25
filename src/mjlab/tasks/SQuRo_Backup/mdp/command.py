@@ -66,7 +66,12 @@ class BackupCommand(CommandTerm):
         super().__init__(cfg, env)
         self.fixed_time_scale = cfg.fixed_time_scale
         self._pose_cos_threshold = cos(radians(angle))
-        self.command_tensor = torch.zeros(self.num_envs, 7, device=self.device)
+        # 命令张量 9 维: [vel, h_f, h_h, gait, curvature, λ, phase, wall_x_neg, wall_x_pos]。
+        # 末两维是**墙位观测**: 墙位是随课程变化的任务参数, 而机器人在各档之间的重置姿态完全
+        # 相同 —— 不给观测就只能靠撞墙事后推断, 属于部分可观测。作为"先验知识"注入 (实验场景
+        # 里墙位本来就是已知设定), actor 与 critic 同时可见。
+        # **只在末尾追加**: 索引 0~6 的含义与顺序不变 (reference.py 与诊断脚本按索引读 λ)。
+        self.command_tensor = torch.zeros(self.num_envs, 9, device=self.device)
         self.vel_command = self.command_tensor[:, 0]
         self.height_f_command = self.command_tensor[:, 1]
         self.height_h_command = self.command_tensor[:, 2]
@@ -74,6 +79,8 @@ class BackupCommand(CommandTerm):
         self.curvature_command = self.command_tensor[:, 4]
         self.time_scale_command = self.command_tensor[:, 5]
         self.phase_command = self.command_tensor[:, 6]
+        self.wall_x_neg_command = self.command_tensor[:, 7]
+        self.wall_x_pos_command = self.command_tensor[:, 8]
 
         # 阶段状态机状态 (每 env 独立)
         self.phase = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -246,6 +253,22 @@ class BackupCommand(CommandTerm):
             self._last_ep_valid = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_ep_success = torch.zeros_like(self.phase, dtype=torch.bool)
 
+    # 把**实际编译进仿真**的墙位写进观测量。来源是场景实体本身, 不是 runner 的缓存 ——
+    # 与"判据一律比实际编译值"同一条原则。墙位在编译期固化, 环境生命周期内不变, 所以只在
+    # (重)采样时写即可; 重建会新建 command 实例, 其 __init__ 会再读一次新实体。
+    # 无受限空间实体时写 0: 只出现在无墙配置与单测替身里, 正常训练恒有实体。
+    def _write_wall_observation(self, env_ids: torch.Tensor) -> None:
+        entity = None
+        scene = getattr(self._env, "scene", None)
+        if scene is not None:
+            entity = getattr(scene, "entities", {}).get("restricted_space")
+        if entity is None:
+            self.wall_x_neg_command[env_ids] = 0.0
+            self.wall_x_pos_command[env_ids] = 0.0
+            return
+        self.wall_x_neg_command[env_ids] = float(entity.cfg.wall_x_neg)
+        self.wall_x_pos_command[env_ids] = float(entity.cfg.wall_x_pos)
+
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         self._ensure_buffers()      # 可能被不跑 __init__ 的测试替身直接调用
@@ -262,6 +285,7 @@ class BackupCommand(CommandTerm):
         else:
             lam = get_curriculum_time_scale(self._env.common_step_counter, n, self.device)
         self.time_scale_command[env_ids] = lam         # 参考时间缩放
+        self._write_wall_observation(env_ids)
         # 状态机重置
         self.phase[env_ids] = 0
         self.t_phase[env_ids] = 0.0

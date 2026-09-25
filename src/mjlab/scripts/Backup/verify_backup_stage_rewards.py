@@ -46,7 +46,7 @@ def make_env(phases):
     cmd.phase = torch.tensor(phases)
     cmd.t_phase = torch.zeros(n)
     cmd.retry = torch.zeros(n, dtype=torch.long)
-    cmd.command_tensor = torch.zeros(n, 7)
+    cmd.command_tensor = torch.zeros(n, 9)
     cmd.command_tensor[:, 5] = 3.0
     cmd.time_scale_command = cmd.command_tensor[:, 5]
     cmd.phase_command = cmd.command_tensor[:, 6]
@@ -56,6 +56,8 @@ def make_env(phases):
     cmd.height_h_command = cmd.command_tensor[:, 2]
     cmd.gait_freq_command = cmd.command_tensor[:, 3]
     cmd.curvature_command = cmd.command_tensor[:, 4]
+    cmd.wall_x_neg_command = cmd.command_tensor[:, 7]
+    cmd.wall_x_pos_command = cmd.command_tensor[:, 8]
     cmd.fixed_time_scale = None          # _resample_command 会读它决定 λ 来源
     cmd._update_dt = env.step_dt
     cmd._pose_cos_threshold = cos(radians(45))
@@ -653,6 +655,32 @@ class StageRewardTests(unittest.TestCase):
         for _ in range(_STAND_STEPS - 1):
             self.assertFalse(cmd.stand_reward_and_pulse()[3].any())
         self.assertTrue(cmd.stand_reward_and_pulse()[3][0])
+
+    # 墙位必须进观测: 墙位随课程变化, 而机器人在各档之间的重置姿态**完全相同** ——
+    # 不给观测就只能靠撞墙事后推断, 属于部分可观测。作为先验知识注入, actor/critic 同时可见。
+    def test_wall_positions_are_in_the_command_observation(self):
+        from mjlab.tasks.SQuRo_Backup.mdp import entity as CE
+        env, cmd = make_env([0, 0])
+        self.assertEqual(cmd.command_tensor.shape[-1], 9, "命令张量必须是 9 维")
+        # 观测必须来自**实际编译值** (场景实体), 不是任何缓存
+        ent = CE.build_restricted_space_cfg(True, wall_x_neg=-0.16, wall_x_pos=0.08).build()
+        env.scene = NS(entities={"restricted_space": ent})
+        cmd._resample_command(torch.arange(2))
+        # 命令张量是 float32, 容差按 float32 给
+        self.assertAlmostEqual(float(cmd.command_tensor[0, 7]), -0.16, places=6)
+        self.assertAlmostEqual(float(cmd.command_tensor[0, 8]), 0.08, places=6)
+        # 无实体时写 0 而不是抛异常 (只出现在无墙配置与单测替身)
+        env.scene = NS(entities={})
+        cmd._resample_command(torch.arange(2))
+        self.assertEqual(float(cmd.command_tensor[0, 7]), 0.0)
+        self.assertEqual(float(cmd.command_tensor[0, 8]), 0.0)
+
+    # 追加必须只在末尾: 索引 0~6 的含义/顺序不变 (reference.py 按索引 5 读 λ)
+    def test_command_observation_keeps_legacy_index_layout(self):
+        env, cmd = make_env([0])
+        cmd.command_tensor[:, 5] = 2.5
+        self.assertAlmostEqual(float(cmd.time_scale_command[0]), 2.5, places=12)
+        self.assertAlmostEqual(float(cmd.command[0, 5]), 2.5, places=12)
 
     # 回合级统计 (墙位课程门控的输入): 完成脉冲产生点立即置位; 循环复位不清;
     # 回合结束发布一次并清零; 首个回合 (自重建以来) 标记无效。

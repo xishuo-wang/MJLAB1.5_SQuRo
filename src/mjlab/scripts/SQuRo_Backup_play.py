@@ -280,10 +280,12 @@ class JointDataRecorder:
         record['base_ang_vel_y'] = float(base_ang_vel_w[1].item())
         record['base_ang_vel_z'] = float(base_ang_vel_w[2].item())
 
-        # 6D 命令 [vel_x, height_f, height_h, gait_freq, curvature, time_scale]
+        # 9D 命令 [vel_x, h_f, h_h, gait, curvature, λ, phase, wall_x_neg, wall_x_pos]
+        # 末两维是墙位观测, 由 command 从场景实体读取 (回放时即本次编译进去的墙位)
         command_names = [
             'vel_command_x', 'height_f_command', 'height_h_command',
             'gait_freq_command', 'curvature_command', 'time_scale_command',
+            'phase_command', 'wall_x_neg_command', 'wall_x_pos_command',
         ]
         for i, name in enumerate(command_names):
             record[name] = float(command[i].item())
