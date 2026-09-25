@@ -13,7 +13,7 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
-    CURRICULUM_GATE_P_DONE,
+    CURRICULUM_GATE_P_STOOD,
     CURRICULUM_LEVELS,
     CURRICULUM_MIN_DWELL_ITER,
     CURRICULUM_START_ITER,
@@ -65,7 +65,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 而且旧墙位的成绩本来也不能用于新墙位升级。
     def _reset_curriculum_window(self) -> None:
         n, w = self._corridor_num_envs, CURRICULUM_WINDOW_EPISODES
-        self._w_succ = torch.zeros(n, w, dtype=torch.bool)
+        # 三个率共用同一个窗口 (同一批有效回合、同一分母), 所以彼此可直接比较
+        self._w_succ = torch.zeros(n, w, dtype=torch.bool)      # 稳定站立成功 (现行判据)
+        self._w_stood = torch.zeros(n, w, dtype=torch.bool)     # 站姿维持满窗口 (去速度项) <- 门控量
+        self._w_onset = torch.zeros(n, w, dtype=torch.bool)     # 站立窗口出现 (单帧, 诊断)
         self._w_head = torch.zeros(n, dtype=torch.long)
         self._w_fill = torch.zeros(n, dtype=torch.long)
         self._ep_seq_seen = torch.zeros(n, dtype=torch.long)
@@ -87,19 +90,26 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if len(keep) > 0:
             head = self._w_head[keep]
             self._w_succ[keep, head] = cmd._last_ep_success.detach().to("cpu")[keep]
+            self._w_stood[keep, head] = cmd._last_ep_stood_pose.detach().to("cpu")[keep]
+            self._w_onset[keep, head] = cmd._last_ep_stood_onset.detach().to("cpu")[keep]
             self._w_head[keep] = (head + 1) % CURRICULUM_WINDOW_EPISODES
             self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1,
                                             max=CURRICULUM_WINDOW_EPISODES)
         self._ep_seq_seen[idx] = seq[idx]
 
-    # 门控量: 窗口内"至少完成一次翻正"的有效回合占比。
-    # 用比值而不是均值: 均值 (每回合平均循环数) 比"回合占比"更松, 会提前放行。
-    def _curriculum_metrics(self) -> tuple[float, bool, int]:
+    # 三个门控量 (分母相同, 都是窗口内的有效回合数):
+    #   p_stood : 站姿维持满确认窗口且当步严格几何 (**不含速度**) —— 课程推进读它
+    #   p_onset : 站立窗口出现过 (单帧, 备用/诊断)
+    #   p_done  : 稳定站立成功 (现行判据, 含 V/T <= 门限) —— 任务进度
+    def _curriculum_metrics(self) -> tuple[float, float, float, bool, int]:
         n_valid = int(self._w_fill.sum())
-        n_succ = int(self._w_succ.sum())
-        p = (n_succ / n_valid) if n_valid > 0 else float("nan")
         ready = bool((self._w_fill >= CURRICULUM_WINDOW_EPISODES).all())
-        return p, ready, n_valid
+        if n_valid == 0:
+            return float("nan"), float("nan"), float("nan"), ready, 0
+        return (int(self._w_stood.sum()) / n_valid,
+                int(self._w_onset.sum()) / n_valid,
+                int(self._w_succ.sum()) / n_valid,
+                ready, n_valid)
 
     # 门控达标则推进一档。只升一档、只改索引, 真正的墙位变化交给随后那次重建。
     def _maybe_promote(self, it: int) -> bool:
@@ -113,19 +123,21 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # —— 典型场景就是 iter 3000 刚开碰撞那一步 (审查 P1)。
         if self._corridor_change_needed():
             return False
-        p, ready, n_valid = self._curriculum_metrics()
-        if not ready or not (p >= CURRICULUM_GATE_P_DONE):
+        p_stood, p_onset, p_done, ready, _ = self._curriculum_metrics()
+        if not ready or not (p_stood >= CURRICULUM_GATE_P_STOOD):
             return False
         self._cur_level_history.append({
             "level": self._cur_level, "iter": it,
-            "wall_x_neg": WALL_X_NEG_LEVELS[self._cur_level], "p_done": p, "n_valid": n_valid,
+            "wall_x_neg": WALL_X_NEG_LEVELS[self._cur_level],
+            "p_stood": p_stood, "p_onset": p_onset, "p_done": p_done,
         })
         self._cur_level += 1
         self._cur_level_iter = it
         self._reset_curriculum_window()
         neg, pos = get_wall_positions_for_level(self._cur_level)
         print(f"[INFO] 墙位课程推进: 第 {self._cur_level} 档 x_neg={neg:.4f} x_pos={pos:.4f} "
-              f"(净宽 {pos - neg - 0.02:.4f} m), iter {it}, 上档 p_done={p:.3f}")
+              f"(净宽 {pos - neg - 0.02:.4f} m), iter {it}, "
+              f"上档 p_stood={p_stood:.3f} p_onset={p_onset:.3f} p_done={p_done:.3f}")
         return True
 
     # 每轮把课程状态写进 tensorboard; 无样本时不写 (NaN 会污染曲线)。
@@ -134,7 +146,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if writer is None:
             return
         neg, pos = get_wall_positions_for_level(self._cur_level)
-        p, ready, n_valid = self._curriculum_metrics()
+        p_stood, p_onset, p_done, ready, n_valid = self._curriculum_metrics()
         writer.add_scalar("Curriculum/level", self._cur_level, it)
         writer.add_scalar("Curriculum/wall_x_neg", neg, it)
         writer.add_scalar("Curriculum/wall_x_pos", pos, it)
@@ -142,7 +154,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         writer.add_scalar("Curriculum/window_ready", float(ready), it)
         if n_valid > 0:
             writer.add_scalar("Curriculum/n_valid_episodes", n_valid, it)
-            writer.add_scalar("Curriculum/p_done", p, it)
+            writer.add_scalar("Curriculum/p_stood", p_stood, it)
+            writer.add_scalar("Curriculum/p_onset", p_onset, it)
+            writer.add_scalar("Curriculum/p_done", p_done, it)
 
     # 当前**实际编译进仿真**的 (墙位对, 碰撞开关), 唯一来源是场景里的实体本身。
     # 不要另存一份缓存来做比较: 缓存只记录"我们以为改成了什么", 一旦与真实环境脱节

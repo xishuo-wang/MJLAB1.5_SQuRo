@@ -28,12 +28,17 @@ class FakeCommand:
         self._ep_seq = torch.zeros(n, dtype=torch.long)
         self._last_ep_valid = torch.zeros(n, dtype=torch.bool)
         self._last_ep_success = torch.zeros(n, dtype=torch.bool)
+        self._last_ep_stood_pose = torch.zeros(n, dtype=torch.bool)
+        self._last_ep_stood_onset = torch.zeros(n, dtype=torch.bool)
 
-    # 模拟"这些环境又结束了一个回合"; valid=False 表示被重建截短/初始化等无效回合
-    def publish(self, env_ids, success, valid: bool = True) -> None:
+    # 模拟"这些环境又结束了一个回合"; valid=False 表示被重建截短/初始化等无效回合。
+    # stood/onset 默认跟随 success, 需要区分 (门控读 stood) 时显式传。
+    def publish(self, env_ids, success, valid: bool = True, stood=None, onset=None) -> None:
         for i, ok in zip(env_ids, success):
             self._last_ep_valid[i] = bool(valid)
             self._last_ep_success[i] = bool(ok) and bool(valid)
+            self._last_ep_stood_pose[i] = (bool(ok) if stood is None else bool(stood)) and bool(valid)
+            self._last_ep_stood_onset[i] = (bool(ok) if onset is None else bool(onset)) and bool(valid)
             self._ep_seq[i] += 1
 
 
@@ -318,17 +323,17 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(compiled_state(r.env), (C.get_wall_positions_for_level(2), True))
         self.assertAlmostEqual(C.get_wall_positions_for_level(2)[1], C.WALL_X_POS, places=12)
 
-    # 门控三要素: 最短驻留、窗口填满、p_done 达标 —— 缺一不可 (窗口只装有效回合)
+    # 门控三要素: 最短驻留、窗口填满、p_stood 达标 —— 缺一不可 (窗口只装有效回合)
     def test_promotion_requires_dwell_window_and_gate(self):
         r = self._build(3000, self._level0(), True)
         n_slot = 2 * C.CURRICULUM_WINDOW_EPISODES      # 2 个环境 × 窗口长度
 
-        def fill(n_succ_slots, level_iter):
+        def fill(n_stood_slots, level_iter):
             r._cur_level_iter = level_iter
             r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-            r._w_succ[:] = False
-            if n_succ_slots:
-                r._w_succ[:, :n_succ_slots] = True
+            r._w_stood[:] = False
+            if n_stood_slots:
+                r._w_stood[:, :n_stood_slots] = True
 
         # 驻留不足
         fill(n_slot, 3000)
@@ -339,7 +344,7 @@ class CorridorRebuildTest(unittest.TestCase):
         fill(n_slot, 3000)
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES - 1
         self.assertFalse(r._maybe_promote(it))
-        # p_done 不达标: 2/6 = 0.33 < 0.60
+        # p_stood 不达标: 2/6 = 0.33 < 0.60
         fill(1, 3000)
         self.assertFalse(r._maybe_promote(it))
         # 三要素齐备 -> 推进一档, 且窗口被清空 (旧墙位的成绩不得用于新墙位)
@@ -350,20 +355,52 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(r._cur_level_iter, it)
         self.assertEqual(int(r._w_fill.sum()), 0)
         self.assertEqual(r._cur_level_history[-1]["level"], 0)
-        self.assertAlmostEqual(r._cur_level_history[-1]["p_done"], 4 / 6, places=6)
+        self.assertAlmostEqual(r._cur_level_history[-1]["p_stood"], 4 / 6, places=6)
+
+    # 本批的核心语义: 门控读的是**站起来率** (不含速度), 而不是稳定站立成功率。
+    # 实测依据: 速度项在开墙前后完全相同 (5.638 vs 5.641 rad/s), 与墙位无关 —— 拿它当门控
+    # 会让课程等一个自己影响不了的条件 (2026-09-25 run 的 p_done 全程 0、5100 轮没动一档)。
+    def test_gate_uses_stood_rate_not_success_rate(self):
+        r = self._build(3000, self._level0(), True)
+        cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
+        r._cur_level_iter = 3000
+        # 每个回合都"站起来了"但从未"稳定站立成功" -> 必须推进
+        for _ in range(C.CURRICULUM_WINDOW_EPISODES):
+            cmd.publish([0, 1], [False, False], stood=True)
+            r._ingest_episode_results()
+        p_stood, p_onset, p_done, ready, n_valid = r._curriculum_metrics()
+        self.assertTrue(ready)
+        self.assertAlmostEqual(p_stood, 1.0, places=6)
+        self.assertAlmostEqual(p_done, 0.0, places=6)
+        self.assertTrue(r._maybe_promote(3100), "站起来率达标就必须推进, 不受成功率为 0 阻挡")
+        self.assertEqual(r._cur_level, 1)
+
+    def test_gate_blocked_when_never_stood_up(self):
+        r = self._build(3000, self._level0(), True)
+        cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
+        r._cur_level_iter = 3000
+        for _ in range(C.CURRICULUM_WINDOW_EPISODES):
+            cmd.publish([0, 1], [False, False], stood=False, onset=True)   # 只有窗口起始
+            r._ingest_episode_results()
+        p_stood, p_onset, p_done, ready, n_valid = r._curriculum_metrics()
+        self.assertTrue(ready)
+        self.assertAlmostEqual(p_stood, 0.0, places=6)
+        self.assertAlmostEqual(p_onset, 1.0, places=6)
+        self.assertFalse(r._maybe_promote(3100),
+                         "只有'窗口起始'不足以推进 —— 单帧条件可能被翻滚瞬时满足")
 
     def test_promotion_blocked_before_start_iter_and_in_fixed_mode(self):
         # 计数器与轮次必须一致: 物理对齐守卫会比 common_step_counter 推出的阶段
         r = self._build(C.CURRICULUM_START_ITER, self._level0(), True)
         r._cur_level_iter = 0
-        r._w_succ[:] = True
+        r._w_stood[:] = True
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         self.assertFalse(r._maybe_promote(C.CURRICULUM_START_ITER - 1), "起始轮数之前不得推进")
         self.assertTrue(r._maybe_promote(C.CURRICULUM_START_ITER))
         # 锁死模式 (诊断/消融) 永不推进
         r2 = self._build(5000, (-0.125, 0.125), True, fixed=True)
         r2._cur_level_iter = 0
-        r2._w_succ[:] = True
+        r2._w_stood[:] = True
         r2._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         self.assertFalse(r2._maybe_promote(5000))
 
@@ -379,7 +416,7 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(int(r._ep_seq_seen.sum()), 0, "重建后必须重置发布序号基线")
         self.assertEqual(int(r._w_fill.sum()), 0, "重建后必须清空门控窗口")
 
-    # 课程标量写 tensorboard: 无样本时不写 p_done (NaN 会污染曲线), 其余键恒写
+    # 课程标量写 tensorboard: 无样本时不写三个率 (NaN 会污染曲线), 其余键恒写
     def test_log_curriculum_writes_scalars(self):
         class RecWriter:
             def __init__(self):
@@ -396,13 +433,16 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertAlmostEqual(w.calls["Curriculum/wall_x_neg"], self._level0()[0], places=12)
         self.assertAlmostEqual(w.calls["Curriculum/wall_x_pos"], self._level0()[1], places=12)
         self.assertEqual(w.calls["Curriculum/window_ready"], 0.0)
-        self.assertNotIn("Curriculum/p_done", w.calls, "无样本时不得写 p_done (NaN 会污染曲线)")
-        # 有样本后 p_done / n_valid 才出现
+        for key in ("Curriculum/p_stood", "Curriculum/p_onset", "Curriculum/p_done"):
+            self.assertNotIn(key, w.calls, f"无样本时不得写 {key} (NaN 会污染曲线)")
+        # 有样本后三个率才出现; 三者共用窗口, 所以分母相同
         cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
-        cmd.publish([0, 1], [True, False])
+        cmd.publish([0, 1], [True, False], stood=True, onset=True)
         r._ingest_episode_results()
         r._log_curriculum(3001)
         self.assertAlmostEqual(w.calls["Curriculum/p_done"], 0.5, places=6)
+        self.assertAlmostEqual(w.calls["Curriculum/p_stood"], 1.0, places=6)
+        self.assertAlmostEqual(w.calls["Curriculum/p_onset"], 1.0, places=6)
         self.assertEqual(w.calls["Curriculum/n_valid_episodes"], 2)
         # 没有 writer 时不得报错 (回放/诊断入口)
         r.logger.writer = None
@@ -414,7 +454,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r = self._build(2999, self._level0(), False)
         # 无碰撞期间窗口已攒满且完成率 100%
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-        r._w_succ[:] = True
+        r._w_stood[:] = True
         r._cur_level_iter = 0
         p1, p2 = self._patches()
         with p1, p2:
@@ -439,7 +479,7 @@ class CorridorRebuildTest(unittest.TestCase):
             cmd.publish([0, 1], [True, False])
             r._ingest_episode_results()
         self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)
-        p, ready, n_valid = r._curriculum_metrics()
+        p_stood, p_onset, p_done, ready, n_valid = r._curriculum_metrics()
         self.assertTrue(ready)
         self.assertEqual(n_valid, 2 * C.CURRICULUM_WINDOW_EPISODES,
                          "分母只能是有效回合数")
@@ -448,7 +488,7 @@ class CorridorRebuildTest(unittest.TestCase):
     def test_promotion_requires_physics_to_match_level(self):
         r = self._build(4000, self._level0(), False)     # 目标要开碰撞, 实际关着
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-        r._w_succ[:] = True
+        r._w_stood[:] = True
         r._cur_level_iter = 0
         self.assertFalse(r._maybe_promote(4000), "物理未对齐时不得推进")
 
@@ -458,7 +498,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r = self._build(3100, self._level0(), True)
         r._cur_level_iter = 3000                       # 驻留已满
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-        r._w_succ[:] = True
+        r._w_stood[:] = True
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(1)                                 # 只跑 3100 这一轮
@@ -474,7 +514,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r = self._build(3100, self._level0(), True)
         r._cur_level_iter = 3000
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-        r._w_succ[:] = True
+        r._w_stood[:] = True
         seen: list = []
         orig_act = r.alg.act
 
@@ -497,10 +537,11 @@ class CorridorRebuildTest(unittest.TestCase):
             cmd.publish([0, 1], [True, False])
             r._ingest_episode_results()
         self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)
-        p, ready, n_valid = r._curriculum_metrics()
+        p_stood, p_onset, p_done, ready, n_valid = r._curriculum_metrics()
         self.assertTrue(ready)
         self.assertEqual(n_valid, 2 * C.CURRICULUM_WINDOW_EPISODES)
-        self.assertAlmostEqual(p, 0.5, places=6)
+        self.assertAlmostEqual(p_done, 0.5, places=6)
+        self.assertAlmostEqual(p_stood, 0.5, places=6, msg="三个率共用同一窗口与分母")
         # 再发布一次不重复计入 (序号增量)
         r._ingest_episode_results()
         self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)

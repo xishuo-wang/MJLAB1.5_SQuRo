@@ -43,10 +43,17 @@ CURRICULUM_LEVELS = len(WALL_X_NEG_LEVELS)
 
 # 按能力推进墙位课程的参数 (门控与预算)
 CURRICULUM_START_ITER = STAGE1_3_ITER   # 保留"前 3000 轮无实体碰撞"阶段, 此后才允许推进
-CURRICULUM_GATE_P_DONE = 0.60           # 本档有效完整回合中"至少完成一次翻正"的占比门槛
+CURRICULUM_GATE_P_STOOD = 0.60          # 回合"站起来"率门槛, 见下方口径说明
 CURRICULUM_WINDOW_EPISODES = 3          # 每环境保留最近几个有效回合
 CURRICULUM_MIN_DWELL_ITER = 100         # 每档最短驻留轮数 (防止一个偶然窗口连跳)
 CURRICULUM_MAX_ITER = 9000              # 总预算, 与 STAGE2_2_ITER 解耦
+
+# 门控口径: **回合"站起来"率** = 站姿维持满确认窗口且当步严格几何, **不含关节速度**。
+# 为什么不用"稳定站立成功率": 速度项是采样量, 实测开墙前后完全相同 (5.638 vs 5.641 rad/s),
+#   即它与墙位无关 —— 拿它当门控会让课程等一个自己影响不了的条件 (2026-09-25 run 实测
+#   p_done 全程 0、课程 5100 轮没动一档)。
+# 为什么不用"进入 P3": _check_S2 是 grounded | standing 的并集, 翻过来趴平同样满足,
+#   那只保证"翻过去了", 不保证"站起来了"。
 
 
 # 奖励权重课程的分档边界 (RewardWeightCurriculum 按 iter 取段)。

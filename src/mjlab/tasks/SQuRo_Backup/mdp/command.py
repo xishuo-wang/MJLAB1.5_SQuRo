@@ -149,6 +149,17 @@ class BackupCommand(CommandTerm):
         self._ep_seq = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._last_ep_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_ep_success = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # "站起来"的两个锁存 (课程门控用; 循环复位不清, 回合结束发布后清零):
+        #   _ep_stood_pose : 站姿维持满确认窗口且当步严格几何 —— **不含速度项**, 即现行成功
+        #                    判据去掉抖动项。课程门控读它: 门控量必须是课程能影响的量, 而
+        #                    速度项在开墙前后完全相同 (实测 5.638 vs 5.641), 与墙位无关。
+        #   _ep_stood_onset: 站立窗口 (宽松几何) 的上升沿, 只作诊断与备用门控 —— 单帧条件,
+        #                    翻滚过程中可能瞬时满足, 不适合直接驱动缩墙。
+        self._ep_stood_pose = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._ep_stood_onset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_ep_stood_pose = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._last_ep_stood_onset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._prev_stand_active = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
         self._pose_cos_cache: torch.Tensor | None = None
         # 姿态识别观测 (技术细节 §7.8): 与 phase 分开, 只作指标, 不参与任何推进判定。
@@ -252,6 +263,12 @@ class BackupCommand(CommandTerm):
             self._ep_seq = torch.zeros_like(self.phase)
             self._last_ep_valid = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_ep_success = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_ep_stood_pose"):
+            self._ep_stood_pose = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._ep_stood_onset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_ep_stood_pose = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_ep_stood_onset = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._prev_stand_active = torch.zeros_like(self.phase, dtype=torch.bool)
 
     # 把**实际编译进仿真**的墙位写进观测量。来源是场景实体本身, 不是 runner 的缓存 ——
     # 与"判据一律比实际编译值"同一条原则。墙位在编译期固化, 环境生命周期内不变, 所以只在
@@ -355,11 +372,15 @@ class BackupCommand(CommandTerm):
                 valid = self._ep_index[ids] >= 1
                 self._last_ep_valid[ids] = valid
                 self._last_ep_success[ids] = self._ep_had_success[ids] & valid
+                self._last_ep_stood_pose[ids] = self._ep_stood_pose[ids] & valid
+                self._last_ep_stood_onset[ids] = self._ep_stood_onset[ids] & valid
                 self._ep_seq[ids] += 1
                 self._ep_index[ids] += 1
             # 中途重置只清"进行中"的累积, 不发布成绩, 也不消耗"首个回合无效"的名额
             self._ep_had_success[env_ids] = False
             self._ep_cycle_count[env_ids] = 0
+            self._ep_stood_pose[env_ids] = False
+            self._ep_stood_onset[env_ids] = False
             self._resample_command(env_ids)
         return extras
 
@@ -739,6 +760,14 @@ class BackupCommand(CommandTerm):
         # 每个循环只能完成一次: 窗口在复位前一直保持"已攒满", 不加这道锁的话在"完成帧"
         # 与"复位帧"之间(以及同一帧内重复结算时)会反复结算同一个循环。
         confirmed = confirmed & ~self._pending_cycle_reset
+        # 把判据拆成"姿态项"与"抖动项": 姿态项就是去掉速度条件的那一半 (站姿维持满确认窗口
+        # 且当步严格几何), 供课程门控使用 —— 门控量必须是课程能影响的量。
+        held = active & running & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps))
+        self._ep_stood_pose |= held & strict
+        # 站立窗口的上升沿 (只作诊断/备用门控): 单帧条件, 可能在翻滚过程中瞬时满足
+        stand_active = active & running
+        self._ep_stood_onset |= stand_active & ~self._prev_stand_active
+        self._prev_stand_active = stand_active
         # 回合级统计的唯一产生点: 就在这里置位, 循环复位不清 (见 __init__ 的说明)。
         self._ep_had_success |= confirmed
         self._ep_cycle_count += confirmed.long()

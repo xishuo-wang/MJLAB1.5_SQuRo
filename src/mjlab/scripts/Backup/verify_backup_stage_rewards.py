@@ -92,6 +92,12 @@ def make_env(phases):
     cmd._ep_seq = torch.zeros(n, dtype=torch.long)
     cmd._last_ep_valid = torch.zeros(n, dtype=torch.bool)
     cmd._last_ep_success = torch.zeros(n, dtype=torch.bool)
+    # "站起来"的两个锁存 (课程门控用) + 站立窗口上升沿检测
+    cmd._ep_stood_pose = torch.zeros(n, dtype=torch.bool)
+    cmd._ep_stood_onset = torch.zeros(n, dtype=torch.bool)
+    cmd._last_ep_stood_pose = torch.zeros(n, dtype=torch.bool)
+    cmd._last_ep_stood_onset = torch.zeros(n, dtype=torch.bool)
+    cmd._prev_stand_active = torch.zeros(n, dtype=torch.bool)
     # CommandTerm.reset 需要的基类状态 (单测会直接调 cmd.reset)
     cmd.metrics = {}
     cmd.command_counter = torch.zeros(n, dtype=torch.long)
@@ -682,6 +688,58 @@ class StageRewardTests(unittest.TestCase):
         cmd.command_tensor[:, 5] = 2.5
         self.assertAlmostEqual(float(cmd.time_scale_command[0]), 2.5, places=12)
         self.assertAlmostEqual(float(cmd.command[0, 5]), 2.5, places=12)
+
+    # 课程门控量: "站起来" = 站姿维持满确认窗口且当步严格几何, **不含关节速度**。
+    # 速度超限只阻止"稳定站立成功", 不该阻止"站起来" —— 实测速度项在开墙前后完全相同
+    # (5.638 vs 5.641 rad/s), 拿它当门控会让课程等一个自己影响不了的条件。
+    def test_stood_pose_latches_without_the_velocity_condition(self):
+        from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_VEL_MEAN_MAX as VMAX
+        env, cmd = make_env([2])
+        cmd.test_vel[:] = VMAX * 2.0                 # 远高于门限: 成功不可能, 但姿态没问题
+        for _ in range(_STAND_STEPS - 1):
+            cmd.stand_reward_and_pulse()
+        cmd.stand_reward_and_pulse()
+        self.assertTrue(bool(cmd._ep_stood_pose[0]), "姿态达标就必须锁存'站起来'")
+        self.assertFalse(bool(cmd._ep_had_success[0]), "速度超限时不算稳定站立成功")
+        self.assertEqual(int(cmd._ep_cycle_count[0]), 0)
+
+    # 速度达标时两者一起成立 (姿态项是成功判据的严格子集)
+    def test_stood_pose_is_a_subset_of_success(self):
+        env, cmd = make_env([2])
+        for _ in range(_STAND_STEPS):
+            cmd.stand_reward_and_pulse()
+        self.assertTrue(bool(cmd._ep_stood_pose[0]))
+        self.assertTrue(bool(cmd._ep_had_success[0]))
+
+    # "站立窗口出现"的上升沿只作诊断/备用门控; 从未进入 P3 时不得置位
+    def test_stood_onset_requires_entering_the_stand_window(self):
+        env, cmd = make_env([1])                     # P2: 不在 P3
+        for _ in range(_STAND_STEPS):
+            cmd.stand_reward_and_pulse()
+        self.assertFalse(bool(cmd._ep_stood_onset[0]), "不在 P3 时不得锁存窗口起始")
+        self.assertFalse(bool(cmd._ep_stood_pose[0]))
+        cmd.phase[:] = 2                             # 进入 P3 -> 窗口开启
+        cmd.stand_reward_and_pulse()
+        self.assertTrue(bool(cmd._ep_stood_onset[0]))
+        self.assertTrue(bool(cmd._prev_stand_active[0]))
+
+    # 两个锁存与成功一样: 循环复位不清, 回合结束发布并清零
+    def test_stood_latches_follow_episode_lifecycle(self):
+        env, cmd = make_env([2])
+        for _ in range(_STAND_STEPS):
+            cmd.stand_reward_and_pulse()
+        cmd._clear_cycle_state(torch.arange(1))      # 循环复位
+        self.assertTrue(bool(cmd._ep_stood_pose[0]), "循环复位不得清掉回合级站起标志")
+        self.assertTrue(bool(cmd._ep_stood_onset[0]))
+        env.episode_length_buf = torch.tensor([1200], dtype=torch.long)
+        cmd.reset(torch.arange(1))                   # 首个回合 -> 无效
+        self.assertFalse(bool(cmd._last_ep_stood_pose[0]), "无效回合即使站起来也不算数")
+        self.assertFalse(bool(cmd._last_ep_stood_onset[0]))
+        self.assertFalse(bool(cmd._ep_stood_pose[0]), "发布后必须清零")
+        env.episode_length_buf = torch.tensor([1200], dtype=torch.long)
+        cmd.reset(torch.arange(1))                   # 第二个回合 -> 有效
+        self.assertTrue(bool(cmd._last_ep_valid[0]))
+        self.assertFalse(bool(cmd._last_ep_stood_pose[0]), "本回合没站起")
 
     # 初始化/中途手动 reset 都不是回合结束: 正常结束的唯一判据是 episode_length_buf 达到
     # 回合上限 (本任务只有 timeout 一种终止)。`> 0` 只说明回合已开始, 不够 —— 真环境已复现
@@ -1903,7 +1961,7 @@ class StageRewardTests(unittest.TestCase):
         for lv in range(C.CURRICULUM_LEVELS):
             self.assertEqual(C.get_level_for_wall_x_neg(C.WALL_X_NEG_LEVELS[lv]), lv)
         # 门控参数必须自洽
-        self.assertTrue(0.0 < C.CURRICULUM_GATE_P_DONE <= 1.0)
+        self.assertTrue(0.0 < C.CURRICULUM_GATE_P_STOOD <= 1.0)
         self.assertGreaterEqual(C.CURRICULUM_WINDOW_EPISODES, 1)
         self.assertGreater(C.CURRICULUM_MIN_DWELL_ITER, 0)
         self.assertEqual(C.CURRICULUM_START_ITER, C.STAGE1_3_ITER)
