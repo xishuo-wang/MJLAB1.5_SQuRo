@@ -4,7 +4,7 @@ from mjlab.rl import (
     RslRlPpoAlgorithmCfg,
 )
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
-    STAGE2_2_ITER,
+    CURRICULUM_MAX_ITER,
     _STEPS_PER_ITER,
 )
 
@@ -44,8 +44,9 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         experiment_name="SQuRo_Backup",
         save_interval=100,
         num_steps_per_env=_STEPS_PER_ITER,
-        # 总轮数 = STAGE2_2_ITER (两阶段见 curriculums 的阶段表)
-        max_iterations=STAGE2_2_ITER,
+        # 总轮数 = CURRICULUM_MAX_ITER: 墙位课程按能力推进, 走完档位所需轮数不再是常量,
+        # 所以预算与 STAGE2_2_ITER (奖励权重/λ 课程的终点) 解耦。
+        max_iterations=CURRICULUM_MAX_ITER,
 
         clip_actions=None,
         seed=42,

@@ -1804,97 +1804,108 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(w[4].item(), R.TRACK_W_LEG, places=6)    # FL_shoulder
         self.assertAlmostEqual(w[8].item(), R.TRACK_W_SPN, places=6)    # H_spine1
 
-    def test_corridor_ladder_reaches_target_width(self):
-        # 受限空间的墙宽课程被量化成离散档位 (几何只能在编译期定)。
-        # 这条守卫的是"末档必须恰好等于下界" —— 曾经用"变化超过 0.05 才重建"的阈值判据,
-        # 最后剩 0.0497 的差值永远不触发, 课程实际停在 0.2497 而不是 0.20。
+    def test_curriculum_level_table_reaches_target_walls(self):
+        # 墙位课程是显式档位表 + 索引推进 (几何只能在编译期定)。
+        # 这条守卫的是"末档必须恰好等于下界" —— 曾经用"变化超过阈值才重建"的判据,
+        # 最后剩 0.0497 的差值永远不触发, 课程实际停在 0.2497 而不是下界。
         from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
-        self.assertAlmostEqual(C.CORRIDOR_WIDTH_LADDER[0], C.CORRIDOR_WIDTH_START, places=12)
-        self.assertAlmostEqual(C.CORRIDOR_WIDTH_LADDER[-1], C.CORRIDOR_WIDTH_MIN, places=12)
-        # 末段任意轮次的实际编译宽度都必须等于下界
-        for it in (C.STAGE2_1_ITER, (C.STAGE2_1_ITER + C.STAGE2_2_ITER) // 2,
-                   C.STAGE2_2_ITER - 1, C.STAGE2_2_ITER + 500):
-            self.assertAlmostEqual(C.get_corridor_width_for_iter(it), C.CORRIDOR_WIDTH_MIN,
-                                   places=12)
-        # 实际编译宽度全程单调不增, 且都在档位表里
-        prev = None
-        for it in range(0, C.STAGE2_2_ITER, 50):
-            w = C.get_corridor_width_for_iter(it)
-            self.assertIn(w, C.CORRIDOR_WIDTH_LADDER)
-            if prev is not None:
-                self.assertLessEqual(w, prev + 1e-12)
-            prev = w
-        # 阶段一边界必须落在第一个档位上
-        self.assertAlmostEqual(C.get_corridor_width_for_iter(C.STAGE1_3_ITER - 1),
-                               C.CORRIDOR_WIDTH_START, places=12)
+        self.assertAlmostEqual(C.WALL_X_NEG_LEVELS[0], C.WALL_X_NEG_START, places=12)
+        self.assertAlmostEqual(C.WALL_X_NEG_LEVELS[-1], C.WALL_X_NEG_END, places=12)
+        self.assertEqual(len(C.WALL_X_NEG_LEVELS), C.CURRICULUM_LEVELS)
+        # 逐档收紧, 且 +X 墙位全程固定
+        for lv in range(C.CURRICULUM_LEVELS - 1):
+            neg0, pos0 = C.get_wall_positions_for_level(lv)
+            neg1, pos1 = C.get_wall_positions_for_level(lv + 1)
+            self.assertGreater(neg1, neg0, "−X 墙位必须逐档朝原点收紧")
+            self.assertEqual(pos0, C.WALL_X_POS)
+            self.assertEqual(pos1, C.WALL_X_POS)
+        # 越界 clamp 到端点: 课程停在末档时仍要能算出墙位
+        self.assertEqual(C.get_wall_positions_for_level(999),
+                         C.get_wall_positions_for_level(C.CURRICULUM_LEVELS - 1))
+        self.assertEqual(C.get_wall_positions_for_level(-1), C.get_wall_positions_for_level(0))
+        # 墙位 -> 档位反查自洽 (续训时检查点只记了墙位的情况)
+        for lv in range(C.CURRICULUM_LEVELS):
+            self.assertEqual(C.get_level_for_wall_x_neg(C.WALL_X_NEG_LEVELS[lv]), lv)
+        # 门控参数必须自洽
+        self.assertTrue(0.0 < C.CURRICULUM_GATE_P_DONE <= 1.0)
+        self.assertGreaterEqual(C.CURRICULUM_WINDOW_EPISODES, 1)
+        self.assertGreater(C.CURRICULUM_MIN_DWELL_ITER, 0)
+        self.assertEqual(C.CURRICULUM_START_ITER, C.STAGE1_3_ITER)
+
+    def test_curriculum_does_not_depend_on_iteration(self):
+        # 课程按能力推进, **不存在**"轮次 -> 墙位"的映射; 时钟只剩碰撞开关这一项。
+        # 这条守卫的是"不要再用轮次反推墙位" (回放的第三级回退已因此删除)。
+        from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
+        self.assertFalse(hasattr(C, "get_corridor_width_for_iter"))
+        self.assertFalse(hasattr(C, "get_curriculum_corridor_width"))
+        self.assertFalse(hasattr(C, "CORRIDOR_WIDTH_LADDER"))
+        self.assertEqual(C.get_training_phase((C.STAGE1_3_ITER - 1) * C._STEPS_PER_ITER), 0)
+        self.assertEqual(C.get_training_phase(C.STAGE1_3_ITER * C._STEPS_PER_ITER), 1)
 
     def test_corridor_stage1_is_collision_free_by_default(self):
         # 阶段一的 env_cfg 必须从第一帧起就是"无碰撞": 曾经硬编码 enable_collision=True,
         # 导致首轮采样带着碰撞跑, 要等第一次日志钩子才重建回无碰撞。
         from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
         from mjlab.tasks.SQuRo_Backup.mdp.entity import build_restricted_space_cfg
+        neg0, pos0 = C.get_wall_positions_for_level(0)
         cfg = build_restricted_space_cfg(
             enable_collision=C.get_training_phase(0) == 1,
-            corridor_width=C.get_corridor_width_for_iter(0),
+            wall_x_neg=neg0, wall_x_pos=pos0,
         )
         self.assertEqual(cfg.contype, 0)
         self.assertEqual(cfg.conaffinity, 0)
-        self.assertAlmostEqual(cfg.corridor_width, C.CORRIDOR_WIDTH_START, places=12)
+        self.assertAlmostEqual(cfg.wall_x_neg, neg0, places=12)
+        self.assertAlmostEqual(cfg.wall_x_pos, pos0, places=12)
 
     def test_play_corridor_flag_precedence(self):
-        # 回放的墙宽/碰撞取值优先级: 命令行 > 检查点记录 > 按轮次推算。
-        # 检查点记录优先于阶段推算 —— 记录是训练当时真实编译生效的值，而"阶段"是拿文件名
-        # 轮次猜的，改名或恰好落在阶段边界上就会猜错。
+        # 回放的墙位/碰撞取值优先级: 命令行 > 检查点记录; **没有第三级** ——
+        # 课程按能力推进, "轮次 -> 墙位"已不存在, 按轮次推算会静默给出错误的墙。
         import mjlab.scripts.SQuRo_Backup_play as play
-        from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
         Cfg = NS
+        none = dict(wall_x_neg=None, wall_x_pos=None, corridor_width=None)
 
-        # 阶段一 + 记录说"无碰撞": 回放成无碰撞 (2999 的 pt 走无碰撞实现)
-        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
+        # 阶段一 + 记录说"无碰撞"(旧格式只记对称间距): 折算成对称墙位, 以记录为准
+        got = play.resolve_corridor(Cfg(enable_collision=None, **none),
                                     {"corridor_width": 0.40, "corridor_collision": False},
-                                    phase=0, align_iter=2999)
-        self.assertAlmostEqual(got[0], 0.40, places=12)
-        self.assertIs(got[1], False)
-        self.assertEqual(got[2], "检查点记录")
-        self.assertEqual(got[3], "检查点记录")
+                                    phase=0)
+        self.assertAlmostEqual(got[0], -0.20, places=12)
+        self.assertAlmostEqual(got[1], 0.20, places=12)
+        self.assertIs(got[2], False)
+        self.assertEqual(got[3], "检查点记录(旧格式, 按对称折算)")
+        self.assertEqual(got[4], "检查点记录")
 
-        # 阶段一但记录说"开碰撞": 以记录为准 (记录是实际编译值, 阶段是猜的)
-        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
-                                    {"corridor_width": 0.5, "corridor_collision": True},
-                                    phase=0, align_iter=100)
-        self.assertAlmostEqual(got[0], 0.5, places=12)
-        self.assertIs(got[1], True)
+        # 记录里有墙位对 (新格式): 直接用, 保留不对称
+        got = play.resolve_corridor(Cfg(enable_collision=None, **none),
+                                    {"wall_x_neg": -0.16, "wall_x_pos": 0.08,
+                                     "corridor_collision": True},
+                                    phase=0)
+        self.assertAlmostEqual(got[0], -0.16, places=12)
+        self.assertAlmostEqual(got[1], 0.08, places=12)
+        self.assertIs(got[2], True, "记录优先于阶段推算")
         self.assertEqual(got[3], "检查点记录")
-
-        # 阶段二: 用检查点记录的实际值, 而不是按轮次反推
-        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
-                                    {"corridor_width": 0.3499, "corridor_collision": True},
-                                    phase=1, align_iter=4000)
-        self.assertAlmostEqual(got[0], 0.3499, places=6)
-        self.assertEqual(got[2], "检查点记录")
 
         # 命令行覆盖一切 (回放脚本的开关必须能压过自动配置)
-        got = play.resolve_corridor(Cfg(corridor_width=0.25, enable_collision=False),
-                                    {"corridor_width": 0.5, "corridor_collision": True},
-                                    phase=1, align_iter=4000)
-        self.assertAlmostEqual(got[0], 0.25, places=12)
-        self.assertIs(got[1], False)
-        self.assertEqual(got[2], "命令行")
+        got = play.resolve_corridor(Cfg(enable_collision=False, wall_x_neg=-0.12,
+                                        wall_x_pos=0.08, corridor_width=None),
+                                    {"wall_x_neg": -0.16, "wall_x_pos": 0.08,
+                                     "corridor_collision": True},
+                                    phase=1)
+        self.assertAlmostEqual(got[0], -0.12, places=12)
+        self.assertIs(got[2], False)
         self.assertEqual(got[3], "命令行")
+        self.assertEqual(got[4], "命令行")
 
-        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=True),
-                                    {"corridor_width": 0.5, "corridor_collision": False},
-                                    phase=0, align_iter=100)
-        self.assertIs(got[1], True)
-        self.assertEqual(got[3], "命令行")
+        # 对称简写仍然可用
+        got = play.resolve_corridor(Cfg(enable_collision=None, wall_x_neg=None,
+                                        wall_x_pos=None, corridor_width=0.25),
+                                    {}, phase=1)
+        self.assertAlmostEqual(got[0], -0.125, places=12)
+        self.assertAlmostEqual(got[1], 0.125, places=12)
+        self.assertEqual(got[3], "命令行(对称简写)")
 
-        # 无检查点记录时按轮次推算 (2999 的 pt 属于阶段一 ⇒ 无碰撞)
-        got = play.resolve_corridor(Cfg(corridor_width=None, enable_collision=None),
-                                    {}, phase=0, align_iter=2989)
-        self.assertAlmostEqual(got[0], C.CORRIDOR_WIDTH_START, places=12)
-        self.assertIs(got[1], False)
-        self.assertEqual(got[2], "按轮次推算")
-        self.assertEqual(got[3], "阶段一默认关")
+        # 无记录时必须报错, 不能退回"按轮次推算"
+        with self.assertRaises(SystemExit):
+            play.resolve_corridor(Cfg(enable_collision=None, **none), {}, phase=0)
 
 
 if __name__ == '__main__':

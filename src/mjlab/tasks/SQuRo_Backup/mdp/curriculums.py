@@ -20,11 +20,33 @@ STAGE2_1_ITER = 5000               # iter 3000-5000: 受限空间课程 (开碰�
 STAGE2_2_ITER = 6000               # iter 5000-6000: 受限空间动作优化 (= 总训练轮数)
 
 
-# 受限空间课程: 两侧墙中心间距 a (m)。实际内侧净宽 = a - 2×墙半厚。
+# 受限空间墙位课程: 两墙中心的世界 x。**墙位是原语, 中心间距是派生量**。
+# 为什么不对称: 实测翻正只朝世界 −X 走 (自由运动 base_x ∈ [−0.10, +0.006]、足端 ∈ [−0.167,
+# +0.062]), −X 侧是唯一有效约束; +X 侧固定在小值即可, 课程变量留给 −X 侧。
 # 注意: mjwarp 在 put_model 时固化碰撞对与几何位置, 运行期都改不了 (实测),
-# 所以下面的函数给出的是"当前轮次该用哪个 a", 真正生效要靠按 a 重建环境 (见 mdp/entity.py)。
-CORRIDOR_WIDTH_START = 0.40        # STAGE1 期间固定值 = 受限空间课程起点
-CORRIDOR_WIDTH_MIN = 0.20          # 课程终点 = STAGE2_2 保持值
+# 所以下面的表给出的是"当前档位该用哪对墙位", 真正生效要靠按档位重建环境 (见 mdp/entity.py)。
+WALL_X_POS = 0.08                  # +X 墙中心, 全程固定 (内侧 +0.07)
+WALL_X_NEG_START = -0.20           # −X 墙中心起点
+WALL_X_NEG_END = -0.08             # −X 墙中心终点 = 课程下界
+WALL_X_NEG_STEP = 0.02
+
+# 档位表显式枚举, 课程推进的是**索引**, 不是"变化量超过阈值才重建" ——
+# 后者曾因末档差值 0.0497 永不触发, 让课程静默停在 0.2497 而不是目标值。
+WALL_X_NEG_LEVELS: tuple[float, ...] = tuple(
+    round(WALL_X_NEG_START + i * WALL_X_NEG_STEP, 6)
+    for i in range(int(round((WALL_X_NEG_END - WALL_X_NEG_START) / WALL_X_NEG_STEP)) + 1)
+)
+# 末档必须精确等于下界, 否则课程永远到不了目标墙位
+assert abs(WALL_X_NEG_LEVELS[-1] - WALL_X_NEG_END) < 1e-9, WALL_X_NEG_LEVELS
+CURRICULUM_LEVELS = len(WALL_X_NEG_LEVELS)
+
+
+# 按能力推进墙位课程的参数 (门控与预算)
+CURRICULUM_START_ITER = STAGE1_3_ITER   # 保留"前 3000 轮无实体碰撞"阶段, 此后才允许推进
+CURRICULUM_GATE_P_DONE = 0.60           # 本档有效完整回合中"至少完成一次翻正"的占比门槛
+CURRICULUM_WINDOW_EPISODES = 3          # 每环境保留最近几个有效回合
+CURRICULUM_MIN_DWELL_ITER = 100         # 每档最短驻留轮数 (防止一个偶然窗口连跳)
+CURRICULUM_MAX_ITER = 9000              # 总预算, 与 STAGE2_2_ITER 解耦
 
 
 # 奖励权重课程的分档边界 (RewardWeightCurriculum 按 iter 取段)。
@@ -147,39 +169,20 @@ def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.T
     return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)
 
 
-# 受限空间阶段: 0 = STAGE1 (不开碰撞, a 固定), 1 = STAGE2 (开碰撞, a 按课程收紧)
+# 受限空间阶段: 0 = STAGE1 (不开实体碰撞), 1 = STAGE2 (开碰撞)。
+# 墙位课程不再与轮次绑定 (改为按能力推进), 这里只剩"碰撞开关"这一个时钟量。
 def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < STAGE1_3_ITER else 1
 
 
-# 受限空间课程: 两侧墙中心间距 a (m) 关于轮次的**连续**取值:
-#   STAGE1  (iter 0 ~ STAGE1_3_ITER)               : a = 0.40 固定, 不开碰撞
-#   STAGE2_1(iter STAGE1_3_ITER ~ STAGE2_1_ITER)   : a 从 0.40 线性收到 0.20, 开碰撞
-#   STAGE2_2(iter STAGE2_1_ITER ~ STAGE2_2_ITER)   : a = 0.20 保持
-# 注意: 几何只能在编译期定, 实际生效的宽度是下面 CORRIDOR_WIDTH_LADDER 里的离散档位,
-#       **不要**用本函数去推算"训练当时真正的墙宽", 那要用 get_corridor_width_for_iter。
-def get_curriculum_corridor_width(step_counter: int) -> float:
-    iter_num = step_counter // _STEPS_PER_ITER
-    if iter_num < STAGE1_3_ITER:
-        return CORRIDOR_WIDTH_START
-    span = max(1, STAGE2_1_ITER - STAGE1_3_ITER)
-    progress = min(1.0, (iter_num - STAGE1_3_ITER) / span)
-    return CORRIDOR_WIDTH_START - progress * (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN)
+# 该档位该编译的墙位对 (m)。训练与回放必须共用这一个口径。
+# 越界一律 clamp 到端点: 课程停在末档时仍要能算出墙位。
+def get_wall_positions_for_level(level: int) -> tuple[float, float]:
+    idx = min(max(int(level), 0), CURRICULUM_LEVELS - 1)
+    return WALL_X_NEG_LEVELS[idx], WALL_X_POS
 
 
-# 实际生效的宽度档位 (m)。墙体几何只能在编译期定, 所以课程被量化成这几档;
-# 末档**必须**恰好等于 CORRIDOR_WIDTH_MIN, 否则课程永远到不了目标宽度。
-CORRIDOR_WIDTH_LEVELS = 5
-CORRIDOR_WIDTH_LADDER: tuple[float, ...] = tuple(
-    CORRIDOR_WIDTH_MIN
-    + (CORRIDOR_WIDTH_START - CORRIDOR_WIDTH_MIN) * (CORRIDOR_WIDTH_LEVELS - 1 - i)
-    / (CORRIDOR_WIDTH_LEVELS - 1)
-    for i in range(CORRIDOR_WIDTH_LEVELS)
-)
-
-
-# 该轮次实际编译生效的墙间距 (从档位表里选最接近的), 训练与回放必须共用这一个口径。
-def get_corridor_width_for_iter(iter_num: int) -> float:
-    step_counter = iter_num * _STEPS_PER_ITER
-    wanted = get_curriculum_corridor_width(step_counter)
-    return min(CORRIDOR_WIDTH_LADDER, key=lambda w: abs(w - wanted))
+# 由墙位反查最近的档位索引 (续训时检查点只记了墙位、没记档位时用)
+def get_level_for_wall_x_neg(x_neg: float) -> int:
+    return min(range(CURRICULUM_LEVELS),
+               key=lambda i: abs(WALL_X_NEG_LEVELS[i] - float(x_neg)))

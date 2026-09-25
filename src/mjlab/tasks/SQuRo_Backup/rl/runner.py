@@ -13,10 +13,17 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CURRICULUM_GATE_P_DONE,
+    CURRICULUM_LEVELS,
+    CURRICULUM_MIN_DWELL_ITER,
+    CURRICULUM_START_ITER,
+    CURRICULUM_WINDOW_EPISODES,
     STAGE1_3_ITER,
+    WALL_X_NEG_LEVELS,
     _STEPS_PER_ITER,
-    get_corridor_width_for_iter,
+    get_level_for_wall_x_neg,
     get_training_phase,
+    get_wall_positions_for_level,
 )
 from rsl_rl.utils import check_nan
 
@@ -26,7 +33,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     def __init__(self, env, train_cfg, log_dir=None, device="cpu") -> None:
         super().__init__(env, train_cfg, log_dir, device)
-        # 墙的 a 与碰撞开关在编译期固化, 运行期改不了 (见 mdp/entity.py), 换档只能重建环境。
+        # 墙位与碰撞开关在编译期固化, 运行期改不了 (见 mdp/entity.py), 换档只能重建环境。
         # 这里留一份**本次启动的 env_cfg 副本**作为重建模板, 否则重建会把命令行覆盖
         # (fixed_time_scale / episode_length_s / sim 参数 / seed) 全部退回注册配置。
         self._corridor_device = device
@@ -35,9 +42,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._corridor_clip_actions = getattr(env, "clip_actions", None)
         self._corridor_render_mode = getattr(env.unwrapped, "render_mode", None)
         entity = env.unwrapped.scene.entities.get("restricted_space")
-        # 启动时编译进仿真的墙宽 (锁死宽度模式的模板), 以及该锁死是否来自显式指定
-        self._corridor_start_width = (
-            float(entity.cfg.corridor_width) if entity is not None else None)
+        # 启动时编译进仿真的墙位 (锁死模式的模板), 以及该锁死是否来自显式指定
+        self._corridor_start_walls = (
+            None if entity is None
+            else (float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)))
         self._corridor_fixed = entity is not None and entity.cfg.fixed_width
         # 显式指定宽度 (RESTRICTED_SPACE_WIDTH) 属于命令行意图, 优先于检查点记录里的锁死标记
         self._corridor_fixed_by_cli = self._corridor_fixed
@@ -45,38 +53,123 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 默认 False = 与 learn() 签名默认值一致; load() 触发的重建早于 learn(), 此时不随机化,
         # 随后的 learn(True) 会补上。
         self._randomize_ep_len = False
+        # 墙位课程状态 —— 课程状态全部由 runner 持有并写进检查点; 物理/循环/未结束的回合
+        # 重建后重新开始, 不跨环境拼接 (技术细节 §7.11 第 11 条)。
+        self._cur_level = 0
+        self._cur_level_iter = 0
+        self._cur_level_history: list[dict] = []
+        self._reset_curriculum_window()
 
-    # 当前**实际编译进仿真**的 (宽度, 碰撞开关), 唯一来源是场景里的实体本身。
+    # 清空当前档位的门控窗口。**每次重建都要清**: 新环境的 _ep_seq 从 0 重新开始, 不清
+    # _ep_seq_seen 就再也收不到事件, 门控会永久饿死 (与 common_step_counter 同一类坑);
+    # 而且旧墙位的成绩本来也不能用于新墙位升级。
+    def _reset_curriculum_window(self) -> None:
+        n, w = self._corridor_num_envs, CURRICULUM_WINDOW_EPISODES
+        self._w_valid = torch.zeros(n, w, dtype=torch.bool)
+        self._w_succ = torch.zeros(n, w, dtype=torch.bool)
+        self._w_head = torch.zeros(n, dtype=torch.long)
+        self._w_fill = torch.zeros(n, dtype=torch.long)
+        self._ep_seq_seen = torch.zeros(n, dtype=torch.long)
+
+    # 拉取本轮新发布的回合结果, 更新每环境的滑动窗口。
+    # 每个环境一轮内最多结束 1 个有效回合 (有效回合恒为 1200 步 > 一轮 96 步), 所以按序号
+    # 取增量不会漏事件。
+    def _ingest_episode_results(self) -> None:
+        if not hasattr(self, "_w_valid"):
+            self._reset_curriculum_window()
+        cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
+        seq = cmd._ep_seq.detach().to("cpu")
+        new = seq > self._ep_seq_seen
+        if not bool(new.any()):
+            return
+        idx = new.nonzero(as_tuple=False).squeeze(-1)
+        head = self._w_head[idx]
+        self._w_valid[idx, head] = cmd._last_ep_valid.detach().to("cpu")[idx]
+        self._w_succ[idx, head] = cmd._last_ep_success.detach().to("cpu")[idx]
+        self._w_head[idx] = (head + 1) % CURRICULUM_WINDOW_EPISODES
+        self._w_fill[idx] = torch.clamp(self._w_fill[idx] + 1, max=CURRICULUM_WINDOW_EPISODES)
+        self._ep_seq_seen[idx] = seq[idx]
+
+    # 门控量: 窗口内"至少完成一次翻正"的有效回合占比。
+    # 用比值而不是均值: 均值 (每回合平均循环数) 比"回合占比"更松, 会提前放行。
+    def _curriculum_metrics(self) -> tuple[float, bool, int]:
+        n_valid = int(self._w_valid.sum())
+        n_succ = int(self._w_succ.sum())
+        p = (n_succ / n_valid) if n_valid > 0 else float("nan")
+        ready = bool((self._w_fill >= CURRICULUM_WINDOW_EPISODES).all())
+        return p, ready, n_valid
+
+    # 门控达标则推进一档。只升一档、只改索引, 真正的墙位变化交给随后那次重建。
+    def _maybe_promote(self, it: int) -> bool:
+        if self._corridor_fixed or self._cur_level >= CURRICULUM_LEVELS - 1:
+            return False
+        if it < CURRICULUM_START_ITER:
+            return False
+        if it - self._cur_level_iter < CURRICULUM_MIN_DWELL_ITER:
+            return False
+        p, ready, n_valid = self._curriculum_metrics()
+        if not ready or not (p >= CURRICULUM_GATE_P_DONE):
+            return False
+        self._cur_level_history.append({
+            "level": self._cur_level, "iter": it,
+            "wall_x_neg": WALL_X_NEG_LEVELS[self._cur_level], "p_done": p, "n_valid": n_valid,
+        })
+        self._cur_level += 1
+        self._cur_level_iter = it
+        self._reset_curriculum_window()
+        neg, pos = get_wall_positions_for_level(self._cur_level)
+        print(f"[INFO] 墙位课程推进: 第 {self._cur_level} 档 x_neg={neg:.4f} x_pos={pos:.4f} "
+              f"(净宽 {pos - neg - 0.02:.4f} m), iter {it}, 上档 p_done={p:.3f}")
+        return True
+
+    # 每轮把课程状态写进 tensorboard; 无样本时不写 (NaN 会污染曲线)。
+    def _log_curriculum(self, it: int) -> None:
+        writer = getattr(self.logger, "writer", None)
+        if writer is None:
+            return
+        neg, pos = get_wall_positions_for_level(self._cur_level)
+        p, ready, n_valid = self._curriculum_metrics()
+        writer.add_scalar("Curriculum/level", self._cur_level, it)
+        writer.add_scalar("Curriculum/wall_x_neg", neg, it)
+        writer.add_scalar("Curriculum/wall_x_pos", pos, it)
+        writer.add_scalar("Curriculum/clear_width", pos - neg - 0.02, it)
+        writer.add_scalar("Curriculum/window_ready", float(ready), it)
+        if n_valid > 0:
+            writer.add_scalar("Curriculum/n_valid_episodes", n_valid, it)
+            writer.add_scalar("Curriculum/p_done", p, it)
+
+    # 当前**实际编译进仿真**的 (墙位对, 碰撞开关), 唯一来源是场景里的实体本身。
     # 不要另存一份缓存来做比较: 缓存只记录"我们以为改成了什么", 一旦与真实环境脱节
     # (例如加载检查点后直接改了缓存), 判据会认为"无需重建"而让训练跑在错误的物理环境里。
-    def _corridor_compiled_state(self) -> tuple[float | None, bool | None]:
+    def _corridor_compiled_state(self) -> tuple[tuple[float, float] | None, bool | None]:
         entity = self.env.unwrapped.scene.entities.get("restricted_space")
         if entity is None:
             return None, None
-        return float(entity.cfg.corridor_width), bool(entity.collision_enabled)
+        return ((float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)),
+                bool(entity.collision_enabled))
 
-    # 当前轮次该用的 (宽度, 是否开碰撞); 锁死宽度模式下宽度保持启动值
-    def _corridor_target(self) -> tuple[float | None, bool]:
+    # 当前该用的 (墙位对, 是否开碰撞)。墙位由课程档位决定; 锁死模式下保持启动墙位。
+    # 注意碰撞开关仍按轮次切 (CURRICULUM_START_ITER), 与墙位课程无关。
+    def _corridor_target(self) -> tuple[tuple[float, float] | None, bool]:
         step_counter = int(self.env.unwrapped.common_step_counter)
         collision = get_training_phase(step_counter) == 1
         if self._corridor_fixed:
-            return self._corridor_start_width, collision
-        iter_num = step_counter // _STEPS_PER_ITER
-        return float(get_corridor_width_for_iter(iter_num)), collision
+            return self._corridor_start_walls, collision
+        return get_wall_positions_for_level(self._cur_level), collision
 
-    # 是否需要重建: 目标与**实际编译值**不一致 (碰撞开关变化, 或宽度不一致)。
-    # 必须拿 compiled_width 比, 不能只在非锁死模式下比: 续训从"非锁死档位"切进"锁死某个 a"
-    # 时目标宽度也变了, 漏掉就会继续跑在错误的墙宽里 (审查发现的续训问题第二种形态)。
+    # 是否需要重建: 目标与**实际编译值**不一致 (碰撞开关变化, 或任一墙位不一致)。
+    # 必须拿 compiled 值比, 不能只在非锁死模式下比: 续训从"锁死某个墙位"切进"课程档位"
+    # 时目标也变了, 漏掉就会继续跑在错误的墙位里 (审查发现的续训问题第二种形态)。
     def _corridor_change_needed(self) -> bool:
-        width, collision = self._corridor_target()
-        compiled_width, compiled_collision = self._corridor_compiled_state()
+        walls, collision = self._corridor_target()
+        compiled_walls, compiled_collision = self._corridor_compiled_state()
         if compiled_collision is None:
             return False
         if collision != compiled_collision:
             return True
-        if width is None or compiled_width is None:
+        if walls is None or compiled_walls is None:
             return False
-        return abs(width - compiled_width) > 1e-9
+        return max(abs(a - b) for a, b in zip(walls, compiled_walls)) > 1e-9
 
     # 清掉"未结束回合"的累计。环境重建会中断所有在跑的回合, 不清就会跨重建拼接统计。
     def _clear_logger_episode_state(self) -> None:
@@ -102,9 +195,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 重建环境, 并按需重新取观测 (换环境后旧 obs 属于旧环境, 必须作废)
     def _apply_corridor_rebuild(self, refresh_obs: bool) -> "torch.Tensor | None":
         step_counter = int(self.env.unwrapped.common_step_counter)
-        width, collision = self._corridor_target()
-        if width is None:
+        walls, collision = self._corridor_target()
+        if walls is None:
             return None
+        neg, pos = walls
         old = self.env
         env_cfg = copy.deepcopy(self._corridor_env_cfg)
         env_cfg.scene.num_envs = self._corridor_num_envs
@@ -112,12 +206,13 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 重建不是新实验的开始: 清掉 seed, 否则 ManagerBasedRlEnv.__init__ 会调 seed_rng ->
         # torch.manual_seed 复位全部设备的 RNG, 影响策略采样与 PPO 抽样。见 §7.11 第 10 条。
         env_cfg.seed = None
-        mdp_entity.configure_restricted_space(env_cfg, width, enable_collision=collision)
+        mdp_entity.configure_restricted_space(env_cfg, wall_x_neg=neg, wall_x_pos=pos,
+                                              enable_collision=collision)
         new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._corridor_device,
                                     render_mode=self._corridor_render_mode)
         # 必须在新环境**首次采样前**接管 common_step_counter: 新环境从 0 起算, 否则下一轮
         # _corridor_target() 会读到 iter 0 (阶段一), 判定碰撞又不一致而再次重建把它关回去,
-        # 形成"开了又关"的反复重建。课程/阶段只由这个计数器决定。
+        # 形成"开了又关"的反复重建。阶段只由这个计数器决定。
         new_env.common_step_counter = step_counter
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._corridor_clip_actions)
         # 包装器 reset 之后再把计数器写一次 (reset 可能把它归零), 然后才允许取观测
@@ -125,14 +220,17 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 与计数器同理, 但必须遵守 learn() 入口的开关: 关闭时保持调用方要求的固定回合长度
         if self._randomize_ep_len:
             self._randomize_episode_phase()
+        # 新环境的回合发布序号从 0 重新开始, 窗口必须一起清 (否则门控永久饿死)
+        self._reset_curriculum_window()
         self._clear_logger_episode_state()
         try:
             old.close()
         except Exception as exc:  # 旧环境关不掉不应中断训练
             print(f"[WARN] 旧环境关闭失败: {exc}")
-        print(f"[INFO] 受限空间重建: a={width:.4f} m (净宽 {width - 0.02:.4f} m), "
+        print(f"[INFO] 受限空间重建: 档位 {self._cur_level}/{CURRICULUM_LEVELS - 1}, "
+              f"墙 x_neg={neg:.4f} x_pos={pos:.4f} (净宽 {pos - neg - 0.02:.4f} m), "
               f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
-              f"(阶段边界 STAGE1_3_ITER={STAGE1_3_ITER}), num_envs={self._corridor_num_envs}")
+              f"num_envs={self._corridor_num_envs}")
         return self.env.get_observations().to(self.device) if refresh_obs else None
 
     # 训练循环: 复制 rsl_rl OnPolicyRunner.learn 的主循环, 只在**每轮采样开始前**插入
@@ -144,7 +242,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if self._randomize_ep_len:
             self._randomize_episode_phase()
 
-        if self._corridor_start_width is not None and self._corridor_change_needed():
+        if self._corridor_start_walls is not None and self._corridor_change_needed():
             self._apply_corridor_rebuild(refresh_obs=False)
 
         obs = self.env.get_observations().to(self.device)
@@ -159,8 +257,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
         for it in range(start_it, total_it):
+            # 墙位课程: 先吸收本轮新结束的回合, 再判门控; 推进只改档位索引, 随后的
+            # _corridor_change_needed() 会因为墙位不一致而重建。顺序保证"PPO 更新已结束、
+            # 下一轮采样之前"换档 (与重建同处一轮的起点)。
+            self._ingest_episode_results()
+            self._maybe_promote(it)
+            self._log_curriculum(it)
             # 受限空间: 每轮采样前检查课程档位/阶段, 需要就重建并刷新观测
-            if self._corridor_start_width is not None and self._corridor_change_needed():
+            if self._corridor_start_walls is not None and self._corridor_change_needed():
                 obs = self._apply_corridor_rebuild(refresh_obs=True)
             start = time.time()
             with torch.inference_mode():
@@ -211,24 +315,43 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 恢复出来的轮次所对应的编译配置 (启动 env 编译的是 iter 0 的配置, 直接续训会跑错物理环境)。
     # load_cfg={"actor": True} 是回放/推理加载: 回放入口已按检查点记录把墙编译好了,
     # 这里再重建会把查看器手里那个 env 换掉 (查看器不接管 runner.env), 必须直接跳过。
+    # 墙位课程不能再按轮次反推 (推进由能力决定), 所以**检查点记录是回放复现墙位的唯一来源**;
+    # 记录缺失时必须显式指定, 不能退回"按轮次推算" (那会静默给出错误的墙)。
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
              map_location: str | None = None) -> dict:
         infos = super().load(path, load_cfg, strict, map_location)
-        if self._corridor_start_width is None:
+        if self._corridor_start_walls is None:
             return infos
         if (load_cfg or {}).get("actor"):
             print("[INFO] 回放加载 (load_cfg.actor=True): 保留入口已编译好的墙体配置, 不重建环境")
             return infos
         saved = (infos or {}).get("corridor_state") or {}
-        # 锁死宽度模式: 显式指定宽度 (命令行) 优先; 否则沿用检查点记录的标记, 并同步模型宽度,
-        # 因为锁死模式下课程档位恒为"启动宽度", 模板不换就会按错误的 a 重建。
+        # 恢复课程档位: 优先用记录里的档位; 只有墙位 (旧格式/手工记录) 时按最近档位反查。
+        # 都没有就把档位当作 0 并提示 —— 不猜。
+        if saved.get("curriculum_level") is not None:
+            self._cur_level = min(max(int(saved["curriculum_level"]), 0), CURRICULUM_LEVELS - 1)
+        elif saved.get("wall_x_neg") is not None:
+            self._cur_level = get_level_for_wall_x_neg(float(saved["wall_x_neg"]))
+        elif saved.get("corridor_width") is not None:
+            # 旧格式: 只记了对称间距。按最近档位折算, 并明确告知几何已经变成不对称。
+            half = 0.5 * float(saved["corridor_width"])
+            self._cur_level = get_level_for_wall_x_neg(-half)
+            print(f"[WARN] 旧格式检查点只记录对称间距 {saved['corridor_width']}, "
+                  f"已折算到第 {self._cur_level} 档 (x_neg={WALL_X_NEG_LEVELS[self._cur_level]})")
+        else:
+            print("[WARN] 检查点没有墙位记录, 课程档位按 0 处理; "
+                  "若这是自动课程 run, 回放请显式指定墙位")
+        self._cur_level_iter = int(saved.get("curriculum_iter", self.current_learning_iteration))
+        self._cur_level_history = list(saved.get("curriculum_history") or [])
+        # 锁死模式: 显式指定墙位 (命令行) 优先; 否则沿用检查点记录的标记, 并同步锁死模板。
         if not self._corridor_fixed_by_cli and saved.get("corridor_fixed") is not None:
             self._corridor_fixed = bool(saved["corridor_fixed"])
-            if self._corridor_fixed and saved.get("corridor_width") is not None:
-                self._corridor_start_width = float(saved["corridor_width"])
+            if self._corridor_fixed and saved.get("wall_x_neg") is not None:
+                self._corridor_start_walls = (float(saved["wall_x_neg"]),
+                                              float(saved["wall_x_pos"]))
         # 判据只比较"课程/锁死目标 vs 实际编译值", 不看记录: 记录本身就是当时真实编译的值,
         # 若拿它去覆盖当前值再比较, 就会把"环境其实没编译成这个值"掩盖过去 (曾经的真 bug)。
-        # 轮次已由父类从检查点恢复, 目标自然与记录一致; 不一致说明记录与轮次自相矛盾, 以轮次为准。
+        self._reset_curriculum_window()
         if self._corridor_change_needed():
             compiled = self._corridor_compiled_state()
             print(f"[INFO] 续训: 实际编译配置 {compiled} 与课程目标 "
@@ -236,13 +359,20 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_corridor_rebuild(refresh_obs=False)
         return infos
 
-    # 检查点里记录**实际编译生效**的墙宽与碰撞开关, 供续训与回放精确复现 (不要用轮次反推)
+    # 检查点里记录**实际编译生效**的墙位、碰撞开关与课程档位, 供续训与回放精确复现
+    # (不要用轮次反推: 自动课程的墙位推进由能力决定, 与轮次没有函数关系)。
     def save(self, path: str, infos=None):
-        width, collision = self._corridor_compiled_state()
+        walls, collision = self._corridor_compiled_state()
+        neg, pos = (walls if walls is not None else (None, None))
         extra = {
-            "corridor_width": width,
+            "wall_x_neg": neg,
+            "wall_x_pos": pos,
+            "corridor_width": (None if walls is None else pos - neg),   # 派生量, 兼容旧读取方
             "corridor_collision": collision,
             "corridor_fixed": self._corridor_fixed,
+            "curriculum_level": self._cur_level,
+            "curriculum_iter": self._cur_level_iter,
+            "curriculum_history": list(self._cur_level_history),
         }
         super().save(path, infos={**(infos or {}), "corridor_state": extra})
         policy_dir, filename, onnx_path = self._get_export_paths(path)

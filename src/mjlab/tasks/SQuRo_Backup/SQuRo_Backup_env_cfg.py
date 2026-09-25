@@ -140,17 +140,21 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
 
     
-    # 受限空间: 是否加入实体、间距 a、碰撞开关都在这里定 (编译期固化, 见文件头的说明)
+    # 受限空间: 是否加入实体、墙位、碰撞开关都在这里定 (编译期固化, 见文件头的说明)
     restricted_space_entities: dict = {}
     if ENABLE_RESTRICTED_SPACE:
         # 初始配置**按当前阶段**决定: STAGE1 必须从第一帧起就不开碰撞 (硬编码 True 会让
-        # 首轮采样带着碰撞跑, 与阶段一语义不符)。锁死宽度时额外打 fixed_width 标记。
+        # 首轮采样带着碰撞跑, 与阶段一语义不符)。墙位取课程第 0 档; 给 RESTRICTED_SPACE_WIDTH
+        # 则改用对称简写并锁死 (诊断/消融用)。
+        if RESTRICTED_SPACE_WIDTH is not None:
+            wall_kwargs: dict = {"corridor_width": float(RESTRICTED_SPACE_WIDTH)}
+        else:
+            neg0, pos0 = mdp.get_wall_positions_for_level(0)
+            wall_kwargs = {"wall_x_neg": neg0, "wall_x_pos": pos0}
         restricted_space_entities["restricted_space"] = mdp.build_restricted_space_cfg(
             enable_collision=mdp.get_training_phase(0) == 1,
-            corridor_width=(mdp.get_corridor_width_for_iter(0)
-                            if RESTRICTED_SPACE_WIDTH is None
-                            else float(RESTRICTED_SPACE_WIDTH)),
             fixed_width=RESTRICTED_SPACE_WIDTH is not None,
+            **wall_kwargs,
         )
 
     # 完整配置

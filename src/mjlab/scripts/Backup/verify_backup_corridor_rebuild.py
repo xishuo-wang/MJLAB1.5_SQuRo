@@ -16,16 +16,31 @@ from mjlab.tasks.SQuRo_Backup.rl.runner import SQuRoBackupOnPolicyRunner
 EVENTS: list[str] = []
 
 
-def compiled_state(env) -> tuple[float, bool]:
-    # 读"实际编译值"的唯一合法途径：场景实体本身 (宽度取自 cfg, 碰撞取自 contype)
+def compiled_state(env) -> tuple[tuple[float, float], bool]:
+    # 读"实际编译值"的唯一合法途径：场景实体本身 (墙位取自 cfg, 碰撞取自 contype)
     ent = env.unwrapped.scene.entities["restricted_space"]
-    return float(ent.cfg.corridor_width), bool(ent.collision_enabled)
+    return (float(ent.cfg.wall_x_neg), float(ent.cfg.wall_x_pos)), bool(ent.collision_enabled)
+
+
+class FakeCommand:
+    # 只提供 runner 读的回合发布接口 (课程门控的输入); 真 command 的其余部分与本回归无关
+    def __init__(self, n: int = 2):
+        self._ep_seq = torch.zeros(n, dtype=torch.long)
+        self._last_ep_valid = torch.zeros(n, dtype=torch.bool)
+        self._last_ep_success = torch.zeros(n, dtype=torch.bool)
+
+    # 模拟"这些环境又结束了一个有效回合"
+    def publish(self, env_ids, success) -> None:
+        for i, ok in zip(env_ids, success):
+            self._last_ep_valid[i] = True
+            self._last_ep_success[i] = bool(ok)
+            self._ep_seq[i] += 1
 
 
 class FakeEnv:
     # 裸环境：只提供 runner 与包装器真正读到的接口
     def __init__(self, step_count: int = 0, tag: str = "initial",
-                 width: float = E.DEFAULT_CORRIDOR_WIDTH, collision: bool = False,
+                 walls: tuple[float, float] = (-0.20, 0.08), collision: bool = False,
                  fixed: bool = False):
         self.device = "cpu"
         self.num_envs = 2
@@ -33,15 +48,20 @@ class FakeEnv:
         self.episode_length_buf = torch.zeros(2, dtype=torch.long)
         self.render_mode = None
         self.tag = tag
+        self.command = FakeCommand(2)
         # 真的实体：用生产代码建, 所以断言读到的就是"编译进仿真的配置"
         cfg = E.build_restricted_space_cfg(enable_collision=collision,
-                                           corridor_width=width, fixed_width=fixed)
+                                           wall_x_neg=walls[0], wall_x_pos=walls[1],
+                                           fixed_width=fixed)
         entity = cfg.build()
         self._state = type("U", (), {
             "common_step_counter": step_count,
             "scene": type("S", (), {
                 "num_envs": 2,
                 "entities": {"restricted_space": entity},
+            })(),
+            "command_manager": type("CM", (), {
+                "get_term": lambda _self, _name: self.command,
             })(),
             "render_mode": None,
             "cfg": "CFG",
@@ -54,6 +74,10 @@ class FakeEnv:
     @property
     def scene(self):
         return self._state.scene
+
+    @property
+    def command_manager(self):
+        return self._state.command_manager
 
     @property
     def common_step_counter(self):
@@ -198,7 +222,7 @@ class CorridorRebuildTest(unittest.TestCase):
         self.seen_seed.append(getattr(cfg, "seed", "MISSING"))
         ent_cfg = cfg.scene.entities["restricted_space"]
         env = FakeEnv(tag=f"new{len(self.built)}",
-                      width=float(ent_cfg.corridor_width),
+                      walls=(float(ent_cfg.wall_x_neg), float(ent_cfg.wall_x_pos)),
                       collision=bool(ent_cfg.contype > 0),
                       fixed=bool(ent_cfg.fixed_width))
         self.built.append(env)
@@ -212,8 +236,8 @@ class CorridorRebuildTest(unittest.TestCase):
         )
 
     # 直接给实例灌属性，绕过真实父类 __init__（不建环境）
-    def _build(self, start_iter: int, width: float, collision: bool,
-               fixed: bool = False, fixed_by_cli: bool | None = None
+    def _build(self, start_iter: int, walls: tuple[float, float], collision: bool,
+               fixed: bool = False, fixed_by_cli: bool | None = None, level: int = 0,
                ) -> SQuRoBackupOnPolicyRunner:
         r = SQuRoBackupOnPolicyRunner.__new__(SQuRoBackupOnPolicyRunner)
         r._corridor_device = "cpu"
@@ -221,13 +245,17 @@ class CorridorRebuildTest(unittest.TestCase):
         r._corridor_num_envs = 2
         r._corridor_clip_actions = None
         r._corridor_render_mode = None
-        r._corridor_start_width = width
+        r._corridor_start_walls = walls
         r._corridor_fixed = fixed
         r._corridor_fixed_by_cli = fixed if fixed_by_cli is None else fixed_by_cli
         r._randomize_ep_len = False
-        # 启动环境按 width/collision 编译 (与 env_cfg 初始配置同源)
+        r._cur_level = level
+        r._cur_level_iter = start_iter
+        r._cur_level_history = []
+        r._reset_curriculum_window()
+        # 启动环境按 walls/collision 编译 (与 env_cfg 初始配置同源)
         r.env = FakeWrapper(FakeEnv(step_count=start_iter * C._STEPS_PER_ITER,
-                                    tag="old", width=width, collision=collision,
+                                    tag="old", walls=walls, collision=collision,
                                     fixed=fixed))
         r.alg = FakeAlg()
         r.logger = FakeLogger()
@@ -244,29 +272,33 @@ class CorridorRebuildTest(unittest.TestCase):
         r.save = lambda *a, **k: None
         return r
 
+    # 课程第 0 档的墙位 (启动配置), 用它建"课程 run"的初始环境
+    def _level0(self) -> tuple[float, float]:
+        return C.get_wall_positions_for_level(0)
+
     def test_no_rebuild_before_stage_boundary(self):
-        r = self._build(2990, 0.40, False)
+        r = self._build(2990, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(6)
         self.assertEqual(len(self.built), 0)
-        self.assertEqual(compiled_state(r.env), (0.40, False))
+        self.assertEqual(compiled_state(r.env), (self._level0(), False))
 
     def test_rebuild_opens_collision_across_stage_boundary(self):
         # 训练只调用一次 learn(6000)，阶段切换发生在循环内部 —— 只在入口判断会漏掉
-        r = self._build(2990, 0.40, False)
+        r = self._build(2990, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(12)
         self.assertEqual(len(self.built), 1)
-        self.assertEqual(compiled_state(r.env), (0.40, True))
+        self.assertEqual(compiled_state(r.env), (self._level0(), True))
         close_at = next(i for i, e in enumerate(EVENTS) if e.startswith("close("))
         self.assertTrue(any(e.startswith("get_obs(new") for e in EVENTS[close_at:]),
                         "重建后必须重新取观测，旧环境的 obs 不能继续用")
 
     def test_counter_survives_rebuild(self):
         # 新环境从 0 起算；不接管计数器会在下一轮读到阶段一，把刚开的碰撞又关回去
-        r = self._build(2990, 0.40, False)
+        r = self._build(2990, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(12)
@@ -275,20 +307,127 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertGreaterEqual(counter, C.STAGE1_3_ITER * C._STEPS_PER_ITER)
         self.assertEqual(C.get_training_phase(counter), 1)
 
-    def test_rebuild_follows_width_ladder(self):
-        # 0.35 -> 0.30 的切档点实测在 iter 3750 (相邻档中点)
-        r = self._build(3749, 0.35, True)
+    # 课程档位 → 编译墙位: 档位变了就必须重建，且编译值等于该档位的墙位
+    def test_rebuild_follows_curriculum_level(self):
+        r = self._build(3749, self._level0(), True)
+        r._cur_level = 2
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2)
         self.assertEqual(len(self.built), 1)
-        expected = C.get_corridor_width_for_iter(3750)
-        self.assertAlmostEqual(expected, C.CORRIDOR_WIDTH_LADDER[2], places=12)
-        self.assertAlmostEqual(compiled_state(r.env)[0], expected, places=12)
+        self.assertEqual(compiled_state(r.env), (C.get_wall_positions_for_level(2), True))
+        self.assertAlmostEqual(C.get_wall_positions_for_level(2)[1], C.WALL_X_POS, places=12)
+
+    # 门控三要素: 最短驻留、窗口填满、p_done 达标 —— 缺一不可
+    def test_promotion_requires_dwell_window_and_gate(self):
+        r = self._build(3000, self._level0(), True)
+        n_slot = 2 * C.CURRICULUM_WINDOW_EPISODES      # 2 个环境 × 窗口长度
+
+        def fill(n_succ_slots, level_iter):
+            r._cur_level_iter = level_iter
+            r._w_valid[:] = True
+            r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+            r._w_succ[:] = False
+            if n_succ_slots:
+                r._w_succ[:, :n_succ_slots] = True
+
+        # 驻留不足
+        fill(n_slot, 3000)
+        self.assertFalse(r._maybe_promote(3000 + C.CURRICULUM_MIN_DWELL_ITER - 1))
+        self.assertEqual(r._cur_level, 0)
+        it = 3000 + C.CURRICULUM_MIN_DWELL_ITER
+        # 窗口未填满
+        fill(n_slot, 3000)
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES - 1
+        self.assertFalse(r._maybe_promote(it))
+        # p_done 不达标: 2/6 = 0.33 < 0.60
+        fill(1, 3000)
+        self.assertFalse(r._maybe_promote(it))
+        # 三要素齐备 -> 推进一档, 且窗口被清空 (旧墙位的成绩不得用于新墙位)
+        # 4/6 = 0.67 >= 0.60
+        fill(2, 3000)
+        self.assertTrue(r._maybe_promote(it))
+        self.assertEqual(r._cur_level, 1)
+        self.assertEqual(r._cur_level_iter, it)
+        self.assertEqual(int(r._w_fill.sum()), 0)
+        self.assertEqual(r._cur_level_history[-1]["level"], 0)
+        self.assertAlmostEqual(r._cur_level_history[-1]["p_done"], 4 / 6, places=6)
+
+    def test_promotion_blocked_before_start_iter_and_in_fixed_mode(self):
+        r = self._build(C.CURRICULUM_START_ITER - 10, self._level0(), True)
+        r._cur_level_iter = 0
+        r._w_valid[:] = True
+        r._w_succ[:] = True
+        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        self.assertFalse(r._maybe_promote(C.CURRICULUM_START_ITER - 1), "起始轮数之前不得推进")
+        self.assertTrue(r._maybe_promote(C.CURRICULUM_START_ITER))
+        # 锁死模式 (诊断/消融) 永不推进
+        r2 = self._build(5000, (-0.125, 0.125), True, fixed=True)
+        r2._cur_level_iter = 0
+        r2._w_valid[:] = True
+        r2._w_succ[:] = True
+        r2._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
+        self.assertFalse(r2._maybe_promote(5000))
+
+    # 新环境的回合发布序号从 0 重新开始; 不清 _ep_seq_seen 就再也收不到事件, 门控永久饿死
+    def test_rebuild_resets_curriculum_window(self):
+        r = self._build(2999, self._level0(), False)
+        r._ep_seq_seen[:] = 99
+        r._w_fill[:] = 3
+        p1, p2 = self._patches()
+        with p1, p2:
+            r.learn(2)
+        self.assertEqual(len(self.built), 1)
+        self.assertEqual(int(r._ep_seq_seen.sum()), 0, "重建后必须重置发布序号基线")
+        self.assertEqual(int(r._w_fill.sum()), 0, "重建后必须清空门控窗口")
+
+    # 课程标量写 tensorboard: 无样本时不写 p_done (NaN 会污染曲线), 其余键恒写
+    def test_log_curriculum_writes_scalars(self):
+        class RecWriter:
+            def __init__(self):
+                self.calls: dict[str, float] = {}
+
+            def add_scalar(self, tag, value, step):
+                self.calls[tag] = value
+
+        r = self._build(3000, self._level0(), True)
+        w = RecWriter()
+        r.logger.writer = w
+        r._log_curriculum(3000)
+        self.assertEqual(w.calls["Curriculum/level"], 0)
+        self.assertAlmostEqual(w.calls["Curriculum/wall_x_neg"], self._level0()[0], places=12)
+        self.assertAlmostEqual(w.calls["Curriculum/wall_x_pos"], self._level0()[1], places=12)
+        self.assertEqual(w.calls["Curriculum/window_ready"], 0.0)
+        self.assertNotIn("Curriculum/p_done", w.calls, "无样本时不得写 p_done (NaN 会污染曲线)")
+        # 有样本后 p_done / n_valid 才出现
+        cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
+        cmd.publish([0, 1], [True, False])
+        r._ingest_episode_results()
+        r._log_curriculum(3001)
+        self.assertAlmostEqual(w.calls["Curriculum/p_done"], 0.5, places=6)
+        self.assertEqual(w.calls["Curriculum/n_valid_episodes"], 2)
+        # 没有 writer 时不得报错 (回放/诊断入口)
+        r.logger.writer = None
+        r._log_curriculum(3002)
+
+    def test_ingest_fills_window_from_published_episodes(self):
+        r = self._build(3000, self._level0(), True)
+        cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
+        for _ in range(C.CURRICULUM_WINDOW_EPISODES):
+            cmd.publish([0, 1], [True, False])
+            r._ingest_episode_results()
+        self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)
+        p, ready, n_valid = r._curriculum_metrics()
+        self.assertTrue(ready)
+        self.assertEqual(n_valid, 2 * C.CURRICULUM_WINDOW_EPISODES)
+        self.assertAlmostEqual(p, 0.5, places=6)
+        # 再发布一次不重复计入 (序号增量)
+        r._ingest_episode_results()
+        self.assertEqual(int(r._w_fill[0]), C.CURRICULUM_WINDOW_EPISODES)
 
     def test_logger_accumulators_cleared_on_rebuild(self):
         # 重建会中断所有在跑的回合，不清零就会跨重建拼接统计
-        r = self._build(2999, 0.40, False)
+        r = self._build(2999, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2)
@@ -300,7 +439,7 @@ class CorridorRebuildTest(unittest.TestCase):
     # 全部环境永久同进同出（每轮 rollout 只覆盖一个任务相位，全环境瞬时平均指标随之失真）。
     def test_rebuild_randomizes_episode_phase(self):
         torch.manual_seed(7)                     # 固定 RNG，避免 2 个环境随机撞成同值
-        r = self._build(2999, 0.40, False)
+        r = self._build(2999, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2, init_at_random_ep_len=True)
@@ -313,7 +452,7 @@ class CorridorRebuildTest(unittest.TestCase):
     # 标准训练入口传 True, 因此这一条只影响固定时长的诊断/消融入口。
     def test_rebuild_respects_disabled_episode_randomization(self):
         torch.manual_seed(7)
-        r = self._build(2999, 0.40, False)
+        r = self._build(2999, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2)                           # init_at_random_ep_len 默认 False
@@ -362,7 +501,7 @@ class CorridorRebuildTest(unittest.TestCase):
     # 重建不是新实验的开始: 不能按 env_cfg.seed 重新播种 —— ManagerBasedRlEnv.__init__ 会调
     # seed_rng -> torch.manual_seed (全设备) + random/np/wp, 把"换墙距"和"复位所有随机流"绑在一起。
     def test_rebuild_does_not_reseed_rng(self):
-        r = self._build(2999, 0.40, False)
+        r = self._build(2999, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2, init_at_random_ep_len=True)
@@ -372,16 +511,16 @@ class CorridorRebuildTest(unittest.TestCase):
 
     def test_fixed_width_still_switches_collision(self):
         # 锁死宽度时宽度判断走不到，碰撞判断必须放在 fixed 分支之外
-        r = self._build(2999, 0.30, False, fixed=True)
+        r = self._build(2999, (-0.15, 0.15), False, fixed=True)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(2)
         self.assertEqual(len(self.built), 1)
-        self.assertEqual(compiled_state(r.env), (0.30, True))
+        self.assertEqual(compiled_state(r.env), ((-0.15, 0.15), True))
 
     def test_fixed_width_single_rebuild_per_boundary(self):
         # 宽度锁死时重建后不应再因宽度差反复重建
-        r = self._build(2999, 0.30, False, fixed=True)
+        r = self._build(2999, (-0.15, 0.15), False, fixed=True)
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(24)
@@ -389,81 +528,90 @@ class CorridorRebuildTest(unittest.TestCase):
 
     # 审查场景：记录与课程目标一致、但环境里编译的不是这个值 ⇒ 必须按**实际编译值**判定重建
     def test_load_rebuilds_even_when_record_matches_target(self):
-        saved_iter = 3750
-        width = C.get_corridor_width_for_iter(saved_iter)
-        self.assertAlmostEqual(width, 0.30, places=12)
-        # 启动环境编译成 0.40；检查点记录 0.30 ⇒ 记录与目标一致，但环境是 0.40
-        r = self._build(0, 0.40, True)
+        saved_iter, saved_level = 3750, 2
+        walls = C.get_wall_positions_for_level(saved_level)
+        # 启动环境编译成第 0 档；检查点记录第 2 档 ⇒ 记录与目标一致，但环境是第 0 档
+        r = self._build(0, self._level0(), True)
         p1, p2 = self._patches()
-        with p1, p2, self._fake_checkpoint(saved_iter, width, True):
+        with p1, p2, self._fake_checkpoint(saved_iter, walls, True, level=saved_level):
             infos = r.load("model_x.pt")
         cw, cc = compiled_state(r.env)
-        self.assertAlmostEqual(cw, width, places=12,
-                               msg="续训后实际编译的墙宽必须是记录值, 不是启动时的 0.40")
+        self.assertEqual(cw, walls, "续训后实际编译的墙位必须是记录值, 不是启动时的第 0 档")
         self.assertIs(cc, True)
-        self.assertAlmostEqual(float(infos["corridor_state"]["corridor_width"]),
-                               width, places=12)
+        self.assertAlmostEqual(float(infos["corridor_state"]["wall_x_neg"]),
+                               walls[0], places=12)
+        self.assertEqual(int(infos["corridor_state"]["curriculum_level"]), saved_level)
 
-    def test_load_without_record_falls_back_to_iteration(self):
-        # 老检查点没有 corridor_state：按恢复后的轮次推算，而不是留在启动配置上
-        r = self._build(0, 0.40, False)
+    def test_load_without_record_defaults_to_level_zero(self):
+        # 新检查点缺墙位记录时不能按轮次反推 (课程按能力推进, 轮次与墙位没有函数关系):
+        # 档位按 0 处理并打警告, 而不是静默给一个猜出来的墙位。
+        r = self._build(0, self._level0(), False)
         p1, p2 = self._patches()
         with p1, p2, self._fake_checkpoint(4000, None, None):
             r.load("model_x.pt")
-        self.assertEqual(compiled_state(r.env),
-                         (C.get_corridor_width_for_iter(4000), True))
+        self.assertEqual(r._cur_level, 0)
+        # 阶段二 (iter 4000) 应为开碰撞 ⇒ 与启动的无碰撞不一致, 会重建一次
+        self.assertEqual(compiled_state(r.env), (self._level0(), True))
 
     def test_load_matching_state_does_not_rebuild(self):
         # 环境本来就编译成了目标值 ⇒ 不要白重建一次
-        width = C.get_corridor_width_for_iter(4000)
-        r = self._build(0, width, True)
+        walls = C.get_wall_positions_for_level(0)
+        r = self._build(0, walls, True)
         p1, p2 = self._patches()
-        with p1, p2, self._fake_checkpoint(4000, width, True):
+        with p1, p2, self._fake_checkpoint(4000, walls, True, level=0):
             r.load("model_x.pt")
         self.assertEqual(len(self.built), 0)
-        self.assertEqual(compiled_state(r.env), (width, True))
+        self.assertEqual(compiled_state(r.env), (walls, True))
 
     def test_load_actor_only_keeps_compiled_env(self):
         # 回放加载 (load_cfg={"actor": True}): 回放入口已按记录把墙编译好了,
         # 这里重建会把查看器手里的 env 换掉 (查看器不接管 runner.env), 必须不重建。
-        r = self._build(2999, 0.40, False)
+        r = self._build(2999, self._level0(), False)
         p1, p2 = self._patches()
-        with p1, p2, self._fake_checkpoint(4000, 0.30, True):
+        with p1, p2, self._fake_checkpoint(4000, ((-0.15, 0.15)), True):
             r.load("model_x.pt", load_cfg={"actor": True})
         self.assertEqual(len(self.built), 0, "回放加载不得重建环境")
         cw, cc = compiled_state(r.env)
-        self.assertAlmostEqual(cw, 0.40, places=12)
+        self.assertEqual(cw, self._level0())
         self.assertIs(cc, False, "回放必须保留入口已编译好的无碰撞配置")
         self.assertEqual(EVENTS.count("close(old)"), 0, "回放加载不得关闭入口的环境")
 
-    # 锁死宽度续训：记录里的标记要生效, 且模板宽度同步成记录值
+    # 锁死模式续训：记录里的标记要生效, 且模板墙位同步成记录值
     def test_load_restores_fixed_width_mode(self):
-        saved_iter, saved_width = 4000, 0.30
-        r = self._build(0, 0.40, True)          # 启动: 非锁死, 0.40
+        saved_iter, saved_walls = 4000, (-0.15, 0.15)
+        r = self._build(0, self._level0(), True)          # 启动: 非锁死, 第 0 档
         p1, p2 = self._patches()
-        with p1, p2, self._fake_checkpoint(saved_iter, saved_width, True, fixed=True):
+        with p1, p2, self._fake_checkpoint(saved_iter, saved_walls, True, fixed=True):
             r.load("model_x.pt")
         cw, cc = compiled_state(r.env)
-        self.assertAlmostEqual(cw, saved_width, places=12,
-                               msg="锁死模式下应按记录的宽度重建, 而不是启动宽度")
+        self.assertEqual(cw, saved_walls,
+                         "锁死模式下应按记录的墙位重建, 而不是启动墙位")
         self.assertIs(cc, True)
+        self.assertEqual(r._corridor_start_walls, saved_walls)
 
-    # 命令行显式给了宽度就不该被记录里的锁死标记带跑
+    # 命令行显式锁死墙位就不该被记录里的锁死标记带跑
     def test_cli_fixed_width_wins_over_record(self):
-        r = self._build(0, 0.25, False, fixed=True, fixed_by_cli=True)
+        cli_walls = (-0.125, 0.125)
+        r = self._build(0, cli_walls, False, fixed=True, fixed_by_cli=True)
         p1, p2 = self._patches()
-        # 记录说"非锁死、4000 轮的档位", 但本次命令行锁死 0.25 ⇒ 目标仍是 0.25
-        with p1, p2, self._fake_checkpoint(4000, 0.35, True, fixed=False):
+        # 记录说"非锁死、第 4 档", 但本次命令行锁死 (-0.125, 0.125) ⇒ 目标仍是它
+        with p1, p2, self._fake_checkpoint(4000, C.get_wall_positions_for_level(4), True,
+                                           fixed=False, level=4):
             r.load("model_x.pt")
         cw, _ = compiled_state(r.env)
-        self.assertAlmostEqual(cw, 0.25, places=12,
-                               msg="命令行锁死宽度优先于检查点记录的锁死标记")
+        self.assertEqual(cw, cli_walls, "命令行锁死墙位优先于检查点记录的锁死标记")
         self.assertTrue(r._corridor_fixed)
+        # 锁死模式下目标墙位恒为命令行墙位, 与课程档位无关
+        self.assertEqual(r._corridor_target()[0], cli_walls)
 
     # 伪造检查点：torch.load 返回的最小可用结构（父类只读这几个键）
-    def _fake_checkpoint(self, it: int, width, collision, fixed: bool = False):
-        state = {"corridor_width": width, "corridor_collision": collision,
-                 "corridor_fixed": fixed}
+    def _fake_checkpoint(self, it: int, walls, collision, fixed: bool = False, level: int = 0):
+        state = {"corridor_collision": collision, "corridor_fixed": fixed,
+                 "curriculum_level": level, "curriculum_iter": it}
+        if walls is not None:
+            state["wall_x_neg"] = walls[0]
+            state["wall_x_pos"] = walls[1]
+            state["corridor_width"] = walls[1] - walls[0]
         infos = {
             "env_state": {"common_step_counter": it * C._STEPS_PER_ITER},
             "corridor_state": state,

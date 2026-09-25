@@ -61,6 +61,7 @@ def init_restricted_space(env, env_ids) -> None:
     entity = env.scene.entities.get("restricted_space")
     if entity is None:
         return
-    print(f"[INFO] 受限空间: 墙中心 ±{entity.cfg.corridor_width / 2:.4f} m, "
+    print(f"[INFO] 受限空间: 墙中心 x_neg={entity.cfg.wall_x_neg:+.4f} "
+          f"x_pos={entity.cfg.wall_x_pos:+.4f} m, "
           f"实际内侧净宽 {entity.clear_width:.4f} m, "
           f"碰撞 {'开' if entity.collision_enabled else '关'} (编译期决定, 运行期不可改)")

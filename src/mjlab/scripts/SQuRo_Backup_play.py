@@ -18,7 +18,6 @@ from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
     _STEPS_PER_ITER,
-    get_corridor_width_for_iter,
     get_training_phase,
 )
 
@@ -44,9 +43,11 @@ class PlayConfig:
     record_data: bool = True
     # Backup 任务相关配置
     fixed_time_scale: float | None = 1
-    # 受限空间: None = 自动 (命令行 > 检查点记录 > 按轮次推算), 显式值可直接压过自动配置
+    # 受限空间: None = 自动 (命令行 > 检查点记录; 缺记录则报错), 显式值可直接压过自动配置
     enable_collision: bool | None = None
-    # 受限空间: None = 按课程取墙间距, 指定则覆盖为固定值
+    # 墙位: 显式给一对 (不对称) 或给对称简写 corridor_width, 两者不能同时给
+    wall_x_neg: float | None = None
+    wall_x_pos: float | None = None
     corridor_width: float | None = None
 
 
@@ -60,19 +61,29 @@ def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
 
 
 
-# 解析回放该用的墙宽与碰撞开关。优先顺序:
-#   1. 命令行显式指定 (--corridor-width / --enable-collision) —— 开关必须能压过自动配置
+# 解析回放该用的墙位与碰撞开关。优先顺序:
+#   1. 命令行显式指定 (--wall-x-neg/--wall-x-pos, 或对称简写 --corridor-width)
 #   2. 检查点里保存的实际编译值 (训练时真实生效的配置)
-#   3. 按轮次推算的课程档位
+#   **没有第三级**: 墙位课程按能力推进, "轮次 → 墙位"已不存在, 按轮次推算会静默给出错误的墙,
+#   所以缺记录时直接报错, 要求显式指定 (审查意见: 新格式缺字段应报错而不是猜)。
 # 检查点记录要压过阶段推算: "阶段"是拿文件名轮次猜的, 而记录是当时真正编译进仿真的值。
-# 阶段一(3k 轮前)无碰撞由训练侧保证 (该阶段检查点记录的碰撞恒为 False)。
-def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[float, bool, str, str]:
-    if cfg.corridor_width is not None:
-        width, width_src = float(cfg.corridor_width), "命令行"
+def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, str, str]:
+    if cfg.wall_x_neg is not None or cfg.wall_x_pos is not None:
+        if cfg.wall_x_neg is None or cfg.wall_x_pos is None:
+            raise SystemExit("--wall-x-neg 与 --wall-x-pos 必须成对给出")
+        neg, pos, src = float(cfg.wall_x_neg), float(cfg.wall_x_pos), "命令行"
+    elif cfg.corridor_width is not None:
+        half = 0.5 * float(cfg.corridor_width)
+        neg, pos, src = -half, half, "命令行(对称简写)"
+    elif saved.get("wall_x_neg") is not None:
+        neg, pos, src = float(saved["wall_x_neg"]), float(saved["wall_x_pos"]), "检查点记录"
     elif saved.get("corridor_width") is not None:
-        width, width_src = float(saved["corridor_width"]), "检查点记录"
+        half = 0.5 * float(saved["corridor_width"])
+        neg, pos, src = -half, half, "检查点记录(旧格式, 按对称折算)"
     else:
-        width, width_src = get_corridor_width_for_iter(align_iter), "按轮次推算"
+        raise SystemExit(
+            "检查点没有墙位记录, 而自动课程的墙位无法按轮次反推; "
+            "请用 --wall-x-neg/--wall-x-pos (或 --corridor-width) 显式指定")
     # 碰撞: 命令行 > 检查点记录 > 按阶段推算。
     # 检查点记录优先于阶段推算: 记录是训练当时**真实编译生效**的值, 而"阶段"是靠文件名
     # 轮次减 10 猜出来的, 检查点被改名或恰在阶段边界上就会猜错。
@@ -84,7 +95,7 @@ def resolve_corridor(cfg, saved: dict, phase: int, align_iter: int) -> tuple[flo
         collision, coll_src = False, "阶段一默认关"
     else:
         collision, coll_src = True, "阶段二默认开"
-    return width, collision, width_src, coll_src
+    return neg, pos, collision, src, coll_src
 
 
 
@@ -424,20 +435,21 @@ def run_play(cfg: PlayConfig):
     align_step = align_iter * _STEPS_PER_ITER
     phase = get_training_phase(align_step)
     saved = read_corridor_state(resume_path) if resume_path is not None else {}
-    corridor_width, corridor_collision, width_src, coll_src = resolve_corridor(
-        cfg, saved, phase, align_iter)
-    ent_cfg = mdp_entity.configure_restricted_space(env_cfg, corridor_width,
-                                                    enable_collision=corridor_collision)
+    wall_x_neg, wall_x_pos, corridor_collision, width_src, coll_src = resolve_corridor(
+        cfg, saved, phase)
+    ent_cfg = mdp_entity.configure_restricted_space(
+        env_cfg, wall_x_neg=wall_x_neg, wall_x_pos=wall_x_pos,
+        enable_collision=corridor_collision)
     print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 STAGE1_3_ITER={STAGE1_3_ITER}), "
           f"碰撞={'开' if corridor_collision else '关'} [{coll_src}], "
-          f"墙中心 a={corridor_width:.4f} m [{width_src}], "
-          f"实际内侧净宽 {ent_cfg.corridor_width - 2 * ent_cfg.wall_half_thickness:.4f} m")
+          f"墙位 x_neg={ent_cfg.wall_x_neg:+.4f} x_pos={ent_cfg.wall_x_pos:+.4f} m [{width_src}], "
+          f"实际内侧净宽 {ent_cfg.clear_width:.4f} m")
 
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = []
     if cfg.fixed_time_scale is not None:
         cmd_suffix_parts.append(f"ts{cfg.fixed_time_scale:.2f}")
-    cmd_suffix_parts.append(f"a{corridor_width:.2f}")
+    cmd_suffix_parts.append(f"xn{wall_x_neg:.2f}-xp{wall_x_pos:.2f}")
     cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}"
     if video_name is not None:
         video_name = f"{video_name}{cmd_suffix}"
