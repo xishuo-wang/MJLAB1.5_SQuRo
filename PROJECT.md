@@ -328,9 +328,15 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 
 ```powershell
 uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard          # 训练 (预算 = PHASE2_END_ITER)
-uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考一致性回归 (8 项)
+uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (19 项, 桩环境不建 env)
+uv run python -B -m mjlab.scripts.Slalom.verify_slalom_env_smoke         # 端到端自检 (真实 env, 含重置边界)
 uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint_file <ckpt>   # 回放
+uv run python -B -m mjlab.scripts.Backup.dump_training_scalars <run_dir> --list  # 读训练日志标量 (通用)
 ```
+
+两个验证脚本分工：`verify_slalom_ref_consistency` 用桩环境直接调用生产函数（快、无 GPU 依赖，
+覆盖参考层的不变量），`verify_slalom_env_smoke` 构造真实环境跑两阶段 + 阶段混合窗口 + 超时重置
+（覆盖 env 构造、奖励/观测管线与重置边界语义）。改动参考层后两个都跑一遍。
 
 ---
 
