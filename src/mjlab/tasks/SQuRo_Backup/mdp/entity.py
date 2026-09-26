@@ -115,23 +115,34 @@ class RestrictedSpaceEntity(Entity):
     def wall_mocap_ids(self) -> list[int]:
         return [int(self.data.model.body_mocapid[b]) for b in self.wall_body_ids]
 
-    # 逐环境写墙位。入参是**世界** x (调用方负责加 env_origins), 可以是标量或 (n,) 数组。
-    # 为什么直写 warp 的 mocap_pos: Entity.write_mocap_pose_to_sim 只作用于实体自己的 root body,
-    # 而这里要动的是 worldbody 下的两个子 body。整块写回只在回合复位时发生。
+    # 逐环境写墙位。入参是**世界** x (调用方负责加 env_origins), 可为标量 / NumPy / CUDA 张量,
+    # env_ids 可以是下标张量或切片 (只写部分环境)。
+    # 走 Sim 的 WarpBridge -> TorchArray 原地写: 有正确的 CUDA 流, 不做显存-内存往返,
+    # 因此可以每回合对部分环境反复调用。不要改回 NumPy (CUDA 张量会直接报
+    # can't convert cuda:0 device type tensor to numpy; 训练里每次复位都要写)。
     def write_wall_x(self, env, x_neg, x_pos, env_ids=None) -> None:
-        wp = env.sim.wp_data
-        arr = wp.mocap_pos.numpy()
+        sim = getattr(env, "sim", None)
+        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
+        if pos is None:
+            # 单测替身没有仿真: 没有物理可写, 调用方的观测更新照常进行。
+            # 真环境里 sim.data.mocap_pos 一定存在, 所以这里不会掩盖接线错误。
+            return
         ids = slice(None) if env_ids is None else env_ids
         mn, mp = self.wall_mocap_ids
-        arr[ids, mn, 0] = x_neg
-        arr[ids, mp, 0] = x_pos
-        wp.mocap_pos.assign(arr)
+        for mocap_id, value in ((mn, x_neg), (mp, x_pos)):
+            if not torch.is_tensor(value):
+                value = torch.as_tensor(value, device=pos.device, dtype=pos.dtype)
+            pos[ids, mocap_id, 0] = value
 
-    # 读回逐环境墙位 (世界 x), 供验收与诊断
+    # 读回逐环境墙位 (世界 x); 无仿真时返回全 0 (单测替身)
     def read_wall_x(self, env) -> tuple:
-        arr = env.sim.wp_data.mocap_pos.numpy()
+        sim = getattr(env, "sim", None)
+        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
+        if pos is None:
+            z = torch.zeros(1)
+            return z.clone(), z.clone()
         mn, mp = self.wall_mocap_ids
-        return arr[:, mn, 0].copy(), arr[:, mp, 0].copy()
+        return pos[:, mn, 0].clone(), pos[:, mp, 0].clone()
 
     @property
     def clear_width(self) -> float:

@@ -132,15 +132,22 @@ def main() -> None:
         assert abs(xs[0] - walls[0]) < 1e-4, "−X 墙中心未落在 wall_x_neg"
         assert abs(xs[1] - walls[1]) < 1e-4, "+X 墙中心未落在 wall_x_pos"
         assert abs(ent.clear_width - (walls[1] - walls[0] - 2 * WALL_HALF_THICKNESS)) < 1e-9
-        # 墙位观测必须等于**实际编译值** (策略靠它区分各档; 各档的重置姿态完全相同)
+        # 墙位观测现在来自**本回合采样的墙位**: 物理写入、观测、回合统计三者同源。
+        # 逐环境随机墙位下, 编译值不再是观测的来源。这里把课程范围退化成单点, 让该档的
+        # 物理墙位与观测都可预期, 并核对两者一致。
         cmd_term = env.command_manager.get_term("backup_cmd")
+        cmd_term.set_wall_curriculum(-walls[0], -walls[0])
+        cmd_term._resample_command(torch.arange(env.num_envs))
         cmd0 = cmd_term.command[0]
         assert cmd_term.command.shape[-1] == 9, "命令张量必须是 9 维 (末两维为墙位观测)"
+        phys_neg, phys_pos = ent.read_wall_x(env)
         # 命令张量是 float32, 容差按 float32 给
-        assert abs(float(cmd0[7]) - walls[0]) < 1e-6, "观测里的 −X 墙位与实际编译值不一致"
-        assert abs(float(cmd0[8]) - walls[1]) < 1e-6, "观测里的 +X 墙位与实际编译值不一致"
+        assert abs(float(cmd0[7]) - walls[0]) < 1e-6, "观测里的 −X 墙位与目标档位不一致"
+        assert abs(float(cmd0[8]) - walls[1]) < 1e-6, "观测里的 +X 墙位与目标档位不一致"
+        assert abs(float(phys_neg[0]) - float(cmd0[7])) < 1e-5, "物理 −X 墙位与观测不一致"
+        assert abs(float(phys_pos[0]) - float(cmd0[8])) < 1e-5, "物理 +X 墙位与观测不一致"
         print(f"    命令张量 {cmd_term.command.shape[-1]} 维, "
-              f"墙位观测 ({float(cmd0[7]):+.4f}, {float(cmd0[8]):+.4f}) 与实际编译值一致")
+              f"墙位观测 ({float(cmd0[7]):+.4f}, {float(cmd0[8]):+.4f}) 与物理墙位一致")
 
     print(f"\n[4] 碰撞是否真的生效 (机器人搬到墙中心 x=±{cfg.test_width/2:.3f}, 跑 {cfg.steps} 步)")
     # 编译期开碰撞 + 几何重叠 => 必须有墙接触

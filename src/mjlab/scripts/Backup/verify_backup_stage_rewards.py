@@ -677,13 +677,23 @@ class StageRewardTests(unittest.TestCase):
         from mjlab.tasks.SQuRo_Backup.mdp import entity as CE
         env, cmd = make_env([0, 0])
         self.assertEqual(cmd.command_tensor.shape[-1], 9, "命令张量必须是 9 维")
-        # 观测必须来自**实际编译值** (场景实体), 不是任何缓存
-        ent = CE.build_restricted_space_cfg(True, wall_x_neg=-0.16, wall_x_pos=0.08).build()
+        ent = CE.build_restricted_space_cfg(True, wall_x_neg=-0.16, wall_x_pos=0.05).build()
         env.scene = NS(entities={"restricted_space": ent})
+        # 观测现在来自**本回合采样的墙位** (物理写入、观测、回合统计三者同源), 不再是
+        # 实体编译值 —— 逐环境随机墙位下"编译值"根本没有意义。
+        # 采样随机, 所以先把课程范围退化成单点再核值。
+        cmd.set_wall_curriculum(0.12, 0.12)
         cmd._resample_command(torch.arange(2))
-        # 命令张量是 float32, 容差按 float32 给
-        self.assertAlmostEqual(float(cmd.command_tensor[0, 7]), -0.16, places=6)
-        self.assertAlmostEqual(float(cmd.command_tensor[0, 8]), 0.08, places=6)
+        self.assertAlmostEqual(float(cmd.command_tensor[0, 7]), -0.12, places=6)
+        self.assertAlmostEqual(float(cmd.command_tensor[0, 8]), 0.05, places=6)
+        # 范围非退化时 d 必须落在 [d_min, d_max] 内, 且观测与 _wall_d 一致 (float32 容差)
+        cmd.set_wall_curriculum(0.08, 0.20)
+        cmd._resample_command(torch.arange(2))
+        for i in range(2):
+            d = float(cmd._wall_d[i])
+            self.assertGreaterEqual(d, 0.08 - 1e-6)
+            self.assertLessEqual(d, 0.20 + 1e-6)
+            self.assertAlmostEqual(float(cmd.command_tensor[i, 7]), -d, places=6)
         # 无实体时写 0 而不是抛异常 (只出现在无墙配置与单测替身)
         env.scene = NS(entities={})
         cmd._resample_command(torch.arange(2))

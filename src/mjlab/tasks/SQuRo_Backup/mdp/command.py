@@ -159,6 +159,12 @@ class BackupCommand(CommandTerm):
         self._ep_stood_onset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_ep_stood_pose = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._last_ep_stood_onset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # 逐环境墙位: 单一真源。物理写入 (mocap) 与策略观测都从这里取值, 不许各读各的 ——
+        # 曾经物理墙用采样值、观测却广播 cfg 值, 于是"墙动了但策略不知道"。
+        # _wall_d 在**完整回合复位**时采样并写入; 循环复位只是 sim.reset 把 mocap 打回默认,
+        # 随后必须用 _wall_d 恢复, 否则同一回合的第二次翻正会面对另一个墙距。
+        self._wall_d = torch.zeros(self.num_envs, device=self.device)
+        self._last_ep_wall_d = torch.zeros(self.num_envs, device=self.device)
         self._prev_stand_active = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._pose_cache: tuple[torch.Tensor, torch.Tensor] | None = None
         self._pose_cos_cache: torch.Tensor | None = None
@@ -269,22 +275,76 @@ class BackupCommand(CommandTerm):
             self._last_ep_stood_pose = torch.zeros_like(self.phase, dtype=torch.bool)
             self._last_ep_stood_onset = torch.zeros_like(self.phase, dtype=torch.bool)
             self._prev_stand_active = torch.zeros_like(self.phase, dtype=torch.bool)
+        if not hasattr(self, "_wall_d"):
+            self._wall_d = torch.zeros_like(self.t_phase)
+            self._last_ep_wall_d = torch.zeros_like(self.t_phase)
 
-    # 把**实际编译进仿真**的墙位写进观测量。来源是场景实体本身, 不是 runner 的缓存 ——
-    # 与"判据一律比实际编译值"同一条原则。墙位在编译期固化, 环境生命周期内不变, 所以只在
-    # (重)采样时写即可; 重建会新建 command 实例, 其 __init__ 会再读一次新实体。
-    # 无受限空间实体时写 0: 只出现在无墙配置与单测替身里, 正常训练恒有实体。
-    def _write_wall_observation(self, env_ids: torch.Tensor) -> None:
-        entity = None
+    # 取受限空间实体; 没有实体 (无墙配置 / 单测替身) 时返回 None
+    def _wall_entity(self):
         scene = getattr(self._env, "scene", None)
-        if scene is not None:
-            entity = getattr(scene, "entities", {}).get("restricted_space")
+        if scene is None:
+            return None
+        return getattr(scene, "entities", {}).get("restricted_space")
+
+    # 右墙的固定中心: 显式配置优先, 否则沿用场景实体的编译值
+    def _wall_x_pos_fixed(self) -> float:
+        if self.cfg.wall_x_pos is not None:
+            return float(self.cfg.wall_x_pos)
+        entity = self._wall_entity()
+        return float(entity.cfg.wall_x_pos) if entity is not None else 0.0
+
+    # 左墙距离 d 的采样范围。两者都留 None 时退化成"实体编译的那个墙位"(单点, 不随机),
+    # 这样默认行为与逐环境墙位引入之前完全一致。
+    def _wall_bounds(self) -> tuple[float, float]:
+        entity = self._wall_entity()
+        compiled = -float(entity.cfg.wall_x_neg) if entity is not None else 0.20
+        lo = compiled if self.cfg.wall_d_min is None else float(self.cfg.wall_d_min)
+        hi = compiled if self.cfg.wall_d_max is None else float(self.cfg.wall_d_max)
+        return lo, max(lo, hi)
+
+    # 把 self._wall_d (本回合的逐环境左墙距离) 推到物理 (mocap) 与观测。
+    # 物理、观测、回合统计三者共用同一份 _wall_d —— 这是"墙动了但策略不知道"的修法。
+    def _push_wall(self, env_ids: torch.Tensor) -> None:
+        entity = self._wall_entity()
         if entity is None:
             self.wall_x_neg_command[env_ids] = 0.0
             self.wall_x_pos_command[env_ids] = 0.0
             return
-        self.wall_x_neg_command[env_ids] = float(entity.cfg.wall_x_neg)
-        self.wall_x_pos_command[env_ids] = float(entity.cfg.wall_x_pos)
+        x_pos = self._wall_x_pos_fixed()
+        d = self._wall_d[env_ids]
+        # mocap_pos 是世界坐标, 要加环境原点。本任务 env_origins 恒为 0, 但不能依赖这一点;
+        # 单测替身的 scene 没有 env_origins, 缺省即原点为 0。
+        origins = getattr(self._env.scene, "env_origins", None)
+        origin = origins[env_ids, 0] if origins is not None else torch.zeros_like(d)
+        entity.write_wall_x(self._env, -d + origin, torch.full_like(d, x_pos) + origin,
+                            env_ids=env_ids)
+        self.wall_x_neg_command[env_ids] = -d
+        self.wall_x_pos_command[env_ids] = x_pos
+
+    # 完整回合复位时逐环境采样本回合的墙位。d_min 概率取 wall_d_min_frac, 其余 U[d_min, d_max];
+    # 下界专门采样组是课程验收的依据 —— 纯均匀几乎不会恰好落到底。
+    def _sample_wall(self, env_ids: torch.Tensor) -> None:
+        n = len(env_ids)
+        lo, hi = self._wall_bounds()
+        if hi > lo:
+            d = torch.empty(n, device=self.device).uniform_(lo, hi)
+            if 0.0 < float(self.cfg.wall_d_min_frac) < 1.0:
+                pick = torch.rand(n, device=self.device) < float(self.cfg.wall_d_min_frac)
+                d = torch.where(pick, torch.full_like(d, lo), d)
+        else:
+            d = torch.full((n,), lo, device=self.device)
+        self._wall_d[env_ids] = d
+        self._push_wall(env_ids)
+
+    # 课程推进时由 runner 调用: 更新下界并让后续回合按新范围采样。
+    # 已在进行中的回合不动 (墙位在回合内固定), 下个完整回合复位才生效。
+    def set_wall_curriculum(self, d_min: float, d_max: float | None = None,
+                            frac: float | None = None) -> None:
+        self.cfg.wall_d_min = float(d_min)
+        if d_max is not None:
+            self.cfg.wall_d_max = float(d_max)
+        if frac is not None:
+            self.cfg.wall_d_min_frac = float(frac)
 
     # 按课程采样 time_scale λ (episode 内固定); 其余字段与 Slalom/Tunnel 语义对齐
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -302,7 +362,7 @@ class BackupCommand(CommandTerm):
         else:
             lam = get_curriculum_time_scale(self._env.common_step_counter, n, self.device)
         self.time_scale_command[env_ids] = lam         # 参考时间缩放
-        self._write_wall_observation(env_ids)
+        self._sample_wall(env_ids)                     # 每回合重采墙位 (物理 + 观测 + 统计同源)
         # 状态机重置
         self.phase[env_ids] = 0
         self.t_phase[env_ids] = 0.0
@@ -374,6 +434,7 @@ class BackupCommand(CommandTerm):
                 self._last_ep_success[ids] = self._ep_had_success[ids] & valid
                 self._last_ep_stood_pose[ids] = self._ep_stood_pose[ids] & valid
                 self._last_ep_stood_onset[ids] = self._ep_stood_onset[ids] & valid
+                self._last_ep_wall_d[ids] = self._wall_d[ids]     # 随回合发布本回合墙位
                 self._ep_seq[ids] += 1
                 self._ep_index[ids] += 1
             # 中途重置只清"进行中"的累积, 不发布成绩, 也不消耗"首个回合无效"的名额
@@ -733,7 +794,15 @@ class BackupCommand(CommandTerm):
         env.action_manager.reset(ids)
         # 5) 清循环状态: 重采 λ、phase=0、t_phase=0、确认计时、里程碑锁存、脉冲起点、站立窗口。
         #    **不碰 _last_cycle_reset**(本步完成事件, 留给 metrics 与回放消费)。
+        #    循环复位**不换墙位**: 墙位是回合级量, 换了会让同一回合的多次翻正面对不同墙距,
+        #    回合级成绩无法归属。这里有两个坑同时存在, 必须一起处理:
+        #      a) 第 1 步 sim.reset 会把 mocap 打回编译默认值;
+        #      b) _resample_command 内部会重新采样 _wall_d。
+        #    所以先存下本回合的 d, 复采样后恢复, 再把墙位重写进仿真与观测。
+        keep_d = self._wall_d[ids].clone()
         self._resample_command(ids)
+        self._wall_d[ids] = keep_d
+        self._push_wall(ids)
         self._clear_cycle_state(ids)
         # 6) 刷新派生量 —— 写 qpos/qvel 之后必须 forward 才能让 site/body 位置与新状态一致
         #    (entity/data.py 明确要求"写后读前先 forward")。
@@ -905,6 +974,19 @@ class BackupCommandCfg(CommandTermCfg):
     pose_angle_tolerance_deg: float = 45.0
     pose_confirm_s: float = 0.10
     inverted_confirm_s: float = 0.15
+    # 逐环境墙位随机采样: 左墙距离 d = -wall_x_neg ∈ [wall_d_min, wall_d_max],
+    # 以 wall_d_min_frac 的概率直接取 wall_d_min (保证每档都有"最窄处"的样本可供验收;
+    # 纯均匀采样几乎不会恰好采到下界)。右墙保持 wall_x_pos 固定。
+    # **三个边界都可以留 None = 沿用场景实体编译的墙位** —— 于是默认行为是"墙就是编译的那对",
+    # 既有工具 (回放/接线自检/单测) 全部照旧; 只有 runner 显式 push 范围时才进入随机模式。
+    # 若这里给了非 None 的默认值, 命令项会在 __init__ 覆盖掉 configure_restricted_space
+    # 编译的墙位, 那是很难查的"墙位被悄悄改掉"。
+    # **只在完整回合复位时采样**: 回合内 (含循环复位) 墙位必须不变, 否则同一回合的多次翻正
+    # 面对不同墙距, 回合级成绩无法归属。
+    wall_d_min: float | None = None
+    wall_d_max: float | None = None
+    wall_d_min_frac: float = 0.3
+    wall_x_pos: float | None = None
 
     @dataclass
     class VizCfg:
