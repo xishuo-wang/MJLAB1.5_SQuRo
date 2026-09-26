@@ -60,9 +60,9 @@ def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 反推接近段轨迹表
-def _approach_rev_table(s0: float, tr: float) -> dict:
-    key = (round(s0, 6), round(tr, 6))
+# 反推接近段轨迹表; platform_at_end=True 时正向终点落在 κ=-K 平台 (无直行 LUT 的首段)
+def _approach_rev_table(s0: float, tr: float, platform_at_end: bool = False) -> dict:
+    key = (round(s0, 6), round(tr, 6), bool(platform_at_end))
     if key in _APPROACH_CACHE:
         return _APPROACH_CACHE[key]
     K = CURVATURE_TARGET
@@ -70,7 +70,12 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
     n = max(2, int(s0 / ds))
     u = np.linspace(0.0, s0, n, endpoint=False)
     trp = min(s0, tr)
-    ku = np.where(u < trp, K * u / trp, K)     # 反向 κ: 过渡 0→+K, 平台 +K
+    if platform_at_end:
+        # 反向 κ: 平台 +K (末端) + 过渡 →0; 正向 = 过渡 0→-K + 平台 -K
+        ku = np.where(u < s0 - trp, K, K * (s0 - u) / trp)
+    else:
+        # 反向 κ: 过渡 0→+K + 平台 +K; 正向 = 平台 -K + 过渡 -K→0 (接直行段)
+        ku = np.where(u < trp, K * u / trp, K)
     h = np.cumsum(ku) * ds
     x = -np.cumsum(np.cos(h)) * ds
     y = -np.cumsum(np.sin(h)) * ds
@@ -80,10 +85,18 @@ def _approach_rev_table(s0: float, tr: float) -> dict:
 
 
 
+# 无直行模式判定 (与 _generate_slalom_lut_smooth_period 的选支口径一致)
+def is_no_straight_spacing(spacing: float) -> bool:
+    tr = SMOOTH_VEL * SMOOTH_TIME
+    _, x_sw_full = _get_smooth_xsw(tr)
+    return spacing < 2 * x_sw_full - 1e-6
+
+
+
 # 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
 def get_approach_start(spacing: float = 0.0) -> tuple[float, float, float]:
     tr = SMOOTH_VEL * SMOOTH_TIME
-    tbl = _approach_rev_table(_INIT_DIST, tr)
+    tbl = _approach_rev_table(_INIT_DIST, tr, platform_at_end=is_no_straight_spacing(spacing))
     # spacing: 杆间距 (新几何起点右移, 接近段终点 = (spacing, 0))
     return float(tbl["x"][-1]) + spacing, float(tbl["y"][-1]), float(tbl["h"][-1])
 
@@ -101,11 +114,9 @@ def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, to
 
 
 
-# 机器人初始位置/朝向 (名义 vel), 供 events.py 重置
+# 机器人初始位置/朝向 (名义 vel), 与 get_approach_start 同义
 def get_phase1_approach(spacing: float = 0.0) -> tuple[float, float, float]:
-    tr = SMOOTH_VEL * SMOOTH_TIME
-    tbl = _approach_rev_table(_INIT_DIST, tr)
-    return float(tbl["x"][-1]) + spacing, float(tbl["y"][-1]), float(tbl["h"][-1])
+    return get_approach_start(spacing)
 
 
 
@@ -385,7 +396,8 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 名义 τ(u) 表 (正向从起点 u=s0 到终点 u=0)
     app_cache = getattr(env, "_slalom_app_tbl", None)
     if app_cache is None or app_cache.get("key") != key:
-        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME,
+                                      platform_at_end=is_no_straight_spacing(pole_spacing))
         app_s_np = app_tbl["s"]                    # 0 → _INIT_DIST (距终点弧长)
         app_k_fwd = -app_tbl["k"]                  # 正向 κ: 起点 -K → 终点 0
         app_scale = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * np.abs(app_k_fwd) / CURVATURE_TARGET

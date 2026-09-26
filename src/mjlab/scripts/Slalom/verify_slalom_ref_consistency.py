@@ -349,6 +349,36 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertLess(float(vel.abs().max()), 1e-6,
                         msg="回合首步出现了重置导致的速度参考尖峰")
 
+    # 接近段与绕杆主路径衔接处, 曲率与期望速度都必须连续
+    def test_approach_joins_lut_at_matching_curvature(self):
+        # 有直行模式 LUT 首段是直行 (κ=0), 无直行模式首段是 κ=-K 平台
+        cases = ((POLE_SPACING_START, 0.0),
+                 (get_effective_pole_spacing(0.08), -CURVATURE_TARGET_MAX))
+        for spacing, junction_kappa in cases:
+            env = make_ref_env([1.0], [0.0], spacing=spacing)
+            compute_slalom_path_ref(env)
+            tau_total = env._slalom_app_tbl["tau_total"]
+            self.assertGreater(tau_total, 2 * STEP_DT)
+
+            samples = []
+            for sign in (-1, 1):
+                t = tau_total + sign * 0.5 * STEP_DT      # 步频 1.0 → tau == t
+                e = make_ref_env([1.0], [t], spacing=spacing)
+                _, _, vx, vy, _ = compute_slalom_path_ref(e)
+                samples.append((float(e._path_kappa[0]), float(torch.hypot(vx[0], vy[0]))))
+            k_before, v_before = samples[0]
+            k_after, v_after = samples[1]
+
+            # 主路径起始曲率必须与接近段终点一致 (无直行时曾是 0 vs -K 的硬跳变)
+            self.assertAlmostEqual(k_after, junction_kappa, places=1,
+                                   msg=f"间距 {spacing:.4f}: 主路径起始曲率 {k_after:.3f} "
+                                       f"与期望 {junction_kappa:.3f} 不符")
+            self.assertLess(abs(k_after - k_before), 0.1 * CURVATURE_TARGET_MAX,
+                            msg=f"间距 {spacing:.4f}: 衔接处曲率跳变 {abs(k_after - k_before):.3f}")
+            self.assertLess(abs(v_after - v_before), 0.2 * max(v_before, v_after),
+                            msg=f"间距 {spacing:.4f}: 衔接处期望速度跳变 "
+                                f"{v_before:.4f} → {v_after:.4f} m/s")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

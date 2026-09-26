@@ -30,6 +30,7 @@ from .path import (
     get_path_curvature,
     get_phase0_approach,
     get_effective_pole_spacing,
+    is_no_straight_spacing,
     _generate_slalom_lut_smooth_period,
 )
 if TYPE_CHECKING:
@@ -296,8 +297,9 @@ class SlalomCommand(CommandTerm):
         x_off = spacing   # 新几何: 周期起点 = 第一根杆正上方 (x=spacing)
 
         radius = 0.006
-        # 接近段 (圆弧: 平台-K + 过渡-K→0, 与实际期望轨迹一致)
-        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
+        # 接近段 (与期望轨迹同一模式: 无直行时正向终点为 κ=-K 平台)
+        app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME,
+                                      platform_at_end=is_no_straight_spacing(spacing))
         n_app = len(app_tbl["x"])
         step = max(1, n_app // 5)
         for i in range(0, n_app, step):
