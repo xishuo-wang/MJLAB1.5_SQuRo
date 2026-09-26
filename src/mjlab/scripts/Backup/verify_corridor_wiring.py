@@ -78,8 +78,8 @@ def run_probe(env, ent, start_x: float, steps: int) -> tuple[int, float]:
 def main() -> None:
     cfg = tyro.cli(ProbeCfg)
     print("=" * 94)
-    print(f"[1] 墙位课程档位表 (+X 固定 {WALL_X_POS:.2f}, −X {WALL_X_NEG_START:.2f} → "
-          f"{WALL_X_NEG_END:.2f}, 步长 {WALL_X_NEG_STEP:.2f}, 共 {CURRICULUM_LEVELS} 档)")
+    print(f"[1] 墙位课程档位表 (+X 固定 {WALL_X_POS:.3f}, −X {WALL_X_NEG_START:.3f} → "
+          f"{WALL_X_NEG_END:.3f}, 步长 {WALL_X_NEG_STEP:.3f}, 共 {CURRICULUM_LEVELS} 档)")
     print(f"  −X 档位表: {list(WALL_X_NEG_LEVELS)}")
     for lv in range(CURRICULUM_LEVELS):
         neg, pos = get_wall_positions_for_level(lv)
