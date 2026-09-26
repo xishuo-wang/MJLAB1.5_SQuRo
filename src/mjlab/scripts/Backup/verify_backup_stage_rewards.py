@@ -12,6 +12,7 @@ from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, terminations, event
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
+from mjlab.tasks.SQuRo_Backup.mdp.curriculums import SPN_AXIS_SCALE
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import get_curriculum_reward_weight
 from mjlab.tasks.SQuRo_Backup.mdp.command import _GROUND_TH
 # 相位时钟与参考表同为累计口径(含前置收腿段 T0), 故 P1 名义段末就是 P1_END×λ。
@@ -980,12 +981,22 @@ class StageRewardTests(unittest.TestCase):
                     target_names=list(reversed(_ACTUATED_JOINT_NAMES)))
         env.action_manager = NS(get_term=lambda _: action)
         with patch.object(rewards, 'get_reference_joint_state', return_value=(torch.zeros(3,14), torch.zeros(3,14))):
-            torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -2.))
+            # 四关节误差全为 1 时, 平方代价按 SPN_AXIS_SCALE^2 加权 (侧摆/俯仰放宽)
+            s = torch.tensor(SPN_AXIS_SCALE)
+            torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                                       torch.full((3,), -2. * float((s ** 2).mean())))
             with patch.dict(_CURVES, weight_spine_target=(4.,)):
-                torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -4.))
-            action.raw_action.zero_()
-            action.raw_action[:, action.target_names.index('F_body_joint')] = 2.
-            torch.testing.assert_close(rewards.compute_spine_target_cost(env), torch.full((3,), -2.))
+                torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                                           torch.full((3,), -4. * float((s ** 2).mean())))
+            # 单一关节误差放 2.0: 扭转 (scale=1) 得 -2.0, 侧摆/俯仰 (scale=0.5) 得 -0.5。
+            # 同时锁住"缩放接在哪一列" —— 接错列会立刻不等。
+            for name, expect in (('F_body_joint', -2.), ('H_body_joint', -2.),
+                                 ('F_spine1_joint', -0.5), ('H_spine1_joint', -0.5)):
+                with self.subTest(joint=name):
+                    action.raw_action.zero_()
+                    action.raw_action[:, action.target_names.index(name)] = 2.
+                    torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                                               torch.full((3,), expect))
 
     def test_action_ctrl_excess_penalty(self):
         env, cmd = make_env([0])
