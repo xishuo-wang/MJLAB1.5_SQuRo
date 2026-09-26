@@ -65,10 +65,14 @@ class RestrictedSpaceEntity(Entity):
         super().__init__(cfg)
         self.cfg = cfg
         self._wall_geoms: list = []
+        self._wall_bodies: list = []
         self._build_geometry()
 
     # 两面侧墙: −x 与 +x 各一面, 沿 Y 延伸、沿 Z 立在 0~wall_height。
     # 位置直接取 cfg 的两个墙心 (可不对称), 不再由间距的一半推导。
+    # **墙是 mocap body**: 无关节、不参与动力学 (机器人推不动), 但位姿可由我们逐环境写 ——
+    # 这是"逐环境随机墙位"的前提。编译期的 pos 只作为默认值; 真正生效的墙位由
+    # write_wall_x 在每次回合开始时逐环境写入。依据与验收见技术细节 §7.16。
     def _build_geometry(self) -> None:
         half_t = self.cfg.wall_half_thickness
         half_l = self.cfg.wall_half_length
@@ -77,7 +81,9 @@ class RestrictedSpaceEntity(Entity):
             body = self._spec.worldbody.add_body(
                 name=f"{self.cfg.name}_wall_{tag}",
                 pos=(center, 0.0, 0.0),
+                mocap=True,
             )
+            self._wall_bodies.append(body)
             self._wall_geoms.append(body.add_geom(
                 name=f"{self.cfg.name}_wall_{tag}_geom",
                 pos=(0.0, 0.0, half_h),
@@ -96,6 +102,36 @@ class RestrictedSpaceEntity(Entity):
     def wall_geom_ids(self) -> list[int]:
         local, _ = self.find_geoms([f"{self.cfg.name}_wall_.*_geom"], preserve_order=True)
         return list(self.indexing.geom_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
+
+    # 编译后的全局 body 下标 (顺序同 _build_geometry 的 neg, pos)
+    @property
+    def wall_body_ids(self) -> list[int]:
+        local, _ = self.find_bodies([f"{self.cfg.name}_wall_.*"], preserve_order=True)
+        return list(self.indexing.body_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
+
+    # 两面墙在 mocap 数组里的下标 (顺序同 wall_body_ids: neg, pos)。
+    # Entity 本身没有 .model, 要从 EntityData 上取 (与 data.py 里的用法一致)。
+    @property
+    def wall_mocap_ids(self) -> list[int]:
+        return [int(self.data.model.body_mocapid[b]) for b in self.wall_body_ids]
+
+    # 逐环境写墙位。入参是**世界** x (调用方负责加 env_origins), 可以是标量或 (n,) 数组。
+    # 为什么直写 warp 的 mocap_pos: Entity.write_mocap_pose_to_sim 只作用于实体自己的 root body,
+    # 而这里要动的是 worldbody 下的两个子 body。整块写回只在回合复位时发生。
+    def write_wall_x(self, env, x_neg, x_pos, env_ids=None) -> None:
+        wp = env.sim.wp_data
+        arr = wp.mocap_pos.numpy()
+        ids = slice(None) if env_ids is None else env_ids
+        mn, mp = self.wall_mocap_ids
+        arr[ids, mn, 0] = x_neg
+        arr[ids, mp, 0] = x_pos
+        wp.mocap_pos.assign(arr)
+
+    # 读回逐环境墙位 (世界 x), 供验收与诊断
+    def read_wall_x(self, env) -> tuple:
+        arr = env.sim.wp_data.mocap_pos.numpy()
+        mn, mp = self.wall_mocap_ids
+        return arr[:, mn, 0].copy(), arr[:, mp, 0].copy()
 
     @property
     def clear_width(self) -> float:
