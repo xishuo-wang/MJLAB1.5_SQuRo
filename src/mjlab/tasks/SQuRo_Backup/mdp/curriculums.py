@@ -82,7 +82,21 @@ TIME_SCALE_MIN_END = 1.0
 # 缩放作用在**误差**上, 所以平方代价按 scale^2 生效 (0.5 => 容差 x2)。
 # 脊柱误差一共出现在 5 处 (跟踪核 / mimic_pos / mimic_vel / spine_target / track_joint),
 # 全部共用这一份。标定与副作用见技术细节 §7.14。
-SPN_AXIS_SCALE: tuple[float, float, float, float] = (0.5, 1.0, 0.5, 1.0)
+#
+# **到 SPN_AXIS_RELAX_ITER 才切**: 前段的唯一任务是"学会按参考翻正", 而跟踪核同时是
+# progress_s1 / progress_s2 / s1_shape 的乘子闸门 (§7.9), 提前放松会一并松开防套利约束,
+# 让"抢在参考之前翻过去"重新变得有利。旧 run 在 iter 3600 进入原课程最窄档, 继承训练
+# 从 4000 轮开始, 所以切换点与继承点对齐取 4000。
+SPN_AXIS_RELAX_ITER = 4000
+SPN_AXIS_SCALE_STRICT: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
+SPN_AXIS_SCALE_RELAXED: tuple[float, float, float, float] = (0.5, 1.0, 0.5, 1.0)
+
+
+# 当前该用的脊柱误差缩放 (按公共步计数器换算轮次, 与 get_training_phase 同口径)。
+def get_spn_axis_scale(step_counter: int) -> tuple[float, float, float, float]:
+    if step_counter // _STEPS_PER_ITER < SPN_AXIS_RELAX_ITER:
+        return SPN_AXIS_SCALE_STRICT
+    return SPN_AXIS_SCALE_RELAXED
 
 
 # 奖励权重课程曲线 — 每阶段一个值, 值数量不足时取末值。

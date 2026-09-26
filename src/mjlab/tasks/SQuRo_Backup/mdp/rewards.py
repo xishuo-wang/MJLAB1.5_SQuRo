@@ -4,7 +4,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .command import BackupCommand
 from .command import _GROUND_TH as _S1_GROUND_TH
-from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
+from .curriculums import get_curriculum_reward_weight, get_spn_axis_scale
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .config import STAND_VEL_MEAN_MAX, T4
@@ -35,29 +35,31 @@ STAND_STILL_FULL_SPEED = STAND_STILL_FULL_SPEED_RATIO * STAND_VEL_MEAN_MAX
 S1_SHAPE_DEPTH_TOL = 0.02
 
 
-# 脊柱四关节的误差缩放张量 (顺序同 actuator_spn_ids), 按 (device, dtype) 缓存。
-# 松掉的是侧摆/俯仰两个辅助自由度, 扭转与腿保持全额, 见 curriculums.SPN_AXIS_SCALE。
+# 脊柱四关节的误差缩放张量 (顺序同 actuator_spn_ids), 按 (device, dtype, 档位) 缓存。
+# 松掉的是侧摆/俯仰两个辅助自由度, 扭转与腿保持全额; 切档点在 SPN_AXIS_RELAX_ITER。
 _SPN_SCALE: dict = {}
 _ERR_SCALE: dict = {}
 
 
-def _spn_axis_scale(device, dtype) -> torch.Tensor:
-    key = (str(device), str(dtype))
+def _spn_axis_scale(env, device, dtype) -> torch.Tensor:
+    scale = get_spn_axis_scale(int(env.common_step_counter))
+    key = (str(device), str(dtype), scale)
     s = _SPN_SCALE.get(key)
     if s is None:
-        s = torch.tensor(SPN_AXIS_SCALE, device=device, dtype=dtype)
+        s = torch.tensor(scale, device=device, dtype=dtype)
         _SPN_SCALE[key] = s
     return s
 
 
-# 14 维误差缩放: 脊柱四个关节按 SPN_AXIS_SCALE, 其余为 1。下标取参考表顺序, 与
+# 14 维误差缩放: 脊柱四个关节按当前档位, 其余为 1。下标取参考表顺序, 与
 # joint_pos[:, joint_ids] 同序 (同 _joint_group_weights 的那条注意事项)。
-def _joint_error_scale(device, dtype) -> torch.Tensor:
-    key = (str(device), str(dtype))
+def _joint_error_scale(env, device, dtype) -> torch.Tensor:
+    scale = get_spn_axis_scale(int(env.common_step_counter))
+    key = (str(device), str(dtype), scale)
     s = _ERR_SCALE.get(key)
     if s is None:
         s = torch.ones(len(_ACTUATED_JOINT_NAMES), device=device, dtype=dtype)
-        s[list(_MODEL_INDICES.actuator_spn_ids)] = _spn_axis_scale(device, dtype)
+        s[list(_MODEL_INDICES.actuator_spn_ids)] = torch.tensor(scale, device=device, dtype=dtype)
         _ERR_SCALE[key] = s
     return s
 
@@ -138,7 +140,7 @@ def _spine_track_kernel(env: "ManagerBasedRlEnv") -> torch.Tensor:
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
     error_spn = (joint_pos - ref_pos)[:, _MODEL_INDICES.actuator_spn_ids]
-    error_spn = error_spn * _spn_axis_scale(error_spn.device, error_spn.dtype)
+    error_spn = error_spn * _spn_axis_scale(env, error_spn.device, error_spn.dtype)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     return torch.exp(-sigma_spn * mse_spn)
@@ -213,7 +215,7 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error = joint_pos - ref_pos
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
-    error_spn = error_spn * _spn_axis_scale(error_spn.device, error_spn.dtype)
+    error_spn = error_spn * _spn_axis_scale(env, error_spn.device, error_spn.dtype)
     error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
@@ -255,7 +257,7 @@ def compute_spine_target_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     spn = _MODEL_INDICES.actuator_spn_ids
     ref_pos, _ = get_reference_joint_state(env)
     return weight * _joint_target_cost(env, spn,
-                                       _spn_axis_scale(ref_pos.device, ref_pos.dtype))
+                                       _spn_axis_scale(env, ref_pos.device, ref_pos.dtype))
 
 
 
@@ -413,7 +415,7 @@ def compute_joint_track_cost(env: "ManagerBasedRlEnv") -> torch.Tensor:
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
     err = joint_pos - ref_pos
-    err = err * _joint_error_scale(err.device, err.dtype)
+    err = err * _joint_error_scale(env, err.device, err.dtype)
     w = _joint_group_weights(err.device, err.dtype)
     cost = (w * err.square()).mean(dim=1) / TRACK_REF_MSE_SCALE
     weight = get_curriculum_reward_weight(env, "weight_track_joint")
@@ -430,7 +432,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error = joint_vel - ref_vel
     error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
     error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
-    error_spn = error_spn * _spn_axis_scale(error_spn.device, error_spn.dtype)
+    error_spn = error_spn * _spn_axis_scale(env, error_spn.device, error_spn.dtype)
     error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
