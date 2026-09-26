@@ -58,7 +58,7 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         # 落到第 0 档 (-0.08, +0.055), 净宽 0.115, 课程再从第 0 档正常往上走。
         # 本批唯一变量: weight_leg_pose 2.0 -> 6.0 (见 mdp/curriculums.py 的说明)。
         # 换实验时把下面三行改回 resume=False 即可 (load_run/load_checkpoint 只在 resume 时生效)。
-        resume=True,
+        resume=False,
         load_run="2026-09-26_01-32-03",
         load_checkpoint="model_3000.pt",
     )
