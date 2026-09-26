@@ -194,9 +194,8 @@ class SlalomCommand(CommandTerm):
             # 接近段起点 κ=-CURVATURE_TARGET → 初始速度为弯道低速 (之后每步变速)
             self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * VEL_MIN, device=self.device)
 
-        # 缓存步频/基础速度标量 (所有 env 共享), 供 path 模块生成变速 t(s) 表 (避免每步 GPU-CPU 同步)
+        # 缓存基础速度标量 (cfg 级全局量), 供 path 模块生成名义 τ(s) 表 (避免每步 GPU-CPU 同步)
         if n > 0:
-            self._env._slalom_gait_scalar = self._shared_gait_freq  # type: ignore[attr-defined]
             self._env._slalom_base_vel_scalar = base_vel  # type: ignore[attr-defined]
         self._start_recorded[env_ids] = False
 

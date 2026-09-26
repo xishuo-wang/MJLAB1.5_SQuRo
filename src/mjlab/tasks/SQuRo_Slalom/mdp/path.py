@@ -337,24 +337,25 @@ def get_smooth_x_sw(smooth_time: Optional[float] = None, vel: Optional[float] = 
 def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
     pole_spacing = cmd_term.active_pole_spacing      # type: ignore[union-attr]
+    cmd_tensor = cmd_term.command                    # type: ignore[union-attr]
     dt = env.step_dt
     t = env.episode_length_buf.float() * dt         # [N]
 
-    # 变速速度剖面标量 (command 每 episode 缓存, 避免 GPU-CPU 同步)
+    # 名义时间 τ = t × 自身步频: dt = dτ/gait, 故 τ(s) 表与步频解耦 (推导见 PROJECT.md 绕杆一节)
     base_vel = float(getattr(env, "_slalom_base_vel_scalar", BASE_VEL))
-    gait = float(getattr(env, "_slalom_gait_scalar", 1.0))
+    tau = t * cmd_tensor[:, 3]                      # [N]
 
-    # LUT 几何固定 (平滑弧长与 vel 解耦); 变速 t(s) 表随 (间距, 步频, 基础速度) 变化
-    key = (pole_spacing, round(gait, 4), base_vel)
+    # LUT 几何固定 (平滑弧长与 vel 解耦); τ(s) 表只随 (间距, 基础速度) 变化
+    key = (pole_spacing, base_vel)
     cache = getattr(env, "_slalom_lut_cache", None)
     if cache is None or cache.get("key") != key:
         arc_np, xs_np, ys_np, hd_np, kp_np = _generate_slalom_lut_smooth_period(pole_spacing)
         dev = env.device
-        # 变速速度剖面: scale(κ) 直行 STRAIGHT_VEL_SCALE → 弯道 VEL_MIN, v = base*gait*scale
+        # 名义速度剖面 (gait=1): scale(κ) 直行 STRAIGHT_VEL_SCALE → 弯道 VEL_MIN
         scale_np = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * np.abs(kp_np) / CURVATURE_TARGET
-        v_np = base_vel * gait * scale_np
-        v_mid = 0.5 * (v_np[:-1] + v_np[1:])
-        t_lut_np = np.concatenate([[0.0], np.cumsum(np.diff(arc_np) / np.maximum(v_mid, 1e-6))])
+        v_nom_np = base_vel * scale_np
+        v_mid = 0.5 * (v_nom_np[:-1] + v_nom_np[1:])
+        tau_lut_np = np.concatenate([[0.0], np.cumsum(np.diff(arc_np) / np.maximum(v_mid, 1e-6))])
         cache = {
             "key": key,
             "spacing": pole_spacing,
@@ -363,8 +364,8 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
             "y": torch.tensor(ys_np, device=dev, dtype=torch.float32),
             "heading": torch.tensor(hd_np, device=dev, dtype=torch.float32),
             "kappa": torch.tensor(kp_np, device=dev, dtype=torch.float32),
-            "t": torch.tensor(t_lut_np, device=dev, dtype=torch.float32),
-            "t_period": float(t_lut_np[-1]),
+            "tau": torch.tensor(tau_lut_np, device=dev, dtype=torch.float32),
+            "tau_period": float(tau_lut_np[-1]),
             "period": float(arc_np[-1]),
         }
         env._slalom_lut_cache = cache  # type: ignore[attr-defined]
@@ -374,46 +375,46 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     y_lut = cache["y"]
     hd_lut = cache["heading"]
     kappa_lut = cache["kappa"]
-    t_lut = cache["t"]
+    tau_lut = cache["tau"]
     s_period = cache["period"]
-    t_period = cache["t_period"]
+    tau_period = cache["tau_period"]
 
     # 新几何: 周期起点 = 第一根杆 (x=pole_spacing) 正上方, 路径整体右移 pole_spacing
     x_offset = pole_spacing
 
-    # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 变速 t(u) 表 (正向从起点 u=s0 到终点 u=0)
+    # 接近段: 圆弧 (平台 -K + 过渡 -K→0), 名义 τ(u) 表 (正向从起点 u=s0 到终点 u=0)
     app_cache = getattr(env, "_slalom_app_tbl", None)
     if app_cache is None or app_cache.get("key") != key:
         app_tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
         app_s_np = app_tbl["s"]                    # 0 → _INIT_DIST (距终点弧长)
         app_k_fwd = -app_tbl["k"]                  # 正向 κ: 起点 -K → 终点 0
         app_scale = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * np.abs(app_k_fwd) / CURVATURE_TARGET
-        app_v = base_vel * gait * app_scale
+        app_v = base_vel * app_scale
         u_desc = app_s_np[::-1].copy()             # _INIT_DIST → 0 (正向行进方向; copy 避免负 stride)
         v_desc = app_v[::-1].copy()
         v_mid = 0.5 * (v_desc[:-1] + v_desc[1:])
-        t_desc_np = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(u_desc)) / np.maximum(v_mid, 1e-6))])
-        app_cache = {key: torch.tensor(val, device=env.device, dtype=torch.float32)
-                     for key, val in app_tbl.items()}
+        tau_desc_np = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(u_desc)) / np.maximum(v_mid, 1e-6))])
+        app_cache = {name: torch.tensor(arr, device=env.device, dtype=torch.float32)
+                     for name, arr in app_tbl.items()}
         app_cache["u_desc"] = torch.tensor(u_desc, device=env.device, dtype=torch.float32)
-        app_cache["t_desc"] = torch.tensor(t_desc_np, device=env.device, dtype=torch.float32)
-        app_cache["t_total"] = float(t_desc_np[-1])
+        app_cache["tau_desc"] = torch.tensor(tau_desc_np, device=env.device, dtype=torch.float32)
+        app_cache["tau_total"] = float(tau_desc_np[-1])
         app_cache["key"] = key
         env._slalom_app_tbl = app_cache  # type: ignore[attr-defined]
     app_s, app_x = app_cache["s"], app_cache["x"]
     app_y, app_h = app_cache["y"], app_cache["h"]
     app_k = app_cache["k"]
     app_u_desc = app_cache["u_desc"]               # 距终点弧长 (s0→0)
-    app_t_desc = app_cache["t_desc"]
-    t_app_total = app_cache["t_total"]
+    app_tau_desc = app_cache["tau_desc"]
+    tau_app_total = app_cache["tau_total"]
 
-    # 变速弧长推进: t → 弧长 (直行段快, 弯道慢, 由速度剖面积分)
-    in_approach = t < t_app_total
+    # 名义时间推进: τ → 弧长 (直行段快, 弯道慢, 由名义速度剖面积分)
+    in_approach = tau < tau_app_total
 
-    # 接近段: t → u (距终点弧长), 再查位置表
-    idx = torch.searchsorted(app_t_desc, t).clamp(1, len(app_t_desc) - 1)
+    # 接近段: τ → u (距终点弧长), 再查位置表
+    idx = torch.searchsorted(app_tau_desc, tau).clamp(1, len(app_tau_desc) - 1)
     idx_p = idx - 1
-    frac = (t - app_t_desc[idx_p]) / (app_t_desc[idx] - app_t_desc[idx_p] + 1e-12)
+    frac = (tau - app_tau_desc[idx_p]) / (app_tau_desc[idx] - app_tau_desc[idx_p] + 1e-12)
     u_approach = app_u_desc[idx_p] + frac * (app_u_desc[idx] - app_u_desc[idx_p])
     idx2 = torch.searchsorted(app_s, u_approach).clamp(1, len(app_s) - 1)
     idx2_p = idx2 - 1
@@ -423,14 +424,14 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     approach_h = app_h[idx2_p] + frac2 * (app_h[idx2] - app_h[idx2_p])
     approach_k = -(app_k[idx2_p] + frac2 * (app_k[idx2] - app_k[idx2_p]))   # 正向 κ = -反推 κ
 
-    # LUT 段: 按周期时间表推进 (变速, 每周期时间 = t_period)
-    t_lut_sec = torch.clamp(t - t_app_total, min=0.0)
-    num_periods = (t_lut_sec / t_period).floor().long()  # [N]
-    t_rem = t_lut_sec - num_periods * t_period
+    # LUT 段: 按周期名义时间推进 (每周期 = tau_period)
+    tau_lut_sec = torch.clamp(tau - tau_app_total, min=0.0)
+    num_periods = (tau_lut_sec / tau_period).floor().long()  # [N]
+    tau_rem = tau_lut_sec - num_periods * tau_period
 
-    idx = torch.searchsorted(t_lut, t_rem).clamp(1, len(t_lut) - 1)
+    idx = torch.searchsorted(tau_lut, tau_rem).clamp(1, len(tau_lut) - 1)
     idx_prev = idx - 1
-    frac = (t_rem - t_lut[idx_prev]) / (t_lut[idx] - t_lut[idx_prev] + 1e-12)  # [N]
+    frac = (tau_rem - tau_lut[idx_prev]) / (tau_lut[idx] - tau_lut[idx_prev] + 1e-12)  # [N]
     x_lut_val = x_lut[idx_prev] + frac * (x_lut[idx] - x_lut[idx_prev])
     y_lut_val = y_lut[idx_prev] + frac * (y_lut[idx] - y_lut[idx_prev])
     h_lut_val = hd_lut[idx_prev]  # 分段常值 heading
@@ -445,7 +446,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
     # 期望速度 (变速): v = base*gait*scale(|κ|) — 直行段快, 弯道慢
     scale_ref = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * kappa_ref.abs() / CURVATURE_TARGET
-    v_cur = base_vel * gait * scale_ref
+    v_cur = base_vel * cmd_tensor[:, 3] * scale_ref
     vx_des = v_cur * torch.cos(path_heading)
     vy_des = v_cur * torch.sin(path_heading)
 
