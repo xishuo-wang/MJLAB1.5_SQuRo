@@ -218,6 +218,7 @@ class SlalomCommand(CommandTerm):
 
 
     def _update_command(self) -> None:
+        # 计时器与到期重采样由基类 CommandTerm.compute 负责, 此处不得再扣减或重采样
         # Phase 1: 每步动态更新曲率 + 期望速度 (变速: 直行快, 弯道慢; fixed_velocity 作为基础速度同样变速)
         if self.slalom_mode_active:
             kappa = get_path_curvature(self._env)
@@ -225,13 +226,6 @@ class SlalomCommand(CommandTerm):
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
             scale = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * kappa.abs() / CURVATURE_TARGET
             self.vel_command[:] = base_vel * self.gait_freq_command * scale
-
-        env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
-        if len(env_ids) > 0:
-            self._resample_command(env_ids)
-            t_range = self.cfg.resampling_time_range
-            self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
-        self.time_left -= self._env.step_dt
 
 
     def _update_metrics(self) -> None:
