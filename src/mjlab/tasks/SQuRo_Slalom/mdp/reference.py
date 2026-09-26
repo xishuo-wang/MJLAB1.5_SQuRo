@@ -19,6 +19,11 @@ _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
 STRIDE_MIN = 0.0                                            # 最小步幅
 
+# 参考限位 (rad): 取 SQuRo.xml 中关节 range 与执行器 ctrlrange 的较小者
+F_SPINE1_LIMIT = 0.6
+H_SPINE1_LIMIT = 0.6
+NECK_YAW_LIMIT = 0.8
+
 
 # 离散曲率绝对值表
 def _generate_curvature_bins(max_k: float) -> list[float]:
@@ -234,18 +239,47 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
     ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * gait_freq.unsqueeze(1)
 
+    # 曲率变化率 κ̇: 把"位置参考随 κ 变化"反映到速度参考上 (回合首步置零, 避免重置瞬间的假尖峰)
+    kappa_prev = getattr(env, "_ref_kappa_prev", None)
+    if kappa_prev is None:
+        kappa_dot = torch.zeros_like(curvature_cmd)
+    else:
+        kappa_dot = (curvature_cmd - kappa_prev) / dt
+        kappa_dot = torch.where(env.episode_length_buf <= 1, torch.zeros_like(kappa_dot), kappa_dot)
+    env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]
+
+    # 腿部: 表沿曲率轴的导数 × |κ|̇ (相位轴分量已由表速度给出, 与步频解耦故在此之后加)
+    d_pos_d_abs_k = (pos1 - pos0) / (k1 - k0).unsqueeze(1)  # [N,14]
+    ref_vel = ref_vel + d_pos_d_abs_k * (kappa_dot * torch.sign(curvature_cmd)).unsqueeze(1)
+
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     k_norm = curvature_cmd / kappa_norm          # 归一化曲率，范围 [-1, 1]
     abs_k_norm = curvature_cmd.abs() / kappa_norm
 
-    # 各脊柱关节目标角度（弧度），在 |κ| = max_k 时达到极值
-    ref_pos[:, 0] = -0.65 * k_norm          # f_spine1 κ=-max → +0.6, κ=+max → -0.6
-    ref_pos[:, 1] = -0.9 * k_norm           # f_body κ=-max → +0.9, κ=+max → -0.9
-    ref_pos[:, 2] = 0.8 * k_norm            # neck_yaw
+    # 各脊柱关节目标角度（弧度），超出限位的部分被截住
+    f_spine1_raw = -0.65 * k_norm
+    h_spine1_raw = -0.65 * abs_k_norm
+    neck_yaw_raw = 0.8 * k_norm
+    ref_pos[:, 0] = torch.clamp(f_spine1_raw, -F_SPINE1_LIMIT, F_SPINE1_LIMIT)
+    ref_pos[:, 1] = -0.9 * k_norm           # f_body
+    ref_pos[:, 2] = torch.clamp(neck_yaw_raw, -NECK_YAW_LIMIT, NECK_YAW_LIMIT)
     ref_pos[:, 3] = -0.3                    # neck_pitch
-    ref_pos[:, 8] = -0.65 * abs_k_norm      # h_spine1 始终 ≤0, |κ|=max → -0.6
-    ref_pos[:, 9] = -0.7 * k_norm           # h_body κ=-max → +0.7, κ=+max → -0.7
+    ref_pos[:, 8] = torch.clamp(h_spine1_raw, -H_SPINE1_LIMIT, H_SPINE1_LIMIT)
+    ref_pos[:, 9] = -0.7 * k_norm           # h_body
+
+    # 脊柱/颈速度参考 = 位置参考的解析时间导数 (被限位截住处导数为 0)
+    zero_dot = torch.zeros_like(kappa_dot)
+    unclamped_f = f_spine1_raw.abs() < F_SPINE1_LIMIT
+    unclamped_h = h_spine1_raw.abs() < H_SPINE1_LIMIT
+    unclamped_yaw = neck_yaw_raw.abs() < NECK_YAW_LIMIT
+    ref_vel[:, 0] = torch.where(unclamped_f, -0.65 * kappa_dot / kappa_norm, zero_dot)
+    ref_vel[:, 1] = -0.9 * kappa_dot / kappa_norm
+    ref_vel[:, 2] = torch.where(unclamped_yaw, 0.8 * kappa_dot / kappa_norm, zero_dot)
     ref_vel[:, 3] = 0.0
+    ref_vel[:, 8] = torch.where(unclamped_h,
+                                -0.65 * torch.sign(curvature_cmd) * kappa_dot / kappa_norm,
+                                zero_dot)
+    ref_vel[:, 9] = -0.7 * kappa_dot / kappa_norm
     # 推进相位
     env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
 
