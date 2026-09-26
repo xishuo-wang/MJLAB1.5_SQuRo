@@ -1,15 +1,17 @@
 # SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
 # 覆盖: 局部重置隔离、参考推进与自身步频一致、gait=1 几何不变、命令计时器、
-#       固定间距的单一真源、默认训练预算覆盖课程终点。
+#       固定间距的单一真源、默认训练预算覆盖课程终点、腿部参考过零连续。
 import unittest
 from types import SimpleNamespace as NS
 
 import torch
 
+from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, SlalomCommandCfg
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     _STEPS_PER_ITER,
     BASE_VEL,
+    CURVATURE_TARGET_MAX,
     PHASE1_END_ITER,
     PHASE2_END_ITER,
     POLE_SPACING_START,
@@ -24,6 +26,11 @@ from mjlab.tasks.SQuRo_Slalom.mdp.path import (
 STEP_DT = 0.02
 # Phase 1 期间的 common_step_counter (绕杆模式生效)
 PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER
+# 腿部关节列 (FL/FR/HL/HR) 与内侧腿列
+_LEG_COLS = [4, 5, 6, 7, 10, 11, 12, 13]
+_LEFT_COLS = [4, 5, 10, 11]
+_RIGHT_COLS = [6, 7, 12, 13]
+_TABLE_RES = 50
 
 # 重构前 (旧实现) 在 gait=1、间距 0.20 下的绕杆参考, 用于证明几何语义未变
 _GOLDEN_GAIT1 = {
@@ -85,7 +92,50 @@ def ref_of(env):
     return x, y, heading
 
 
+# 构造只含参考关节表所需字段的桩环境 (Phase 0 语义: 曲率取静态命令值)
+def make_ref_state_env(curvatures, phases=None, gait=1.0, step_count=5):
+    n = len(curvatures)
+    cmd = object.__new__(SlalomCommand)
+    env = NS(
+        device=torch.device("cpu"),
+        num_envs=n,
+        step_dt=STEP_DT,
+        common_step_counter=0,
+        episode_length_buf=torch.full((n,), step_count, dtype=torch.long),
+        reset_terminated=torch.zeros(n, dtype=torch.bool),
+        scene={"robot": None},
+    )
+    cmd._env = env
+    cmd.cfg = SlalomCommandCfg()
+    cmd.command_tensor = torch.zeros(n, 5)
+    cmd.command_tensor[:, 3] = gait
+    cmd.command_tensor[:, 4] = torch.tensor(curvatures, dtype=torch.float32)
+    cmd._shared_gait_freq = gait
+    env.command_manager = NS(_terms={"slalom_cmd": cmd})
+    if phases is None:
+        env._ref_phase = torch.zeros(n)
+    else:
+        env._ref_phase = torch.tensor(phases, dtype=torch.float32)
+    return env
+
+
+# 取一条腿在一个步态周期内的关节行程 (max-min), 用于判断内侧腿是否被压缩
+def leg_travel(kappa, cols):
+    n = _TABLE_RES
+    env = make_ref_state_env([kappa] * n, phases=[i / (n - 1) for i in range(n)])
+    pos, _ = ref_mod.get_reference_joint_state(env)
+    return (pos[:, cols].max(dim=0).values - pos[:, cols].min(dim=0).values)
+
+
 class TestSlalomRefConsistency(unittest.TestCase):
+
+    # 替换模型索引解析, 桩环境没有真实实体
+    def setUp(self):
+        self._orig_resolve = ref_mod.resolve_model_indices
+        ref_mod.resolve_model_indices = lambda entity: None
+
+    def tearDown(self):
+        ref_mod.resolve_model_indices = self._orig_resolve
 
     # 局部重置 (某个环境重抽步频) 不得改变其他环境的参考
     def test_local_reset_does_not_move_others(self):
@@ -210,6 +260,94 @@ class TestSlalomRefConsistency(unittest.TestCase):
         cfg = SQuRo_Slalom_PPO_Runner_Cfg()
         self.assertGreaterEqual(cfg.max_iterations, PHASE2_END_ITER,
                                 msg="默认训练轮数覆盖不到课程终点")
+
+    # 曲率过零时腿部参考必须连续 (不允许整条腿的相位被换掉)
+    def test_leg_ref_continuous_across_zero_curvature(self):
+        worst = 0.0
+        for i in range(20):
+            phase = i / 20
+            env_a = make_ref_state_env([-1e-6], [phase])
+            pos_a, _ = ref_mod.get_reference_joint_state(env_a)
+            env_b = make_ref_state_env([1e-6], [phase])
+            pos_b, _ = ref_mod.get_reference_joint_state(env_b)
+            jump = float((pos_a[0, _LEG_COLS] - pos_b[0, _LEG_COLS]).abs().max())
+            worst = max(worst, jump)
+        self.assertLess(worst, 0.05,
+                        msg=f"κ 过零时腿部参考跳变 {worst:.4f} rad (相位被交换)")
+
+    # 内侧腿必须随转向侧收缩, 外侧腿参考不得随曲率改变
+    def test_inner_leg_is_on_turn_side(self):
+        travel_left_0 = leg_travel(0.0, _LEFT_COLS)
+        travel_right_0 = leg_travel(0.0, _RIGHT_COLS)
+        travel_left_pos = leg_travel(CURVATURE_TARGET_MAX, _LEFT_COLS)
+        travel_right_pos = leg_travel(CURVATURE_TARGET_MAX, _RIGHT_COLS)
+        travel_left_neg = leg_travel(-CURVATURE_TARGET_MAX, _LEFT_COLS)
+        travel_right_neg = leg_travel(-CURVATURE_TARGET_MAX, _RIGHT_COLS)
+
+        # 左转 (κ>0): 左腿为内侧 → 行程被压缩; 右腿为外侧 → 与直行完全一致
+        for i in range(len(_LEFT_COLS)):
+            self.assertLess(float(travel_left_pos[i]), float(travel_left_0[i]) * 0.95,
+                            msg="左转时左腿 (内侧) 行程未被压缩")
+        for i in range(len(_RIGHT_COLS)):
+            self.assertAlmostEqual(float(travel_right_pos[i]), float(travel_right_0[i]),
+                                   places=6, msg="左转时右腿 (外侧) 参考被改动")
+
+        # 右转 (κ<0): 右腿为内侧 → 压缩; 左腿为外侧 → 与直行完全一致
+        for i in range(len(_RIGHT_COLS)):
+            self.assertLess(float(travel_right_neg[i]), float(travel_right_0[i]) * 0.95,
+                            msg="右转时右腿 (内侧) 行程未被压缩")
+        for i in range(len(_LEFT_COLS)):
+            self.assertAlmostEqual(float(travel_left_neg[i]), float(travel_left_0[i]),
+                                   places=6, msg="右转时左腿 (外侧) 参考被改动")
+
+    # 脊柱/颈参考不得超过模型关节与执行器限位
+    def test_spine_ref_within_joint_limits(self):
+        kappas = [(-25 + 2.5 * i) for i in range(21)]
+        env = make_ref_state_env(kappas, phases=[0.3] * len(kappas), gait=0.0)
+        pos, _ = ref_mod.get_reference_joint_state(env)
+        max_f = float(pos[:, 0].abs().max())
+        max_h = float(pos[:, 8].abs().max())
+        max_yaw = float(pos[:, 2].abs().max())
+        self.assertLessEqual(max_f, 0.6 + 1e-5, msg=f"F_spine1 参考超出限位: {max_f:.4f}")
+        self.assertLessEqual(max_h, 0.6 + 1e-5, msg=f"H_spine1 参考超出限位: {max_h:.4f}")
+        self.assertLessEqual(max_yaw, 0.8 + 1e-5, msg=f"Neck_yaw 参考超出限位: {max_yaw:.4f}")
+        # 高曲率处必须真的贴到限位 (否则说明 clamp 没生效)
+        self.assertAlmostEqual(max_f, 0.6, places=4)
+        self.assertAlmostEqual(max_h, 0.6, places=4)
+
+    # 速度参考必须等于位置参考的差分 (位置动而速度说不动即为不一致)
+    def test_ref_vel_matches_position_difference(self):
+        # 冻结相位 (gait=0) 以隔离"曲率变化"这一项; |κ| 取在脊柱限位以内
+        env = make_ref_state_env([-20.0], phases=[0.3], gait=0.0)
+        pos_a, _ = ref_mod.get_reference_joint_state(env)
+        cmd = env.command_manager._terms["slalom_cmd"]
+        cmd.command_tensor[:, 4] = -20.4      # 同一曲率 bin 内, 保证插值线性
+        env.common_step_counter = 1
+        env.episode_length_buf = torch.tensor([6])
+        pos_b, vel_b = ref_mod.get_reference_joint_state(env)
+        expected = (pos_b - pos_a) / STEP_DT
+        diff = (vel_b - expected).abs().max()
+        self.assertLess(float(diff), 1e-3,
+                        msg=f"速度参考与位置参考差分不符, 最大差 {float(diff):.4f} rad/s")
+        # 脊柱确实在动 (排除"两边都是 0"的假通过)
+        self.assertGreater(float(vel_b[:, 0].abs().max()), 1e-3)
+        # 被限位截住时导数必须为 0 (与位置恒定一致)
+        env_hi = make_ref_state_env([-24.0], phases=[0.3], gait=0.0)
+        pos_c, _ = ref_mod.get_reference_joint_state(env_hi)
+        env_hi.command_manager._terms["slalom_cmd"].command_tensor[:, 4] = -24.4
+        env_hi.common_step_counter = 1
+        env_hi.episode_length_buf = torch.tensor([6])
+        pos_d, vel_d = ref_mod.get_reference_joint_state(env_hi)
+        self.assertLess(float((vel_d[:, 0] - (pos_d[:, 0] - pos_c[:, 0]) / STEP_DT).abs().max()),
+                        1e-3, msg="限位区内速度参考与位置不一致")
+
+    # 回合首步不得因重置前的 κ 产生假的速度尖峰
+    def test_ref_vel_zero_on_first_episode_step(self):
+        env = make_ref_state_env([-25.0], phases=[0.0], gait=0.0, step_count=1)
+        env._ref_kappa_prev = torch.tensor([0.0])   # 上一回合末尾 κ=0, 重置后 κ=-25
+        _, vel = ref_mod.get_reference_joint_state(env)
+        self.assertLess(float(vel.abs().max()), 1e-6,
+                        msg="回合首步出现了重置导致的速度参考尖峰")
 
 
 if __name__ == "__main__":
