@@ -51,12 +51,14 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         clip_actions=None,
         seed=42,
 
-        # 继承训练入口 (2026-09-26): 从旧 run 的 model_4000 继续。
-        # 为什么是 4000 而不是末档 (3600) 或最后一个 (6700): 3600 刚切进最窄档、actor 还没适应,
-        # 6700 已经在旧墙位下跑了 3100 轮; 4000 是"已进入最窄档并稳定下来"的第一个整百轮次,
-        # 同时与脊柱侧摆/俯仰的放宽点 (SPN_AXIS_RELAX_ITER) 对齐。
+        # 继承训练入口 (2026-09-26 第二批): 从旧 run 的 model_3000 继续。
+        # 为什么取 3000: 它是 STAGE2 的起点 (碰撞与墙位课程从这一轮开始), 此时的策略
+        # **从未见过任何墙体**, 因此不会把上一批"卡在墙之间通过判据"的习惯带进来。
+        # 墙位由档位表决定, 该检查点记录的 (-0.20, +0.08) 与新表不自洽, runner 会按墙位反查
+        # 落到第 0 档 (-0.08, +0.055), 净宽 0.115, 课程再从第 0 档正常往上走。
+        # 本批唯一变量: weight_leg_pose 2.0 -> 6.0 (见 mdp/curriculums.py 的说明)。
         # 换实验时把下面三行改回 resume=False 即可 (load_run/load_checkpoint 只在 resume 时生效)。
         resume=True,
         load_run="2026-09-26_01-32-03",
-        load_checkpoint="model_4000.pt",
+        load_checkpoint="model_3000.pt",
     )
