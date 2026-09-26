@@ -196,10 +196,19 @@ Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时�
 **计时器归基类管**：`CommandTerm.compute` 已扣 `time_left` 并在到期时重采样，任务侧不得再扣
 （曾经重复扣减，使 20~30 s 的重采样提前到 10~15 s，并在回合中途把别的重置批次的步频写进当前回合）。
 
-**阶段按回合起点锁定**：路径选择用逐环境的 `phase1_mask = get_training_phase_batch(
-common_step_counter - episode_length_buf)`，即"本回合开始时刻"的阶段，回合内不翻转；
-`compute_path_ref` 对圆弧/绕杆两条路径逐环境取并集，`get_path_curvature` 统一读它写入的 `_path_kappa`。
-`slalom_mode_active` 仍是全局口径，只用于可视化与课程间距。
+**阶段按回合起点锁定**：路径选择与**命令更新**都用逐环境的 `phase1_mask =
+get_training_phase_batch(common_step_counter - episode_length_buf)`，即"本回合开始时刻"的阶段，
+回合内不翻转；`compute_path_ref` 对圆弧/绕杆两条路径逐环境取并集，`get_path_curvature` 统一读它写入的
+`_path_kappa`；`_update_command` 也按该掩码逐环境写曲率/速度（未结束的旧阶段回合保持重置时写入的命令，
+否则阶段切换瞬间会改掉它们的速度并让圆弧参考后跳）。`slalom_mode_active` 仍是全局口径，
+只用于可视化与课程间距。
+
+**重置边界**：框架在同一步内的顺序是"算终止步奖励 → 重置 → 算观测"，期间 `common_step_counter`
+不变。因此参考缓存键含**重置代次**（`reference.invalidate_reference_cache`，由命令项 `reset` 调用），
+重置后同一控制步内强制重算，首帧观测拿到的才是新回合的参考；`_ref_phase` 推进、κ 历史写入、
+重置相位清零都加了"每步只做一次"的保护，重算不会二次推进。参考所用的瞬时曲率取自本步的
+`compute_path_ref(t)`，与参考位置同源（重置后 t=0，故取接近段起点曲率），
+Phase 1 重置时写入的初始曲率也按接近段起点取（有直行 -K / 无直行 0）。
 
 ## 期望轨迹 (mdp/path.py)
 
@@ -402,6 +411,16 @@ uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 
     改用按回合起点锁定的 `phase1_mask`，回合内不翻转
 25. **回合首步的重置速度尖峰** → 新回路的 κ̇ 若按上一回合末尾的 κ 差分，会给出几十 rad/s 的假速度参考 →
     `episode_length_buf <= 1` 时 κ̇ 置零
+26. **命令更新漏了逐环境阶段** → 阶段锁定只改了路径选择，`_update_command` 仍按全局
+    `slalom_mode_active` 写全部环境：iter 4000 越过边界时未结束的 Phase 0 回合被套用 Phase 1 变速公式，
+    速度 0.10 → 0.05 m/s，圆弧参考（按 `vel*t`）在回合进行到 10 s 时后跳约 0.5 m →
+    `_update_command` 也按 `phase1_mask` 逐环境写
+27. **重置首帧观测命中上一回合的参考缓存** → 框架在同一步内"先算奖励、再重置、再算观测"，
+    `common_step_counter` 不变，而缓存只按步数判有效；曲率由 +20 重采样为 -20 时首帧前躯参考仍是
+    -0.72 rad（应为 +0.72，差 1.44 rad）。相位清零并不能解决（相位清了缓存还在）→
+    缓存键加入**重置代次**（`invalidate_reference_cache`，命令项 reset 调用），
+    相位推进 / κ 历史 / 清零改为每步一次，且参考的 κ 取自本步 `compute_path_ref(t)` 与位置同源
+    （顺带消除了模仿奖励比走廊奖励晚一步取 κ 的问题）
 
 ## 可视化 / WarpBridge（Slalom）
 
