@@ -329,34 +329,38 @@ class StageRewardTests(unittest.TestCase):
         self.assertAlmostEqual(r2 / r1, 4.0, places=4)
 
     def test_leg_pose_averages_only_leg_joints(self):
-        # [§7.13] 分母口径必须精确: 4 个腿关节各偏 0.5 rad、权重 2.0 时, 结果必须**恰好**是
-        # 2.0 × (4×0.25)/8 = −0.25。只断言 "<−0.1" 守不住分母 (换成 14 关节平均也会通过)。
+        # [§7.13] 分母口径必须精确: 4 个腿关节各偏 0.5 rad 时, 结果必须**恰好**是
+        # w × (4×0.25)/8。只断言 "<−0.1" 守不住分母 (换成 14 关节平均也会通过)。
+        # 权重从 _CURVES 推导, 调权重不必改测试。
+        w = _CURVES['weight_leg_pose'][0]
         env, cmd = make_env([2])
         leg_cols = list(_MODEL_INDICES.actuator_leg_ids)[:4]
         env = self._set_joint_error(env, leg_cols, 0.5)
         r = rewards.compute_leg_pose_cost(env)[0].item()
-        self.assertAlmostEqual(r, -0.25, places=6)
+        self.assertAlmostEqual(r, -w * 0.125, places=6)
 
     def test_leg_pose_denominator_is_eight(self):
-        # [§7.13] 8 个腿关节全偏 0.5 rad ⇒ 2.0 × 0.25 = −0.5 (与上一条一起夹住分母 = 8)
+        # [§7.13] 8 个腿关节全偏 0.5 rad ⇒ w × 0.25 (与上一条一起夹住分母 = 8)
+        w = _CURVES['weight_leg_pose'][0]
         env, cmd = make_env([2])
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
         r = rewards.compute_leg_pose_cost(env)[0].item()
-        self.assertAlmostEqual(r, -0.5, places=6)
+        self.assertAlmostEqual(r, -w * 0.25, places=6)
 
     def test_leg_pose_average_is_per_env_not_global(self):
         # [§7.13] 逐环境求均值: 两条环境误差不同时, 读数必须各自独立 (不能被跨环境平均掉)
+        w = _CURVES['weight_leg_pose'][0]
         env, cmd = make_env([2, 2])
         from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
         ref, _ = get_reference_joint_state(env)
         q = ref.clone()
         for c in _MODEL_INDICES.actuator_leg_ids:
-            q[0, c] += 0.5     # 环境0: 8 腿全偏 0.5 -> -0.5
-            q[1, c] += 1.0     # 环境1: 8 腿全偏 1.0 -> -2.0
+            q[0, c] += 0.5     # 环境0: 8 腿全偏 0.5 -> -w×0.25
+            q[1, c] += 1.0     # 环境1: 8 腿全偏 1.0 -> -w×1.0
         env.make_robot.data = NS(joint_pos=q, body_link_pos_w=torch.zeros(2, 2, 3))
         r = rewards.compute_leg_pose_cost(env)
-        self.assertAlmostEqual(r[0].item(), -0.5, places=6)
-        self.assertAlmostEqual(r[1].item(), -2.0, places=6)
+        self.assertAlmostEqual(r[0].item(), -w * 0.25, places=6)
+        self.assertAlmostEqual(r[1].item(), -w * 1.0, places=6)
 
     def test_leg_pose_logging_is_p3_filtered(self):
         # [§7.13] 日志必须与奖励同门控。全相位平均会让"P1 腿错 1 rad"与"P3 腿错 1 rad"
