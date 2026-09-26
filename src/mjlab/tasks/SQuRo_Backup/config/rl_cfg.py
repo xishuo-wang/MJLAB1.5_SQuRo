@@ -51,5 +51,12 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         clip_actions=None,
         seed=42,
 
-        resume=False,
+        # 继承训练入口 (2026-09-26): 从旧 run 的 model_4000 继续。
+        # 为什么是 4000 而不是末档 (3600) 或最后一个 (6700): 3600 刚切进最窄档、actor 还没适应,
+        # 6700 已经在旧墙位下跑了 3100 轮; 4000 是"已进入最窄档并稳定下来"的第一个整百轮次,
+        # 同时与脊柱侧摆/俯仰的放宽点 (SPN_AXIS_RELAX_ITER) 对齐。
+        # 换实验时把下面三行改回 resume=False 即可 (load_run/load_checkpoint 只在 resume 时生效)。
+        resume=True,
+        load_run="2026-09-26_01-32-03",
+        load_checkpoint="model_4000.pt",
     )
