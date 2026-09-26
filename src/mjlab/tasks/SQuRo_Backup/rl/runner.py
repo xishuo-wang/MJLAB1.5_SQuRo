@@ -20,6 +20,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     CURRICULUM_WINDOW_EPISODES,
     STAGE1_3_ITER,
     WALL_X_NEG_LEVELS,
+    WALL_X_POS,
     _STEPS_PER_ITER,
     get_level_for_wall_x_neg,
     get_training_phase,
@@ -354,15 +355,22 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 恢复课程档位: 优先用记录里的档位; 只有墙位 (旧格式/手工记录) 时按最近档位反查。
         # 都没有就把档位当作 0 并提示 —— 不猜。
         recorded_neg = saved.get("wall_x_neg")
+        recorded_pos = saved.get("wall_x_pos")
         if saved.get("curriculum_level") is not None:
             level = min(max(int(saved["curriculum_level"]), 0), CURRICULUM_LEVELS - 1)
-            # 档位号必须与记录的墙位自洽: 档位表改过之后, 同一个档位号会指向完全不同的墙位
-            # (旧末档 6 = −0.08/+0.08, 新表第 6 档 = −0.050/+0.055), 直接用会把策略瞬移进
-            # 最窄的走廊。不自洽时以**实际编译过的墙位**为准反查, 并明确告知。
-            if recorded_neg is not None and abs(WALL_X_NEG_LEVELS[level] - float(recorded_neg)) > 1e-9:
+            # 档位号必须与记录的**墙位对**自洽, 两个坐标都要比: 只比 −X 会漏掉
+            # "−X 恰好相同、+X 固定值改过"的情形 (2026-09-26 把 +X 从 0.055 收到 0.05,
+            # 此时旧末档 (−0.05, +0.055) 的 −X 与新末档相同, 但几何并不相同)。
+            pair_matches = (
+                (recorded_neg is None or abs(WALL_X_NEG_LEVELS[level] - float(recorded_neg)) <= 1e-9)
+                and (recorded_pos is None or abs(WALL_X_POS - float(recorded_pos)) <= 1e-9)
+            )
+            if not pair_matches and recorded_neg is not None:
                 level = get_level_for_wall_x_neg(float(recorded_neg))
                 print(f"[WARN] 检查点档位 {saved['curriculum_level']} 与记录的墙位 "
-                      f"{float(recorded_neg):+.4f} 不自洽 (档位表已改), 按墙位反查为第 {level} 档")
+                      f"({float(recorded_neg):+.4f}, "
+                      f"{'?' if recorded_pos is None else format(float(recorded_pos), '+.4f')}) "
+                      f"不自洽 (档位表已改), 按墙位反查为第 {level} 档")
             self._cur_level = level
         elif recorded_neg is not None:
             self._cur_level = get_level_for_wall_x_neg(float(recorded_neg))
