@@ -105,13 +105,14 @@ class SlalomCommand(CommandTerm):
         return get_training_phase(self._env.common_step_counter) == 1
 
 
-    # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取)
+    # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取; 覆盖值同样过有效间距转换)
     @property
     def active_pole_spacing(self) -> float:
         override = getattr(self.cfg, "fixed_pole_spacing", None)
         if override is not None:
-            return float(override)
-        raw = get_curriculum_pole_spacing(self._env.common_step_counter)
+            raw = float(override)
+        else:
+            raw = get_curriculum_pole_spacing(self._env.common_step_counter)
         # Phase 1: 平滑有效间距 (不兼容区间 → 无直行最小间距, 与 vel 解耦, 保证周期位移匹配)
         if self.slalom_mode_active:
             return get_effective_pole_spacing(raw)

@@ -1,8 +1,8 @@
 from __future__ import annotations
 import math as _m
 import torch
-from .path import _INIT_DIST, get_approach_start, get_effective_pole_spacing
-from .curriculums import get_training_phase, get_curriculum_pole_spacing
+from .path import _INIT_DIST, get_approach_start
+from .curriculums import get_training_phase
 
 
 # 重置模型
@@ -18,7 +18,8 @@ def reset_model(env, env_ids):
     root_state = torch.zeros(n, 13, device=env.device)
     if get_training_phase(env.common_step_counter) == 1:
         # 新几何: 起点右移杆间距 (接近段终点 = 第一根杆正上方 (spacing, 0))
-        spacing = get_effective_pole_spacing(get_curriculum_pole_spacing(env.common_step_counter))
+        # 间距取命令项的唯一真源 (含 fixed_pole_spacing 覆盖与有效间距转换)
+        spacing = env.command_manager._terms["slalom_cmd"].active_pole_spacing
         ax, ay, ah = get_approach_start(spacing=spacing)
         c, s = _m.cos(ah / 2), _m.sin(ah / 2)
         qx, qy = 0.70710678 * (s - c), -0.70710678 * (c + s)
