@@ -155,7 +155,10 @@ def main() -> None:
     env_cfg.events.pop("init_restricted_space", None)
     mdp_entity.configure_restricted_space(env_cfg, wall_x_neg=cfg.wall_x_neg,
                                          wall_x_pos=cfg.wall_x_pos,
-                                         enable_collision=cfg.enable_collision)
+                                         enable_collision=cfg.enable_collision,
+                                         # 必须锁定: 否则 runner 初始化会推送随机墙位课程并
+                                         # 重采墙位, 把 --wall-x-neg 指定的墙覆盖成课程起点
+                                         fixed_width=True)
     raw = ManagerBasedRlEnv(cfg=env_cfg, device=cfg.device)
     raw.common_step_counter = it * _STEPS_PER_ITER      # 让 λ 课程落在训练同段
     env = RslRlVecEnvWrapper(raw)

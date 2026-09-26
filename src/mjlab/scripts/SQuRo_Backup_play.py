@@ -450,7 +450,11 @@ def run_play(cfg: PlayConfig):
         cfg, saved, phase)
     ent_cfg = mdp_entity.configure_restricted_space(
         env_cfg, wall_x_neg=wall_x_neg, wall_x_pos=wall_x_pos,
-        enable_collision=corridor_collision)
+        enable_collision=corridor_collision,
+        # **必须锁定墙距**: 否则 runner 初始化会立刻推送随机墙位课程并重采墙位, 把这里
+        # 指定的墙位覆盖成课程起点 (实测 -0.06 被改成 -0.20, 净宽 0.09 变成 0.23),
+        # 而文件名与上面的打印仍标着原墙位 —— 极易误判策略能力。
+        fixed_width=True)
     print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 STAGE1_3_ITER={STAGE1_3_ITER}), "
           f"碰撞={'开' if corridor_collision else '关'} [{coll_src}], "
           f"墙位 x_neg={ent_cfg.wall_x_neg:+.4f} x_pos={ent_cfg.wall_x_pos:+.4f} m [{width_src}], "
@@ -535,6 +539,18 @@ def run_play(cfg: PlayConfig):
             map_location=device
         )
         policy = runner.get_inference_policy(device=device)
+        # 守卫: runner 初始化可能改动物理墙位 (随机墙位课程会推送自己的范围并重采)。
+        # 若实际墙位与入口指定的不一致, 回放结果就与文件名/打印里的墙位无关 —— 必须报错,
+        # 不能让它静默跑出一个"看起来是 0.09 净宽、其实是 0.23"的结果。
+        ent = env.unwrapped.scene.entities.get("restricted_space")
+        if ent is not None:
+            got_neg, got_pos = ent.read_wall_x(env.unwrapped)
+            if (abs(float(got_neg[0]) - wall_x_neg) > 1e-4
+                    or abs(float(got_pos[0]) - wall_x_pos) > 1e-4):
+                raise SystemExit(
+                    f"墙位被改写了: 入口指定 ({wall_x_neg:+.4f}, {wall_x_pos:+.4f}), "
+                    f"runner 初始化后实际 ({float(got_neg[0]):+.4f}, {float(got_pos[0]):+.4f})。"
+                    f"回放/诊断入口必须用 fixed_width=True 锁定墙距。")
 
     # 运行查看器
     try:

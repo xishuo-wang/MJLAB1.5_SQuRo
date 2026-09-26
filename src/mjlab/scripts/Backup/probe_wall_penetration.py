@@ -59,7 +59,10 @@ def main() -> None:
                                           wall_x_pos=cfg.wall_x_pos,
                                           enable_collision=True,
                                           solref=parse_pair(cfg.solref),
-                                          solimp=parse_pair(cfg.solimp))
+                                          solimp=parse_pair(cfg.solimp),
+                                          # 必须锁定: 否则 runner 初始化会推送随机墙位课程并
+                                          # 重采墙位, 覆盖 --wall-x-neg 指定的墙
+                                          fixed_width=True)
     raw = ManagerBasedRlEnv(cfg=env_cfg, device=cfg.device)
     raw.common_step_counter = it * _STEPS_PER_ITER
     env = RslRlVecEnvWrapper(raw)
