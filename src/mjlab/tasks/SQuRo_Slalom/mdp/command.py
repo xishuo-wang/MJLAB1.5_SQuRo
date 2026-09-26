@@ -22,6 +22,7 @@ from .curriculums import (
     SMOOTH_VEL,
     get_curriculum_pole_spacing,
     get_training_phase,
+    get_training_phase_batch,
 )
 from .pole import update_pole_visibility
 from .path import (
@@ -100,10 +101,17 @@ class SlalomCommand(CommandTerm):
         return self.command_tensor
 
 
-    # 绕杆模式 (由 curriculums.get_training_phase 自动控制)
+    # 绕杆模式 (由 curriculums.get_training_phase 自动控制; 全局口径, 用于可视化与课程间距)
     @property
     def slalom_mode_active(self) -> bool:
         return get_training_phase(self._env.common_step_counter) == 1
+
+
+    # 逐环境阶段 (按本回合起始时刻锁定): 回合内不随全局计数器翻转, 避免回合跨阶段
+    @property
+    def phase1_mask(self) -> torch.Tensor:
+        episode_start = self._env.common_step_counter - self._env.episode_length_buf
+        return get_training_phase_batch(episode_start)
 
 
     # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取; 覆盖值同样过有效间距转换)

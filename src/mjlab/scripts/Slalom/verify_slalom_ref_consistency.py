@@ -379,6 +379,76 @@ class TestSlalomRefConsistency(unittest.TestCase):
                             msg=f"间距 {spacing:.4f}: 衔接处期望速度跳变 "
                                 f"{v_before:.4f} → {v_after:.4f} m/s")
 
+    # 阶段必须按回合起点锁定, 不得在回合中途随全局计数器翻转
+    def test_phase_locked_at_episode_start(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import (
+            compute_arc_path_ref,
+            compute_path_ref,
+            compute_slalom_path_ref,
+        )
+
+        # env0 起步于边界前 (仍 Phase 0), env1 起步于边界后 (Phase 1)
+        env = make_ref_env([1.0, 1.0], [1.0, 1.0], spacing=POLE_SPACING_START)
+        env.common_step_counter = PHASE1_STEP + 130
+        env.episode_length_buf = torch.tensor([200, 50])
+        cmd = env.command_manager._terms["slalom_cmd"]
+
+        self.assertEqual(cmd.phase1_mask.tolist(), [False, True],
+                         msg="阶段未按回合起点判定")
+
+        x, _, _, _, _ = compute_path_ref(env)
+        arc_x, _, _, _, _ = compute_arc_path_ref(env)
+        slalom_x, _, _, _, _ = compute_slalom_path_ref(env)
+        self.assertAlmostEqual(x[0].item(), arc_x[0].item(), places=6,
+                               msg="边界前起步的回合被切到了绕杆路径")
+        self.assertAlmostEqual(x[1].item(), slalom_x[1].item(), places=6,
+                               msg="边界后起步的回合没有走绕杆路径")
+
+        # 回合继续推进 (计数器与回合步数同步增加) → 阶段不得翻转
+        env.common_step_counter += 1
+        env.episode_length_buf += 1
+        self.assertEqual(cmd.phase1_mask.tolist(), [False, True],
+                         msg="阶段在回合中途翻转了")
+        x2, _, _, _, _ = compute_path_ref(env)
+        arc_x2, _, _, _, _ = compute_arc_path_ref(env)
+        self.assertAlmostEqual(x2[0].item(), arc_x2[0].item(), places=6,
+                               msg="回合中途被切到了绕杆路径")
+
+    # 杆间距课程不得落进几何不兼容区间 (否则会被静默 clamp 成断崖)
+    def test_curriculum_spacing_avoids_incompatible_window(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
+            POLE_SPACING_RAMP_END_ITER,
+            get_curriculum_pole_spacing,
+            get_pole_spacing_bounds,
+        )
+
+        min_spacing, straight_floor = get_pole_spacing_bounds()
+        self.assertLess(min_spacing, straight_floor)
+
+        prev = None
+        cliff_iters = []
+        for it in range(PHASE1_END_ITER, PHASE2_END_ITER + 1, 5):
+            sp = get_curriculum_pole_spacing(it * _STEPS_PER_ITER)
+            self.assertTrue(sp <= min_spacing + 1e-6 or sp >= straight_floor - 1e-6,
+                            msg=f"iter {it}: 间距 {sp:.5f} 落在不兼容区间")
+            # 课程值本身必须是有效间距, 不允许被 get_effective_pole_spacing 静默改写
+            self.assertAlmostEqual(get_effective_pole_spacing(sp), sp, places=9,
+                                   msg=f"iter {it}: 间距 {sp:.5f} 被静默 clamp")
+            if prev is not None:
+                self.assertLessEqual(sp, prev + 1e-9, msg=f"iter {it}: 间距课程非单调")
+                if prev - sp > 1e-3:
+                    cliff_iters.append(it)
+            prev = sp
+
+        self.assertEqual(len(cliff_iters), 1,
+                         msg=f"间距断崖应只出现一次, 实测 {cliff_iters}")
+        self.assertAlmostEqual(
+            get_curriculum_pole_spacing(POLE_SPACING_RAMP_END_ITER * _STEPS_PER_ITER),
+            min_spacing, places=9, msg="斜坡终点未切到无直行最小间距")
+        self.assertAlmostEqual(
+            get_curriculum_pole_spacing(PHASE2_END_ITER * _STEPS_PER_ITER),
+            min_spacing, places=9, msg="课程终点不是无直行最小间距")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Any
 
+import torch
+
 
 _STEPS_PER_ITER = 24                # 强化学习算法相关
 
@@ -17,7 +19,7 @@ SMOOTH_TIME = 1.0                   # 单段过渡时间 (s)，弧段间曲率�
 SMOOTH_VEL = 0.025                  # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
 
 POLE_SPACING_START = 0.20           # 绕杆起始杆间距 (宽)
-POLE_SPACING_MIN = 2 * Rmin         # 绕杆最小杆间距 (= 2Rmin = 0.10)
+POLE_SPACING_RAMP_END_ITER = 5500   # 间距斜坡终点: 在此一次性切到无直行最小间距
 
 GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
 GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
@@ -66,13 +68,34 @@ def get_training_phase(step_counter: int) -> int:
     return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
-# 获取杆间距 (确定性课程: iter 4000 前固定 0.20, 之后线性缩小至最小间距)
+# 批量获取训练阶段 (逐环境, 用于按回合起点锁定的阶段判定)
+def get_training_phase_batch(step_counter: torch.Tensor) -> torch.Tensor:
+    return (step_counter // _STEPS_PER_ITER) >= PHASE1_END_ITER
+
+
+# 几何可行的杆间距边界 (无直行最小间距, 有直行下限); 由 path.py 计算, 惰性导入避免循环依赖
+_SPACING_BOUNDS: tuple[float, float] | None = None
+
+
+def get_pole_spacing_bounds() -> tuple[float, float]:
+    global _SPACING_BOUNDS
+    if _SPACING_BOUNDS is None:
+        from .path import _get_smooth_xsw
+        x_sw_half, x_sw_full = _get_smooth_xsw(SMOOTH_VEL * SMOOTH_TIME)
+        _SPACING_BOUNDS = (2.0 * x_sw_half, 2.0 * x_sw_full)
+    return _SPACING_BOUNDS
+
+
+# 获取杆间距 (确定性课程: 先在"有直行"区间线性缩小, 再一次性切到无直行最小间距)
 def get_curriculum_pole_spacing(step_counter: int) -> float:
     iter_num = step_counter // _STEPS_PER_ITER
     if iter_num < PHASE1_END_ITER:
         return POLE_SPACING_START
-    progress = min(1.0, (iter_num - PHASE1_END_ITER) / (PHASE2_MID_ITER - PHASE1_END_ITER))
-    return POLE_SPACING_START - progress * (POLE_SPACING_START - POLE_SPACING_MIN)
+    min_spacing, straight_floor = get_pole_spacing_bounds()
+    if iter_num >= POLE_SPACING_RAMP_END_ITER:
+        return min_spacing
+    progress = (iter_num - PHASE1_END_ITER) / (POLE_SPACING_RAMP_END_ITER - PHASE1_END_ITER)
+    return POLE_SPACING_START - progress * (POLE_SPACING_START - straight_floor)
 
 
 # 奖励权重课程

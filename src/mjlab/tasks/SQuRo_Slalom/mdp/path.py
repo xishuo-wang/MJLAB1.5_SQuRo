@@ -123,9 +123,19 @@ def get_phase1_approach(spacing: float = 0.0) -> tuple[float, float, float]:
 # 路径参考调度 — 根据训练阶段自动选择圆弧或绕杆路径
 def compute_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    if cmd_term.slalom_mode_active:  # type: ignore[union-attr]
-        return compute_slalom_path_ref(env)
-    return compute_arc_path_ref(env)
+    # 逐环境阶段: 两条路径都算再按阶段选取, 阶段切换后的一个回合内会同时存在两种环境
+    phase1 = cmd_term.phase1_mask  # type: ignore[union-attr]
+    sx, sy, svx, svy, sh = compute_slalom_path_ref(env)
+    kappa_slalom = env._path_kappa  # type: ignore[attr-defined]
+    ax, ay, avx, avy, ah = compute_arc_path_ref(env)
+    env._path_kappa = torch.where(phase1, kappa_slalom, cmd_term.command[:, 4])  # type: ignore[union-attr,attr-defined]
+    return (
+        torch.where(phase1, sx, ax),
+        torch.where(phase1, sy, ay),
+        torch.where(phase1, svx, avx),
+        torch.where(phase1, svy, avy),
+        torch.where(phase1, sh, ah),
+    )
 
 
 
@@ -469,11 +479,9 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 
 
 
-# 获取当前路径瞬时曲率 κ(t) — Phase 0 返回静态命令值, Phase 1 返回 LUT 插值
+# 获取当前路径瞬时曲率 κ(t) — 由 compute_path_ref 逐环境写入 (Phase 0 为命令值, Phase 1 为 LUT 插值)
 def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    if not cmd_term.slalom_mode_active:  # type: ignore[union-attr]
-        return cmd_term.command[:, 4]  # type: ignore[union-attr]
     return getattr(env, "_path_kappa", cmd_term.command[:, 4])  # type: ignore[union-attr]
 
 
