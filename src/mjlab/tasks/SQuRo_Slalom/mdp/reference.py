@@ -36,8 +36,8 @@ _TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
 _table_device: str | None = None
 _k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
-_pos_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
-_vel_table: torch.Tensor | None = None     # [_NUM_CURV, 50, 12]
+_pos_table: torch.Tensor | None = None     # [2, _NUM_CURV, 50, 14] (内侧, 曲率, 相位, 关节)
+_vel_table: torch.Tensor | None = None     # 同上
 
 
 
@@ -106,70 +106,62 @@ def _init_tables(device: torch.device | str) -> None:
     y_h_t = torch.tensor(y_h_grid, device=dev, dtype=torch.float32)
     z_h_t = torch.tensor(z_h_grid, device=dev, dtype=torch.float32)
 
-    # 预分配三维表 [曲率, 相位, 关节]
-    pos = torch.zeros(_NUM_CURV, _TABLE_RESOLUTION, 14, device=dev)
+    # 预分配四维表 [内侧, 曲率, 相位, 关节]: 0=左腿为内侧(左转), 1=右腿为内侧(右转)
+    # 两张表各自只缩放"内侧腿"的 Y_mean, 每侧腿部相位不随曲率符号改变
+    pos = torch.zeros(2, _NUM_CURV, _TABLE_RESOLUTION, 14, device=dev)
 
-    # 对每个离散曲率生成“左转参考表”（左腿为内侧，右腿为外侧）
+    # 对每个离散曲率生成左内/右内两张参考表
     for i, abs_k in enumerate(_CURVATURE_BINS):
         scale_inner = 1.0 - (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX
 
-        # 左腿（FL, HL）为内侧，缩放其 Y_mean
-        y_fL = y_f_t * scale_inner
-        z_fL = z_f_t                      # 高度不变
-        y_hL = y_h_t * scale_inner
-        z_hL = z_h_t
+        for side in (0, 1):
+            # 内侧腿缩放其 Y_mean (side=0: FL/HL, side=1: FR/HR), 外侧腿保持原轨迹
+            scale_fL = scale_inner if side == 0 else 1.0
+            scale_fR = 1.0 if side == 0 else scale_inner
+            scale_hL = scale_inner if side == 0 else 1.0
+            scale_hR = 1.0 if side == 0 else scale_inner
 
-        # 右腿（FR, HR）为外侧，保持原轨迹
-        y_fR = y_f_t
-        z_fR = z_f_t
-        y_hR = y_h_t
-        z_hR = z_h_t
+            # 分别计算每条腿的关节角（应用相位差）
+            # FL
+            shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
+            sh, el = _inverse_kinematics(torch.roll(y_f_t * scale_fL, shifts=shift),
+                                         torch.roll(z_f_t, shifts=shift), True)
+            pos[side, i, :, 4] = sh
+            pos[side, i, :, 5] = el
 
-        # 分别计算每条腿的关节角（应用相位差）
-        # FL
-        shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
-        y_shifted = torch.roll(y_fL, shifts=shift)
-        z_shifted = torch.roll(z_fL, shifts=shift)
-        sh, el = _inverse_kinematics(y_shifted, z_shifted, True)
-        pos[i, :, 4] = sh
-        pos[i, :, 5] = el
+            # FR
+            shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
+            sh, el = _inverse_kinematics(torch.roll(y_f_t * scale_fR, shifts=shift),
+                                         torch.roll(z_f_t, shifts=shift), True)
+            pos[side, i, :, 6] = sh
+            pos[side, i, :, 7] = el
 
-        # FR
-        shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
-        y_shifted = torch.roll(y_fR, shifts=shift)
-        z_shifted = torch.roll(z_fR, shifts=shift)
-        sh, el = _inverse_kinematics(y_shifted, z_shifted, True)
-        pos[i, :, 6] = sh
-        pos[i, :, 7] = el
+            # HL
+            shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
+            hp, kn = _inverse_kinematics(torch.roll(y_h_t * scale_hL, shifts=shift),
+                                         torch.roll(z_h_t, shifts=shift), False)
+            pos[side, i, :, 10] = hp
+            pos[side, i, :, 11] = kn
 
-        # HL
-        shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
-        y_shifted = torch.roll(y_hL, shifts=shift)
-        z_shifted = torch.roll(z_hL, shifts=shift)
-        hp, kn = _inverse_kinematics(y_shifted, z_shifted, False)
-        pos[i, :, 10] = hp
-        pos[i, :, 11] = kn
+            # HR
+            shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
+            hp, kn = _inverse_kinematics(torch.roll(y_h_t * scale_hR, shifts=shift),
+                                         torch.roll(z_h_t, shifts=shift), False)
+            pos[side, i, :, 12] = hp
+            pos[side, i, :, 13] = kn
 
-        # HR
-        shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
-        y_shifted = torch.roll(y_hR, shifts=shift)
-        z_shifted = torch.roll(z_hR, shifts=shift)
-        hp, kn = _inverse_kinematics(y_shifted, z_shifted, False)
-        pos[i, :, 12] = hp
-        pos[i, :, 13] = kn
-
-        # 脊柱四列保持零位（直行参考姿态）
-        pos[i, :, 0] = 0.0   # F_spine1
-        pos[i, :, 1] = 0.0   # F_body
-        pos[i, :, 8] = 0.0   # H_spine1
-        pos[i, :, 9] = 0.0   # H_body
+            # 脊柱四列保持零位（由 κ 解析驱动, 见 get_reference_joint_state）
+            pos[side, i, :, 0] = 0.0   # F_spine1
+            pos[side, i, :, 1] = 0.0   # F_body
+            pos[side, i, :, 8] = 0.0   # H_spine1
+            pos[side, i, :, 9] = 0.0   # H_body
 
     # 中心差分计算速度表（沿相位维度）
     vel = torch.zeros_like(pos)
     two_dt = 2.0 / _TABLE_RESOLUTION
-    vel[:, 1:-1] = (pos[:, 2:] - pos[:, :-2]) / two_dt
-    vel[:, 0] = (pos[:, 1] - pos[:, -1]) / two_dt
-    vel[:, -1] = (pos[:, 0] - pos[:, -2]) / two_dt
+    vel[:, :, 1:-1] = (pos[:, :, 2:] - pos[:, :, :-2]) / two_dt
+    vel[:, :, 0] = (pos[:, :, 1] - pos[:, :, -1]) / two_dt
+    vel[:, :, -1] = (pos[:, :, 0] - pos[:, :, -2]) / two_dt
 
     _pos_table = pos.contiguous()
     _vel_table = vel.contiguous()
@@ -177,7 +169,7 @@ def _init_tables(device: torch.device | str) -> None:
     _table_device = str(device)
     _tables_initialized = True
 
-    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 曲率 × {_TABLE_RESOLUTION} bins × 14 joints")
+    print(f"\n[SQuRo Trot] 参考轨迹表生成完成: 2 内侧 × {_NUM_CURV} 曲率 × {_TABLE_RESOLUTION} bins × 14 joints")
 
 
 
@@ -231,38 +223,16 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     k1 = _k_bins[idx + 1]
     t = (abs_k - k0) / (k1 - k0 + 1e-12)  # 插值因子，[0,1]
 
-    # pos_table: [_NUM_CURV, 50, 12], phase_indices: [N]
-    pos0 = _pos_table[idx, phase_indices]      # [N,12]
-    pos1 = _pos_table[idx + 1, phase_indices]  # [N,12]
-    vel0 = _vel_table[idx, phase_indices]      # [N,12]
-    vel1 = _vel_table[idx + 1, phase_indices]
+    # pos_table: [2, _NUM_CURV, 50, 14]; side 选择内侧腿, 每条腿各自相位不变
+    side = (curvature_cmd < 0).long()          # [N] 0=左内(κ≥0), 1=右内(κ<0)
+    pos0 = _pos_table[side, idx, phase_indices]      # [N,14]
+    pos1 = _pos_table[side, idx + 1, phase_indices]  # [N,14]
+    vel0 = _vel_table[side, idx, phase_indices]
+    vel1 = _vel_table[side, idx + 1, phase_indices]
 
     # 线性插值腿部参考（脊柱部分后续覆盖，但插值也参与）
     ref_pos = (1 - t.unsqueeze(1)) * pos0 + t.unsqueeze(1) * pos1
     ref_vel = ((1 - t.unsqueeze(1)) * vel0 + t.unsqueeze(1) * vel1) * gait_freq.unsqueeze(1)
-
-    # 根据曲率符号交换左右腿关节（右转时内侧为右腿）
-    swap_mask = curvature_cmd < 0  # [N] bool
-    if swap_mask.any():
-        # 保存原值
-        FL = ref_pos[:, [4, 5]].clone()
-        FR = ref_pos[:, [6, 7]].clone()
-        HL = ref_pos[:, [10, 11]].clone()
-        HR = ref_pos[:, [12, 13]].clone()
-        FL_v = ref_vel[:, [4, 5]].clone()
-        FR_v = ref_vel[:, [6, 7]].clone()
-        HL_v = ref_vel[:, [10, 11]].clone()
-        HR_v = ref_vel[:, [12, 13]].clone()
-
-        ref_pos[swap_mask, 4:6] = FR[swap_mask]
-        ref_pos[swap_mask, 6:8] = FL[swap_mask]
-        ref_pos[swap_mask, 10:12] = HR[swap_mask]
-        ref_pos[swap_mask, 12:14] = HL[swap_mask]
-
-        ref_vel[swap_mask, 4:6] = FR_v[swap_mask]
-        ref_vel[swap_mask, 6:8] = FL_v[swap_mask]
-        ref_vel[swap_mask, 10:12] = HR_v[swap_mask]
-        ref_vel[swap_mask, 12:14] = HL_v[swap_mask]
 
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     k_norm = curvature_cmd / kappa_norm          # 归一化曲率，范围 [-1, 1]
