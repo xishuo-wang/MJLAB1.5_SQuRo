@@ -1889,11 +1889,8 @@ curriculum_history`，外加实际编译的 `wall_x_neg/wall_x_pos`、碰撞开�
 | `probe_corridor_floor.py` | **走廊几何下界**：按网格顶点算真实包围盒，只统计低于墙顶的部分，输出墙心/净宽的理论下界（只读） |
 | `probe_corridor_clearance.py` | 受限空间几何复核：初态体轴朝向与左右横向净宽（只读） |
 | `probe_step_budget.py` | 单步耗时分解：逐段 cuda 同步计时 + `.item()` 消融，定位与环境数无关的固定开销（只读） |
-| `diag_brittleness_sweep.py` | 多种子扫描，区分"初态运气"与"真实脆弱性"（只读） |
-| `diag_s1_shape_ablation.py` | 对照两次训练（无 / 有 `s1_shape`）的收敛与行为（只读） |
-| `diag_s1_shape_degradation.py` | 有 `s1_shape` 那次训练在 1000~2000 轮之间的退化与恢复（只读） |
-| `diag_shape_checkpoint_posture.py` | 有 `s1_shape` run 在 1000/1100/1500/2900 四个回放检查点的 P3 站姿质量（只读） |
-| `diag_stuck_replay.py` | 定位那条"没站起来"的 1500 回放卡在哪（只读） |
+| `diag_run_compare.py` | **多 run 标量对照**：把两次或多次训练的同一标量并排比（tensorboard 优先，退回 `output.log`），两个 run 时给出逐箱差，用于单变量 A/B（只读） |
+| `diag_brittleness_sweep.py` | **多种子扫描**：对每个 (检查点, seed) 跑一次 `diag_s1_reach`，按**表头名字**取列汇总，区分"初态运气"与"真实脆弱性"（只读） |
 | `diagnose_phase_tracking.py` | 手调脚本的相位推进与训练 `BackupCommand` 为何不同步，逐帧打印两侧 phase / t_phase |
 | `diagnose_s1_conditions.py` | S1/S2 达标诊断：逐帧检查状态机的 4 个几何条件，定位是哪一个不满足 |
 | `trace_p1_world_attitude.py` | 各 body 相对 base 的"零位"姿态（由 SQuRo.xml 固定安装旋转导出） |
