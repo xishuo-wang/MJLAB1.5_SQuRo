@@ -7,7 +7,7 @@
 | 子任务 | 任务 ID | 状态 | 文档位置 |
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
-| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 已实现，见本文档下半部分 | 本文档 |
+| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 已实现；Phase 0 已验收，Phase 1 参考层已修复待训练验证 | 本文档 |
 | **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
 | **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-07 旧版在 mjlab 1.5 上完整恢复 + 四阶段课程，待重训验证 | `docs/SQuRo_Hole_技术细节.md` |
 
@@ -153,25 +153,28 @@ iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
-Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 0.10 线性缩小, iter 4000→6000), 步频 1~2Hz 随机, 杆可见(无碰撞)
+Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 2Rmin=0.08 线性缩小, iter 4000→6000), 步频 1~2Hz 随机, 杆可见(无碰撞)
 ```
 
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | CURVATURE_MIN | 0.5 | Phase 0 κ 起始值 |
-| CURVATURE_TARGET_MAX | 20.0 | Phase 0 κ 上限 |
-| CURVATURE_TARGET | 20.0 | Phase 1 绕杆弧曲率 (= 1/Rmin, 与 CURVATURE_TARGET_MAX 相同) |
+| CURVATURE_TARGET_MAX | 25.0 | Phase 0 κ 上限 |
+| CURVATURE_TARGET | 25.0 | Phase 1 绕杆弧曲率 (= 1/Rmin, 与 CURVATURE_TARGET_MAX 相同) |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
-| GAIT_FREQ_PHASE1 | 1.0 | 默认步频 (Phase 1 实际也用 1~2Hz 随机采样) |
+| GAIT_FREQ_PHASE1 | 1.0 | 仅作初始值 (Phase 1 实际用 1~2Hz 随机采样) |
 | POLE_SPACING_START | 0.20 | Phase 1 起始杆间距 (iter 4000 前固定) |
-| POLE_SPACING_MIN | 0.10 | Phase 1 最小杆间距 (= 2Rmin, iter 6000) |
+| POLE_SPACING_MIN | 0.08 | Phase 1 课程终点 (= 2Rmin; 实际被有效间距下界 0.0812 截住, 见下) |
 | SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
 | SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
 | BASE_VEL | 0.1 | 基础速度 (m/s, 1Hz 时) |
 | VEL_MIN | 0.15 | 最大曲率下速度缩放 (转弯低速) |
 | STRAIGHT_VEL_SCALE | 0.5 | 直行段速度缩放 (= 直行基础速度 0.05 / BASE_VEL) |
 
-平滑无直行最小间距 = 2×x_sw_half ≈ 0.1009 m（有直行下限 2×x_sw_full ≈ 0.1260 m，见 `path.py` `_get_smooth_xsw`）。
+Rmin=0.04、tr=SMOOTH_VEL×SMOOTH_TIME=0.025 下实测：x_sw_half=0.04059、x_sw_full=0.05312，
+故**无直行最小间距 = 2×x_sw_half ≈ 0.0812 m**、**有直行下限 = 2×x_sw_full ≈ 0.1062 m**
+（见 `path.py` `_get_smooth_xsw`）。课程 raw 值 ≥0.1062 原样通过，一旦低于 0.1062 就一律落到
+0.0812 —— 即 **iter 5563 处有效间距从约 0.1063 断崖跳到 0.0812**，其后到 6000 轮不再变化。
 
 ## 命令系统 (mdp/command.py)
 
@@ -179,14 +182,17 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 0.10 �
 
 | 字段 | Phase 0 | Phase 1 | 更新 |
 |------|---------|---------|------|
-| vel_x | `base*gait*(1-0.75*|κ|/20)` | **变速**: `base*gait*(STRAIGHT_VEL_SCALE−(STRAIGHT_VEL_SCALE−VEL_MIN)·|κ|/25)`, 直行 0.05×gait / 弯道 0.015×gait, 每步更新 | Phase0: reset; Phase1: 每步 |
+| vel_x | `base*gait*(1-0.85*|κ|/25)` | **变速**: `base*gait*(STRAIGHT_VEL_SCALE−(STRAIGHT_VEL_SCALE−VEL_MIN)·|κ|/25)`, 直行 0.05×gait / 弯道 0.015×gait, 每步更新 | Phase0: reset; Phase1: 每步 |
 | height_f/h | 固定 0.055 | 固定 0.055 | 周期性 |
 | gait_freq | U(1.0,2.0) 随机, ep 内固定 | U(1.0,2.0) 随机, ep 内固定 | reset |
-| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±20↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
+| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±25↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
 
 Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值（平滑 LUT 的过渡 κ）；
 **velocity 变速**——直行段（κ=0）scale=STRAIGHT_VEL_SCALE(0.5)、弯道（κ=±25）scale=VEL_MIN(0.15)，
 线性过渡，每步随 κ 更新。回放 `fixed_velocity` 作为基础速度同样变速。
+
+**计时器归基类管**：`CommandTerm.compute` 已扣 `time_left` 并在到期时重采样，任务侧不得再扣
+（曾经重复扣减，使 20~30 s 的重采样提前到 10~15 s，并在回合中途把别的重置批次的步频写进当前回合）。
 
 ## 期望轨迹 (mdp/path.py)
 
@@ -199,16 +205,23 @@ Phase 1 周期起点 = 第一根杆正上方 `(spacing, 0)`（杆1 在 `(spacing
 直行(杆1 上方, L/2) → CW弧→CCW弧(绕杆1) → 直行(杆2 下方, L) → CCW弧→CW弧(绕杆2) → 直行(杆3 上方, L/2)，
 其中**每根杆均位于其直行段正中间**（直行段长度 L = spacing−2×x_sw_full，杆1/杆3 的直行段横跨周期边界）；
 无直行模式 4 段同向连续。弧曲率 = ±CURVATURE_TARGET，且**所有曲率跳变线性过渡**
-（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。**变速弧长推进**：
-期望速度 v=base×gait×scale(κ) 随曲率变化，预计算 t(s) 表（t_i += Δs_i/v_i）精确积分，
-运行时 t→s 查表（直行段快、弯道慢），跨周期按周期时间 t_period 推进，x_ref 叠加偏移保证连续。
+（平滑弧长 = SMOOTH_VEL×SMOOTH_TIME，与 vel 解耦，几何固定）。
+
+**名义时间 τ 推进（步频只作时间缩放）**：期望速度 v=base×gait×scale(κ)，故
+`dt = dτ/gait`，其中 **τ(s) = ∫ ds/(base×scale(κ))** 与步频无关。预计算 τ(s) 表
+（τ_i += Δs_i/v_nom,i，v_nom 取 gait=1 名义速度），运行时每个环境取 **τ = t×gait_自身**
+查表（直行段快、弯道慢），跨周期按 τ_period 推进，x_ref 叠加偏移保证连续。
+这样参考推进速度 `ds/dt = v_nom×gait` 恰好等于该环境自己的 `vel_x` 命令，
+且表只随 (杆间距, 基础速度) 变化 —— 任一环境重抽步频不会再改动其他环境的参考。
+gait=1 时 τ=t，与旧实现逐点等价。
 
 ### 平滑 LUT 的双模式
 
-- **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡；**直行段以杆为中心**——每根杆位于其直行段正中间（长度 L = spacing−2×x_sw_full），杆1/杆3 的直行段横跨周期边界、杆2 的直行段完整在周期内
-- **无直行模式**：间距 ≤ 2×x_sw_half (0.1009)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +20→0→+20 的 V 形过渡）
-- **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动 clamp 到无直行最小间距（并打印警告）
-- 有效间距经 `active_pole_spacing` 统一处理，保证周期位移恒 = 2×有效间距（无累积误差）
+- **有直行模式**：间距 ≥ 2×x_sw_full (0.1062)，弧↔直行均有过渡；**直行段以杆为中心**——每根杆位于其直行段正中间（长度 L = spacing−2×x_sw_full），杆1/杆3 的直行段横跨周期边界、杆2 的直行段完整在周期内
+- **无直行模式**：间距 ≤ 2×x_sw_half (0.0812)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +25→0→+25 的 V 形过渡）
+- **不兼容区间** (0.0812, 0.1062)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动落到无直行最小间距
+- 有效间距经 `active_pole_spacing` 统一处理（`fixed_pole_spacing` 覆盖值同样过这一步），
+  `events.reset_model` 的出生点直接读该属性，保证**间距只有一个真源**
 
 ### 接近段圆弧
 
@@ -230,7 +243,13 @@ h_body   = -0.7 × κ/κ_max
 
 Phase 0: κ=静态命令值; Phase 1: κ=`get_path_curvature()` 动态读取 LUT 瞬时值。
 
-腿部参考由 CSV (Trot_F/H) + 逆运动学生成，26 曲率×50 相位×14 关节预计算表，运行时按曲率插值。
+腿部参考由 CSV (Trot_F/H) + 逆运动学生成，31 曲率×50 相位×14 关节预计算表，运行时按曲率插值。
+颈部同样由 κ 驱动（`neck_yaw = 0.8×κ/κ_max`、`neck_pitch = -0.3`）。
+注意 F_spine1/H_spine1 参考峰值 0.65 rad 超过模型关节与执行器限位 ±0.6 rad，位置模仿在该处不可达
+（`PROJECT.md` 曲率命令设计一节写的是 clamp ±0.6，代码里没有 clamp，属未决项）。
+κ 过零时左右腿参考按"交换关节列"实现内/外侧，而左右腿本身带半周期相位差，
+故交换等价于把两条腿的参考整体延后半个步态周期（实测 κ=-1e-6→+1e-6 时最大跳变 1.20 rad ≈ 68.6°），
+绕杆反复左右转时会持续触发，属未决项。
 内侧腿 Y 轨迹按 `1-|κ|/κ_max` 缩放实现差速（κ=0 全步幅, κ=κ_max 全停）。
 
 ## 奖励函数 (mdp/rewards.py)
@@ -257,11 +276,12 @@ r = exp(-σ·v²)
 
 ## 杆模块 (mdp/pole.py)
 
-MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.063**（平滑路径等效圆心，不再等于 -Rmin=-0.05）。
+MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0531**（平滑路径等效圆心，不等于 -Rmin=-0.04）。
 训练全程 `contype=0`（无物理碰撞）。透明度由 `update_pole_visibility()` 按 `geom_type==CYLINDER` 匹配控制。
-杆数量 `POLE_NUM=12`。
+杆数量 `POLE_NUM=12`。**杆实体位置在 env_cfg 里按 POLE_SPACING_START 一次性建好且从不移动**，
+课程缩间距时场景里的杆与实际参考路径不一致（无碰撞，故只影响可视化；回放脚本会按正确间距重建）。
 
-## 回放脚本 (scripts/SQuRo_play.py)
+## 回放脚本 (scripts/SQuRo_Slalom_play.py)
 
 提取 `train_iter` → `align_iter = max(0, train_iter-10)`
 
@@ -280,6 +300,15 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 
 脊柱参考角: F_spine1 = clamp(-GAIN × ω_cmd, ±0.6), GAIN = L/v = 2.0。
 符号: 实测 F_body_heading = base_heading - F_spine1，左转需 F_spine1<0 → 取负号。
+（注：`reference.py` 实际按 `-0.65×κ/κ_max` 生成且未做 clamp，与本节的 ±0.6 不一致，见预计算表一节。）
+
+## 常用入口
+
+```powershell
+uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard          # 训练 (预算 = PHASE2_END_ITER)
+uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考一致性回归 (8 项)
+uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint_file <ckpt>   # 回放
+```
 
 ---
 
@@ -325,7 +354,14 @@ uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 
 3. **track_path 无朝向约束** → 替换为 corridor 奖励
 4. **脊柱参考静态 vs 绕杆动态** → Phase 1 用 `get_path_curvature()` 动态读取 LUT 瞬时 κ
 5. **vel 动态缩放导致参考超前** → Phase 1 速度改回固定（reset 时按 CURVATURE_TARGET 计算, episode 内不变）
-6. **变速时弧长需积分** → 现 Phase 1 重新启用变速（直行快/弯道慢），改用**预计算 t(s) 表**精确积分（t_i += Δs_i/v_i），避免 `vel×t` 参考超前
+6. **变速时弧长需积分** → 现 Phase 1 重新启用变速（直行快/弯道慢），改用**预计算表**精确积分（τ_i += Δs_i/v_nom,i），避免 `vel×t` 参考超前
+7. **逐环境量被塞进全局槽** → 参考的 τ(s) 表原先按全局标量 `_slalom_gait_scalar` 建，而它由最后一次重置批次写入；
+   1024 环境稳态下约每步就有 1 个环境重置，于是表几乎每步被别的环境的步频重建，**未重置环境的参考随之跳变**
+   （桩复现 4.42 cm），参考推进速度也与该环境自己的速度命令不符 → 改成**每环境 τ = t×gait_自身**，
+   表只随 (间距, 基础速度) 变化
+8. **计时器被扣两次** → `CommandTerm.compute` 与任务的 `_update_command` 各扣一次 `time_left`，
+   20 ms 控制步扣掉约 40 ms，配置的 20~30 s 重采样提前到 10~15 s；那次中途重采样会把别的重置批次的
+   共享步频写进当前回合，破坏"回合内步频固定" → 任务侧不再碰计时器
 
 ## 训练（Slalom）
 
@@ -334,9 +370,14 @@ uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 
 12. **杆间距硬编码 0.3** → 统一到 `POLE_SPACING = 2/CURVATURE_TARGET`
 13. **curvature ±15 硬编码** → 统一到 `CURVATURE_TARGET`
 14. **平滑 LUT 几何随 vel 变化**（平滑弧长 = vel×SMOOTH_TIME）→ 同一间距下不同步频轨迹几何不同, 训练局部最优 → **平滑弧长与 vel 解耦**（固定名义 vel, 几何稳定）
-15. **平滑不兼容区间** (0.1009, 0.1260) → 两种模式均周期错位 → `get_effective_pole_spacing` clamp 到无直行最小间距
-16. **无直行时同向弧段仍加 +20→0→+20 过渡** → 直行段不存在时 V 形过渡多余 → 无直行模式同向弧段直接连续
+15. **平滑不兼容区间** (0.0812, 0.1062) → 两种模式均周期错位 → `get_effective_pole_spacing` 落到无直行最小间距
+16. **无直行时同向弧段仍加 +25→0→+25 过渡** → 直行段不存在时 V 形过渡多余 → 无直行模式同向弧段直接连续
 17. **Phase 0 起点动态化**（随 κ 变化）→ 起始域扩大, 起步即转 → 需配合起始状态分布评估
+18. **课程有效间距断崖** → `POLE_SPACING_MIN=2Rmin=0.08` 低于几何下界 0.0812，且 (0.0812, 0.1062) 区间不可周期匹配，
+    于是 iter 5563 有效间距从 0.1063 直接跳到 0.0812，其后到 6000 轮空转 → 未决项
+19. **默认预算练不到终点** → `max_iterations` 原为 5000 而课程到 6000 才结束 → 改为直接引用 `PHASE2_END_ITER`
+20. **参考位置动而速度说不动** → 脊柱/颈位置参考随 κ 变，但对应的 `ref_vel` 仍为 0（表里脊柱列全零），
+    位置模仿要求转动、速度模仿同时奖励静止 → 未决项
 
 ## 可视化 / WarpBridge（Slalom）
 
