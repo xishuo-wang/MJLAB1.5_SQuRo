@@ -23,6 +23,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     CURRICULUM_GATE_P_STOOD,
     _STEPS_PER_ITER,
 )
+from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
 
 TASK_NAME = "Mjlab-SQuRo-Backup"
 
@@ -40,6 +41,28 @@ class Cfg:
     seed: int = 0
 
 
+# 包络统计桶: 基座/足端的世界 X、Y、Z 极值 + 计入的环境样本数
+def _new_box() -> dict:
+    d = {"n": 0}
+    for k in ("base_x", "base_y", "base_z", "foot_x", "foot_y", "foot_z"):
+        d[k] = [float("inf"), float("-inf")]
+    return d
+
+
+# 把一帧快照并入包络 (mask 给定时只统计被选中的环境)
+def _acc_box(dst: dict, b_xyz, s_xyz, mask=None) -> None:
+    if mask is not None:
+        if not bool(mask.any()):
+            return
+        b_xyz, s_xyz = b_xyz[mask], s_xyz[mask]
+    for tag, arr in (("base", b_xyz), ("foot", s_xyz)):
+        for i, ax in enumerate("xyz"):
+            v = arr[..., i]
+            dst[f"{tag}_{ax}"] = [min(dst[f"{tag}_{ax}"][0], float(v.min())),
+                                  max(dst[f"{tag}_{ax}"][1], float(v.max()))]
+    dst["n"] += int(b_xyz.shape[0])
+
+
 # 跑一种动作模式, 统计回合级的三个率 (与训练侧 _ingest_episode_results 同一套发布机制)
 def run_mode(name: str, env, policy, cmd, steps: int, num_envs: int) -> dict:
     obs = env.get_observations()
@@ -47,8 +70,45 @@ def run_mode(name: str, env, policy, cmd, steps: int, num_envs: int) -> dict:
     seq_seen = cmd._ep_seq.detach().to("cpu").clone()
     stat = {"episodes": 0, "valid": 0, "onset": 0, "stood": 0, "success": 0}
     vt_sum, vt_n = 0.0, 0
-    for _ in range(steps):
+    robot = env.unwrapped.scene.entities["robot"]
+    ent = env.unwrapped.scene.entities["restricted_space"]
+    foot_ids = _MODEL_INDICES.foot_site_ids
+    neg, pos = ent.cfg.wall_x_neg, ent.cfg.wall_x_pos
+    half_t = ent.cfg.wall_half_thickness
+    half_l = ent.cfg.wall_half_length
+    wh = ent.cfg.wall_height
+    stand_box, init_box = _new_box(), _new_box()
+    inside_wall, stand_samples = 0, 0
+    out_x_beside, out_x_beyond = 0, 0
+    base_beside, base_beyond = 0, 0
+    for k in range(steps):
         with torch.inference_mode():
+            # 先取状态再步进: k=0 取到的就是重置后的初始姿态
+            b_xyz = robot.data.root_link_pos_w[:, :3]
+            s_xyz = robot.data.site_pos_w[:, foot_ids, :3]
+            if k == 0:
+                _acc_box(init_box, b_xyz, s_xyz)
+            # 站立窗口内的包络: 墙在"已经站起来"之后是否还限制得住姿态 (见技术细节 §7.14)
+            active = cmd._stand_elapsed > 0
+            if bool(active.any()):
+                _acc_box(stand_box, b_xyz, s_xyz, active)
+                stand_samples += int(active.sum())
+                sx, sy, sz = s_xyz[..., 0], s_xyz[..., 1], s_xyz[..., 2]
+                in_x = ((sx > neg - half_t) & (sx < neg + half_t)) | \
+                       ((sx > pos - half_t) & (sx < pos + half_t))
+                # 足端落在墙体 X 区间、低于墙顶且在墙的 Y 范围内 => 与墙体重叠
+                hit = in_x & (sz < wh) & (sy.abs() < half_l) & active.unsqueeze(-1)
+                inside_wall += int(hit.sum())
+                # 足端已经在墙内侧之外: 分"在墙的 Y 范围内(只能越顶)"与"越过墙端(绕行)"
+                beyond = (sx < neg + half_t) | (sx > pos - half_t)
+                beside = beyond & (sy.abs() < half_l) & active.unsqueeze(-1)
+                out_x_beside += int(beside.sum())
+                out_x_beyond += int((beyond & ~(sy.abs() < half_l) & active.unsqueeze(-1)).sum())
+                # 基座同理: 判断"墙有没有真的把躯干限制在走廊里"
+                b_x, b_y = b_xyz[..., 0], b_xyz[..., 1]
+                b_out = (b_x < neg + half_t) | (b_x > pos - half_t)
+                base_beside += int((b_out & (b_y.abs() < half_l) & active).sum())
+                base_beyond += int((b_out & ~(b_y.abs() < half_l) & active).sum())
             act = policy(obs, stochastic_output=True) if name == "sample" else policy(obs)
             obs, _, _, _ = env.step(act.to(env.device))
         seq = cmd._ep_seq.detach().to("cpu")
@@ -72,6 +132,15 @@ def run_mode(name: str, env, policy, cmd, steps: int, num_envs: int) -> dict:
             vt_sum += float(cmd.windowed_mean_vel()[active].mean())
             vt_n += 1
     stat["mean_vt"] = (vt_sum / vt_n) if vt_n else float("nan")
+    stat["stand_box"] = stand_box
+    stat["init_box"] = init_box
+    stat["stand_samples"] = stand_samples
+    stat["inside_wall"] = inside_wall
+    stat["out_x_beside"] = out_x_beside
+    stat["out_x_beyond"] = out_x_beyond
+    stat["base_beside"] = base_beside
+    stat["base_beyond"] = base_beyond
+    stat["walls"] = (neg, pos, half_t, half_l, wh)
     return stat
 
 
@@ -116,6 +185,38 @@ def main() -> None:
               f"   {'>= 门控, 会推进' if s['stood'] / v >= CURRICULUM_GATE_P_STOOD else '< 门控, 不推进'}")
         print(f"  p_done  (稳定站立成功)   = {s['success'] / v:.3f}")
         print(f"  站立窗口内平均 V/T       = {s['mean_vt']:.2f} rad/s")
+        neg, pos, half_t, half_l, wh = s["walls"]
+        ib = s["init_box"]
+        print(f"  初始姿态 基座 X [{ib['base_x'][0]:+.4f}, {ib['base_x'][1]:+.4f}]"
+              f" Y [{ib['base_y'][0]:+.4f}, {ib['base_y'][1]:+.4f}]"
+              f" Z [{ib['base_z'][0]:+.4f}, {ib['base_z'][1]:+.4f}]")
+        print(f"  初始姿态 足端 X [{ib['foot_x'][0]:+.4f}, {ib['foot_x'][1]:+.4f}]"
+              f" Y [{ib['foot_y'][0]:+.4f}, {ib['foot_y'][1]:+.4f}]"
+              f" Z [{ib['foot_z'][0]:+.4f}, {ib['foot_z'][1]:+.4f}]")
+        print(f"  墙盒   X [{neg - half_t:+.4f}, {neg + half_t:+.4f}] 与 "
+              f"[{pos - half_t:+.4f}, {pos + half_t:+.4f}]  Y ±{half_l:.3f}  Z 0~{wh:.3f}"
+              f"  (净宽 {pos - neg - 2 * half_t:.4f} m)")
+        sb = s["stand_box"]
+        if s["stand_samples"] == 0:
+            print("  站立窗口内无样本, 无法给出包络")
+        else:
+            print(f"  站立窗口 {s['stand_samples']} 个环境样本: "
+                  f"基座 X [{sb['base_x'][0]:+.4f}, {sb['base_x'][1]:+.4f}]"
+                  f" Y [{sb['base_y'][0]:+.4f}, {sb['base_y'][1]:+.4f}]"
+                  f" Z [{sb['base_z'][0]:+.4f}, {sb['base_z'][1]:+.4f}]")
+            print(f"  站立窗口内足端 X [{sb['foot_x'][0]:+.4f}, {sb['foot_x'][1]:+.4f}]"
+                  f" Y [{sb['foot_y'][0]:+.4f}, {sb['foot_y'][1]:+.4f}]"
+                  f" Z [{sb['foot_z'][0]:+.4f}, {sb['foot_z'][1]:+.4f}]")
+            n = max(1, s["stand_samples"])
+            nf = 4 * n            # 足端统计的样本数是 4 只脚 × 环境样本数
+            print(f"  站立窗口内足端落入墙盒 = {s['inside_wall']} / {nf}"
+                  f"  ({100.0 * s['inside_wall'] / nf:.3f}%)")
+            print(f"  站立窗口内足端已在墙内侧之外: 在墙 Y 范围内(含与墙体重叠) = "
+                  f"{s['out_x_beside']} ({100.0 * s['out_x_beside'] / nf:.3f}%)  "
+                  f"越过墙端(绕行) = {s['out_x_beyond']} ({100.0 * s['out_x_beyond'] / nf:.3f}%)")
+            print(f"  站立窗口内基座已在墙内侧之外: 在墙 Y 范围内(与墙体重叠) = "
+                  f"{s['base_beside']} ({100.0 * s['base_beside'] / n:.2f}%)  "
+                  f"越过墙端(在走廊之外) = {s['base_beyond']} ({100.0 * s['base_beyond'] / n:.2f}%)")
         # 每次换模式前重置环境, 避免上一次的回合尾巴混进统计 (序号快照在 run_mode 里取)。
         # 必须在 inference_mode 内: 上一步 step 已把管理器里的缓冲张量标成推理张量,
         # 在外面做就地写会直接抛错。
