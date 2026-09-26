@@ -73,6 +73,21 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._dmin_batch_stood = 0
         self._dmin_batch_pass = 0
         self._reset_curriculum_window()
+        # 初始环境的第一个回合是在 runner 存在之前采样的 (命令项当时用编译墙位), 立刻推送
+        # 课程范围并重采该回合 —— 否则首个回合会跑在声明范围之外却仍被 PPO 采样。
+        self._push_wall_curriculum()
+        self._force_wall_resample()
+
+    # 懒初始化墙位课程状态: 单测替身不跑 __init__, 这些字段可能缺失 (与 command._ensure_buffers 同风格)。
+    def _ensure_wall_state(self) -> None:
+        if not hasattr(self, "_wall_random"):
+            self._wall_random = False
+        if not hasattr(self, "_wall_d_min"):
+            self._wall_d_min = WALL_D_MAX
+        if not hasattr(self, "_dmin_batch_ep"):
+            self._dmin_batch_ep = 0
+            self._dmin_batch_stood = 0
+            self._dmin_batch_pass = 0
 
     # 清空当前档位的门控窗口。**每次重建都要清**: 新环境的 _ep_seq 从 0 重新开始, 不清
     # _ep_seq_seen 就再也收不到事件, 门控会永久饿死 (与 common_step_counter 同一类坑);
@@ -86,12 +101,26 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._w_head = torch.zeros(n, dtype=torch.long)
         self._w_fill = torch.zeros(n, dtype=torch.long)
         self._ep_seq_seen = torch.zeros(n, dtype=torch.long)
+        # d_min 批次统计与滑动窗口同生命周期: 物理条件一变 (重建/开碰撞/换下界), 旧成绩
+        # 就不能再用于验收 —— 否则"开碰撞后的第一批有墙验收"可能全部来自无墙训练。
+        self._dmin_batch_ep = 0
+        self._dmin_batch_stood = 0
+        self._dmin_batch_pass = 0
+
+    # 阶段二 (开碰撞) 是否已生效。批次验收只在阶段二累计: 阶段一的成绩来自无墙物理。
+    def _collision_phase_on(self) -> bool:
+        try:
+            step_counter = int(self.env.unwrapped.common_step_counter)
+        except Exception:
+            return False
+        return get_training_phase(step_counter) == 1
 
     # 拉取本轮新发布的回合结果, 更新每环境的滑动窗口。
     # **无效回合只推进已消费序号, 不占窗口槽位、不加填充量** —— 否则"1 个无效 + 2 个有效"
     # 会被判成"3 个有效回合已攒满"(审查 P2 已复现)。窗口只存有效完整回合, 故分母即 _w_fill 合计。
     # 每个环境一轮内最多结束 1 个有效回合 (有效回合恒为 1200 步 > 一轮 96 步), 按序号取增量不漏事件。
     def _ingest_episode_results(self) -> None:
+        self._ensure_wall_state()
         if not hasattr(self, "_w_succ"):
             self._reset_curriculum_window()
         cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
@@ -110,8 +139,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._w_head[keep] = (head + 1) % CURRICULUM_WINDOW_EPISODES
             self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1,
                                             max=CURRICULUM_WINDOW_EPISODES)
-            # 批次门控只累计"本回合采到 d_min"的回合 —— 宽墙位的成绩不能用来判定窄墙位是否达标
-            if self._wall_random:
+            # 批次门控只累计"本回合采到 d_min"的回合 —— 宽墙位的成绩不能用来判定窄墙位是否达标。
+            # 还要排除阶段一 (无碰撞) 的回合: 无墙训练的成绩不是受限空间的验收证据。
+            if self._wall_random and self._collision_phase_on():
                 d = cmd._last_ep_wall_d.detach().to("cpu")[keep]
                 at_min = (d - self._wall_d_min).abs() < 1e-6
                 self._dmin_batch_ep += int(at_min.sum())
@@ -134,6 +164,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 门控达标则推进一档。只升一档、只改索引, 真正的墙位变化交给随后那次重建。
     def _maybe_promote(self, it: int) -> bool:
+        self._ensure_wall_state()
         if self._corridor_fixed:
             return False
         if self._wall_random:
@@ -203,23 +234,60 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
               f"上档 p_stood={p_stood:.3f}")
         return True
 
-    # 把当前 d_min / 范围 / 下界采样比例推给命令项 (新建命令实例后必须重推一次)
-    def _push_wall_curriculum(self) -> None:
-        if not self._wall_random:
-            return
-        try:
-            cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
-        except Exception:
+    # 把当前 d_min / 范围 / 下界采样比例推给命令项 (新建命令实例后必须重推一次)。
+    # d_min 传 None 表示清掉范围, 让命令项回到"用编译墙位"(锁死模式用)。
+    def _push_wall_curriculum(self, enabled: bool | None = None) -> None:
+        self._ensure_wall_state()
+        cmd = self._command_term()
+        if cmd is None:
             return
         setter = getattr(cmd, "set_wall_curriculum", None)
-        if setter is not None:
-            setter(self._wall_d_min, WALL_D_MAX, WALL_D_MIN_FRAC)
+        if setter is None:
+            return
+        if enabled is False or not self._wall_random:
+            setter(None, None, None)
+            return
+        setter(self._wall_d_min, WALL_D_MAX, WALL_D_MIN_FRAC)
+
+    # 取命令项; 测试替身可能没有 command_manager
+    def _command_term(self):
+        try:
+            return self.env.unwrapped.command_manager.get_term("backup_cmd")
+        except Exception:
+            return None
+
+    # 按当前 (_corridor_fixed, _corridor_start_walls) 重新确定课程模式。
+    # 加载检查点可能把 _corridor_fixed 恢复成 True, 这时必须关掉随机课程 —— 否则后续完整
+    # 回合复位会把本应锁死的左墙覆盖成采样值 (审查复现: 两者同时为 True)。
+    def _refresh_wall_mode(self) -> None:
+        self._ensure_wall_state()
+        # 只**关闭**随机模式, 不重新打开 —— 开启由 __init__ 决定 (CLI 的 corridor_fixed 也能覆盖)。
+        # 若这里能重新打开, 显式关掉它的调用方 (阶梯路径 / 测试替身) 会被无声改回去。
+        if self._corridor_fixed or self._corridor_start_walls is None:
+            self._wall_random = False
+        if not self._wall_random:
+            self._push_wall_curriculum(enabled=False)
+            self._force_wall_resample()
+
+    # 让**正在进行**的回合立刻改用当前课程范围。墙位在回合内固定是对的, 但环境新建/重建后的
+    # 首个回合是在范围推送之前采样的 (那时命令项还是编译墙位): 它虽然不进课程统计, 仍会被
+    # PPO 采样, 且难度可能与声明值差很远。所以只在初始化/重建后纠正, 正常推进不动已有回合。
+    def _force_wall_resample(self) -> None:
+        cmd = self._command_term()
+        if cmd is None:
+            return
+        try:
+            ids = torch.arange(self._corridor_num_envs, device=cmd.device)
+            cmd._resample_command(ids)
+        except Exception as exc:
+            print(f"[WARN] 墙位范围同步失败: {exc}")
 
     # 每轮把课程状态写进 tensorboard; 无样本时不写 (NaN 会污染曲线)。
     def _log_curriculum(self, it: int) -> None:
         writer = getattr(self.logger, "writer", None)
         if writer is None:
             return
+        self._ensure_wall_state()
         neg, pos = get_wall_positions_for_level(self._cur_level)
         p_stood, p_onset, p_done, ready, n_valid = self._curriculum_metrics()
         writer.add_scalar("Curriculum/level", self._cur_level, it)
@@ -255,6 +323,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 当前该用的 (墙位对, 是否开碰撞)。墙位由课程档位决定; 锁死模式下保持启动墙位。
     # 注意碰撞开关仍按轮次切 (CURRICULUM_START_ITER), 与墙位课程无关。
     def _corridor_target(self) -> tuple[tuple[float, float] | None, bool]:
+        self._ensure_wall_state()
         step_counter = int(self.env.unwrapped.common_step_counter)
         collision = get_training_phase(step_counter) == 1
         if self._corridor_fixed:
@@ -334,8 +403,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._reset_curriculum_window()
         self._cur_level_iter = step_counter // _STEPS_PER_ITER
         self._clear_logger_episode_state()
-        # 新环境的命令项是全新实例, 必须把随机墙位的课程范围重新推一次 (否则回到编译墙位)
+        # 新环境的命令项是全新实例, 必须把随机墙位的课程范围重新推一次 (否则回到编译墙位);
+        # 而且新环境的首个回合是在推送之前采样的, 必须重采一次才符合声明范围。
         self._push_wall_curriculum()
+        self._force_wall_resample()
         try:
             old.close()
         except Exception as exc:  # 旧环境关不掉不应中断训练
@@ -365,6 +436,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_corridor_rebuild(refresh_obs=False)
         else:
             self._push_wall_curriculum()
+            self._force_wall_resample()
 
         obs = self.env.get_observations().to(self.device)
         self.alg.train_mode()
@@ -442,6 +514,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     # 记录缺失时必须显式指定, 不能退回"按轮次推算" (那会静默给出错误的墙)。
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
              map_location: str | None = None) -> dict:
+        self._ensure_wall_state()
         infos = super().load(path, load_cfg, strict, map_location)
         if self._corridor_start_walls is None:
             return infos
@@ -498,6 +571,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                                               float(saved["wall_x_pos"]))
         # 判据只比较"课程/锁死目标 vs 实际编译值", 不看记录: 记录本身就是当时真实编译的值,
         # 若拿它去覆盖当前值再比较, 就会把"环境其实没编译成这个值"掩盖过去 (曾经的真 bug)。
+        # 恢复锁死模式后必须重新确定课程模式: 否则 _wall_random 仍为 True, 后续完整回合复位
+        # 会把本应锁死的左墙覆盖成采样值 (审查复现: 两者同时为 True)。
+        self._refresh_wall_mode()
         self._reset_curriculum_window()
         if self._corridor_change_needed():
             compiled = self._corridor_compiled_state()
@@ -506,11 +582,13 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_corridor_rebuild(refresh_obs=False)
         else:
             self._push_wall_curriculum()
+            self._force_wall_resample()
         return infos
 
     # 检查点里记录**实际编译生效**的墙位、碰撞开关与课程档位, 供续训与回放精确复现
     # (不要用轮次反推: 自动课程的墙位推进由能力决定, 与轮次没有函数关系)。
     def save(self, path: str, infos=None):
+        self._ensure_wall_state()
         walls, collision = self._corridor_compiled_state()
         neg, pos = (walls if walls is not None else (None, None))
         extra = {

@@ -253,6 +253,14 @@ class CorridorRebuildTest(unittest.TestCase):
         r._corridor_start_walls = walls
         r._corridor_fixed = fixed
         r._corridor_fixed_by_cli = fixed if fixed_by_cli is None else fixed_by_cli
+        # 这些用例覆盖"档位阶梯 + 换档重建"路径 (随机墙位课程之前的实现, 仍作为非随机回退保留)。
+        # 随机课程路径有独立用例; 不显式关掉的话 load() 里的 _refresh_wall_mode 会把它打开,
+        # 于是 _corridor_target 报编译墙位、按档位重建不再发生。
+        r._wall_random = False
+        r._wall_d_min = C.WALL_D_MAX
+        r._dmin_batch_ep = 0
+        r._dmin_batch_stood = 0
+        r._dmin_batch_pass = 0
         r._randomize_ep_len = False
         r._cur_level = level
         r._cur_level_iter = start_iter

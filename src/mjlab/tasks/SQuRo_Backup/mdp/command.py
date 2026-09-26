@@ -338,11 +338,10 @@ class BackupCommand(CommandTerm):
 
     # 课程推进时由 runner 调用: 更新下界并让后续回合按新范围采样。
     # 已在进行中的回合不动 (墙位在回合内固定), 下个完整回合复位才生效。
-    def set_wall_curriculum(self, d_min: float, d_max: float | None = None,
+    def set_wall_curriculum(self, d_min: float | None, d_max: float | None = None,
                             frac: float | None = None) -> None:
-        self.cfg.wall_d_min = float(d_min)
-        if d_max is not None:
-            self.cfg.wall_d_max = float(d_max)
+        self.cfg.wall_d_min = None if d_min is None else float(d_min)
+        self.cfg.wall_d_max = None if d_max is None else float(d_max)
         if frac is not None:
             self.cfg.wall_d_min_frac = float(frac)
 
@@ -418,11 +417,14 @@ class BackupCommand(CommandTerm):
         self._s1_hold_lost[env_ids] = False
 
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
-        extras = super().reset(env_ids)
+        self._ensure_buffers()      # 发布块在 super().reset() 之前, 替身可能还没建缓冲
+        # **发布必须早于 super().reset()**: 父类内部会 _resample_command 重采墙位, 之后 _wall_d
+        # 已经属于下一回合, 拿它给上一回合贴标签会把成绩记到错误的墙距上 (宽墙位的成功被记成
+        # 最窄档成功, 直接破坏 d_min 门控)。同理末尾不能再补一次 _resample_command —— 那会让
+        # 一个回合采样两次墙位; 父类已完成 phase 复位与重采。
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             # 只有**正常结束**的回合才发布成绩。本任务唯一的终止是 timeout, 所以"正常结束"
-            # 等价于 episode_length_buf 达到回合上限 —— 它在 _reset_idx 末尾才被清零, 而
-            # command_manager.reset 在那之前, 故此处读到的仍是上限值。
+            # 等价于 episode_length_buf 达到回合上限 —— 它在 _reset_idx 末尾才被清零。
             # 不能用 `> 0` 判断 (那只说明回合已开始): 初始化与**中途手动 reset** 都不满足上限,
             # 把它们当成完整回合会污染课程分母 (真环境已复现: 只跑 3 步再 reset 仍发布 valid)。
             max_len = int(self._env.max_episode_length)
@@ -434,7 +436,7 @@ class BackupCommand(CommandTerm):
                 self._last_ep_success[ids] = self._ep_had_success[ids] & valid
                 self._last_ep_stood_pose[ids] = self._ep_stood_pose[ids] & valid
                 self._last_ep_stood_onset[ids] = self._ep_stood_onset[ids] & valid
-                self._last_ep_wall_d[ids] = self._wall_d[ids]     # 随回合发布本回合墙位
+                self._last_ep_wall_d[ids] = self._wall_d[ids]     # 本回合墙位 (重采之前)
                 self._ep_seq[ids] += 1
                 self._ep_index[ids] += 1
             # 中途重置只清"进行中"的累积, 不发布成绩, 也不消耗"首个回合无效"的名额
@@ -442,8 +444,7 @@ class BackupCommand(CommandTerm):
             self._ep_cycle_count[env_ids] = 0
             self._ep_stood_pose[env_ids] = False
             self._ep_stood_onset[env_ids] = False
-            self._resample_command(env_ids)
-        return extras
+        return super().reset(env_ids)
 
     def compute(self, dt: float) -> None:
         # CommandTerm._update_command() 不接收 dt，因此在调用父类前暂存本次真实步长。

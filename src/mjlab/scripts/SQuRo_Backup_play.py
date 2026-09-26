@@ -75,6 +75,15 @@ def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, 
     elif cfg.corridor_width is not None:
         half = 0.5 * float(cfg.corridor_width)
         neg, pos, src = -half, half, "命令行(对称简写)"
+    elif saved.get("wall_d_min") is not None:
+        # 随机墙位课程: 记录里的 wall_x_neg 只是**编译模板**, 不是课程测试用的墙位。
+        # 默认回放到课程下界 (d = d_min), 否则会把模板墙位当成最窄档测试 (审查 P2:
+        # 模板 -0.08 与最窄档 d_min=0.06 相差很远, 极容易误判)。
+        d = float(saved["wall_d_min"])
+        neg = -d
+        pos = float(saved["wall_x_pos"]) if saved.get("wall_x_pos") is not None else 0.05
+        src = (f"随机课程下界 d_min={d:.3f} (已忽略记录里的编译模板 "
+               f"{float(saved['wall_x_neg']):+.3f}; 要指定其它墙距请给 --wall-x-neg)")
     elif saved.get("wall_x_neg") is not None:
         neg, pos, src = float(saved["wall_x_neg"]), float(saved["wall_x_pos"]), "检查点记录"
     elif saved.get("corridor_width") is not None:
