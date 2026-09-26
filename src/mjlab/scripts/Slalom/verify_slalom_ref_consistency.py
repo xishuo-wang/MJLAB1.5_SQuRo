@@ -15,6 +15,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     PHASE1_END_ITER,
     PHASE2_END_ITER,
     POLE_SPACING_START,
+    VEL_MIN,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.events import reset_model
 from mjlab.tasks.SQuRo_Slalom.mdp.path import (
@@ -62,8 +63,21 @@ def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_
     cfg.fixed_pole_spacing = spacing
     cfg.fixed_velocity = base_vel
     cmd.cfg = cfg
+    # 生产代码在 __init__ 里从 cfg 拷贝的固定值 + 命令视图, 桩环境需手动补齐
+    cmd.fixed_velocity = None
+    cmd.fixed_height_f = None
+    cmd.fixed_height_h = None
+    cmd.fixed_gait_freq = None
+    cmd.fixed_curvature = None
+    cmd.fixed_pole_spacing = spacing
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = torch.tensor(gait_freqs, dtype=torch.float32)
+    cmd.vel_command = cmd.command_tensor[:, 0]
+    cmd.height_f_command = cmd.command_tensor[:, 1]
+    cmd.height_h_command = cmd.command_tensor[:, 2]
+    cmd.gait_freq_command = cmd.command_tensor[:, 3]
+    cmd.curvature_command = cmd.command_tensor[:, 4]
+    cmd._start_recorded = torch.zeros(n, dtype=torch.bool)
     env.command_manager = NS(_terms={"slalom_cmd": cmd})
     # 旧实现从全局槽读步频; 桩里默认模拟"最后重置者"写入
     env._slalom_gait_scalar = float(gait_freqs[-1] if gait_scalar is None else gait_scalar)
@@ -74,8 +88,10 @@ def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_
 # 构造只含计时器所需字段的桩命令项
 def make_timer_cmd(n=4, time_left=25.0):
     cmd = object.__new__(SlalomCommand)
-    cmd._env = NS(device=torch.device("cpu"), num_envs=n, step_dt=STEP_DT,
-                  common_step_counter=0)
+    env = NS(device=torch.device("cpu"), num_envs=n, step_dt=STEP_DT,
+             common_step_counter=0,
+             episode_length_buf=torch.full((n,), 10, dtype=torch.long))
+    cmd._env = env
     cmd.cfg = SlalomCommandCfg()
     cmd.time_left = torch.full((n,), float(time_left))
     cmd.command_counter = torch.zeros(n, dtype=torch.long)
@@ -83,6 +99,12 @@ def make_timer_cmd(n=4, time_left=25.0):
     cmd._update_metrics = lambda: None
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = 1.0
+    cmd.fixed_velocity = None
+    cmd.vel_command = cmd.command_tensor[:, 0]
+    cmd.gait_freq_command = cmd.command_tensor[:, 3]
+    cmd.curvature_command = cmd.command_tensor[:, 4]
+    env._path_kappa = cmd.command_tensor[:, 4]
+    env.command_manager = NS(_terms={"slalom_cmd": cmd})
     return cmd
 
 
@@ -363,6 +385,52 @@ class TestSlalomRefConsistency(unittest.TestCase):
         ref_mod.get_reference_joint_state(env_keep)
         self.assertAlmostEqual(float(env_keep._ref_phase[0]), 0.72, places=5,
                                msg="未重置环境的相位被误清零")
+
+    # 命令更新必须按逐环境阶段: 未结束的旧阶段回合不得套用新阶段的速度公式
+    def test_command_update_respects_episode_phase(self):
+        env = make_ref_env([1.0, 1.0], [10.0, 10.0])
+        cmd = env.command_manager._terms["slalom_cmd"]
+        env.common_step_counter = PHASE1_STEP + 130
+        env.episode_length_buf = torch.tensor([200, 50])   # env0 旧阶段, env1 新阶段
+        cmd.command_tensor[:, 0] = 0.10                    # 旧阶段写下的命令速度
+        cmd.command_tensor[:, 4] = 0.0
+        env._path_kappa = torch.tensor([0.0, -CURVATURE_TARGET_MAX])
+
+        cmd._update_command()
+
+        # env0: 仍属旧阶段 → 命令必须保持不变 (曾经从 0.10 掉到 0.05, 参考随之后跳)
+        self.assertAlmostEqual(cmd.command_tensor[0, 0].item(), 0.10, places=6,
+                               msg="未结束的旧阶段回合被套用了新阶段速度公式")
+        self.assertAlmostEqual(cmd.command_tensor[0, 4].item(), 0.0, places=6,
+                               msg="未结束的旧阶段回合的曲率被改写")
+        # env1: 已属新阶段 → 曲率取路径值, 速度按变速公式
+        self.assertAlmostEqual(cmd.command_tensor[1, 4].item(), -CURVATURE_TARGET_MAX,
+                               places=5, msg="新阶段回合的曲率未跟随路径")
+        self.assertAlmostEqual(cmd.command_tensor[1, 0].item(), BASE_VEL * 1.0 * VEL_MIN,
+                               places=6, msg="新阶段回合的速度不是变速公式结果")
+
+    # 重置后同一控制步内的首帧观测必须用新回合的参考 (框架顺序: 奖励 → 重置 → 观测)
+    def test_reset_first_frame_uses_new_episode_reference(self):
+        env = make_ref_state_env([20.0], phases=[0.5], gait=1.0, step_count=500)
+        env.reset_buf = torch.tensor([True])            # 框架在算奖励前就已标出本步重置
+        cmd = env.command_manager._terms["slalom_cmd"]
+
+        pos_reward, _ = ref_mod.get_reference_joint_state(env)
+        self.assertAlmostEqual(float(pos_reward[0, 1]), -0.9 * 20.0 / CURVATURE_TARGET_MAX,
+                               places=5, msg="奖励趟的参考不是旧回合曲率")
+        self.assertAlmostEqual(float(env._ref_phase[0]), 0.0, places=6,
+                               msg="重置环境的相位未在重置趟清零")
+
+        # 重置: 曲率重采样 (+20 → -20) + 回合计数归零 + 参考代次 +1
+        cmd.command_tensor[:, 4] = -20.0
+        env.episode_length_buf = torch.tensor([0])
+        ref_mod.invalidate_reference_cache(env)
+
+        pos_obs, _ = ref_mod.get_reference_joint_state(env)
+        self.assertAlmostEqual(float(pos_obs[0, 1]), 0.9 * 20.0 / CURVATURE_TARGET_MAX,
+                               places=5, msg="首帧观测仍返回上一回合的参考")
+        self.assertAlmostEqual(float(env._ref_phase[0]), 0.0, places=6,
+                               msg="重置后的重算把相位又推进了一次")
 
     # 接近段与绕杆主路径衔接处, 曲率与期望速度都必须连续
     def test_approach_joins_lut_at_matching_curvature(self):

@@ -25,6 +25,7 @@ from .curriculums import (
     get_training_phase_batch,
 )
 from .pole import update_pole_visibility
+from .reference import invalidate_reference_cache
 from .path import (
     _INIT_DIST,
     _approach_rev_table,
@@ -194,15 +195,18 @@ class SlalomCommand(CommandTerm):
         else:
             # Phase 1: 绕杆训练 — 曲率 -CURVATURE_TARGET (LUT 第一段 CW 弧 = 负), 步频 1~2Hz 随机
             # 速度: 变速 (直行段 STRAIGHT_VEL_SCALE 快, 转弯段 VEL_MIN 慢), 每步由 _update_command 动态更新
-            self.curvature_command[env_ids] = torch.full((n,), -CURVATURE_TARGET, device=self.device)
+            # 接近段起点 κ: 有直行模式为 -K 平台, 无直行模式为 0 (见 path._approach_rev_table)
+            self.curvature_command[env_ids] = torch.full((n,), self._phase1_start_kappa(), device=self.device)
             if self.fixed_gait_freq is not None:
                 self._shared_gait_freq = float(self.fixed_gait_freq)
             else:
                 self._shared_gait_freq = float(GAIT_FREQ_MIN + torch.rand(1).item() * (GAIT_FREQ_MAX - GAIT_FREQ_MIN))
             self.gait_freq_command[env_ids] = self._shared_gait_freq
             base_vel = float(self.fixed_velocity) if self.fixed_velocity is not None else BASE_VEL
-            # 接近段起点 κ=-CURVATURE_TARGET → 初始速度为弯道低速 (之后每步变速)
-            self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * VEL_MIN, device=self.device)
+            # 初始速度为接近段起点曲率对应的低速 (之后每步变速)
+            kappa0 = self._phase1_start_kappa()
+            scale0 = STRAIGHT_VEL_SCALE - (STRAIGHT_VEL_SCALE - VEL_MIN) * abs(kappa0) / CURVATURE_TARGET
+            self.vel_command[env_ids] = torch.full((n,), base_vel * self._shared_gait_freq * scale0, device=self.device)
 
         # 缓存基础速度标量 (cfg 级全局量), 供 path 模块生成名义 τ(s) 表 (避免每步 GPU-CPU 同步)
         if n > 0:
@@ -218,11 +222,18 @@ class SlalomCommand(CommandTerm):
         self.gait_freq_command[env_ids] = self._get_gait_freq(n)
 
 
+    # Phase 1 接近段起点的路径曲率 (有直行 -K / 无直行 0)
+    def _phase1_start_kappa(self) -> float:
+        return 0.0 if is_no_straight_spacing(self.active_pole_spacing) else -CURVATURE_TARGET
+
+
     # 重置时额外采样曲率 + 记录轨迹起始位置
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._resample_curvature(env_ids)
+            # 重置代次 +1: 使同一控制步内已缓存的参考失效, 观测才能拿到新回合的参考
+            invalidate_reference_cache(self._env)
         return extras
 
 

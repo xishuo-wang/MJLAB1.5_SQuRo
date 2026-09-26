@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
-from .path import get_path_curvature
+from .path import compute_path_ref, get_path_curvature
 from .indices import resolve_model_indices
 from .curriculums import CURVATURE_TARGET_MAX
 if TYPE_CHECKING:
@@ -179,12 +179,18 @@ def _init_tables(device: torch.device | str) -> None:
 
 
 # =========================================================================================
+# 重置代次 +1: 使同一控制步内已缓存的参考失效 (框架在同一步内先算奖励、再重置、再算观测)
+def invalidate_reference_cache(env: ManagerBasedRlEnv) -> None:
+    env._ref_epoch = getattr(env, "_ref_epoch", 0) + 1  # type: ignore[attr-defined]
+
+
 # 获取当前步的参考关节位置和速度
 def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
-    # 步级缓存
+    # 步级缓存: 键含重置代次, 重置后同一控制步内必须重算 (观测要用新回合的参考)
     current_step = env.common_step_counter
+    epoch = getattr(env, "_ref_epoch", 0)
     cached = getattr(env, "_ref_state_cache", None)
-    if cached is not None and cached[0] == current_step:
+    if cached is not None and cached[0] == current_step and cached[3] == epoch:
         return cached[1], cached[2]
 
     # 首次: 初始化相位状态 + 解析模型索引
@@ -208,7 +214,8 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [N]
     phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
 
-    # 获取路径瞬时曲率 + 步频 (Phase 0: 静态命令值, Phase 1: LUT 插值)
+    # 瞬时曲率与参考位置同源: 由本步的路径参考算出 (重置后 t=0, 故重置回合拿到接近段起点曲率)
+    compute_path_ref(env)
     curvature_cmd = get_path_curvature(env)  # [N]
     cmd_tensor = env.command_manager._terms["slalom_cmd"].command  # type: ignore[union-attr]
     vel_cmd = cmd_tensor[:, 0]  # [N]
@@ -246,7 +253,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     else:
         kappa_dot = (curvature_cmd - kappa_prev) / dt
         kappa_dot = torch.where(env.episode_length_buf <= 1, torch.zeros_like(kappa_dot), kappa_dot)
-    env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]
 
     # 腿部: 表沿曲率轴的导数 × |κ|̇ (相位轴分量已由表速度给出, 与步频解耦故在此之后加)
     d_pos_d_abs_k = (pos1 - pos0) / (k1 - k0).unsqueeze(1)  # [N,14]
@@ -280,15 +286,17 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
                                 -0.65 * torch.sign(curvature_cmd) * kappa_dot / kappa_norm,
                                 zero_dot)
     ref_vel[:, 9] = -0.7 * kappa_dot / kappa_norm
-    # 推进相位
-    env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
+    # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
+    if getattr(env, "_ref_phase_step", None) != current_step:
+        env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]
+        env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
+        # 重置环境 (含超时, reset_buf = 终止 | 超时) 的步态相位清零, 保证每个回合从同一相位起步
+        reset_buf = getattr(env, "reset_buf", None)
+        if reset_buf is not None:
+            ids = reset_buf.nonzero(as_tuple=False).flatten()
+            if len(ids) > 0:
+                env._ref_phase[ids] = 0.0  # type: ignore[attr-defined]
+        env._ref_phase_step = current_step  # type: ignore[attr-defined]
 
-    # 重置环境 (含超时, reset_buf = 终止 | 超时) 的步态相位清零, 保证每个回合从同一相位起步
-    reset_buf = getattr(env, "reset_buf", None)
-    if reset_buf is not None:
-        ids = reset_buf.nonzero(as_tuple=False).flatten()
-        if len(ids) > 0:
-            env._ref_phase[ids] = 0.0  # type: ignore[attr-defined]
-
-    env._ref_state_cache = (current_step, ref_pos, ref_vel)  # type: ignore[attr-defined]
+    env._ref_state_cache = (current_step, ref_pos, ref_vel, epoch)  # type: ignore[attr-defined]
     return ref_pos, ref_vel
