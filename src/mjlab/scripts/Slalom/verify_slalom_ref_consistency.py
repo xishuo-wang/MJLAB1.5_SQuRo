@@ -349,6 +349,21 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertLess(float(vel.abs().max()), 1e-6,
                         msg="回合首步出现了重置导致的速度参考尖峰")
 
+    # 超时重置的回合也必须把步态相位清零 (原判据只看终止, 漏掉超时)
+    def test_gait_phase_reset_covers_timeout(self):
+        env = make_ref_state_env([0.0], phases=[0.7], gait=1.0)
+        env.reset_buf = torch.tensor([True])        # 本步超时重置
+        ref_mod.get_reference_joint_state(env)
+        self.assertAlmostEqual(float(env._ref_phase[0]), 0.0, places=6,
+                               msg="超时重置的回合没有清零步态相位")
+
+        # 未重置环境的相位必须继续推进 (gait=1 Hz, dt=20 ms)
+        env_keep = make_ref_state_env([0.0], phases=[0.7], gait=1.0)
+        env_keep.reset_buf = torch.tensor([False])
+        ref_mod.get_reference_joint_state(env_keep)
+        self.assertAlmostEqual(float(env_keep._ref_phase[0]), 0.72, places=5,
+                               msg="未重置环境的相位被误清零")
+
     # 接近段与绕杆主路径衔接处, 曲率与期望速度都必须连续
     def test_approach_joins_lut_at_matching_curvature(self):
         # 有直行模式 LUT 首段是直行 (κ=0), 无直行模式首段是 κ=-K 平台

@@ -283,10 +283,10 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     # 推进相位
     env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
 
-    # 重置已终止环境
-    reset_ids = getattr(env, "reset_terminated", None)
-    if reset_ids is not None:
-        ids = reset_ids.nonzero(as_tuple=False).flatten()
+    # 重置环境 (含超时, reset_buf = 终止 | 超时) 的步态相位清零, 保证每个回合从同一相位起步
+    reset_buf = getattr(env, "reset_buf", None)
+    if reset_buf is not None:
+        ids = reset_buf.nonzero(as_tuple=False).flatten()
         if len(ids) > 0:
             env._ref_phase[ids] = 0.0  # type: ignore[attr-defined]
 
