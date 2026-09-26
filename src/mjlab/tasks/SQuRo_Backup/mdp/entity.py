@@ -15,6 +15,14 @@ DEFAULT_WALL_HEIGHT = 0.10          # 走廊开口高度 (m)
 DEFAULT_WALL_X_NEG = -0.20          # −X 墙中心默认值 (m)
 DEFAULT_WALL_X_POS = 0.20           # +X 墙中心默认值 (m)
 DEFAULT_CORRIDOR_WIDTH = DEFAULT_WALL_X_POS - DEFAULT_WALL_X_NEG   # 对称简写 = 0.40
+# 墙体接触约束: 不显式给就是 MuJoCo 默认的**软接触** (solref 时间常数 0.02 s), 实测
+# 1 m/s / 0.017 kg 的小球撞上去压入 6.1 mm (probe_mocap_wall)。机器人卡墙时施加的力更大,
+# 在 0.08 m 净宽下几毫米的压入足以改变判读。
+# 时间常数下限受物理步长约束 (timestep = 0.002 s), 取 0.005 (= 2.5 个物理步)。
+# solimp 同时收紧: 默认 (0.9, 0.95, ...) 在大压入时更软。
+# 标定与前后对照见技术细节 §7.15。
+WALL_SOLREF = (0.005, 1.0)
+WALL_SOLIMP = (0.99, 0.999, 0.001, 0.5, 2.0)
 
 
 @dataclass
@@ -32,6 +40,9 @@ class RestrictedSpaceEntityCfg(EntityCfg):
     # 所以这两个值就是"这面墙到底碰不碰"的唯一开关, 必须在编译前定好。
     contype: int = 1
     conaffinity: int = 1
+    # 接触约束参数 (硬接触): 理由与标定见 WALL_SOLREF 的说明
+    solref: tuple[float, float] = WALL_SOLREF
+    solimp: tuple[float, float, float, float, float] = WALL_SOLIMP
     # True = 本次训练的墙位全程锁死 (不跟随课程), runner 不会为课程推进重建环境
     fixed_width: bool = False
 
@@ -75,6 +86,8 @@ class RestrictedSpaceEntity(Entity):
                 rgba=self.cfg.rgba,
                 contype=self.cfg.contype,
                 conaffinity=self.cfg.conaffinity,
+                solref=self.cfg.solref,
+                solimp=self.cfg.solimp,
             ))
 
     # 编译后的全局 geom 下标 (顺序同 _build_geometry 的 neg, pos)。
@@ -130,9 +143,17 @@ def build_restricted_space_cfg(enable_collision: bool,
                                corridor_width: float | None = None,
                                fixed_width: bool = False, *,
                                wall_x_neg: float | None = None,
-                               wall_x_pos: float | None = None) -> RestrictedSpaceEntityCfg:
+                               wall_x_pos: float | None = None,
+                               solref: tuple[float, ...] | None = None,
+                               solimp: tuple[float, ...] | None = None) -> RestrictedSpaceEntityCfg:
     neg, pos = _resolve_wall_pair(corridor_width, wall_x_neg, wall_x_pos)
     value = 1 if enable_collision else 0
+    # 接触参数默认取 dataclass 的硬接触值; 显式给出时按显式值 (供软/硬对照实验)
+    extra: dict = {}
+    if solref is not None:
+        extra["solref"] = tuple(float(v) for v in solref)
+    if solimp is not None:
+        extra["solimp"] = tuple(float(v) for v in solimp)
     return RestrictedSpaceEntityCfg(
         name="restricted_space",
         wall_x_neg=neg,
@@ -140,6 +161,7 @@ def build_restricted_space_cfg(enable_collision: bool,
         contype=value,
         conaffinity=value,
         fixed_width=bool(fixed_width),
+        **extra,
     )
 
 
@@ -147,18 +169,27 @@ def build_restricted_space_cfg(enable_collision: bool,
 def configure_restricted_space(env_cfg, corridor_width: float | None = None,
                                enable_collision: bool = True, fixed_width: bool = False, *,
                                wall_x_neg: float | None = None,
-                               wall_x_pos: float | None = None) -> RestrictedSpaceEntityCfg:
+                               wall_x_pos: float | None = None,
+                               solref: tuple[float, ...] | None = None,
+                               solimp: tuple[float, ...] | None = None) -> RestrictedSpaceEntityCfg:
     neg, pos = _resolve_wall_pair(corridor_width, wall_x_neg, wall_x_pos)
     cfg = build_restricted_space_cfg(enable_collision=enable_collision,
                                      wall_x_neg=neg, wall_x_pos=pos,
-                                     fixed_width=fixed_width)
+                                     fixed_width=fixed_width,
+                                     solref=solref, solimp=solimp)
     existing = dict(env_cfg.scene.entities).get("restricted_space")
     # 只改课程控制的两个墙位与碰撞开关, 其余尺寸 (墙高/半长/半厚/配色) 必须沿用启动配置 ——
     # 直接新建默认 cfg 会把自定义墙体尺寸悄悄改回默认值。见技术细节 §7.11 第 9 条。
+    # 接触参数同理: 只有显式给出时才覆盖 (对照实验要用), 否则沿用启动配置。
     if isinstance(existing, RestrictedSpaceEntityCfg):
-        cfg = replace(existing, wall_x_neg=cfg.wall_x_neg, wall_x_pos=cfg.wall_x_pos,
-                      contype=cfg.contype, conaffinity=cfg.conaffinity,
-                      fixed_width=cfg.fixed_width)
+        keep: dict = dict(wall_x_neg=cfg.wall_x_neg, wall_x_pos=cfg.wall_x_pos,
+                          contype=cfg.contype, conaffinity=cfg.conaffinity,
+                          fixed_width=cfg.fixed_width)
+        if solref is not None:
+            keep["solref"] = cfg.solref
+        if solimp is not None:
+            keep["solimp"] = cfg.solimp
+        cfg = replace(existing, **keep)
     entities = dict(env_cfg.scene.entities)
     entities["restricted_space"] = cfg
     env_cfg.scene.entities = entities
