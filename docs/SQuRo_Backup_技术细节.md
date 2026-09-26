@@ -1677,10 +1677,20 @@ PPO 用回报与优势更新，**奖励不通过物理仿真的解析梯度传�
 **结论与下一步**：
 
 1. 本 run 已榨干，不要续训；从末档 checkpoint 续训即可（见"续训对齐"）。
-2. **新阶梯（2026-09-26 生效）**：`WALL_X_POS` 固定 **+0.055**（内侧 +0.045），
-   `WALL_X_NEG` 走 **−0.08 → −0.05、步长 0.005（7 档）**，净宽 **0.115 → 0.085**。
-   第 5 档是甜点（净宽 0.090，`p_stood` 0.85~0.90、`p_done` 0.039~0.055），第 6 档是前沿
-   （0.085，门控会把它挡住）。起点取 −0.08 是为了与旧课程末档对齐，续训不会瞬移。
+2. **新阶梯（2026-09-26 生效，同日第二批再收一次）**：`WALL_X_POS` 固定 **+0.05**
+   （内侧 **+0.040**），`WALL_X_NEG` 走 **−0.08 → −0.05、步长 0.005（7 档）**，
+   净宽 **0.110 → 0.080**。
+
+   | 档 | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+   |---|---|---|---|---|---|---|---|
+   | 净宽 | 0.110 | 0.105 | 0.100 | 0.095 | 0.090 | 0.085 | **0.080（对称）** |
+
+   - **末档两侧对称**（中心 ±0.05、内壁 ±0.04），专门用来探极限宽度。
+   - **代价**：reset 姿态余量从 6.8 mm 降到 **1.8 mm**（reset 足端 X 半宽 0.0382，墙心硬下界
+     = 0.0382 + 半厚 0.01 = **0.0482**）；再往里就是"机器人一出生就嵌在墙里"。
+   - 旧值 +0.055（内侧 +0.045）下的实测甜点是净宽 0.090；改到 +0.05 后 0.090 落在第 4 档，
+     第 5/6 档是此前**从未测过**的更窄区间。
+   - 起点取 −0.08 是为了与旧课程末档对齐，续训不会瞬移。
 3. **脊柱侧摆/俯仰跟踪放宽（同批）**：误差缩放两档，
    `SPN_AXIS_SCALE_STRICT = (1,1,1,1)` → `SPN_AXIS_SCALE_RELAXED = (0.5, 1.0, 0.5, 1.0)`
    （顺序 = `actuator_spn_ids` = F_spine1 / F_body / H_spine1 / H_body），由
@@ -1869,6 +1879,35 @@ curriculum_history`，外加实际编译的 `wall_x_neg/wall_x_pos`、碰撞开�
 | `compare_checkpoint_action_quality.py` | **站立动作质量对照**：速度 RMS / 力矩饱和 / 目标角抖动（窗口口径见 §7.2.3b） |
 | `measure_body_height_vs_scale.py` | 不同 λ 下参考高度与站立门限的关系 |
 | `measure_reward_economy.py` / `compare_episode_returns.py` | 奖励经济性与回合回报拆解 |
+
+上表之外的其余脚本（2026-09-26 补齐索引；用途取各脚本首部说明）：
+
+| 脚本 | 用途 |
+|---|---|
+| `verify_corridor_wiring.py` | **受限空间接线自检**：档位表 / 墙体几何与净宽 / 碰撞是否真的生效（只读，带失败断言） |
+| `diag_curriculum_gate.py` | **墙位课程门控诊断**：固定检查点在指定墙位下量 `p_onset`/`p_stood`/`p_done`/窗口 V/T，并给基座与足端的 X/Y/Z 包络与越界分解（只读） |
+| `probe_corridor_floor.py` | **走廊几何下界**：按网格顶点算真实包围盒，只统计低于墙顶的部分，输出墙心/净宽的理论下界（只读） |
+| `probe_corridor_clearance.py` | 受限空间几何复核：初态体轴朝向与左右横向净宽（只读） |
+| `probe_step_budget.py` | 单步耗时分解：逐段 cuda 同步计时 + `.item()` 消融，定位与环境数无关的固定开销（只读） |
+| `diag_brittleness_sweep.py` | 多种子扫描，区分"初态运气"与"真实脆弱性"（只读） |
+| `diag_s1_shape_ablation.py` | 对照两次训练（无 / 有 `s1_shape`）的收敛与行为（只读） |
+| `diag_s1_shape_degradation.py` | 有 `s1_shape` 那次训练在 1000~2000 轮之间的退化与恢复（只读） |
+| `diag_shape_checkpoint_posture.py` | 有 `s1_shape` run 在 1000/1100/1500/2900 四个回放检查点的 P3 站姿质量（只读） |
+| `diag_stuck_replay.py` | 定位那条"没站起来"的 1500 回放卡在哪（只读） |
+| `diagnose_phase_tracking.py` | 手调脚本的相位推进与训练 `BackupCommand` 为何不同步，逐帧打印两侧 phase / t_phase |
+| `diagnose_s1_conditions.py` | S1/S2 达标诊断：逐帧检查状态机的 4 个几何条件，定位是哪一个不满足 |
+| `trace_p1_world_attitude.py` | 各 body 相对 base 的"零位"姿态（由 SQuRo.xml 固定安装旋转导出） |
+| `check_body_up_convention.py` | 三口径对拍：`_body_up` 公式 / 其另一分量 / 世界系背腹轴真值 |
+| `check_segment_gravity.py` | 用独立于四元数的几何真值判定 `body_link_quat_w` 的口径 |
+| `measure_ref_tracking_conditions.py` | 若策略完美跟踪参考表（纯开环下发参考角），S1/S2 能否成立、窗口多宽 |
+| `measure_s1_s2_conditions.py` | 手调回放的 S1/S2 分项测量 |
+| `measure_progress_reward_scale.py` | 区间奖励（progress）权重标定测算，只测量不注册奖励项 |
+| `gen_body_attitude_ref.py` | 从成功回放 CSV 提取躯干姿态参考（两段背腹轴的世界 Z 余弦随时间） |
+| `baseline_trivial_policy.py` | 平凡基线与多策略对照评估（zero / random / reference / trained / sampled 动作） |
+| `backup_p1_diagnostics.py` | P1 段诊断：分离时间、动作放大与后腿参考对 S1 达成的影响 |
+| `backup_righting_profile.py` | 开环手调状态机的逐步关节角 / body 位姿 / 真实包络采集（只读，不落盘） |
+| `SQuRo_backup_ref_replay.py` | 开环参考"策略"：忽略观测，每步按 episode 时间输出参考动作 |
+| `analyze_backup_video_csv.py` | 回放 CSV 分析：用 `*_ref_pos` / `*_ref_vel` 列反推策略当时处在哪一段参考 |
 
 回归与验收入口：
 
