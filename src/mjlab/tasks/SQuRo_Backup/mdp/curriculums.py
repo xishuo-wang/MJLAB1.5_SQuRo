@@ -233,3 +233,17 @@ def get_wall_positions_for_level(level: int) -> tuple[float, float]:
 def get_level_for_wall_x_neg(x_neg: float) -> int:
     return min(range(CURRICULUM_LEVELS),
                key=lambda i: abs(WALL_X_NEG_LEVELS[i] - float(x_neg)))
+
+
+# 逐环境随机墙位课程 (mocap 墙)。左墙距离 d = -wall_x_neg 每回合从 [d_min, WALL_D_MAX] 采样,
+# 以 WALL_D_MIN_FRAC 的概率直接取 d_min; 右墙固定 WALL_X_POS。
+# d_min 从 WALL_D_MAX 逐档降到 CUR_D_MIN_END, 只统计"采到 d_min 的那批回合"的成绩。
+# 下界 0.06 (净宽 0.09) 是硬接触下的物理下限: 硬墙下 0.08 净宽根本翻不起来 (p_onset 0.008)。
+WALL_D_MAX = 0.20
+CUR_D_MIN_END = 0.06
+CUR_D_MIN_STEP = 0.01
+WALL_D_MIN_FRAC = 0.3
+# 门控批次: 每 CURRICULUM_BATCH_EPISODES 个 d_min 回合结算一批, 连续 CURRICULUM_BATCHES_REQUIRED
+# 批达标才降一档。批次互不重叠 (结算即清零), 避免滑动窗口在高方差下反复触发。
+CURRICULUM_BATCH_EPISODES = 256
+CURRICULUM_BATCHES_REQUIRED = 2

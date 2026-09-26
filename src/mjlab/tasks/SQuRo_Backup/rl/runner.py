@@ -13,12 +13,18 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    CUR_D_MIN_END,
+    CUR_D_MIN_STEP,
+    CURRICULUM_BATCHES_REQUIRED,
+    CURRICULUM_BATCH_EPISODES,
     CURRICULUM_GATE_P_STOOD,
     CURRICULUM_LEVELS,
     CURRICULUM_MIN_DWELL_ITER,
     CURRICULUM_START_ITER,
     CURRICULUM_WINDOW_EPISODES,
     STAGE1_3_ITER,
+    WALL_D_MAX,
+    WALL_D_MIN_FRAC,
     WALL_X_NEG_LEVELS,
     WALL_X_POS,
     _STEPS_PER_ITER,
@@ -59,6 +65,13 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._cur_level = 0
         self._cur_level_iter = 0
         self._cur_level_history: list[dict] = []
+        # 逐环境随机墙位课程 (mocap 墙): 左墙下界 d_min 从 WALL_D_MAX 逐档降到 CUR_D_MIN_END。
+        # 与档位阶梯互斥: 走随机路径时不再需要为换墙位重建环境, 只有碰撞开关仍需重建。
+        self._wall_random = self._corridor_start_walls is not None and not self._corridor_fixed
+        self._wall_d_min = WALL_D_MAX
+        self._dmin_batch_ep = 0
+        self._dmin_batch_stood = 0
+        self._dmin_batch_pass = 0
         self._reset_curriculum_window()
 
     # 清空当前档位的门控窗口。**每次重建都要清**: 新环境的 _ep_seq 从 0 重新开始, 不清
@@ -90,12 +103,19 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         keep = idx[cmd._last_ep_valid.detach().to("cpu")[idx]]
         if len(keep) > 0:
             head = self._w_head[keep]
+            stood = cmd._last_ep_stood_pose.detach().to("cpu")[keep]
             self._w_succ[keep, head] = cmd._last_ep_success.detach().to("cpu")[keep]
-            self._w_stood[keep, head] = cmd._last_ep_stood_pose.detach().to("cpu")[keep]
+            self._w_stood[keep, head] = stood
             self._w_onset[keep, head] = cmd._last_ep_stood_onset.detach().to("cpu")[keep]
             self._w_head[keep] = (head + 1) % CURRICULUM_WINDOW_EPISODES
             self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1,
                                             max=CURRICULUM_WINDOW_EPISODES)
+            # 批次门控只累计"本回合采到 d_min"的回合 —— 宽墙位的成绩不能用来判定窄墙位是否达标
+            if self._wall_random:
+                d = cmd._last_ep_wall_d.detach().to("cpu")[keep]
+                at_min = (d - self._wall_d_min).abs() < 1e-6
+                self._dmin_batch_ep += int(at_min.sum())
+                self._dmin_batch_stood += int(stood[at_min].sum())
         self._ep_seq_seen[idx] = seq[idx]
 
     # 三个门控量 (分母相同, 都是窗口内的有效回合数):
@@ -114,7 +134,11 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 门控达标则推进一档。只升一档、只改索引, 真正的墙位变化交给随后那次重建。
     def _maybe_promote(self, it: int) -> bool:
-        if self._corridor_fixed or self._cur_level >= CURRICULUM_LEVELS - 1:
+        if self._corridor_fixed:
+            return False
+        if self._wall_random:
+            return self._maybe_lower_dmin(it)
+        if self._cur_level >= CURRICULUM_LEVELS - 1:
             return False
         if it < CURRICULUM_START_ITER:
             return False
@@ -141,6 +165,56 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
               f"上档 p_stood={p_stood:.3f} p_onset={p_onset:.3f} p_done={p_done:.3f}")
         return True
 
+    # 随机墙位课程: 攒满一批 d_min 回合就结算, 连续两批达标才把 d_min 降一档。
+    # 降档不需要重建环境 (墙位由命令项逐环境写 mocap), 只把新范围推给命令项, 下个回合生效。
+    def _maybe_lower_dmin(self, it: int) -> bool:
+        if self._wall_d_min <= CUR_D_MIN_END + 1e-9:
+            return False
+        if it < CURRICULUM_START_ITER:
+            return False
+        if it - self._cur_level_iter < CURRICULUM_MIN_DWELL_ITER:
+            return False
+        # 不变量: 物理必须已与当前课程一致 —— 否则会拿"开碰撞之前"的成绩降 d_min
+        if self._corridor_change_needed():
+            return False
+        if self._dmin_batch_ep < CURRICULUM_BATCH_EPISODES:
+            return False
+        p_stood = self._dmin_batch_stood / max(1, self._dmin_batch_ep)
+        n_ep = self._dmin_batch_ep
+        self._dmin_batch_ep = 0
+        self._dmin_batch_stood = 0
+        self._dmin_batch_pass = self._dmin_batch_pass + 1 if p_stood >= CURRICULUM_GATE_P_STOOD else 0
+        print(f"[INFO] d_min 批次结算: d_min={self._wall_d_min:.3f} "
+              f"{n_ep} 个回合 p_stood={p_stood:.3f} -> 连续达标 {self._dmin_batch_pass}/"
+              f"{CURRICULUM_BATCHES_REQUIRED}")
+        if self._dmin_batch_pass < CURRICULUM_BATCHES_REQUIRED:
+            return False
+        self._cur_level_history.append({
+            "d_min": self._wall_d_min, "iter": it, "batch_episodes": n_ep,
+            "p_stood": p_stood,
+        })
+        self._wall_d_min = max(CUR_D_MIN_END, round(self._wall_d_min - CUR_D_MIN_STEP, 6))
+        self._dmin_batch_pass = 0
+        self._cur_level_iter = it
+        self._reset_curriculum_window()
+        self._push_wall_curriculum()
+        print(f"[INFO] 墙位课程推进: d_min={self._wall_d_min:.3f} "
+              f"(净宽下限 {self._wall_d_min + WALL_X_POS - 0.02:.4f} m), iter {it}, "
+              f"上档 p_stood={p_stood:.3f}")
+        return True
+
+    # 把当前 d_min / 范围 / 下界采样比例推给命令项 (新建命令实例后必须重推一次)
+    def _push_wall_curriculum(self) -> None:
+        if not self._wall_random:
+            return
+        try:
+            cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
+        except Exception:
+            return
+        setter = getattr(cmd, "set_wall_curriculum", None)
+        if setter is not None:
+            setter(self._wall_d_min, WALL_D_MAX, WALL_D_MIN_FRAC)
+
     # 每轮把课程状态写进 tensorboard; 无样本时不写 (NaN 会污染曲线)。
     def _log_curriculum(self, it: int) -> None:
         writer = getattr(self.logger, "writer", None)
@@ -149,6 +223,15 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         neg, pos = get_wall_positions_for_level(self._cur_level)
         p_stood, p_onset, p_done, ready, n_valid = self._curriculum_metrics()
         writer.add_scalar("Curriculum/level", self._cur_level, it)
+        if self._wall_random:
+            # 随机墙位下"当前墙位"是一个分布, 只有下界是确定量; 用 d_min 代替档位口径
+            neg, pos = -self._wall_d_min, WALL_X_POS
+            writer.add_scalar("Curriculum/wall_d_min", self._wall_d_min, it)
+            writer.add_scalar("Curriculum/dmin_batch_episodes", self._dmin_batch_ep, it)
+            writer.add_scalar("Curriculum/dmin_batch_pass", self._dmin_batch_pass, it)
+            if self._dmin_batch_ep > 0:
+                writer.add_scalar("Curriculum/dmin_p_stood",
+                                  self._dmin_batch_stood / self._dmin_batch_ep, it)
         writer.add_scalar("Curriculum/wall_x_neg", neg, it)
         writer.add_scalar("Curriculum/wall_x_pos", pos, it)
         writer.add_scalar("Curriculum/clear_width", pos - neg - 0.02, it)
@@ -176,6 +259,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         collision = get_training_phase(step_counter) == 1
         if self._corridor_fixed:
             return self._corridor_start_walls, collision
+        if self._wall_random:
+            # 墙位由命令项逐环境写 mocap, 与编译几何无关 -> 不需要为换墙位重建。
+            # 报"编译值"当目标, 于是墙位比较恒等, 只剩碰撞开关能触发重建。
+            return self._corridor_compiled_state()[0], collision
         return get_wall_positions_for_level(self._cur_level), collision
 
     # 是否需要重建: 目标与**实际编译值**不一致 (碰撞开关变化, 或任一墙位不一致)。
@@ -247,10 +334,18 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._reset_curriculum_window()
         self._cur_level_iter = step_counter // _STEPS_PER_ITER
         self._clear_logger_episode_state()
+        # 新环境的命令项是全新实例, 必须把随机墙位的课程范围重新推一次 (否则回到编译墙位)
+        self._push_wall_curriculum()
         try:
             old.close()
         except Exception as exc:  # 旧环境关不掉不应中断训练
             print(f"[WARN] 旧环境关闭失败: {exc}")
+        if self._wall_random:
+            print(f"[INFO] 受限空间重建: 碰撞={'开' if collision else '关'}, "
+                  f"随机墙位 d∈[{self._wall_d_min:.3f}, {WALL_D_MAX:.2f}] "
+                  f"x_pos={WALL_X_POS:.3f}, iter {step_counter // _STEPS_PER_ITER} "
+                  f"num_envs={self._corridor_num_envs}")
+            return self.env.get_observations().to(self.device) if refresh_obs else None
         print(f"[INFO] 受限空间重建: 档位 {self._cur_level}/{CURRICULUM_LEVELS - 1}, "
               f"墙 x_neg={neg:.4f} x_pos={pos:.4f} (净宽 {pos - neg - 0.02:.4f} m), "
               f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
@@ -268,6 +363,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
         if self._corridor_start_walls is not None and self._corridor_change_needed():
             self._apply_corridor_rebuild(refresh_obs=False)
+        else:
+            self._push_wall_curriculum()
 
         obs = self.env.get_observations().to(self.device)
         self.alg.train_mode()
@@ -385,6 +482,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                   "若这是自动课程 run, 回放请显式指定墙位")
         self._cur_level_iter = int(saved.get("curriculum_iter", self.current_learning_iteration))
         self._cur_level_history = list(saved.get("curriculum_history") or [])
+        # 随机墙位课程: 直接恢复下界 (墙位不再是单一编译值, 档位口径对它没有意义)
+        if self._wall_random and saved.get("wall_d_min") is not None:
+            self._wall_d_min = float(saved["wall_d_min"])
+            self._dmin_batch_ep = 0
+            self._dmin_batch_stood = 0
+            self._dmin_batch_pass = 0
+            print(f"[INFO] 续训: 恢复随机墙位课程 d_min={self._wall_d_min:.3f} "
+                  f"(范围 [{self._wall_d_min:.3f}, {WALL_D_MAX:.2f}])")
         # 锁死模式: 显式指定墙位 (命令行) 优先; 否则沿用检查点记录的标记, 并同步锁死模板。
         if not self._corridor_fixed_by_cli and saved.get("corridor_fixed") is not None:
             self._corridor_fixed = bool(saved["corridor_fixed"])
@@ -399,6 +504,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[INFO] 续训: 实际编译配置 {compiled} 与课程目标 "
                   f"{self._corridor_target()} 不一致, 首次采样前重建")
             self._apply_corridor_rebuild(refresh_obs=False)
+        else:
+            self._push_wall_curriculum()
         return infos
 
     # 检查点里记录**实际编译生效**的墙位、碰撞开关与课程档位, 供续训与回放精确复现
@@ -415,6 +522,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             "curriculum_level": self._cur_level,
             "curriculum_iter": self._cur_level_iter,
             "curriculum_history": list(self._cur_level_history),
+            # 随机墙位课程的下界 (墙位不再是单一编译值, 续训必须恢复它)
+            "wall_d_min": (self._wall_d_min if self._wall_random else None),
         }
         super().save(path, infos={**(infos or {}), "corridor_state": extra})
         policy_dir, filename, onnx_path = self._get_export_paths(path)
