@@ -37,9 +37,13 @@ if TYPE_CHECKING:
 _GROUND_TH = 0.03     # S1 平躺高度阈值
 _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)。三个时刻含义不同, 混用会造成目标冲突, 见技术细节 §7.10:
-# _P1_NOMINAL 奖励基准 = 参考要求到达 S1 的时刻; _P1_EXPECT 推进门 = 冻结等待段走完。
+# _P1_NOMINAL 奖励基准 = 参考要求到达 S1 的时刻; P1 推进门 = (P1_END + 沉降余量) × λ,
+# 沉降余量按轮次下降 (课程), 见 curriculums.get_p1_settle_margin。
 _P1_NOMINAL = P1_END
-_P1_EXPECT = P1_END + P1_SETTLE_MAX     # 旧口径 (沉降余量取满), 现在只作重试截止的基准
+# 旧口径的 P1 推进门 (沉降余量取满)。**训练侧已不再用它**: 训练按课程取
+# (P1_END + get_p1_settle_margin()) × λ。但 SQuRo_Backup_Replay 的手调状态机仍从这里导入,
+# 删它会让那个模块 ImportError —— 要统一口径必须同时改回放脚本 (见技术细节待办)。
+_P1_EXPECT = P1_END + P1_SETTLE_MAX
 _P2_NOMINAL = T3
 _P2_EXPECT = T3
 
