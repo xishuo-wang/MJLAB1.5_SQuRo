@@ -1,7 +1,6 @@
 from __future__ import annotations
 import sys
 import torch
-import numpy as np
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
@@ -37,7 +36,7 @@ def main() -> None:
     print(f"  slow1_target 内部: time1={1.0}  time2={1.0 + 0.65 * lam:.3f}  "
           f"time3={1.0 + 0.80 * lam:.3f}  time4={1.0 + 0.95 * lam:.3f}  "
           f"time5_end={1.0 + 1.45 * lam:.3f}")
-    print(f"  传参方式: current_time = 1.0 + tn*λ, scale=λ  →  有效名义时刻 tn = (current_time-1.0)/λ")
+    print("  传参方式: current_time = 1.0 + tn*λ, scale=λ  →  有效名义时刻 tn = (current_time-1.0)/λ")
     print(f"  名义 T1 末 = {(1.0 + 0.65 * lam - 1.0) / lam:.3f}s ; "
           f"T2 末 = {(1.0 + 0.80 * lam - 1.0) / lam:.3f}s ; "
           f"T3 末 = {(1.0 + 0.95 * lam - 1.0) / lam:.3f}s")
@@ -62,7 +61,7 @@ def main() -> None:
             seg = "T5 保持"
         print(f"{tn:7.3f} | {r[0]:+7.3f} {r[1]:+7.3f} {r[8]:+7.3f} {r[9]:+7.3f} | {seg}")
 
-    print(f"\n=== 回放实际运行 (检查是否中途被 auto-reset) ===")
+    print("\n=== 回放实际运行 (检查是否中途被 auto-reset) ===")
     fb, hb = _MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id
     prev_eph = 0
     reset_events = []

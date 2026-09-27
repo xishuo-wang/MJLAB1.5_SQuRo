@@ -21,7 +21,6 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Backup.rl.runner import _STEPS_PER_ITER
 
 

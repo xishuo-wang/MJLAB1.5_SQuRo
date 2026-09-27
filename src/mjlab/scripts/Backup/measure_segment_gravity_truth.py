@@ -55,7 +55,7 @@ def main() -> None:
         return -float(v[2] / (np.linalg.norm(v) + 1e-12))
 
     print(f"\nλ={lam}  正置度: +1=正置(腹面朝下)  -1=倒置(腹面朝上)")
-    print(f"验收锚点: 初始(-1,-1) | T2末(-1,+1) | T3末(+1,+1)")
+    print("验收锚点: 初始(-1,-1) | T2末(-1,+1) | T3末(+1,+1)")
     print(f"{'t':>6} {'t_nom':>6} {'ph':>3} | {'base_up':>8} | {'F':>8} {'H':>8} | "
           f"{'zF':>7} {'zH':>7} | 判定")
     with torch.no_grad():

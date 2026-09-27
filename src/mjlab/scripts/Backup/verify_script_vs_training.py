@@ -18,7 +18,7 @@ from mjlab.scripts.SQuRo_Backup_Replay import (
     T_SEG4_END,
 )
 from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp import config as T
 from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_TRANSITION_END as _STAND_TRANSITION_END
@@ -190,7 +190,7 @@ def cmp_detection(lam: float) -> bool:
         print(f"    首个不一致: t={t0:.2f}s 手调={phase_name.get(h_ph, '?')} 训练={phase_name.get(c_ph, '?')}")
     # 每处相位边界允许 1 帧错位: 手调侧在 env.step 之前推进时钟, 训练 command 在 step 之内,
     # 两者天生相差一步。超过"边界数×1 帧"才是真的状态机分歧。
-    print(f"    说明: ≤3 帧(三个边界各 1 帧)属固有错位, >3 帧才是状态机分歧")
+    print("    说明: ≤3 帧(三个边界各 1 帧)属固有错位, >3 帧才是状态机分歧")
 
     env.close()
     ok = sum(n_mismatch.values()) == 0

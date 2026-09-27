@@ -11,7 +11,7 @@ except Exception:
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.scripts.SQuRo_Backup_Replay import StateMachinePolicy
 from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import resolve_model_indices
 
 
 # 用 body 的 site 世界坐标做最小二乘姿态拟合 (不依赖任何四元数约定)

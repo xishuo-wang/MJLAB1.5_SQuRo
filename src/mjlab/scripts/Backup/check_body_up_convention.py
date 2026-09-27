@@ -2,7 +2,6 @@ from __future__ import annotations
 import sys
 import torch
 import numpy as np
-import mujoco
 from pathlib import Path
 
 try:

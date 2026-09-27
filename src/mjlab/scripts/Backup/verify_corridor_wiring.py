@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from dataclasses import dataclass
 
-import numpy as np
 import torch
 import tyro
 

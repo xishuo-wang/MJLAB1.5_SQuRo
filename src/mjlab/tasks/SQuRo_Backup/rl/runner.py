@@ -22,7 +22,6 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     CURRICULUM_MIN_DWELL_ITER,
     CURRICULUM_START_ITER,
     CURRICULUM_WINDOW_EPISODES,
-    STAGE1_3_ITER,
     WALL_D_MAX,
     WALL_D_MIN_FRAC,
     WALL_X_NEG_LEVELS,

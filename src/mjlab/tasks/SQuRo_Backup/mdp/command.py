@@ -8,7 +8,6 @@ from mjlab.managers.command_manager import CommandTerm
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .config import (
     P1_END,
-    PRE_DURATION,
     STAND_CONFIRM_DURATION,
     STAND_GROUND_HEIGHT,
     STAND_TARGET_HEIGHT,

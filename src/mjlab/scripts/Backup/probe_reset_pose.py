@@ -9,7 +9,7 @@ import torch
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATED_JOINT_NAMES, _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACTUATED_JOINT_NAMES, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import _generate_reference_table
 from mjlab.tasks.registry import load_env_cfg
 

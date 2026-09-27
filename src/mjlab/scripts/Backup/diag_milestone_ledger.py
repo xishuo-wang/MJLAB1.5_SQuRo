@@ -12,7 +12,6 @@ from mjlab.tasks.SQuRo_Backup.mdp.config import (
     P1_END,
     P2_END,
     REFERENCE_TOTAL_TIME,
-    STAND_CONFIRM_DURATION,
 )
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES

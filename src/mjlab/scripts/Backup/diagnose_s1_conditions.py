@@ -64,7 +64,7 @@ def main() -> None:
             df["zF_est"] = df["base_pos_z"].to_numpy() + OFF * df["upF"].to_numpy()
             df["zH_est"] = df["base_pos_z"].to_numpy() + OFF * df["upH"].to_numpy()
             zf_col, zh_col = "zF_est", "zH_est"
-            print(f"  未找到 body 高度列, 用 base_pos_z + 0.0468*背腹轴 估算")
+            print("  未找到 body 高度列, 用 base_pos_z + 0.0468*背腹轴 估算")
 
     m = (df["t"] >= args.t_min) & (df["t"] <= args.t_max)
     d = df[m].copy()

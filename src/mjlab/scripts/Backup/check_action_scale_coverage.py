@@ -84,7 +84,7 @@ def main() -> None:
     if CLIP is None:
         print(f"@scale=0.3: 最大所需动作 {worst:.3f} ({worst_j}) —— 但 clip_actions=None, **没有任何外层裁剪**")
         print(f"            该值 = 把 {worst_j} 推到 ctrlrange 极值所需的动作量; 策略实测可达 5.4~5.6,")
-        print(f"            即它长期工作在 |action|≈5, 是标称 ±1 的 5 倍。")
+        print("            即它长期工作在 |action|≈5, 是标称 ±1 的 5 倍。")
         print(f"            把 scale 提到 1.6 后同一目标只需 {worst * 0.3 / 1.6:.3f}。")
     else:
         print(f"@scale=0.3: 最大所需动作 {worst:.3f} ({worst_j}), clip={CLIP} → 余量 {CLIP / worst:.2f}x")

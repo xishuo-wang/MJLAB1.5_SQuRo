@@ -92,7 +92,7 @@ def main() -> None:
         print("时间窗内无数据")
         return
 
-    print(f"\n注意: base 四元数未记录, 高度用 base_pos_z + 单位四元数近似 (FK 主要误差来自姿态翻转)")
+    print("\n注意: base 四元数未记录, 高度用 base_pos_z + 单位四元数近似 (FK 主要误差来自姿态翻转)")
     print(f"\n{'t':>6} {'upF':>7} {'upH':>7} {'zF':>8} {'zH':>8} | {'c1':>3} {'c2':>3} {'c3':>3} {'c4':>3} | S1")
     step = args.step or max(1, len(dsp) // 35)
     for i in range(0, len(dsp), step):

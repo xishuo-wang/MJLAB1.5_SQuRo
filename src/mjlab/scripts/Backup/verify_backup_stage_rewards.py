@@ -8,7 +8,7 @@ from unittest.mock import patch
 import torch
 
 from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommand, BackupCommandCfg
-from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, terminations, events
+from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, events
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
@@ -20,7 +20,6 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import get_curriculum_reward_weigh
 from mjlab.tasks.SQuRo_Backup.mdp.command import _GROUND_TH
 # 相位时钟与参考表同为累计口径(含前置收腿段 T0), 故 P1 名义段末就是 P1_END×λ。
 from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END as _P1_END
-from mjlab.tasks.SQuRo_Backup.mdp.config import P2_END as _P2_END
 from mjlab.tasks.SQuRo_Backup.mdp.config import PRE_DURATION as _PRE_DURATION
 # 段内口径(不含 T0): 姿态参考与录制身体轨迹表的时刻基准, 比累计口径整整少一个 T0。
 from mjlab.tasks.SQuRo_Backup.mdp.config import P1_SPAN as _P1_SPAN
@@ -1856,8 +1855,8 @@ class StageRewardTests(unittest.TestCase):
         # 本测试用**判据本身**(cos45 锥)而不是手写常量来卡边界。
         from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_body_attitude
         from mjlab.tasks.SQuRo_Backup.mdp.reference import (
-            ATTITUDE_F_HOLD_T, ATTITUDE_F_RIGHTED_T,
-            ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T)
+            ATTITUDE_F_RIGHTED_T,
+            ATTITUDE_H_RIGHTED_T)
         env, cmd = make_env([0])
         cmd._update_dt = env.step_dt
         cmd.command_tensor[:, 5] = 1.0          # λ=1, 让 t_nom == t_phase
