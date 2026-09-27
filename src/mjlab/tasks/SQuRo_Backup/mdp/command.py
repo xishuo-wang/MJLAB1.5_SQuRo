@@ -332,8 +332,13 @@ class BackupCommand(CommandTerm):
         lo, hi = self._wall_bounds()
         if hi > lo:
             d = torch.empty(n, device=self.device).uniform_(lo, hi)
-            if 0.0 < float(self.cfg.wall_d_min_frac) < 1.0:
-                pick = torch.rand(n, device=self.device) < float(self.cfg.wall_d_min_frac)
+            frac = float(self.cfg.wall_d_min_frac)
+            if frac >= 1.0:
+                # 全部取最窄档 (消融用)。不能写成 0 < frac < 1 才处理 —— 那样 frac=1.0
+                # 会掉进均匀采样, 实测 64 个样本没有一个落在下界。
+                d = torch.full_like(d, lo)
+            elif frac > 0.0:
+                pick = torch.rand(n, device=self.device) < frac
                 d = torch.where(pick, torch.full_like(d, lo), d)
         else:
             d = torch.full((n,), lo, device=self.device)
