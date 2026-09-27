@@ -247,3 +247,27 @@ WALL_D_MIN_FRAC = 0.3
 # 批达标才降一档。批次互不重叠 (结算即清零), 避免滑动窗口在高方差下反复触发。
 CURRICULUM_BATCH_EPISODES = 256
 CURRICULUM_BATCHES_REQUIRED = 2
+
+
+# P1 沉降余量课程。参考在 P1_END(1.30) 就被 clamp 钉住 (reference._stage_t_nom 的 p1_t),
+# 之后的等待只是"参考播完后强制站定"的缓冲; 下限 0 = 参考刚播完 + 姿态连续确认满
+# pose_confirm_s 就放行。**不得为负**: 那会截断真实扭转动作, 推进瞬间参考跳 1.37 rad。
+# 从 P1_SETTLE_START_ITER 线性降到 P1_SETTLE_END_ITER。
+P1_SETTLE_MAX = 0.50
+P1_SETTLE_MIN = 0.00
+P1_SETTLE_START_ITER = 2000
+P1_SETTLE_END_ITER = 3000
+# 重试截止是否跟随沉降余量一起收缩。False = 仍按旧口径 (余量取满 0.50) 算截止,
+# 这样本次实验只动"放行时刻", 不同时收紧失败容忍时间, 便于归因。
+P1_CLOSE_FOLLOWS_SETTLE = False
+
+
+# P1 沉降余量 (名义秒) 按轮次线性下降
+def get_p1_settle_margin(step_counter: int) -> float:
+    it = int(step_counter) // _STEPS_PER_ITER
+    if it <= P1_SETTLE_START_ITER:
+        return P1_SETTLE_MAX
+    if it >= P1_SETTLE_END_ITER:
+        return P1_SETTLE_MIN
+    frac = (it - P1_SETTLE_START_ITER) / float(P1_SETTLE_END_ITER - P1_SETTLE_START_ITER)
+    return P1_SETTLE_MAX + frac * (P1_SETTLE_MIN - P1_SETTLE_MAX)

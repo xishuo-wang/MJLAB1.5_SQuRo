@@ -15,7 +15,12 @@ from .config import (
     STAND_VEL_MEAN_MAX,
     T3,
 )
-from .curriculums import get_curriculum_time_scale
+from .curriculums import (
+    P1_CLOSE_FOLLOWS_SETTLE,
+    P1_SETTLE_MAX,
+    get_curriculum_time_scale,
+    get_p1_settle_margin,
+)
 
 # 只在本文件使用的站立判据与水印常量 (未跨文件, 故不进 config.py)。
 WINDOW_LATE_S = 0.50          # 段末之后的晚侧余量 (实际秒); 窗上界同时是重试截止
@@ -35,7 +40,7 @@ _GROUND_TH_S2 = 0.04  # S2 趴地高度阈值 (段3末 H 后肢略翘≈0.034)
 # 阶段预期时长 (名义, ×λ)。三个时刻含义不同, 混用会造成目标冲突, 见技术细节 §7.10:
 # _P1_NOMINAL 奖励基准 = 参考要求到达 S1 的时刻; _P1_EXPECT 推进门 = 冻结等待段走完。
 _P1_NOMINAL = P1_END
-_P1_EXPECT = P1_END + PRE_DURATION
+_P1_EXPECT = P1_END + P1_SETTLE_MAX     # 旧口径 (沉降余量取满), 现在只作重试截止的基准
 _P2_NOMINAL = T3
 _P2_EXPECT = T3
 
@@ -649,7 +654,10 @@ class BackupCommand(CommandTerm):
         self._pose_cache = pose_flags() if pose_flags is not None else None
         # 瞬时候选只用于日志与确认计时, 不能直接当作阶段转移。
         p1 = self.phase == 0
-        expected1 = _P1_EXPECT * lam
+        # P1 推进门 = (P1_END + 沉降余量) × λ。余量按轮次线性下降 (课程), 下限 0:
+        # 参考在 P1_END 已被 clamp 钉住, 余量取 0 不会截断动作, 只是不再强制站定。
+        settle1 = get_p1_settle_margin(int(getattr(self._env, "common_step_counter", 0)))
+        expected1 = (P1_END + settle1) * lam
         s1_ok = self._check_S1()
         p2 = self.phase == 1
         expected2 = _P2_EXPECT * lam
@@ -680,7 +688,8 @@ class BackupCommand(CommandTerm):
         # (达成时刻恒为 max(真实到达时刻, 段末)), 0.60λ 的地板从未起过作用。
         # 真正拦"提前到达并保持"的是里程碑时间质量核, 按"真实首次到达时刻"打折。
         # 设计依据见技术细节开头的"2026-09-18 达成时刻约束 + 循环复位"一节。
-        close1 = expected1 + float(self.cfg.window_late_s)
+        close_settle = settle1 if P1_CLOSE_FOLLOWS_SETTLE else P1_SETTLE_MAX
+        close1 = (P1_END + close_settle) * lam + float(self.cfg.window_late_s)
         close2 = expected2 + float(self.cfg.window_late_s)
         gated1 = p1 & (self.t_phase <= close1)
         gated2 = p2 & (self.t_phase <= close2)
