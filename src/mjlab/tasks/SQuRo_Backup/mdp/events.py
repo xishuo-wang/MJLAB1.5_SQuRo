@@ -54,9 +54,7 @@ def reset_model(env, env_ids) -> None:
 
 
 
-# 启动事件: 报告受限空间实际编译进仿真的状态。
-# 这里不切 contype: mjwarp 在 put_model 时已固化碰撞对, 运行期改掩码无效, 开关只能由
-# env_cfg 在编译前决定。本事件只把真实状态打出来, 避免"以为关了其实没关"。依据见技术细节 §7.11。
+# 初始化受限空间状态
 def init_restricted_space(env, env_ids) -> None:
     entity = env.scene.entities.get("restricted_space")
     if entity is None:
@@ -64,4 +62,4 @@ def init_restricted_space(env, env_ids) -> None:
     print(f"[INFO] 受限空间: 墙中心 x_neg={entity.cfg.wall_x_neg:+.4f} "
           f"x_pos={entity.cfg.wall_x_pos:+.4f} m, "
           f"实际内侧净宽 {entity.clear_width:.4f} m, "
-          f"碰撞 {'开' if entity.collision_enabled else '关'} (编译期决定, 运行期不可改)")
+          f"碰撞 {'开' if entity.collision_enabled else '关'}")
