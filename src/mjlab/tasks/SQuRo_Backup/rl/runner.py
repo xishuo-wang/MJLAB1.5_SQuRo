@@ -1,9 +1,12 @@
 import copy
 import os
 import time
+from typing import Any
 
 import torch
 import wandb
+from rsl_rl.utils import check_nan
+
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import (
@@ -13,10 +16,11 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
+    _STEPS_PER_ITER,
     CUR_D_MIN_END,
     CUR_D_MIN_STEP,
-    CURRICULUM_BATCHES_REQUIRED,
     CURRICULUM_BATCH_EPISODES,
+    CURRICULUM_BATCHES_REQUIRED,
     CURRICULUM_GATE_P_STOOD,
     CURRICULUM_LEVELS,
     CURRICULUM_MIN_DWELL_ITER,
@@ -26,12 +30,10 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     WALL_D_MIN_FRAC,
     WALL_X_NEG_LEVELS,
     WALL_X_POS,
-    _STEPS_PER_ITER,
     get_level_for_wall_x_neg,
     get_training_phase,
     get_wall_positions_for_level,
 )
-from rsl_rl.utils import check_nan
 
 
 class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
@@ -43,11 +45,11 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         # 这里留一份**本次启动的 env_cfg 副本**作为重建模板, 否则重建会把命令行覆盖
         # (fixed_time_scale / episode_length_s / sim 参数 / seed) 全部退回注册配置。
         self._corridor_device = device
-        self._corridor_env_cfg = copy.deepcopy(env.unwrapped.cfg)
-        self._corridor_num_envs = int(env.unwrapped.scene.num_envs)
+        self._corridor_env_cfg = copy.deepcopy(env.unwrapped.cfg)  # type: ignore
+        self._corridor_num_envs = int(env.unwrapped.scene.num_envs)  # type: ignore
         self._corridor_clip_actions = getattr(env, "clip_actions", None)
-        self._corridor_render_mode = getattr(env.unwrapped, "render_mode", None)
-        entity = env.unwrapped.scene.entities.get("restricted_space")
+        self._corridor_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
+        entity = env.unwrapped.scene.entities.get("restricted_space")  # type: ignore
         # 启动时编译进仿真的墙位 (锁死模式的模板), 以及该锁死是否来自显式指定
         self._corridor_start_walls = (
             None if entity is None
@@ -122,7 +124,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._ensure_wall_state()
         if not hasattr(self, "_w_succ"):
             self._reset_curriculum_window()
-        cmd = self.env.unwrapped.command_manager.get_term("backup_cmd")
+        cmd = self._command_term()
         seq = cmd._ep_seq.detach().to("cpu")
         new = seq > self._ep_seq_seen
         if not bool(new.any()):
@@ -249,7 +251,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         setter(self._wall_d_min, WALL_D_MAX, WALL_D_MIN_FRAC)
 
     # 取命令项; 测试替身可能没有 command_manager
-    def _command_term(self):
+    # 返回 Any 是刻意的: runner 必须读任务专用命令项的私有回合账本 (_ep_seq/_last_ep_*),
+    # 而 get_term 的声明类型是通用 CommandTerm, 不标注会刷出十几个类型检查错误。
+    def _command_term(self) -> Any:
         try:
             return self.env.unwrapped.command_manager.get_term("backup_cmd")
         except Exception:
@@ -316,8 +320,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         entity = self.env.unwrapped.scene.entities.get("restricted_space")
         if entity is None:
             return None, None
-        return ((float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)),
-                bool(entity.collision_enabled))
+        return ((float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)),  # type: ignore
+                bool(entity.collision_enabled))  # type: ignore
 
     # 当前该用的 (墙位对, 是否开碰撞)。墙位由课程档位决定; 锁死模式下保持启动墙位。
     # 注意碰撞开关仍按轮次切 (CURRICULUM_START_ITER), 与墙位课程无关。
@@ -345,7 +349,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             return True
         if walls is None or compiled_walls is None:
             return False
-        return max(abs(a - b) for a, b in zip(walls, compiled_walls)) > 1e-9
+        return max(abs(a - b) for a, b in zip(walls, compiled_walls, strict=True)) > 1e-9
 
     # 清掉"未结束回合"的累计。环境重建会中断所有在跑的回合, 不清就会跨重建拼接统计。
     def _clear_logger_episode_state(self) -> None:
@@ -494,14 +498,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 loss_dict=loss_dict,
                 learning_rate=self.alg.learning_rate,
                 action_std=self.alg.get_policy().output_std,
-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
+                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
             )
 
             if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
-                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))
+                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
 
         if self.logger.writer is not None:
-            self.save(os.path.join(self.logger.log_dir,
+            self.save(os.path.join(self.logger.log_dir,  # type: ignore
                                    f"model_{self.current_learning_iteration}.pt"))
             self.logger.stop_logging_writer()
 
@@ -593,7 +597,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         extra = {
             "wall_x_neg": neg,
             "wall_x_pos": pos,
-            "corridor_width": (None if walls is None else pos - neg),   # 派生量, 兼容旧读取方
+            "corridor_width": (None if walls is None else pos - neg),   # 派生量, 兼容旧读取方  # type: ignore
             "corridor_collision": collision,
             "corridor_fixed": self._corridor_fixed,
             "curriculum_level": self._cur_level,
