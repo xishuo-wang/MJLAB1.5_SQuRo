@@ -50,6 +50,8 @@ def probe(ckpt: Path, args) -> dict:
     min_vel_rms = torch.full((n,), float("inf"), device=dev)
     fail_speed = 0
     fail_geom = 0
+    window_vel: list[torch.Tensor] = []   # 窗口攒满时的 V/T 样本
+    p3_h_floor: list[torch.Tensor] = []   # P3 内高度下限样本
 
     obs = wrapped.get_observations().to(dev)
     for _ in range(args.steps):
@@ -74,8 +76,15 @@ def probe(ckpt: Path, args) -> dict:
         full = elapsed >= (STAND_CONFIRM_DURATION - 1e-3)
         fail_speed += int((full & in_p3 & strict & (mean_vel > STAND_VEL_MEAN_MAX)).sum())
         fail_geom += int((in_p3 & ~strict & (elapsed > 0)).sum())
+        # 判据余量: 窗口攒满时的 V/T (离门限多远) 与几何富余量 —— 用来量化"临界程度"
+        if bool(full.any()):
+            window_vel.append(mean_vel[full].detach().cpu())
+        if bool(in_p3.any()):
+            p3_h_floor.append(h_floor[in_p3].detach().cpu())
 
     env.close()
+    vel_all = (torch.cat(window_vel) if window_vel else torch.zeros(0)).float()
+    h_all = (torch.cat(p3_h_floor) if p3_h_floor else torch.zeros(0)).float()
     return {
         "ckpt": ckpt.name,
         "s1_rate": float(ever_s1.float().mean()),
@@ -88,6 +97,10 @@ def probe(ckpt: Path, args) -> dict:
         "min_vel_rms": float(min_vel_rms.mean()),
         "fail_speed": fail_speed,
         "fail_geom": fail_geom,
+        # 判据余量: 窗口 V/T 的中位数/最差, 高度下限的最小值 (离门限多远)
+        "vel_med": float(vel_all.median()) if vel_all.numel() else float("nan"),
+        "vel_max": float(vel_all.max()) if vel_all.numel() else float("nan"),
+        "h_min": float(h_all.min()) if h_all.numel() else float("nan"),
     }
 
 
@@ -105,7 +118,8 @@ def main() -> None:
     rows = [probe(Path(c), args) for c in args.ckpt]
 
     keys = ["s1_rate", "s2_rate", "strict_rate", "s1_step_ratio", "max_prog_s1",
-            "best_u_floor", "max_h_floor", "min_vel_rms", "fail_speed", "fail_geom"]
+            "best_u_floor", "max_h_floor", "min_vel_rms", "fail_speed", "fail_geom",
+            "vel_med", "vel_max", "h_min"]
     print()
     print("=== 确定性 rollout 姿态达成对比 (同 seed / 同初态 / %d 环境 x %d 步) ==="
           % (args.num_envs, args.steps))

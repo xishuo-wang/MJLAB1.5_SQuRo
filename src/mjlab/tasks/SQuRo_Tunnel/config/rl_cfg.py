@@ -37,7 +37,7 @@ def SQuRo_Tunnel_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
       desired_kl=0.01,
       max_grad_norm=1.0,
     ),
-    experiment_name="mouse_locomotion",
+    experiment_name="SQuRo_Tunnel",
     save_interval=100,
     num_steps_per_env=24,
     max_iterations=PHASE1_START_ITER * 2,   # 一阶段 0~3k (随机高度) + 二阶段 3k~6k (受限空间)

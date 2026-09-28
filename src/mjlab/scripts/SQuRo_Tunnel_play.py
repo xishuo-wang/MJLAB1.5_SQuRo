@@ -532,7 +532,7 @@ def run_play(cfg: PlayConfig):
         print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
         print(f"[INFO] 前肢中心 x={float(x_f[0]):.4f} z={float(z_f[0]):.4f} 期望={float(z_f_ref[0]):.4f}")
         print(f"[INFO] 后肢中心 x={float(x_h[0]):.4f} z={float(z_h[0]):.4f} 期望={float(z_h_ref[0]):.4f}")
-        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")
+        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}") # type: ignore
         if data_recorder:
             data_recorder.save_to_csv()
         env.close()

@@ -15,7 +15,7 @@ _FIXED_WEIGHTS: dict[str, float] = {
     "weight_height": 2.5,
     "weight_track_vel": 4.0,
     "weight_track_vyz": 1.0,
-    "weight_corridor": 8.0,
+    "weight_corridor": 0.0,
     "weight_track_head": 5.0,
     "weight_smooth_L1_leg": 0.5,
     "weight_smooth_L1_spn": 0.5,
