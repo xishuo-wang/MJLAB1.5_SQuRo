@@ -119,6 +119,3 @@ def resolve_model_indices(entity) -> None:
     print(f"  足端 site IDs: {_MODEL_INDICES.foot_site_ids}")
     print(f"  躯干腹/背 site IDs: {_MODEL_INDICES.segment_belly_back_ids}")
     print(f"  actuator 顺序: {list(joint_names)}")
-    print(f"  leg action idx: {_ACTION_LEG_IDS}")
-    print(f"  spn action idx: {_ACTION_SPN_IDS}")
-    print(f"  neck action idx: {_ACTION_NECK_IDS}")
