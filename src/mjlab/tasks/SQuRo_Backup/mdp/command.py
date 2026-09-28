@@ -1,4 +1,8 @@
 from __future__ import annotations
+# ruff: noqa: I001
+# 本文件的导入顺序是**承重的**, 不要排序: rewards.py 会在本模块的常量定义之前
+# 反向导入 _GROUND_TH, 而 isort 会把 .indices 挪到 .config/.curriculums 之后,
+# 造成循环导入时序错误 (实测 88+31 项测试与冒烟训练全部 ImportError)。
 import torch
 from math import cos, isfinite, radians
 from typing import TYPE_CHECKING, Tuple
@@ -923,8 +927,6 @@ class BackupCommand(CommandTerm):
         # NaN(退化向量) 归为 0=未判定, 不参与统计。
         stage = torch.where(torch.isfinite(pose_cos), stage, torch.zeros_like(stage))
         self._pose_stage = stage
-        log["Pose/stage_F"] = stage[:, 0].float().mean().item()
-        log["Pose/stage_H"] = stage[:, 1].float().mean().item()
         # 9 格压缩成一个可上报的类别: 0=两段倒置 1=后段翻正中 2=S1(前倒后正)
         # 3=前段翻正中 4=两段正置(S2姿态) 5=前正后倒(错误顺序) 6=其他未知
         both_inv = (stage[:, 0] == -1) & (stage[:, 1] == -1)
@@ -941,7 +943,6 @@ class BackupCommand(CommandTerm):
         mid_f = (stage[:, 0] == 0) & (stage[:, 1] == 1)
         cls = torch.where(mid_f, torch.full_like(cls, 3), cls)
         cls = torch.where(mid_h, torch.full_like(cls, 1), cls)
-        log["Pose/class"] = cls.float().mean().item()
         # ① P1 内提前到达 S2 姿态: 进入"两段正置"格且 S1 尚未确认。
         running = self._env.episode_length_buf > 0
         early = s2_pose & (self.phase == 0) & ~self._s1_awarded & running
@@ -950,14 +951,11 @@ class BackupCommand(CommandTerm):
         self._early_s2_entered |= early
         step = self._update_dt if (self._update_dt > 0.0 and isfinite(self._update_dt)) else 0.0
         self._early_s2_elapsed += early.float() * step
-        log["Pose/early_s2_count"] = self._early_s2_count.mean().item()
-        log["Pose/early_s2_elapsed"] = self._early_s2_elapsed.mean().item()
         # ② S1 确认后丢失 (倒置, 正置) 格: 说明已到达 S1 姿态又离开。
         lost = (self.phase >= 1) & ~s1_pose & running
         rising_lost = lost & ~self._s1_hold_lost
         self._s1_hold_lost_count += rising_lost.float()
         self._s1_hold_lost |= lost
-        log["Pose/s1_hold_lost_count"] = self._s1_hold_lost_count.mean().item()
         # 循环统计。计数在**完成时**累计(而不是在复位后), 并在完整回合重置之前上报 ——
         # 框架顺序是 奖励 → 完整回合重置 → command.compute → _update_metrics,
         # 所以超时回合若在 reset() 里清零, 这里读到的就是 0(上一版的错)。
