@@ -34,8 +34,8 @@ from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
 TASK_NAME = "Mjlab-SQuRo-Backup"
 CONTROL_DT = 0.01                 # = env_cfg 的 timestep 0.002 × decimation 5
 # 每步记录: [0:14] 动作, 14 base_x, 15 foot|x|max, 16 foot_x 最小, 17 u_F, 18 u_H,
-#           19 phase, 20 wall_force_neg, 21 wall_force_pos
-ROW_DIM = 22
+#           19 phase, 20 wall_force_neg, 21 wall_force_pos, 22 穿透量 (m, 负=穿透)
+ROW_DIM = 23
 # 墙接触传感器 primary: 机器人全部 body (几何名有空串, 只能按 body 取)
 CONTACT_BODY_PATTERNS = (
     "base_Link", "FU_.*", "FD_.*", "F_spine.*", "F_body_Link",
@@ -51,6 +51,10 @@ class Cfg:
     steps: int = 320                   # 覆盖一个完整循环 (≈2.7 s) 并留出余量
     repeats: int = 3                   # 每条件闭环重复次数 (同构建内, 给重置级重复性)
     time_scale: float = 1.0
+    # 墙体接触参数覆盖: None = 用实体默认 (solref 0.005/1.0, solimp 0.99/0.999/0.001/0.5/2.0)
+    wall_solref: tuple[float, ...] | None = None
+    wall_solimp: tuple[float, ...] | None = None
+    tag: str = ""                      # 输出目录后缀, 用于区分不同接触参数的批次
     device: str = "cuda:0"
     seed: int = 0
     out_dir: str = "logs/backup_contact_causality"
@@ -65,7 +69,8 @@ def _build(cfg: Cfg, clear_width: float, collision: bool, wall_force: bool, iter
     env_cfg.commands["backup_cmd"].fixed_time_scale = cfg.time_scale
     half = 0.5 * clear_width + WALL_HALF_THICKNESS
     mdp_entity.configure_restricted_space(env_cfg, wall_x_neg=-half, wall_x_pos=half,
-                                         enable_collision=collision, fixed_width=True)
+                                         enable_collision=collision, fixed_width=True,
+                                         solref=cfg.wall_solref, solimp=cfg.wall_solimp)
     if collision and wall_force:
         sensors = tuple(env_cfg.scene.sensors or ())
         for tag, geom in (("neg", "restricted_space_wall_n_geom"),
@@ -74,7 +79,7 @@ def _build(cfg: Cfg, clear_width: float, collision: bool, wall_force: bool, iter
                 name=f"wall_contact_{tag}",
                 primary=ContactMatch(mode="body", pattern=CONTACT_BODY_PATTERNS, entity="robot"),
                 secondary=ContactMatch(mode="geom", pattern=geom, entity="restricted_space"),
-                fields=("found", "force"), reduce="netforce", num_slots=1),)
+                fields=("found", "force", "dist"), reduce="netforce", num_slots=1),)
         env_cfg.scene.sensors = sensors
     raw = ManagerBasedRlEnv(cfg=env_cfg, device=cfg.device)
     raw.common_step_counter = iter_num * _STEPS_PER_ITER
@@ -118,14 +123,19 @@ def _rollout(env, steps: int, act_seq: np.ndarray | None, wall_force: bool) -> n
                 # (见 docs §7.17 单位与口径)。单位 N; 机器人自重 2.698 N (0.2750 kg)。
                 wf = [scene[f"wall_contact_{t}"].data.force[0].sum(dim=0).norm()
                       for t in ("neg", "pos")]
+                # 穿透量: 两面墙里最深的那个 (dist < 0 = 穿透, 单位 m)
+                pen = min(float(scene[f"wall_contact_{t}"].data.dist[0].min())
+                          for t in ("neg", "pos"))
             else:
                 wf = [torch.zeros((), device=env.device)] * 2
+                pen = 0.0
             fx = robot.data.site_pos_w[0, feet, 0]
             pose = cmd._pose_cos()[0]
             rows.append(torch.cat((
                 act.reshape(-1).detach(),
                 torch.stack((robot.data.root_link_pos_w[0, 0], fx.abs().max(), fx.min(),
-                             pose[0], pose[1], cmd.phase[0].float(), wf[0], wf[1])),
+                             pose[0], pose[1], cmd.phase[0].float(), wf[0], wf[1],
+                             torch.as_tensor(pen, device=env.device, dtype=torch.float32))),
             )))
     return torch.stack(rows).cpu().numpy()
 
@@ -182,7 +192,7 @@ def main() -> None:
     torch.manual_seed(cfg.seed)
     m = re.search(r"model_(\d+)", Path(cfg.checkpoint).name)
     iter_num = int(m.group(1)) if m else 0
-    out_dir = Path(cfg.out_dir) / Path(cfg.checkpoint).parent.name
+    out_dir = Path(cfg.out_dir) / (Path(cfg.checkpoint).parent.name + cfg.tag)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     traces: dict[str, np.ndarray] = {}
@@ -219,6 +229,8 @@ def main() -> None:
         tc = _first_contact(tr)
         cut = int(tc / CONTROL_DT) if np.isfinite(tc) else 0
         post = np.abs(tr[cut:, 14]) if cut < len(tr) else np.abs(tr[:, 14])
+        press = tr[:, 20] + tr[:, 21]
+        in_contact = press > 1e-6
         summary.append({
             "rollout": name, "steps": len(tr),
             "base_x_absmax_mm": float(np.abs(tr[:, 14]).max() * 1000),
@@ -226,7 +238,12 @@ def main() -> None:
             "base_x_absp90_post_mm": float(np.percentile(post, 90) * 1000),
             "foot_x_absmax_mm": float(np.abs(tr[:, 15]).max() * 1000),
             "t_contact_s": tc,
-            "wall_force_max": float((tr[:, 20] + tr[:, 21]).max()),
+            "wall_force_peak": float(press.max()),
+            "wall_force_mean_contact": float(press[in_contact].mean()) if in_contact.any()
+            else float("nan"),
+            "wall_force_impulse": float(press.sum() * CONTROL_DT),
+            "wall_contact_steps": int(in_contact.sum()),
+            "wall_pen_max_mm": float(tr[:, 22].min() * 1000),
         })
 
     def val(name: str, key: str) -> float:
@@ -265,6 +282,16 @@ def main() -> None:
         print(f"   {lab:22s} 碰撞开 {on_m:6.1f} ± {on_s:4.1f} mm    "
               f"碰撞关 {off_m:6.1f} ± {off_s:4.1f} mm    "
               f"比值 {off_m / max(on_m, 1e-6):.2f}×")
+    w = 0.2750 * 9.81
+    print(f"   [墙接触] 挤压合力峰值 = {val('narrow_on', 'wall_force_peak'):.1f} N "
+          f"({val('narrow_on', 'wall_force_peak') / w:.1f}× 体重);  "
+          f"接触窗口均值 = {val('narrow_on', 'wall_force_mean_contact'):.1f} N "
+          f"({val('narrow_on', 'wall_force_mean_contact') / w:.1f}× 体重)")
+    print(f"   [墙接触] 冲量 = {val('narrow_on', 'wall_force_impulse'):.2f} N·s;  "
+          f"接触步数 = {int(val('narrow_on', 'wall_contact_steps'))}/{cfg.steps};  "
+          f"最大穿透 = {val('narrow_on', 'wall_pen_max_mm'):.2f} mm")
+    print(f"   [接触参数] solref={cfg.wall_solref or '默认(0.005,1.0)'}  "
+          f"solimp={cfg.wall_solimp or '默认(0.99,0.999,0.001,0.5,2.0)'}")
 
     print("\nE2 反事实开环 (同一构建内的对照优先; 量 = max|base_x| / 接触后 mean|base_x| / mm)")
     names = ("wide_on", "wide_on_rep1", "id_wide_on", "ol_narrowoff_act_in_wide_on",
