@@ -22,7 +22,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     _STEPS_PER_ITER,
     get_level_for_wall_x_neg,
     get_training_phase,
-    get_wall_positions_for_level,
+    get_wall_positions,
 )
 from mjlab.tasks.SQuRo_Backup.mdp.entity import WALL_HALF_THICKNESS
 
@@ -80,7 +80,7 @@ def main() -> None:
           f"{WALL_X_NEG_END:.3f}, 步长 {WALL_X_NEG_STEP:.3f}, 共 {CURRICULUM_LEVELS} 档)")
     print(f"  −X 档位表: {list(WALL_X_NEG_LEVELS)}")
     for lv in range(CURRICULUM_LEVELS):
-        neg, pos = get_wall_positions_for_level(lv)
+        neg, pos = get_wall_positions(lv)
         print(f"  档位 {lv}: x_neg={neg:+.4f} x_pos={pos:+.4f} "
               f"净宽 {pos - neg - 2 * WALL_HALF_THICKNESS:.4f} m")
     # 末档必须精确等于下界, 否则课程永远到不了目标墙位
@@ -90,13 +90,13 @@ def main() -> None:
     for a, b in zip(WALL_X_NEG_LEVELS, WALL_X_NEG_LEVELS[1:]):
         assert b > a + 1e-12, "−X 墙位必须逐档朝原点收紧"
     for lv in range(CURRICULUM_LEVELS - 1):
-        w0 = get_wall_positions_for_level(lv)
-        w1 = get_wall_positions_for_level(lv + 1)
+        w0 = get_wall_positions(lv)
+        w1 = get_wall_positions(lv + 1)
         assert (w1[1] - w1[0]) < (w0[1] - w0[0]), "净宽必须逐档变小"
         assert w1[1] == w0[1] == WALL_X_POS, "+X 墙位必须全程固定"
     # 越界要 clamp 到端点 (课程停在末档时仍要能算出墙位)
-    assert get_wall_positions_for_level(-3) == get_wall_positions_for_level(0)
-    assert get_wall_positions_for_level(999) == get_wall_positions_for_level(CURRICULUM_LEVELS - 1)
+    assert get_wall_positions(-3) == get_wall_positions(0)
+    assert get_wall_positions(999) == get_wall_positions(CURRICULUM_LEVELS - 1)
     # 由墙位反查档位必须自洽
     for lv in range(CURRICULUM_LEVELS):
         assert get_level_for_wall_x_neg(WALL_X_NEG_LEVELS[lv]) == lv
@@ -113,14 +113,14 @@ def main() -> None:
           f"fixed_width={ent_cfg.fixed_width}")
     assert ent_cfg.contype == 0 and ent_cfg.conaffinity == 0, \
         "STAGE1 的默认配置必须编译成不开碰撞 (否则首轮采样会带着碰撞跑)"
-    neg0, pos0 = get_wall_positions_for_level(0)
+    neg0, pos0 = get_wall_positions(0)
     assert abs(ent_cfg.wall_x_neg - neg0) < 1e-12 and abs(ent_cfg.wall_x_pos - pos0) < 1e-12, \
         "默认配置必须编译成课程第 0 档墙位"
     print("  默认配置断言通过")
 
     print("\n[3] 墙体几何与净宽口径 (第 0 档 / 末档)")
     for lv in (0, CURRICULUM_LEVELS - 1):
-        walls = get_wall_positions_for_level(lv)
+        walls = get_wall_positions(lv)
         env = make_env(cfg, walls, collision=False)
         ent = env.scene.entities["restricted_space"]
         xs = [float(env.sim.mj_data.geom_xpos[g][0]) for g in ent.wall_geom_ids]

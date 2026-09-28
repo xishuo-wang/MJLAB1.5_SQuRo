@@ -1979,15 +1979,15 @@ class StageRewardTests(unittest.TestCase):
         self.assertEqual(len(C.WALL_X_NEG_LEVELS), C.CURRICULUM_LEVELS)
         # 逐档收紧, 且 +X 墙位全程固定
         for lv in range(C.CURRICULUM_LEVELS - 1):
-            neg0, pos0 = C.get_wall_positions_for_level(lv)
-            neg1, pos1 = C.get_wall_positions_for_level(lv + 1)
+            neg0, pos0 = C.get_wall_positions(lv)
+            neg1, pos1 = C.get_wall_positions(lv + 1)
             self.assertGreater(neg1, neg0, "−X 墙位必须逐档朝原点收紧")
             self.assertEqual(pos0, C.WALL_X_POS)
             self.assertEqual(pos1, C.WALL_X_POS)
         # 越界 clamp 到端点: 课程停在末档时仍要能算出墙位
-        self.assertEqual(C.get_wall_positions_for_level(999),
-                         C.get_wall_positions_for_level(C.CURRICULUM_LEVELS - 1))
-        self.assertEqual(C.get_wall_positions_for_level(-1), C.get_wall_positions_for_level(0))
+        self.assertEqual(C.get_wall_positions(999),
+                         C.get_wall_positions(C.CURRICULUM_LEVELS - 1))
+        self.assertEqual(C.get_wall_positions(-1), C.get_wall_positions(0))
         # 墙位 -> 档位反查自洽 (续训时检查点只记了墙位的情况)
         for lv in range(C.CURRICULUM_LEVELS):
             self.assertEqual(C.get_level_for_wall_x_neg(C.WALL_X_NEG_LEVELS[lv]), lv)
@@ -2012,7 +2012,7 @@ class StageRewardTests(unittest.TestCase):
         # 导致首轮采样带着碰撞跑, 要等第一次日志钩子才重建回无碰撞。
         from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
         from mjlab.tasks.SQuRo_Backup.mdp.entity import build_restricted_space_cfg
-        neg0, pos0 = C.get_wall_positions_for_level(0)
+        neg0, pos0 = C.get_wall_positions(0)
         cfg = build_restricted_space_cfg(
             enable_collision=C.get_training_phase(0) == 1,
             wall_x_neg=neg0, wall_x_pos=pos0,

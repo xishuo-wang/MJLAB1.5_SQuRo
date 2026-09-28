@@ -287,7 +287,7 @@ class CorridorRebuildTest(unittest.TestCase):
 
     # 课程第 0 档的墙位 (启动配置), 用它建"课程 run"的初始环境
     def _level0(self) -> tuple[float, float]:
-        return C.get_wall_positions_for_level(0)
+        return C.get_wall_positions(0)
 
     def test_no_rebuild_before_stage_boundary(self):
         r = self._build(2990, self._level0(), False)
@@ -328,8 +328,8 @@ class CorridorRebuildTest(unittest.TestCase):
         with p1, p2:
             r.learn(2)
         self.assertEqual(len(self.built), 1)
-        self.assertEqual(compiled_state(r.env), (C.get_wall_positions_for_level(2), True))
-        self.assertAlmostEqual(C.get_wall_positions_for_level(2)[1], C.WALL_X_POS, places=12)
+        self.assertEqual(compiled_state(r.env), (C.get_wall_positions(2), True))
+        self.assertAlmostEqual(C.get_wall_positions(2)[1], C.WALL_X_POS, places=12)
 
     # 门控三要素: 最短驻留、窗口填满、p_stood 达标 —— 缺一不可 (窗口只装有效回合)
     def test_promotion_requires_dwell_window_and_gate(self):
@@ -514,7 +514,7 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(r._cur_level, 1, "本轮应已升级")
         self.assertEqual(len(self.built), 1, "升级当轮就必须重建到新档位")
         self.assertEqual(compiled_state(r.env),
-                         (C.get_wall_positions_for_level(1), True),
+                         (C.get_wall_positions(1), True),
                          "升级当轮编译值必须已是新档位的墙位")
 
     # 更强的一条: 升级当轮**第一次 act() 之前**实际墙位就必须已是新档位 ——
@@ -536,7 +536,7 @@ class CorridorRebuildTest(unittest.TestCase):
         with p1, p2:
             r.learn(1)
         self.assertTrue(seen, "本轮必须至少采样一次")
-        self.assertEqual(seen[0], (C.get_wall_positions_for_level(1), True),
+        self.assertEqual(seen[0], (C.get_wall_positions(1), True),
                          "升级当轮第一次 act() 之前, 实际墙位必须已是新档位")
 
     def test_ingest_fills_window_from_published_episodes(self):
@@ -659,7 +659,7 @@ class CorridorRebuildTest(unittest.TestCase):
     # 审查场景：记录与课程目标一致、但环境里编译的不是这个值 ⇒ 必须按**实际编译值**判定重建
     def test_load_rebuilds_even_when_record_matches_target(self):
         saved_iter, saved_level = 3750, 2
-        walls = C.get_wall_positions_for_level(saved_level)
+        walls = C.get_wall_positions(saved_level)
         # 启动环境编译成第 0 档；检查点记录第 2 档 ⇒ 记录与目标一致，但环境是第 0 档
         r = self._build(0, self._level0(), True)
         p1, p2 = self._patches()
@@ -685,7 +685,7 @@ class CorridorRebuildTest(unittest.TestCase):
 
     def test_load_matching_state_does_not_rebuild(self):
         # 环境本来就编译成了目标值 ⇒ 不要白重建一次
-        walls = C.get_wall_positions_for_level(0)
+        walls = C.get_wall_positions(0)
         r = self._build(0, walls, True)
         p1, p2 = self._patches()
         with p1, p2, self._fake_checkpoint(4000, walls, True, level=0):
@@ -725,7 +725,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r = self._build(0, cli_walls, False, fixed=True, fixed_by_cli=True)
         p1, p2 = self._patches()
         # 记录说"非锁死、第 4 档", 但本次命令行锁死 (-0.125, 0.125) ⇒ 目标仍是它
-        with p1, p2, self._fake_checkpoint(4000, C.get_wall_positions_for_level(4), True,
+        with p1, p2, self._fake_checkpoint(4000, C.get_wall_positions(4), True,
                                            fixed=False, level=4):
             r.load("model_x.pt")
         cw, _ = compiled_state(r.env)

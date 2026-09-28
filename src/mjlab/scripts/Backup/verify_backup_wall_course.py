@@ -104,10 +104,10 @@ def main() -> None:
     r2._maybe_lower_dmin(r2._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1)
     check(r2._dmin_batch_pass == 0, "一批不达标就把连续计数打断")
     # 到下限不再降
-    r3 = make_runner(d_min=C.CUR_D_MIN_END)
+    r3 = make_runner(d_min=C.WALL_D_MIN_END)
     r3._dmin_batch_ep, r3._dmin_batch_stood = raw, raw
     check(r3._maybe_lower_dmin(r3._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1) is False,
-          f"到达下限 {C.CUR_D_MIN_END} 后不再降档")
+          f"到达下限 {C.WALL_D_MIN_END} 后不再降档")
 
     print("\n[4] 首回合必须遵守课程范围 (推送 + 强制重采)")
     seen: list = []
