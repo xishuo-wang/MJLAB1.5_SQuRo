@@ -113,7 +113,11 @@ def _rollout(env, steps: int, act_seq: np.ndarray | None, wall_force: bool) -> n
                 act = torch.as_tensor(act_seq[k], device=env.device).reshape(1, -1)
             obs, _, _, _ = env.step(act.to(env.device))
             if wall_force:
-                wf = [scene[f"wall_contact_{t}"].data.force[0].abs().sum() for t in ("neg", "pos")]
+                # 墙对机器人的"挤压合力": 每面墙先把 37 个 body 的净力矢量和起来(得到该墙的合反力),
+                # 再取两墙范数之和。**不要**用 |Fx|+|Fy|+|Fz| 逐 body 求和 —— 那会把数值放大近一倍
+                # (见 docs §7.17 单位与口径)。单位 N; 机器人自重 2.698 N (0.2750 kg)。
+                wf = [scene[f"wall_contact_{t}"].data.force[0].sum(dim=0).norm()
+                      for t in ("neg", "pos")]
             else:
                 wf = [torch.zeros((), device=env.device)] * 2
             fx = robot.data.site_pos_w[0, feet, 0]

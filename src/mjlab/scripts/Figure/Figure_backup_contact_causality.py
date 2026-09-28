@@ -23,6 +23,7 @@ import tyro
 COL_BASE_X, COL_FOOT, COL_WNEG, COL_WPOS = 14, 15, 20, 21
 DT = 0.01
 CLEAR_WIDTH = 0.09                 # 窄走廊净宽 (m), 与实验脚本默认一致
+ROBOT_MASS = 0.2750                # 机器人本体质量 (kg), 自重 2.698 N
 
 
 @dataclass
@@ -120,14 +121,29 @@ def main() -> None:
     ax.grid(alpha=0.25, axis="y")
 
     ax = axes[1, 1]
+    # 单位 N 的口径: 每面墙先把 37 个 body 的净力矢量和起来, 再取两墙范数之和 (见 docs §7.17)
     force = (on[:, COL_WNEG] + on[:, COL_WPOS])
-    ax.plot(t, force, color="#c0392b", lw=1.5, label="wall contact force (both walls, sum)")
+    weight = ROBOT_MASS * 9.81
+    ax.plot(t, force, color="#c0392b", lw=1.5,
+            label=r"wall squeeze force $|F_L|+|F_R|$")
+    ax.axhline(weight, color="#2471a3", ls=":", lw=1.2,
+               label=f"robot weight = {weight:.2f} N (0.275 kg)")
     ax.axvline(cfg.t_contact, color="k", ls="--", lw=1.0)
+    contact = force > 1e-6
+    if contact.any():
+        ax.axhline(float(force[contact].mean()), color="#7f8c8d", ls="-.", lw=1.0,
+                   label=f"mean while in contact = {force[contact].mean():.1f} N "
+                         f"({force[contact].mean() / weight:.1f}× weight)")
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("net contact force (solver units)")
+    ax.set_ylabel("contact force (N)")
     ax.set_title("(d) the mechanical event itself", fontsize=10)
     ax.grid(alpha=0.25)
-    ax.legend(fontsize=7.5, loc="upper left", framealpha=0.85)
+    ax.legend(fontsize=7.0, loc="upper left", framealpha=0.85)
+    top = ax.get_ylim()[1]
+    ax.set_ylim(0, top)
+    ax2 = ax.twinx()
+    ax2.set_ylim(0, top / weight)
+    ax2.set_ylabel("normalized by body weight (-)", fontsize=8.5)
 
     fig.suptitle("Closed-loop mechanical contact, not corridor awareness, drives the "
                  "behaviour change (checkpoint 8999, $\\lambda$=1)", fontsize=11)
