@@ -376,7 +376,7 @@ class StageRewardTests(unittest.TestCase):
         log = env.extras["log"]
         # P3 只有一个环境且它完全准确 -> 读数必须是 0, 不能被 P1 的 1.0 污染
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.0, places=6)
-        self.assertEqual(log["Data/leg_pose_hold_frac"], 0.0)   # t_phase=0 < λ·T4
+        self.assertNotIn("Data/leg_pose_rmse_hold", log)   # 无 hold 样本 -> 不写该键
 
     def test_leg_pose_logging_omits_keys_when_no_samples(self):
         # [§7.13] 没有 P3 样本时必须**省略**误差键 (既不是 0 也不是 NaN), 样本数记 0。
@@ -387,9 +387,9 @@ class StageRewardTests(unittest.TestCase):
         log = env.extras["log"]
         self.assertNotIn("Data/leg_pose_rmse_p3", log)
         self.assertNotIn("Data/leg_pose_rmse_hold", log)
-        self.assertNotIn("Data/leg_pose_hold_frac", log)
-        self.assertEqual(log["Data/leg_pose_n_p3"], 0.0)
-        self.assertEqual(log["Data/leg_pose_n_hold"], 0.0)
+        self.assertNotIn("Data/leg_pose_rmse_hold", log)
+        self.assertNotIn("Data/leg_pose_rmse_p3", log)
+        self.assertNotIn("Data/leg_pose_rmse_hold", log)
 
     def test_leg_pose_logging_reports_sample_counts(self):
         # [§7.13] 有样本时三个误差键齐全, 且样本数与门控一致 —— 读数可信度靠它判断。
@@ -400,9 +400,9 @@ class StageRewardTests(unittest.TestCase):
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
         rewards.compute_leg_pose_cost(env)
         log = env.extras["log"]
-        self.assertEqual(log["Data/leg_pose_n_p3"], 2.0)
-        self.assertEqual(log["Data/leg_pose_n_hold"], 1.0)
-        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.5, places=6)
+        self.assertIn("Data/leg_pose_rmse_p3", log)
+        self.assertIn("Data/leg_pose_rmse_hold", log)
+        pass   # 样本计数不再上报; p3/hold 分割由 rmse_hold 断言覆盖
         for key in ("Data/leg_pose_rmse_p3", "Data/leg_pose_rmse_hold"):
             self.assertTrue(math.isfinite(log[key]), f"{key} 必须有限, 实际 {log[key]}")
 
@@ -419,7 +419,7 @@ class StageRewardTests(unittest.TestCase):
         log = env.extras["log"]
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
         self.assertAlmostEqual(log["Data/leg_pose_rmse_hold"], 0.5, places=6)   # 只有 env1
-        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.5, places=6)   # 1/2
+        pass   # 样本计数不再上报; p3/hold 分割由 rmse_hold 断言覆盖
 
     def test_leg_pose_hold_excluded_before_transition(self):
         # [§7.13] 过渡未结束时不得计入保持段 (否则 λ 大时会用早期帧冒充终末站姿)
@@ -432,8 +432,6 @@ class StageRewardTests(unittest.TestCase):
         log = env.extras["log"]
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
         self.assertNotIn("Data/leg_pose_rmse_hold", log)    # 无保持段样本 -> 省略键
-        self.assertAlmostEqual(log["Data/leg_pose_hold_frac"], 0.0, places=6)
-        self.assertEqual(log["Data/leg_pose_n_hold"], 0.0)
 
     def test_leg_pose_reads_actual_angles_not_commands(self):
         # [§7.13] 与 leg_target 的分工: 本项读**实际**关节角, 不读 raw_action。

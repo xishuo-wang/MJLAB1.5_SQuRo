@@ -293,7 +293,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._ensure_wall_state()
         neg, pos = get_wall_positions_for_level(self._cur_level)
         p_stood, p_onset, p_done, ready, n_valid = self._curriculum_metrics()
-        writer.add_scalar("Curriculum/level", self._cur_level, it)
         if self._wall_random:
             # 随机墙位下"当前墙位"是一个分布, 只有下界是确定量; 用 d_min 代替档位口径
             neg, pos = -self._wall_d_min, WALL_X_POS
@@ -303,9 +302,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             if self._dmin_batch_ep > 0:
                 writer.add_scalar("Curriculum/dmin_p_stood",
                                   self._dmin_batch_stood / self._dmin_batch_ep, it)
-        writer.add_scalar("Curriculum/wall_x_neg", neg, it)
-        writer.add_scalar("Curriculum/wall_x_pos", pos, it)
-        writer.add_scalar("Curriculum/clear_width", pos - neg - 0.02, it)
+        writer.add_scalar("Curriculum/wall_width", pos - neg - 0.02, it)
         writer.add_scalar("Curriculum/window_ready", float(ready), it)
         if n_valid > 0:
             writer.add_scalar("Curriculum/n_valid_episodes", n_valid, it)

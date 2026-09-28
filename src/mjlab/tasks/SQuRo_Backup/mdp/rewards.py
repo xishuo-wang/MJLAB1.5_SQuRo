@@ -323,12 +323,8 @@ def _log_leg_pose(env: "ManagerBasedRlEnv", command: BackupCommand,
     n_hold = int(in_hold.sum())
     if n_p3 > 0:
         log["Data/leg_pose_rmse_p3"] = float(rmse[in_p3].mean().item())
-        log["Data/leg_pose_hold_frac"] = float(n_hold) / n_p3
-    if n_hold > 0:
-        log["Data/leg_pose_rmse_hold"] = float(rmse[in_hold].mean().item())
-    # 样本数逐帧上报: 为 0 与"该帧没有这个键"是两件事, 读数可信度靠它判断。
-    log["Data/leg_pose_n_p3"] = float(n_p3)
-    log["Data/leg_pose_n_hold"] = float(n_hold)
+        if n_hold > 0:
+            log["Data/leg_pose_rmse_hold"] = float(rmse[in_hold].mean().item())
 
 
 # 躯干姿态模仿代价 — 跟踪两段背腹轴的世界 Z 余弦 (技术细节 §7.8)。

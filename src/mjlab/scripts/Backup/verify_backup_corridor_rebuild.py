@@ -437,9 +437,10 @@ class CorridorRebuildTest(unittest.TestCase):
         w = RecWriter()
         r.logger.writer = w
         r._log_curriculum(3000)
-        self.assertEqual(w.calls["Curriculum/level"], 0)
-        self.assertAlmostEqual(w.calls["Curriculum/wall_x_neg"], self._level0()[0], places=12)
-        self.assertAlmostEqual(w.calls["Curriculum/wall_x_pos"], self._level0()[1], places=12)
+        for key in ("Curriculum/level", "Curriculum/wall_x_neg", "Curriculum/wall_x_pos"):
+            self.assertNotIn(key, w.calls, "%s 已清理, 不应再写" % key)
+        self.assertAlmostEqual(w.calls["Curriculum/wall_width"],
+                               self._level0()[1] - self._level0()[0] - 0.02, places=12)
         self.assertEqual(w.calls["Curriculum/window_ready"], 0.0)
         for key in ("Curriculum/p_stood", "Curriculum/p_onset", "Curriculum/p_done"):
             self.assertNotIn(key, w.calls, f"无样本时不得写 {key} (NaN 会污染曲线)")
