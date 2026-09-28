@@ -15,8 +15,8 @@ from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     _STEPS_PER_ITER,
-    CUR_D_MIN_END,
-    CUR_D_MIN_STEP,
+    WALL_D_MIN_END,
+    WALL_D_MIN_STEP,
     CURRICULUM_BATCH_EPISODES,
     CURRICULUM_BATCHES_REQUIRED,
     CURRICULUM_GATE_P_STOOD,
@@ -30,7 +30,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     WALL_X_POS,
     get_level_for_wall_x_neg,
     get_training_phase,
-    get_wall_positions_for_level,
+    get_wall_positions,
 )
 
 
@@ -168,7 +168,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._cur_level += 1
         self._cur_level_iter = it
         self._reset_curriculum_window()
-        neg, pos = get_wall_positions_for_level(self._cur_level)
+        neg, pos = get_wall_positions(self._cur_level)
         print(f"[INFO] 墙位课程推进: 第 {self._cur_level} 档 x_neg={neg:.4f} x_pos={pos:.4f} "
               f"(净宽 {pos - neg - 0.02:.4f} m), iter {it}, "
               f"上档 p_stood={p_stood:.3f} p_onset={p_onset:.3f} p_done={p_done:.3f}")
@@ -177,7 +177,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 随机墙位课程
     def _maybe_lower_dmin(self, it: int) -> bool:
-        if self._wall_d_min <= CUR_D_MIN_END + 1e-9:
+        if self._wall_d_min <= WALL_D_MIN_END + 1e-9:
             return False
         if it < CURRICULUM_START_ITER:
             return False
@@ -201,7 +201,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             "d_min": self._wall_d_min, "iter": it, "batch_episodes": n_ep,
             "p_stood": p_stood,
         })
-        self._wall_d_min = max(CUR_D_MIN_END, round(self._wall_d_min - CUR_D_MIN_STEP, 6))
+        self._wall_d_min = max(WALL_D_MIN_END, round(self._wall_d_min - WALL_D_MIN_STEP, 6))
         self._dmin_batch_pass = 0
         self._cur_level_iter = it
         self._reset_curriculum_window()
@@ -263,7 +263,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if writer is None:
             return
         self._ensure_wall_state()
-        neg, pos = get_wall_positions_for_level(self._cur_level)
+        neg, pos = get_wall_positions(self._cur_level)
         p_stood, p_onset, p_done, ready, n_valid = self._curriculum_metrics()
         if self._wall_random:
             neg, pos = -self._wall_d_min, WALL_X_POS
@@ -298,7 +298,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             return self._corridor_start_walls, collision
         if self._wall_random:
             return self._corridor_compiled_state()[0], collision
-        return get_wall_positions_for_level(self._cur_level), collision
+        return get_wall_positions(self._cur_level), collision
 
 
     # 判定是否需要重建
