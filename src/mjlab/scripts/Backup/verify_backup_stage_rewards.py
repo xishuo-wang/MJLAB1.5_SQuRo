@@ -17,10 +17,10 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import SPN_AXIS_RELAX_ITER
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import SPN_AXIS_SCALE_RELAXED
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import SPN_AXIS_SCALE_STRICT
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import get_curriculum_reward_weight
-from mjlab.tasks.SQuRo_Backup.mdp.command import _GROUND_TH
+from mjlab.tasks.SQuRo_Backup.mdp.command import _GROUND_TH_S1
 # 相位时钟与参考表同为累计口径(含前置收腿段 T0), 故 P1 名义段末就是 P1_END×λ。
 from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END as _P1_END
-from mjlab.tasks.SQuRo_Backup.mdp.config import PRE_DURATION as _PRE_DURATION
+from mjlab.tasks.SQuRo_Backup.mdp.config import T0 as _T0
 # 段内口径(不含 T0): 姿态参考与录制身体轨迹表的时刻基准, 比累计口径整整少一个 T0。
 from mjlab.tasks.SQuRo_Backup.mdp.config import P1_SPAN as _P1_SPAN
 from mjlab.tasks.SQuRo_Backup.mdp.config import P2_SPAN as _P2_SPAN
@@ -227,7 +227,7 @@ class StageRewardTests(unittest.TestCase):
         # 且最大值恰等于权重本身 —— 否则"到达 S1"与"拿满塑形分"不是同一件事。
         env, cmd = make_env([0])
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0]])
-        z = _GROUND_TH - 0.005
+        z = _GROUND_TH_S1 - 0.005
         self._set_body_heights(env, [z], [z])
         r = rewards.compute_s1_shape_reward(env)
         w = get_curriculum_reward_weight(env, 'weight_s1_shape')
@@ -238,7 +238,7 @@ class StageRewardTests(unittest.TestCase):
         # 随机探索没命中时完全无梯度。这里逐项扰动, 要求值严格下降且悬空处仍 > 0。
         env, cmd = make_env([0] * 4)
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0], [0.0, 1.0], [-1.0, 0.0], [-1.0, 1.0]])
-        z_low, z_high = _GROUND_TH - 0.005, _GROUND_TH + 0.015
+        z_low, z_high = _GROUND_TH_S1 - 0.005, _GROUND_TH_S1 + 0.015
         self._set_body_heights(env, [z_low, z_low, z_low, z_high],
                                [z_low, z_low, z_low, z_high])
         r = rewards.compute_s1_shape_reward(env)
@@ -251,9 +251,9 @@ class StageRewardTests(unittest.TestCase):
         # 高度因子在 阈值+TOL 处归零, 中段是线性斜坡 (既非阶跃, 也不永不归零)
         env, cmd = make_env([0] * 3)
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0]] * 3)
-        z0 = _GROUND_TH - 0.005
-        z_mid = _GROUND_TH + rewards.S1_SHAPE_DEPTH_TOL / 2.0
-        z_far = _GROUND_TH + rewards.S1_SHAPE_DEPTH_TOL * 3.0
+        z0 = _GROUND_TH_S1 - 0.005
+        z_mid = _GROUND_TH_S1 + rewards.S1_SHAPE_DEPTH_TOL / 2.0
+        z_far = _GROUND_TH_S1 + rewards.S1_SHAPE_DEPTH_TOL * 3.0
         self._set_body_heights(env, [z0, z_mid, z_far], [z0, z_mid, z_far])
         r = rewards.compute_s1_shape_reward(env)
         self.assertAlmostEqual(r[2].item(), 0.0, places=6)
@@ -265,7 +265,7 @@ class StageRewardTests(unittest.TestCase):
         # 反而堵死 P1 -> P2 —— 正是要避免的断崖/局部最优。
         env, cmd = make_env([0, 1, 2])
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0]] * 3)
-        z = _GROUND_TH - 0.005
+        z = _GROUND_TH_S1 - 0.005
         self._set_body_heights(env, [z] * 3, [z] * 3)
         r = rewards.compute_s1_shape_reward(env)
         self.assertGreater(r[0].item(), 0.0)
@@ -277,7 +277,7 @@ class StageRewardTests(unittest.TestCase):
         # 姿态"套利 (否则时间表失去约束力 -> S1 回退)。
         env, cmd = make_env([0])
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0]])
-        z = _GROUND_TH - 0.005
+        z = _GROUND_TH_S1 - 0.005
         self._set_body_heights(env, [z], [z])
         on_ref = rewards.compute_s1_shape_reward(env)[0].item()
         # 把关节角推离参考 -> 脊柱跟踪核衰减 -> 塑形项随之衰减
@@ -466,8 +466,8 @@ class StageRewardTests(unittest.TestCase):
         for uf, uh, z in itertools.product(
                 [-1.0, -0.9, -0.5, 0.0, 0.5, 0.9, 1.0],
                 [-1.0, -0.9, -0.5, 0.0, 0.5, 0.9, 1.0],
-                [_GROUND_TH - 0.01, _GROUND_TH - 0.002, _GROUND_TH + 0.005,
-                 _GROUND_TH + 0.02, _GROUND_TH + 0.06]):
+                [_GROUND_TH_S1 - 0.01, _GROUND_TH_S1 - 0.002, _GROUND_TH_S1 + 0.005,
+                 _GROUND_TH_S1 + 0.02, _GROUND_TH_S1 + 0.06]):
             cmd.test_u[:] = torch.tensor([[uf, uh]] * 200)
             self._set_body_heights(env, [z] * 200, [z] * 200)
             r = rewards.compute_s1_shape_reward(env)[0].item()
@@ -481,7 +481,7 @@ class StageRewardTests(unittest.TestCase):
         thr = cmd._pose_cos_threshold
         self.assertLessEqual(uf, -thr, f"峰值前段应超阈倒置, 实际 u_F={uf}")
         self.assertGreaterEqual(uh, thr, f"峰值后段应超阈正置, 实际 u_H={uh}")
-        self.assertLess(z, _GROUND_TH, f"峰值高度应低于贴地阈值, 实际 {z}")
+        self.assertLess(z, _GROUND_TH_S1, f"峰值高度应低于贴地阈值, 实际 {z}")
         # 并直接确认该配置确实被 _check_S1 判为 S1 (清掉姿态缓存, 强制按 test_u 重算)
         cmd.test_u[:] = torch.tensor([[uf, uh]] * 200)
         self._set_body_heights(env, [z] * 200, [z] * 200)
@@ -1050,7 +1050,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.test_u[:] = torch.tensor([-1., 1.])          # S1 候选
         # P1 的推进门 = (前置收腿段 + P1_END) × λ; 奖励基准是参考到达时刻 P1_END×λ, 两者不同。
         lam = float(cmd.time_scale_command[0])
-        p1_expect = (_PRE_DURATION + _P1_END) * lam
+        p1_expect = (_T0 + _P1_END) * lam
         p1_nominal = _P1_END * lam
         # 门控之前候选成立也不得推进/结算。
         cmd.t_phase[:] = 2.00
@@ -1161,9 +1161,9 @@ class StageRewardTests(unittest.TestCase):
         env, cmd = make_env([0])
         lam = float(cmd.time_scale_command[0])
         # P1: 录制值特征 zF != zH(两段独立录制), 斜坡会强制相等。
-        # t_phase 含前置收腿段(PRE_DURATION), 故取样点要整体后移, 否则落在 P0(脊柱与腿恒定)。
+        # t_phase 含前置收腿段(T0), 故取样点要整体后移, 否则落在 P0(脊柱与腿恒定)。
         for tp in (0.0, .2 * lam, .5 * lam, .79 * lam):
-            cmd.t_phase[:] = _PRE_DURATION * lam + tp
+            cmd.t_phase[:] = _T0 * lam + tp
             _, zF, _, zH = reference.get_body_reference(env)
             self.assertNotAlmostEqual(float(zF[0]), float(zH[0]), places=4,
                                       msg="P1 的 z 不应被斜坡覆盖(此时 zF/zH 应各取录制值)")
@@ -1332,10 +1332,10 @@ class StageRewardTests(unittest.TestCase):
 
     def test_early_arrival_advances_only_at_segment_end(self):
         # 早侧地板已删除: 提前摆出 S1 会正常起算确认(不再被拦), 但推进仍必须等
-        # 参考播完门 (PRE_DURATION + P1_END)λ=3.90 —— 于是"提前到达并保持"的达成时刻
+        # 参考播完门 (T0 + P1_END)λ=3.90 —— 于是"提前到达并保持"的达成时刻
         # 恒为段末, 与恰好到点达成者同刻推进。真正的惩罚在里程碑时间质量核(按真实到达时刻打折)。
         # 直接设 t_phase 验证语义, 不靠累加步数(浮点边界会让 >= 差一个 ulp 而漏判)。
-        p1_expect = (_PRE_DURATION + _P1_END) * 3.
+        p1_expect = (_T0 + _P1_END) * 3.
         _, cmd = make_env([0])
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])
@@ -1529,7 +1529,7 @@ class StageRewardTests(unittest.TestCase):
         env.step_dt = .01
         cmd.test_heights[:] = .024
         cmd.test_u[:] = torch.tensor([-1., 1.])            # 候选持续成立, 跨重试不清零
-        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .50   # 正好到 P1 窗界
+        cmd.t_phase[:] = (_T0 + _P1_END) * 3. + .50   # 正好到 P1 窗界
         cmd._update_command()                              # 这一步触发重试(未确认)
         self.assertEqual(cmd.retry.item(), 1)
         self.assertTrue(torch.isnan(cmd._s1_criterion_first).item())
@@ -1557,7 +1557,7 @@ class StageRewardTests(unittest.TestCase):
             cmd._update_command()
         self.assertAlmostEqual(cmd._s1_confirm_elapsed.item(), .10, places=4)   # 确认已成立
         self.assertEqual(cmd.phase.item(), 0)              # 但段末未到, 不得推进
-        cmd.t_phase[:] = (_PRE_DURATION + _P1_END) * 3. + .10   # 越过段末(余量 > dt)
+        cmd.t_phase[:] = (_T0 + _P1_END) * 3. + .10   # 越过段末(余量 > dt)
         cmd._update_command()
         self.assertEqual(cmd.phase.item(), 1)
         self.assertTrue(cmd.s1_milestone_pulse.item())
