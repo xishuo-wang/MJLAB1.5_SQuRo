@@ -12,9 +12,9 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
+from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
-from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
     _STEPS_PER_ITER,
@@ -41,11 +41,11 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    # Backup 任务相关配置
+    # 时间缩放
     fixed_time_scale: float | None = 1
-    # 受限空间: None = 自动 (命令行 > 检查点记录; 缺记录则报错), 显式值可直接压过自动配置
+    # 碰撞属性: None = 自动
     enable_collision: bool | None = None
-    # 墙位: 显式给一对 (不对称) 或给对称简写 corridor_width, 两者不能同时给
+    # 受限空间位置
     wall_x_neg: float | None = None
     wall_x_pos: float | None = None
     corridor_width: float | None = None
@@ -61,12 +61,7 @@ def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
 
 
 
-# 解析回放该用的墙位与碰撞开关。优先顺序:
-#   1. 命令行显式指定 (--wall-x-neg/--wall-x-pos, 或对称简写 --corridor-width)
-#   2. 检查点里保存的实际编译值 (训练时真实生效的配置)
-#   **没有第三级**: 墙位课程按能力推进, "轮次 → 墙位"已不存在, 按轮次推算会静默给出错误的墙,
-#   所以缺记录时直接报错, 要求显式指定 (审查意见: 新格式缺字段应报错而不是猜)。
-# 检查点记录要压过阶段推算: "阶段"是拿文件名轮次猜的, 而记录是当时真正编译进仿真的值。
+# 解析回放该用的墙位与碰撞开关，命令行显式指定优先于检查点里保存的实际编译值
 def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, str, str]:
     if cfg.wall_x_neg is not None or cfg.wall_x_pos is not None:
         if cfg.wall_x_neg is None or cfg.wall_x_pos is None:
@@ -76,9 +71,6 @@ def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, 
         half = 0.5 * float(cfg.corridor_width)
         neg, pos, src = -half, half, "命令行(对称简写)"
     elif saved.get("wall_d_min") is not None:
-        # 随机墙位课程: 记录里的 wall_x_neg 只是**编译模板**, 不是课程测试用的墙位。
-        # 默认回放到课程下界 (d = d_min), 否则会把模板墙位当成最窄档测试 (审查 P2:
-        # 模板 -0.08 与最窄档 d_min=0.06 相差很远, 极容易误判)。
         d = float(saved["wall_d_min"])
         neg = -d
         pos = float(saved["wall_x_pos"]) if saved.get("wall_x_pos") is not None else 0.05
@@ -93,9 +85,7 @@ def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, 
         raise SystemExit(
             "检查点没有墙位记录, 而自动课程的墙位无法按轮次反推; "
             "请用 --wall-x-neg/--wall-x-pos (或 --corridor-width) 显式指定")
-    # 碰撞: 命令行 > 检查点记录 > 按阶段推算。
-    # 检查点记录优先于阶段推算: 记录是训练当时**真实编译生效**的值, 而"阶段"是靠文件名
-    # 轮次减 10 猜出来的, 检查点被改名或恰在阶段边界上就会猜错。
+    # 碰撞优先级: 命令行 > 检查点记录 > 按阶段推算
     if cfg.enable_collision is not None:
         collision, coll_src = bool(cfg.enable_collision), "命令行"
     elif saved.get("corridor_collision") is not None:
@@ -108,19 +98,19 @@ def resolve_corridor(cfg, saved: dict, phase: int) -> tuple[float, float, bool, 
 
 
 
-# 读取检查点里保存的受限空间实际编译值 (宽墙/碰撞开关), 供回放精确复现。
-# 不要用轮次反推: 训练走的是离散档位, 反推会与实际物理配置不一致。
+# 读取检查点里记录的受限空间实际编译值
 def read_corridor_state(checkpoint_path: Path) -> dict:
     return _read_infos(checkpoint_path).get("corridor_state") or {}
 
 
 
-# 读取检查点里记录的 env_state (含训练时的 common_step_counter), 比文件名轮次可靠
+# 读取检查点里记录的 env_state
 def read_env_state(checkpoint_path: Path) -> dict:
     return _read_infos(checkpoint_path).get("env_state") or {}
 
 
 
+# 读取检查点里记录的 INFO
 def _read_infos(checkpoint_path: Path) -> dict:
     try:
         loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
@@ -161,7 +151,7 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 14 个驱动关节 — 顺序必须与 entity actuator 顺序一致
+        # 14 个驱动关节
         self.joint_names = [
             'F_spine1', 'F_body',
             'Neck_yaw', 'Neck_pitch',
@@ -172,7 +162,7 @@ class JointDataRecorder:
             'HR_hip', 'HR_knee',
         ]
         self._joint_ids_resolved = False
-        self.action_names = self.joint_names  # 与 joint_names 同序
+        self.action_names = self.joint_names
         self.foot_names = ['FL', 'FR', 'HL', 'HR']
         self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
         self._foot_site_ids = None
@@ -194,7 +184,7 @@ class JointDataRecorder:
         asset = unwrapped.scene["robot"]
         env_idx = 0
 
-        # 足部接触力
+        # 足端接触力
         contact_sensor = unwrapped.scene["feet_ground_contact"]
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)
         for i, name in enumerate(self.foot_names):
@@ -213,12 +203,11 @@ class JointDataRecorder:
             record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
             record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
 
-        # 关节状态 — 使用 ModelIndices 解析后的实体级关节索引
+        # 关节状态
         if not self._joint_ids_resolved:
             resolve_model_indices(asset)
             self._joint_ids_resolved = True
         joint_ids = _MODEL_INDICES.joint_ids
-        # 先减默认值再升维：[J] 或 [N,J] → 统一 [N,J]
         djp = asset.data.default_joint_pos
         djv = asset.data.default_joint_vel
         jp = (asset.data.joint_pos - djp) if djp is not None else asset.data.joint_pos
@@ -290,7 +279,6 @@ class JointDataRecorder:
         record['base_ang_vel_z'] = float(base_ang_vel_w[2].item())
 
         # 9D 命令 [vel_x, h_f, h_h, gait, curvature, λ, phase, wall_x_neg, wall_x_pos]
-        # 末两维是墙位观测, 由 command 从场景实体读取 (回放时即本次编译进去的墙位)
         command_names = [
             'vel_command_x', 'height_f_command', 'height_h_command',
             'gait_freq_command', 'curvature_command', 'time_scale_command',
@@ -359,9 +347,7 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
 
     def step(self, actions):
         scaled_actions = actions * self.action_scale
-
         obs_dict, rew, dones, extras = super().step(scaled_actions)
-
         if self.data_recorder:
             self.data_recorder.record_step_data(
                 self.env,
@@ -376,15 +362,11 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
 
 def run_play(cfg: PlayConfig):
     configure_torch_backends()
-
     device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-
     env_cfg = load_env_cfg(TASK_NAME, play=True)
     agent_cfg = load_rl_cfg(TASK_NAME)
-
     DUMMY_MODE = cfg.agent in {"zero", "random"}
     TRAINED_MODE = not DUMMY_MODE
-
     log_dir: Path | None = None
     resume_path: Path | None = None
     video_name: str | None = None
@@ -434,9 +416,7 @@ def run_play(cfg: PlayConfig):
         if cfg.fixed_time_scale is not None:
             cmd_cfg.fixed_time_scale = cfg.fixed_time_scale  # type: ignore[attr-defined]
 
-    # 受限空间 — 墙位与碰撞开关都在编译期固化, 必须在建环境之前写进实体配置
-    # (与 Slalom 回放重建杆实体同理; 运行期改 a 或 contype 都无效)
-    # 取值优先顺序: 命令行显式指定 > 检查点里保存的实际编译值 > 按轮次推算的课程档位。
+    # 墙位与碰撞开关都在编译期固化, 必须在建环境之前写进实体配置
     train_iter = extract_iter_from_checkpoint(resume_path) if resume_path is not None else 0
     align_iter = max(0, train_iter - 10)          # 与 env 内部课程口径对齐
     # 检查点记录了训练时的 common_step_counter 时以它为准 (比文件名可靠)
@@ -446,15 +426,8 @@ def run_play(cfg: PlayConfig):
     align_step = align_iter * _STEPS_PER_ITER
     phase = get_training_phase(align_step)
     saved = read_corridor_state(resume_path) if resume_path is not None else {}
-    wall_x_neg, wall_x_pos, corridor_collision, width_src, coll_src = resolve_corridor(
-        cfg, saved, phase)
-    ent_cfg = mdp_entity.configure_restricted_space(
-        env_cfg, wall_x_neg=wall_x_neg, wall_x_pos=wall_x_pos,
-        enable_collision=corridor_collision,
-        # **必须锁定墙距**: 否则 runner 初始化会立刻推送随机墙位课程并重采墙位, 把这里
-        # 指定的墙位覆盖成课程起点 (实测 -0.06 被改成 -0.20, 净宽 0.09 变成 0.23),
-        # 而文件名与上面的打印仍标着原墙位 —— 极易误判策略能力。
-        fixed_width=True)
+    wall_x_neg, wall_x_pos, corridor_collision, width_src, coll_src = resolve_corridor(cfg, saved, phase)
+    ent_cfg = mdp_entity.configure_restricted_space(env_cfg, wall_x_neg=wall_x_neg, wall_x_pos=wall_x_pos,enable_collision=corridor_collision,fixed_width=True)
     print(f"[INFO] 受限空间: 阶段={phase} (align_iter {align_iter}, 边界 STAGE1_3_ITER={STAGE1_3_ITER}), "
           f"碰撞={'开' if corridor_collision else '关'} [{coll_src}], "
           f"墙位 x_neg={ent_cfg.wall_x_neg:+.4f} x_pos={ent_cfg.wall_x_pos:+.4f} m [{width_src}], "
@@ -476,7 +449,7 @@ def run_play(cfg: PlayConfig):
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
-    # 对齐课程阶段 (奖励权重等按 common_step_counter 取段)
+    # 对齐课程阶段
     if TRAINED_MODE and align_iter > 0:
         env.common_step_counter = align_step
         print(f"[INFO] 课程对齐到 iter {align_iter} (step {align_step})")
@@ -539,14 +512,10 @@ def run_play(cfg: PlayConfig):
             map_location=device
         )
         policy = runner.get_inference_policy(device=device)
-        # 守卫: runner 初始化可能改动物理墙位 (随机墙位课程会推送自己的范围并重采)。
-        # 若实际墙位与入口指定的不一致, 回放结果就与文件名/打印里的墙位无关 —— 必须报错,
-        # 不能让它静默跑出一个"看起来是 0.09 净宽、其实是 0.23"的结果。
         ent = env.unwrapped.scene.entities.get("restricted_space")
         if ent is not None:
-            got_neg, got_pos = ent.read_wall_x(env.unwrapped)
-            if (abs(float(got_neg[0]) - wall_x_neg) > 1e-4
-                    or abs(float(got_pos[0]) - wall_x_pos) > 1e-4):
+            got_neg, got_pos = ent.read_wall_x(env.unwrapped) # type: ignore
+            if (abs(float(got_neg[0]) - wall_x_neg) > 1e-4 or abs(float(got_pos[0]) - wall_x_pos) > 1e-4):
                 raise SystemExit(
                     f"墙位被改写了: 入口指定 ({wall_x_neg:+.4f}, {wall_x_pos:+.4f}), "
                     f"runner 初始化后实际 ({float(got_neg[0]):+.4f}, {float(got_pos[0]):+.4f})。"
