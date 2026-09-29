@@ -8,6 +8,7 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers import CommandTermCfg
+from .curriculums import BASE_HEIGHT, GAIT_FREQ, HEIGHT_THRESHOLD
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -26,9 +27,9 @@ STAGE1_END = STAGE1_END_ITER * 24
 STAGE2_END = STAGE2_END_ITER * 24
 STAGE3_END = STAGE3_END_ITER * 24
 
-BASE_HEIGHT = 0.06                     # 基准高度 (m)
-BASE_SPEED = 0.25                      # 基准速度 (m/s, 对应基准高度)
-HEIGHT_THRESHOLD = 0.04                # 高度高低判定阈值 (m)
+# 基准速度 (m/s): 由"速度 = 步频 × 步幅"标定 —— 基准高度 + 双肢都在动时的推进速度
+BASE_STRIDE_PER_HEIGHT = 1.25          # 参考步幅 = 1.25 × 高度 (摆线 stride/body_height 之比)
+BASE_SPEED = GAIT_FREQ * BASE_STRIDE_PER_HEIGHT * BASE_HEIGHT   # = 0.1375 m/s
 
 STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055, 0.06]        # 阶段1: 中等高度
 STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]  # 阶段2: 全部高度
@@ -49,11 +50,20 @@ STAGE3_POSITION_SCHEDULE = [
 ]
 
 
-# 高度缩放系数: 低于阈值统一取 0.1, 否则按高度比例
+# 高度缩放系数 (按解耦口径: 每段用**自己的**高度; 冻结段不参与运动)
 def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
-    if target_height < HEIGHT_THRESHOLD:
-        return 0.1
     return target_height / base_height
+
+
+# 速度: v = BASE_SPEED × scale × (2 − n) / 2, n = 处于低高度的肢体数
+# (2-n)/2 是"参与运动的肢体比例": 双腿都在动=1, 单肢=0.5, 双低=0
+def speed_for_heights(height_F: torch.Tensor, height_H: torch.Tensor) -> torch.Tensor:
+    low_f = height_F < HEIGHT_THRESHOLD
+    low_h = height_H < HEIGHT_THRESHOLD
+    n_low = low_f.float() + low_h.float()
+    moving_height = torch.maximum(height_F, height_H)
+    scale = moving_height / BASE_HEIGHT
+    return BASE_SPEED * scale * (2.0 - n_low) / 2.0
 
 
 # 按全局步数取命令阶段 (1~4)
@@ -150,10 +160,9 @@ class HoleCommand(CommandTerm):
         fallback = torch.tensor(BASE_HEIGHT, device=device)
         return fallback, fallback
 
-    # 按有效高度定速度
+    # 按高度组合定速度 (v = 基准速度 × 高度缩放 × (2−n))
     def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        effective_height = min(height_F.item(), height_H.item())
-        return BASE_SPEED * get_height_scale_factor(effective_height, BASE_HEIGHT)
+        return float(speed_for_heights(height_F.reshape(1), height_H.reshape(1))[0])
 
     # 按高度组合定角度命令
     def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
@@ -181,8 +190,7 @@ class HoleCommand(CommandTerm):
 
         height_F = schedule_hF[schedule_indices]
         height_H = schedule_hH[schedule_indices]
-        effective_height = torch.minimum(height_F, height_H)
-        vel_x = BASE_SPEED * (effective_height / BASE_HEIGHT)
+        vel_x = speed_for_heights(height_F, height_H)
 
         self.vel_command_w[env_ids, 0] = vel_x
         self.vel_command_w[env_ids, 1] = 0.0

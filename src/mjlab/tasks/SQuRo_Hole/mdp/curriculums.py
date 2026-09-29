@@ -3,6 +3,11 @@ from typing import Any, Dict
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
+# 正常行走高度 (高度缩放基准: scale = h / BASE_HEIGHT)、高低判定阈值、步态步频
+BASE_HEIGHT = 0.055
+HEIGHT_THRESHOLD = 0.04
+GAIT_FREQ = 2.0                        # 参考轨迹的名义步频 (Hz, 表内摆线即按 2 Hz 生成)
+
 _DEFAULT_SCENE_CFG = SceneEntityCfg("robot")
 
 

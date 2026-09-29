@@ -12,6 +12,8 @@ from .indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
+from .curriculums import BASE_HEIGHT, GAIT_FREQ
+from .curriculums import HEIGHT_THRESHOLD as HEIGHT_LOW_THRESHOLD
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -20,7 +22,6 @@ if TYPE_CHECKING:
 # 步态与高度配置
 USE_SPINE_CSV = False                  # 脊柱 CSV 不在仓库内, 默认关闭
 HEIGHT_LIST = [0.02, 0.04, 0.05, 0.06]
-BASE_HEIGHT = 0.06
 
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 
@@ -227,11 +228,13 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     hind_low = CYCLOID_PARAMS["hind_low"]
 
     for height_idx, target_height in enumerate(HEIGHT_LIST):
-        height_scale = get_height_scale_factor(target_height, BASE_HEIGHT)
+        # 该高度档的缩放系数: 各段按**自己的**高度解耦缩放 (h / BASE_HEIGHT)
+        height_scale = target_height / BASE_HEIGHT
+        is_low_band = target_height < HEIGHT_LOW_THRESHOLD
 
         for mode in range(NUM_MODES):
-            # 前腿: 模式1 冻结, 否则走 CSV 轨迹
-            if mode == 1:
+            # 前腿: 模式1 或低高度档 → 冻结 (固定姿态, 不随高度缩放)
+            if mode == 1 or is_low_band:
                 x_fl, z_fl = CSV_Leg_Trajectory(phases_np, front_trajectory,
                                                 CSV_PARAMS["phase_lag"]["FL"], 0.0,
                                                 1.0, 0.0, 0.0, 0.02, True)
@@ -255,8 +258,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             front_pos_table[mode, height_idx, :, 0:2] = torch.stack([sh_fl, el_fl], dim=-1)
             front_pos_table[mode, height_idx, :, 2:4] = torch.stack([sh_fr, el_fr], dim=-1)
 
-            # 后腿: 模式2 冻结, 模式1 用摆线, 否则走 CSV 轨迹
-            if mode == 2:
+            # 后腿: 模式2 或低高度档 → 冻结; 模式1 → 摆线 (该段此时处于正常高度, 按自身高度缩放)
+            if mode == 2 or is_low_band:
                 x_hl, z_hl = CSV_Leg_Trajectory(phases_np, hind_trajectory,
                                                 CSV_PARAMS["phase_lag"]["HL"], 0.0,
                                                 1.0, 0.0, 0.0, 0.02, False)
@@ -271,12 +274,12 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                                                 front_low["stride_H"], front_low["height_H"],
                                                 front_low["body_height_H"],
                                                 front_low["rotate_angle_H"],
-                                                front_low["x_offset_H"], 1.0)
+                                                front_low["x_offset_H"], height_scale)
                 x_hr, z_hr = Cycloid_Trajectory(t_mods, t_sw, period - t_sw,
                                                 front_low["stride_H"], front_low["height_H"],
                                                 front_low["body_height_H"],
                                                 front_low["rotate_angle_H"],
-                                                front_low["x_offset_H"], 1.0)
+                                                front_low["x_offset_H"], height_scale)
             else:
                 x_hl, z_hl = CSV_Leg_Trajectory(
                     phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"],
@@ -296,7 +299,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
             # 脊柱: 低高度或单段低时固定弯曲; 否则用脊柱 CSV 或直立
             spine_angles = np.zeros((_TABLE_RESOLUTION, 4))
-            if target_height < 0.04 or mode in (1, 2):
+            if is_low_band or mode in (1, 2):
                 spine_angles[:, 2] = -0.65
             elif USE_SPINE_CSV and xoy_spine_data is not None and yoz_spine_data is not None:
                 spine_angles[:, 0] = CSV_Spine_Trajectory(phases_np, xoy_spine_data)
