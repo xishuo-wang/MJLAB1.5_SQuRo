@@ -15,6 +15,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.spine_deformation import SQuRoSpineDeformation
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
     _STEPS_PER_ITER,
@@ -166,6 +167,8 @@ class JointDataRecorder:
         self.foot_names = ['FL', 'FR', 'HL', 'HR']
         self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
         self._foot_site_ids = None
+        # 实际脊柱形变角读取器: 懒创建 (需要实体), 见 docs/SQuRo_实际脊柱形变角.md
+        self._spine_reader: SQuRoSpineDeformation | None = None
 
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
@@ -301,6 +304,25 @@ class JointDataRecorder:
         record['h_body_up_cos'] = float(pose[1].item())
         record['f_body_height'] = float(body_pos_w[env_idx, _MODEL_INDICES.f_body_id, 2].item())
         record['h_body_height'] = float(body_pos_w[env_idx, _MODEL_INDICES.h_body_id, 2].item())
+
+        # 实际脊柱三形变角: 由三点折线与平均扭转平面算得, 不是关节角的映射
+        if self._spine_reader is None:
+            self._spine_reader = SQuRoSpineDeformation(asset)
+        # 循环复位与回合复位都会瞬移整机, 必须清掉扭转展开历史, 否则平均平面可能静默翻转 180°
+        if bool(term.cycle_completed_pulse[env_idx].item()) or (dones is not None and bool(dones[0].item())):
+            self._spine_reader.reset()
+        deformation = self._spine_reader.compute()
+        record['spine_lateral'] = float(deformation.lateral[env_idx].item())
+        record['spine_sagittal'] = float(deformation.sagittal[env_idx].item())
+        record['spine_axial'] = float(deformation.axial_unwrapped[env_idx].item())
+        record['spine_valid'] = float(deformation.valid[env_idx].item())
+        # 三点折线总弯曲角: 上下两个面板若只画 u 与轴向, 前者可推出后者, 需要这一项做独立佐证
+        ids = self._spine_reader.body_ids
+        seg_f = (body_pos_w[env_idx, ids[0]] - body_pos_w[env_idx, ids[1]])
+        seg_h = (body_pos_w[env_idx, ids[1]] - body_pos_w[env_idx, ids[2]])
+        cos_bend = torch.dot(seg_f, seg_h) / (torch.norm(seg_f) * torch.norm(seg_h)).clamp_min(1e-9)
+        record['spine_bend_total'] = float(torch.arccos(cos_bend.clamp(-1.0, 1.0)).item())
+
         for name, attr in {
             's1_candidate': '_last_s1_ok', 's2_candidate': '_last_s2_ok',
             's1_confirmed': '_last_s1_confirmed', 's2_confirmed': '_last_s2_confirmed',
