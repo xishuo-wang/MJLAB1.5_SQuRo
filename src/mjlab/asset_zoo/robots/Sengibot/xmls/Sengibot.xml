@@ -1,7 +1,7 @@
 <mujoco model="20240517sengibot_urdfall_2 - demo">
 <!-- <mujoco model="sengibot_urdfall_motor"> -->
   <!-- <compiler angle="radian" meshdir="E:/Software_pro2/mujoco3.1.5/mujoco-3.1.5-windows-x86_64/bin/20240517sengibot_urdfall_2/meshes/"/> -->
-  <compiler angle="radian" meshdir="D:/Code/Model/Sengibot/20240517sengibot_urdfall_2 - demo/meshes/"/>
+  <compiler angle="radian" meshdir="D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\Sengibot\xmls\meshes"/>
   <!-- <compiler angle="radian" meshdir="C:/Users/Starrish/.mujoco/mjpro150/model/20240517sengibot_urdfall_2/meshes/"/> -->
   <option timestep="2e-3" iterations="200" tolerance="1e-9" cone="elliptic"/>
 
@@ -401,13 +401,13 @@
       ctrlrange 取关节机械范围，MuJoCo 会把目标角裁到该区间；
       forcerange 对应 kp*(目标-当前) 的饱和点，误差超过 0.02 rad 即满力矩。 -->
  <actuator>
-	<position joint="joint_waist_drive" name="joint_waist_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-0.25 0.25"/>
-	<position joint="joint_LF_drive" name="joint_LF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/>
-	<position joint="joint_RF_drive" name="joint_RF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/>
-	<position joint="joint_LH_drive" name="joint_LH_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.0 1.5" forcelimited="true" forcerange="-0.2 0.2"/>
-	<position joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/>
+	<!-- <position joint="joint_waist_drive" name="joint_waist_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-0.25 0.25"/> -->
+	<!-- <position joint="joint_LF_drive" name="joint_LF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/> -->
+	<!-- <position joint="joint_RF_drive" name="joint_RF_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.5 0.5" forcelimited="true" forcerange="-0.2 0.2"/> -->
+	<!-- <position joint="joint_LH_drive" name="joint_LH_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.0 1.5" forcelimited="true" forcerange="-0.2 0.2"/> -->
+	<!-- <position joint="joint_LH_tibia" name="joint_LH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/> -->
 	<position joint="joint_RH_drive" name="joint_RH_drive" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-1.0 1.5" forcelimited="true" forcerange="-0.2 0.2"/>
-	<position joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/>
+	<!-- <position joint="joint_RH_tibia" name="joint_RH_tibia" gear="1" kp="10" kv="0.05" ctrllimited="true" ctrlrange="-0.7 0.7" forcelimited="true" forcerange="-0.2 0.2"/> -->
  </actuator>
 
  <!-- sensor -->
