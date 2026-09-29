@@ -26,6 +26,20 @@ SEGMENT_BELLY_BACK_SITES = (
     ("H_body_belly_site", "H_body_back_site"),
 )
 
+# 形变接口使用独立实例索引；列向量依次为头向、左向、背向。
+SPINE_DEFORMATION_BODY_NAMES = ("F_body_Link", "base_Link", "H_body_Link")
+SPINE_FRONT_FRAME = ((0., 1., 0.), (0., 0., -1.), (-1., 0., 0.))
+SPINE_HIND_FRAME = ((0., -1., 0.), (0., 0., 1.), (-1., 0., 0.))
+
+
+# 按名称解析当前实体的三段索引，不复用训练任务的全局缓存。
+def resolve_spine_deformation_indices(entity) -> tuple[int, int, int]:
+    ids, names = entity.find_bodies(list(SPINE_DEFORMATION_BODY_NAMES), preserve_order=True)
+    if tuple(names) != SPINE_DEFORMATION_BODY_NAMES:
+        raise ValueError(f"脊柱形变所需刚体不完整或顺序不符：{names}")
+    front, center, hind = ids
+    return int(front), int(center), int(hind)
+
 
 
 # action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
