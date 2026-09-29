@@ -39,10 +39,13 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    # Hole 任务: 命令固定值 (None 表示用 cfg 里的位置表/随机采样)
+    # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
+    # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
+    command_source: Literal["schedule", "fixed", "random"] = "schedule"
     fixed_velocity: float | None = None
     fixed_height_F: float | None = None
     fixed_height_H: float | None = None
+    stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
     enable_collision: bool | None = None   # None = 按 cfg (训练默认关, 阶段 4 才开)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
 
@@ -256,15 +259,22 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
-    # 命令固定值覆盖 (回放时锁死高度/速度, 便于单帧对比)
+    # 命令来源: schedule = 位置表 (阶段 3/4); fixed = 固定高度/速度; random = 随机高度 (阶段 1/2)
     cmd_cfg = env_cfg.commands.get("hole_cmd")
-    if cmd_cfg is not None and TRAINED_MODE:
+    if cmd_cfg is not None:
+        if cfg.command_source != "schedule":
+            # 关掉位置表 → 走 _resample_command: fixed 锁死给定值, random 按阶段 1/2 随机采样
+            cmd_cfg.use_position_schedule = False  # type: ignore[attr-defined]
+            cmd_cfg.position_schedule = None  # type: ignore[attr-defined]
         if cfg.fixed_velocity is not None:
             cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
         if cfg.fixed_height_F is not None:
             cmd_cfg.fixed_height_F = cfg.fixed_height_F  # type: ignore[attr-defined]
         if cfg.fixed_height_H is not None:
             cmd_cfg.fixed_height_H = cfg.fixed_height_H  # type: ignore[attr-defined]
+        print(f"[INFO] 命令来源 = {cfg.command_source}"
+              + (f" (固定 h_F={cfg.fixed_height_F}, h_H={cfg.fixed_height_H}, "
+                 f"vel={cfg.fixed_velocity})" if cfg.command_source != "schedule" else " (8 段位移位置表)"))
 
     # 限高板碰撞开关 (编译期固化): 显式传入优先, 否则用 cfg 默认
     if cfg.enable_collision is not None:
@@ -281,6 +291,20 @@ def run_play(cfg: PlayConfig):
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+
+    # 阶段对齐: 命令来源/课程权重都由 common_step_counter 决定, 强制到指定阶段的第一轮
+    if cfg.stage is not None:
+        from mjlab.tasks.SQuRo_Hole.mdp.command import (
+            STAGE1_END, STAGE2_END, STAGE3_END,
+        )
+        stage_start = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage]
+        env.common_step_counter = stage_start
+        print(f"[INFO] 强制阶段 {cfg.stage} (common_step_counter={stage_start})")
+    elif resume_path is not None:
+        train_iter = extract_iter_from_checkpoint(resume_path)
+        env.common_step_counter = max(0, train_iter - 10) * 24
+        print(f"[INFO] 按 checkpoint 推断阶段: iter {train_iter} → "
+              f"common_step_counter={env.common_step_counter}")
 
     data_recorder = None
     if cfg.record_data:

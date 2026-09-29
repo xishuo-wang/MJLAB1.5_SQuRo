@@ -180,16 +180,42 @@ F 段局部 z ∈ {+0.008, −0.010, −0.028}   H 段局部 z ∈ {−0.010, +0
 ```powershell
 # 训练 (200 Hz, 4000 iter; 必须显式 tensorboard)
 uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard
-# 回放 (命令走 8 段位置表)
+# 回放阶段 3/4 的策略 (默认: 命令自动走 8 段位置表, 无需指定高度)
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file logs/rsl_rl/SQuRo_Hole/<run>/model_3999.pt
+# 回放阶段 1/2 的策略: 位置表要关掉, 否则命令恒等于表的第一段
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source fixed --fixed-height-F 0.055 --fixed-height-H 0.055 --fixed-velocity 0.2
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random --stage 1   # 阶段1 随机中等档
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random --stage 2   # 阶段2 随机全档(含0.02)
+# 阶段 4 的 checkpoint 需要显式开碰撞 (阶段 1~3 是关的)
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --stage 4 --enable-collision True
 # 无 checkpoint 自检
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 60 --no-video
 # 基线验证 (参考表 / 位置表 / 课程 / 碰撞 / 观测维度)
 uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 ```
 
+回放脚本的三个命令维度（`PlayConfig`）：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--command-source schedule`（默认） | 命令 = 8 段位移位置表，按 root 位移自动推进；`--fixed-*` 在此模式下**被忽略**（表模式不走固定值分支） |
+| `--command-source fixed` | 关闭位置表，用 `--fixed-height-F/H` 与 `--fixed-velocity` 锁死单帧场景 |
+| `--command-source random` | 关闭位置表，按**当前阶段**随机采样（阶段 1 中等档 `[0.04..0.06]`、阶段 2 全档含 0.02 + 配对约束），每 episode 采一次 |
+| `--stage 1..4` | 强制课程阶段（覆盖 `common_step_counter`），决定随机档位、位置表、碰撞与奖励权重；不传时按 checkpoint 轮次推断 |
+| `--enable-collision` | 覆盖限高板碰撞开关（阶段 1~3 默认关、阶段 4 需显式开；`True`/`False` 都要写值） |
+
 回放 CSV（`dummy.csv` 示例 60 步 × 70 列）含 base 位置速度、F/H 躯干高度与追踪误差、
 6D 命令与模式判定、足端接触力与位置、12 列参考位置/速度。
+
+### 各阶段回放时"要不要指定命令"
+
+| 回放对象 | 需要指定的参数 | 说明 |
+| --- | --- | --- |
+| 阶段 1 checkpoint | `--command-source fixed`（给一组 `[0.04..0.06]` 的高度）或 `--command-source random --stage 1` | 不能用默认的位置表——训练时它没见过表里的 0.02 档 |
+| 阶段 2 checkpoint | 同上，`--stage 2`；或 `--command-source fixed --fixed-height-F 0.02 --fixed-height-H 0.055`（单低场景） | 阶段 2 才引入 0.02 |
+| 阶段 3 checkpoint | 默认即可（位置表），碰撞保持关 | 训练时是表 + `body_contact` 软约束 |
+| 阶段 4 checkpoint | 默认 + `--enable-collision True` | 阶段 4 训练时板是碰的，不开碰撞回放会穿过板 |
+
 
 ## 9. 注意与未决项
 
