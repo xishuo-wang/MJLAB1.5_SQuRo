@@ -61,8 +61,10 @@ def _transport(
 
 # 验证输入为右手正交旋转矩阵，避免把非单位四元数误差当作形变。
 def _rotation_valid(rotation: torch.Tensor, eps: float) -> torch.Tensor:
-  eye = torch.eye(3, dtype=rotation.dtype, device=rotation.device)
-  error = (rotation.transpose(-1, -2) @ rotation - eye).abs().amax(dim=(-1, -2))
+  eye = torch.eye(3, dtype=torch.float64, device=rotation.device)
+  # 正交性必须用 float64 校验: CUDA 开启 TF32 后 float32 的 R^T R 误差约 4e-4, 会超过本容差
+  check = rotation.to(torch.float64)
+  error = (check.transpose(-1, -2) @ check - eye).abs().amax(dim=(-1, -2))
   handed = (
     torch.linalg.cross(rotation[..., :, 0], rotation[..., :, 1]) * rotation[..., :, 2]
   ).sum(dim=-1)
@@ -162,8 +164,10 @@ def compute_spine_deformation(
   frame = torch.stack((middle_x, middle_y, middle_z), dim=-1)
 
   # 各投影的有符号夹角：左弯为正，前段朝背侧弯为正。
-  f = (frame.transpose(-1, -2) @ forward_f.unsqueeze(-1)).squeeze(-1)
-  h = (frame.transpose(-1, -2) @ forward_h.unsqueeze(-1)).squeeze(-1)
+  # 用逐元素乘加代替矩阵乘, 避免 CUDA 的 TF32 把投影分量截到约 1e-3 的精度
+  axis = frame.transpose(-1, -2)
+  f = (axis * forward_f.unsqueeze(-2)).sum(dim=-1)
+  h = (axis * forward_h.unsqueeze(-2)).sum(dim=-1)
   lateral = torch.atan2(
     h[..., 0] * f[..., 1] - h[..., 1] * f[..., 0],
     h[..., 0] * f[..., 0] + h[..., 1] * f[..., 1],
