@@ -160,7 +160,7 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 ```powershell
 # 训练 (200 Hz, 4000 iter; 必须显式 tensorboard)
 uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard
-# 回放 (默认: 命令走 8 段位置表)
+# 回放 (默认即录视频 + CSV, 输出到 <run>/videos/)
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt>
 # 旧备份检查点不可直接回放 (它是 obs 193 / action 12; 当前是 205 / 14), 需重训
 # 固定/随机命令
@@ -168,11 +168,26 @@ uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --com
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random --stage 1
 # 显式开关限高板碰撞
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --enable-collision False
-# 无 checkpoint 自检
+# 关视频 / 只跑 N 步自检
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --no-video
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 60 --no-video
 # 基线验证 (参考表 / 位置表 / 课程 / 碰撞 / 观测维度)
 uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 ```
+
+### 输出命名与视频录制
+
+- 文件名 = `<run目录名>_<checkpoint步数>` + 后缀，例如
+  `logs/rsl_rl/SQuRo_Hole/2026-09-30_17-23-55/model_3999.pt` → `2026-09-30_17-23-55_3999.mp4`
+  （与 Backup 回放口径一致；mp4 与 csv 同名，便于对照）。
+- 后缀只记录**实际生效的非默认配置**（任务里没有受限空间 / `fixed_time_scale` 这类项，故不加）：
+  命令来源（`fixed`/`random`）、`fixed` 的 `hF/hH/v` 数值、`--stage`、`--enable-collision`。
+  例如 `..._3999-random-s2-col0.mp4`。默认（schedule + 按 checkpoint 推断阶段）时无后缀。
+- 视频默认开启（`video=True`、1000 帧、1920×1080），写入 `<run>/videos/`；
+  `--no-video` 关闭。**`render_mode="rgb_array"` 必须传进 `ManagerBasedRlEnv`**，
+  否则 `VideoRecorder` 抓不到帧（早期版本漏传，导致只出 csv 不出 mp4）。
+- 自检循环必须走 `DataRecordingEnvWrapper.step_inference()`：观测历史缓冲区是 in-place 写入，
+  带 autograd 图会抛 `where(): functions with out=... don't support automatic differentiation`。
 
 ## 9. 注意与未决项
 

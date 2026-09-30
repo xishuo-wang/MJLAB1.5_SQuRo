@@ -166,7 +166,7 @@ class JointDataRecorder:
         for i, name in enumerate(['vel_command_x', 'vel_command_y', 'vel_command_z',
                                   'height_F_command', 'height_H_command', 'angle_command']):
             record[name] = float(command[i].item())
-        record['mode'] = mode_of(float(command[3]), float(command[4]))
+        record['mode'] = mode_of(float(command[3]), float(command[4])) # type: ignore
         record['height_F_error'] = f_height - float(command[3].item())
         record['height_H_error'] = h_height - float(command[4].item())
 
@@ -210,6 +210,11 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
             self.data_recorder.record_step_data(self.env, actions=scaled_actions,
                                                 rewards=rew, dones=dones)
         return obs_dict, rew, dones, extras
+
+    # 推理步: 观测历史缓冲区的 in-place 写入不支持 autograd, 必须关梯度
+    def step_inference(self, actions):
+        with torch.inference_mode():
+            return self.step(actions)
 
 
 def run_play(cfg: PlayConfig):
@@ -282,11 +287,26 @@ def run_play(cfg: PlayConfig):
         mask = 1 if cfg.enable_collision else 0
         for key, ent in env_cfg.scene.entities.items():
             if key.startswith("hole"):
-                ent.contype = mask
-                ent.conaffinity = mask
+                ent.contype = mask # type: ignore
+                ent.conaffinity = mask # type: ignore
         print(f"[INFO] 限高板碰撞 = {'开' if cfg.enable_collision else '关'}")
 
-    suffix = f"-it{extract_iter_from_checkpoint(resume_path)}" if resume_path else ""
+    # 构建输出名后缀: 只记录实际生效的非默认配置 (任务里没有受限空间/fixed_time_scale 这类项)
+    suffix_parts = []
+    if cfg.command_source != "schedule":
+        suffix_parts.append(cfg.command_source)
+    if cfg.command_source == "fixed":
+        if cfg.fixed_height_F is not None:
+            suffix_parts.append(f"hF{cfg.fixed_height_F * 1000:.0f}")
+        if cfg.fixed_height_H is not None:
+            suffix_parts.append(f"hH{cfg.fixed_height_H * 1000:.0f}")
+        if cfg.fixed_velocity is not None:
+            suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
+    if cfg.stage is not None:
+        suffix_parts.append(f"s{cfg.stage}")
+    if cfg.enable_collision is not None:
+        suffix_parts.append("col1" if cfg.enable_collision else "col0")
+    suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{suffix}"
 
@@ -294,7 +314,8 @@ def run_play(cfg: PlayConfig):
     if cfg.video and DUMMY_MODE:
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
-    env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+    # render_mode 必须传进环境, 否则 VideoRecorder 抓不到帧 (rgb_array 才录)
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
     # 阶段对齐: 命令来源/课程权重都由 common_step_counter 决定, 强制到指定阶段的第一轮
     if cfg.stage is not None:
@@ -359,9 +380,9 @@ def run_play(cfg: PlayConfig):
         cmd_hist = []
         for _ in range(cfg.smoke_steps):
             act = policy(obs_in)
-            obs_dict, rew, dones, extras = env.step(act)
+            obs_dict, rew, dones, extras = env.step_inference(act)
             obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
-            cmd_hist.append(env.unwrapped.command_manager.get_command("hole_cmd")[0].clone())
+            cmd_hist.append(env.unwrapped.command_manager.get_command("hole_cmd")[0].clone()) # type: ignore
         cmds = torch.stack(cmd_hist)
         robot = env.unwrapped.scene["robot"]
         print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
