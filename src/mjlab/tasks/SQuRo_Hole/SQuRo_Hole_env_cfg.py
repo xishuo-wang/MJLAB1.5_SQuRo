@@ -98,7 +98,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # "cot": RewardTermCfg(func=mdp.compute_cot_penalty, weight=1.0),
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
         "body_contact": RewardTermCfg(func=mdp.compute_body_contact_penalty, weight=1.0),
-        "update": RewardTermCfg(func=mdp.update_curriculum, weight=0.0),
+        "update": RewardTermCfg(func=mdp.update_curriculum, weight=1.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
         "reached": RewardTermCfg(func=mdp.compute_reached_reward, weight=1.0),
         

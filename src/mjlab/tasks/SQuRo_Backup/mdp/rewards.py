@@ -260,7 +260,7 @@ def compute_action_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     lo, hi = _ctrl_range_tensors(action_term.target_names, target.device, target.dtype)
     cost = (lo - target).clamp(min=0.0) + (target - hi).clamp(min=0.0)
     weight = get_curriculum_reward_weight(env, "weight_action_excess")
-    penalty = -weight * cost
+    penalty = -weight * cost.mean(dim=1)
     return penalty
 
 
