@@ -16,13 +16,11 @@ from .config import (
     ANGLE_VALUES,
     BASE_HEIGHT,
     BASE_SPEED,
+    FULL_HEIGHT_VALUES,
     HEIGHT_THRESHOLD,
-    STAGE1_END,
-    STAGE1_HEIGHT_VALUES,
-    STAGE2_END,
-    STAGE2_HEIGHT_VALUES,
-    STAGE3_END,
-    STAGE3_HEIGHT_VALUES,
+    get_current_stage,
+    heights_for_stage,
+    stage_uses_schedule,
 )
 
 
@@ -44,16 +42,6 @@ def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIG
     if target_height < HEIGHT_THRESHOLD:
         return 0.1
     return target_height / base_height
-
-
-# 根据步数获取当前阶段
-def get_current_stage(step_counter: int) -> int:
-    if step_counter < STAGE1_END:
-        return 1
-    elif step_counter < STAGE2_END:
-        return 2
-    else:
-        return 3
 
 
 class HoleCommand(CommandTerm):
@@ -95,14 +83,9 @@ class HoleCommand(CommandTerm):
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
         self.start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
-    # 根据阶段获取可用的高度值列表
+    # 根据阶段获取可用的高度值列表 (阶段 1 正常档 / 阶段 2 含低高度全档 / 阶段 3+ 位置表)
     def _get_available_heights(self, stage: int) -> Optional[list]:
-        if stage == 1:
-            return STAGE1_HEIGHT_VALUES
-        elif stage == 2:
-            return STAGE2_HEIGHT_VALUES
-        else:
-            return None  # 第三阶段使用位置表
+        return heights_for_stage(stage)
     
     def _should_use_schedule(self, stage: int) -> bool:
         if self.use_position_schedule and self.position_schedule:
@@ -111,7 +94,7 @@ class HoleCommand(CommandTerm):
         if self.use_height_schedule and self.height_schedule:
             return True
         
-        if stage == 3 and self.cfg.stage_schedule_fallback:
+        if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
             return True
         
         return False
@@ -126,8 +109,8 @@ class HoleCommand(CommandTerm):
         if self.use_height_schedule and self.height_schedule:
             return self.height_schedule
         
-        # 第三阶段：使用默认位置表
-        if stage == 3 and self.cfg.stage_schedule_fallback:
+        # 阶段 3/4：使用默认位置表
+        if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
             return STAGE3_POSITION_SCHEDULE
         
         return []
@@ -149,8 +132,8 @@ class HoleCommand(CommandTerm):
         # 使用随机采样
         available_heights = self._get_available_heights(stage)
         if available_heights is None:
-            # 降级到第二阶段的高度值
-            available_heights = STAGE2_HEIGHT_VALUES
+            # 阶段 3/4 走位置表, 不该到这里; 兜底用全高度档
+            available_heights = FULL_HEIGHT_VALUES
         
         # 初始化命令张量
         vel_x = torch.zeros(n_envs, device=self.device)

@@ -31,17 +31,60 @@ NECK_REF_VEL = 0.0
 
 
 
-# 命令阶段边界 (全局步数): 决定命令来源
-# 注意前两段都只占 1 个 iter, 第 2 个控制步起即进入阶段 3 (旧版原始行为, 未改)
-STEPS_PER_ITER = 24
-STAGE1_END = 1 * STEPS_PER_ITER
-STAGE2_END = 1 * STEPS_PER_ITER
-STAGE3_END = 4000 * STEPS_PER_ITER
+# 命令与课程共用的阶段边界 (iter): 唯一来源, curriculums/command 都从这里取
+# 1) 0-1k     正常高度范围内的随机采样
+# 2) 1k-2k    含低高度状态的全高度随机采样
+# 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
+# 4) 3k 以后  位置表 + 真实碰撞
+# 注: 阶段 1~3 已生效; 阶段 4 的真实碰撞需要"按阶段重建环境"的机制, 尚未实现
+STAGE1_END_ITER = 1000
+STAGE2_END_ITER = 2000
+STAGE3_END_ITER = 3000
+NUM_STAGES = 4
 
-# 各阶段可随机采样的高度值 (阶段 3 用位置表, 不随机采样)
-STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
-STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
-STAGE3_HEIGHT_VALUES = None
+STEPS_PER_ITER = 24
+STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
+STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
+STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
+
+# 各阶段的随机采样高度池 (阶段 3 起用位置表, 不再随机采样)
+RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
+FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
+
+# 各阶段是否要求限高板实体碰撞 (编译期固化; 阶段 4 的机制未实现, 此处仅声明意图)
+STAGE_COLLISION = (False, False, False, True)
 
 # 角度命令候选 (度)
 ANGLE_VALUES = [0.0]
+
+
+
+# 按全局步数取当前阶段 (1~4); 阶段边界是命令/课程/碰撞的唯一来源
+def get_current_stage(step_counter: int) -> int:
+    if step_counter < STAGE1_END:
+        return 1
+    if step_counter < STAGE2_END:
+        return 2
+    if step_counter < STAGE3_END:
+        return 3
+    return 4
+
+
+# 该阶段是否使用位置表 (阶段 3/4)
+def stage_uses_schedule(stage: int) -> bool:
+    return stage >= 3
+
+
+# 该阶段是否要求实体碰撞
+def stage_requires_collision(stage: int) -> bool:
+    idx = min(max(int(stage), 1), NUM_STAGES) - 1
+    return STAGE_COLLISION[idx]
+
+
+# 按阶段的随机采样高度池; 阶段 3/4 返回 None (用位置表)
+def heights_for_stage(stage: int):
+    if stage == 1:
+        return RANDOM_HEIGHT_VALUES
+    if stage == 2:
+        return FULL_HEIGHT_VALUES
+    return None

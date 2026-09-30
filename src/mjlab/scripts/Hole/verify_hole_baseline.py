@@ -1,5 +1,5 @@
 # uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
-# Hole 基线验证: 参考表 / 命令位置表 / 三阶段课程 / 实体碰撞 / 观测维度
+# Hole 基线验证: 参考表 / 命令位置表 / 四阶段课程 / 实体碰撞 / 观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
 import torch
@@ -8,11 +8,17 @@ from mjlab.tasks.registry import load_env_cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.SQuRo_Hole.mdp.command import (
     HEIGHT_THRESHOLD,
+    STAGE3_POSITION_SCHEDULE,
+)
+# 阶段边界唯一来源是 config (command 只是转出)
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STAGE1_END,
     STAGE2_END,
     STAGE3_END,
-    STAGE3_POSITION_SCHEDULE,
     get_current_stage,
+    heights_for_stage,
+    stage_requires_collision,
+    stage_uses_schedule,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import reward_weight_curriculum
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
@@ -69,6 +75,16 @@ def check_command() -> None:
           f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
           f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
           f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
+    print("[3b] 四阶段定义 (边界唯一定义在 mdp/config.py):")
+    print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'位置表':>8}{'要求碰撞':>10}")
+    bounds = [0, STAGE1_END // 24, STAGE2_END // 24, STAGE3_END // 24]
+    for s in (1, 2, 3, 4):
+        lo = bounds[s - 1]
+        hi = bounds[s] - 1 if s < 4 else "∞"
+        pool = heights_for_stage(s)
+        src = "位置表" if pool is None else f"随机 {len(pool)} 档"
+        print(f"     {s:>4}{f'{lo}-{hi}':>16}{src:>26}"
+              f"{str(stage_uses_schedule(s)):>8}{str(stage_requires_collision(s)):>10}")
 
     # 位移推进查表: 位置表只在 stage 3 生效, 先把计数器推到该阶段
     env.common_step_counter = STAGE2_END
@@ -136,9 +152,11 @@ def main() -> None:
     check_command()
     check_curriculum()
     check_env()
-    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、三阶段课程 "
-          "(随机中等档 / 随机全档 / 位置表 + enable_holes 开碰撞)、"
+    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、四阶段课程 "
+          "(0-1k 正常档随机 / 1k-2k 含低高度全档随机 / 2k-3k 位置表+虚拟碰撞 / 3k+ 位置表)、"
           "动作 14 维 / 观测 205 维即为当前 Hole 基线")
+    print("     注: 阶段 4 的\"真实碰撞\"需要按阶段重建环境的机制, 尚未实现; "
+          "训练时限高板始终 contype=0 (回放为 1)")
 
 
 if __name__ == "__main__":

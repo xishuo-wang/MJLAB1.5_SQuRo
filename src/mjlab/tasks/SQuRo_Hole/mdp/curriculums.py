@@ -1,21 +1,25 @@
 from __future__ import annotations
 from typing import Any
 
-from .config import STEPS_PER_ITER as _STEPS_PER_ITER
+from .config import (
+    STAGE1_END_ITER,
+    STAGE2_END_ITER,
+    STAGE3_END_ITER,
+    STEPS_PER_ITER as _STEPS_PER_ITER,
+)
 
 
 
-# 阶段相关定义 (iter)
-STAGE1_1_ITER = 1000                # iter    0-1000: 纯模仿
-STAGE1_2_ITER = 2000                # iter 1000-2000: 高度课程收紧
-STAGE1_3_ITER = 3000                # iter 2000-3000: 虚拟碰撞 (body_contact) + 平滑权重第 3 档
-# 与 command.py 的阶段边界分开: 这里只管奖励权重, 命令阶段由 command.STAGE*_END 控制
+# 阶段边界 (iter): 与 command.py 共用 config 里的同一来源, 四段一一对应
+STAGE1_1_ITER = STAGE1_END_ITER      # 0-1k:  正常高度随机采样 (纯模仿)
+STAGE1_2_ITER = STAGE2_END_ITER      # 1k-2k: 含低高度全档随机采样 (高度课程收紧)
+STAGE1_3_ITER = STAGE3_END_ITER      # 2k-3k: 位置表 + 虚拟碰撞 (body_contact)
 _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 
 
 
-# 障碍物碰撞开关 (编译期固化, 运行期改 contype 无效; 这里只记录"课程是否要求开启")
-ENABLE_HOLES_ITER = 3000
+# 障碍物碰撞开关 (编译期固化, 运行期改 contype 无效)
+ENABLE_HOLES_ITER = STAGE3_END_ITER  # 3k 起进入真实碰撞阶段
 HOLE_ENTITY_NAMES = ("hole1", "hole2", "hole3")
 
 
