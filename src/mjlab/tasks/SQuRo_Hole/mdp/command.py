@@ -19,12 +19,12 @@ STAGE1_END = 1 * 24   # 第一阶段结束步数
 STAGE2_END = 1 * 24   # 第二阶段结束步数
 STAGE3_END = 4000 * 24   # 第三阶段结束步数
 
-BASE_HEIGHT = 0.06                    # 基准高度
-BASE_SPEED = 0.25                     # 基准速度（对应基准高度0.06m时的速度）
+BASE_HEIGHT = 0.055                    # 基准高度
+BASE_SPEED = 0.2                     # 基准速度（对应基准高度0.06m时的速度）
 
 # 各阶段的高度值配置
-STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055, 0.06]  # 第一阶段：中等高度
-STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]  # 第二阶段：全部高度
+STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]  # 第一阶段：中等高度
+STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]  # 第二阶段：全部高度
 STAGE3_HEIGHT_VALUES = None  # 第三阶段：使用位置表，不使用随机采样
 
 ANGLE_VALUES = [0.0]  # 所有可能的角度值（度）
