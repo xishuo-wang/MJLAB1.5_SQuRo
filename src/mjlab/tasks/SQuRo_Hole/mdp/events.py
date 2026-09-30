@@ -1,6 +1,8 @@
 from __future__ import annotations
 import torch
 
+from .indices import NECK_INIT_POS
+
 
 # 重置模型
 def reset_model(env, env_ids):
@@ -27,14 +29,16 @@ def reset_model(env, env_ids):
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
 
+    # 重置所用关节索引 (末尾 4/5 为 Neck_yaw 与 Neck_pitch)
     joint_indices = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23] + [
         7, 9, 10, 11, 13, 15, 16, 17, 25, 27, 28, 29, 31, 33, 34, 35
-    ]
-    
+    ] + [4, 5]
+
+    # 重置所用关节位置, 与 joint_indices 逐项对应
     joint_positions = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0] + [
         -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
         0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905
-    ]
+    ] + [NECK_INIT_POS[0], NECK_INIT_POS[1]]
 
     for i, idx in enumerate(joint_indices):
         if idx < robot_entity.num_joints:

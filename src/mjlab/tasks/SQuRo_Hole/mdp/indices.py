@@ -12,14 +12,21 @@ _ACTUATED_JOINT_NAMES = [
     "HR_hip_joint", "HR_knee_joint",
 ]
 
-# 执行器顺序下各组的关节索引 (参考表列口径: 前腿 4 + 后腿 4 + 脊柱 4)
+# 执行器顺序下的关节索引 (执行器序: 脊柱2 + 头颈2 + 前腿4 + 后腿4)
 ACTUATOR_LEG_IDS = (
     (4, 5, 6, 7, 10, 11, 12, 13)
 )
+REF_SPINE_IDS = (0, 1, 8, 9)      # F_spine1, F_body, H_spine1, H_body
+REF_NECK_IDS = (2, 3)             # Neck_yaw, Neck_pitch (参考期望恒 0)
 REF_FRONT_IDS = (4, 5, 6, 7)      # FL/FR shoulder, elbow
 REF_HIND_IDS = (10, 11, 12, 13)   # HL/HR hip, knee
-REF_SPINE_IDS = (0, 1, 8, 9)      # F_spine1, F_body, H_spine1, H_body
-REF_NECK_IDS = (2, 3)             # Neck_yaw, Neck_pitch
+
+# 参考表 14 列的列序: 前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2
+REF_TABLE_ORDER = REF_FRONT_IDS + REF_HIND_IDS + REF_SPINE_IDS + REF_NECK_IDS
+
+# 模型 joint_names 里的头颈索引与初值姿态
+NECK_JOINT_NAMES = ("Neck_yaw_joint", "Neck_pitch_joint")
+NECK_INIT_POS = (0.0, -0.3)
 
 # 虚拟碰撞采样点: 前段 F_body_1..9 + 后段 H_body_1..9 (世界系上表面)
 # 这 18 个点按 body 局部 z 分布在上/下表面, 世界系下 +0.008 的表面朝上, 用于
@@ -74,10 +81,15 @@ def resolve_model_indices(entity) -> None:
 
     joint_ids, joint_names = entity.find_joints(_ACTUATED_JOINT_NAMES, preserve_order=True)
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
-    # 腿: 位置 4-7, 10-13; 脊柱: 0-1, 8-9; 颈: 2-3
-    _MODEL_INDICES.joint_leg_ids = tuple(joint_ids[4:8]) + tuple(joint_ids[10:14])
-    _MODEL_INDICES.joint_spn_ids = tuple(joint_ids[0:2]) + tuple(joint_ids[8:10])
-    _MODEL_INDICES.joint_neck_ids = tuple(joint_ids[2:4])
+    # 按执行器名分组: 前腿 4-7 / 后腿 10-13 / 脊柱 0-1,8-9 / 头颈 2-3
+    name_to_id = {
+        n: i for n, i in zip(_ACTUATED_JOINT_NAMES, joint_ids, strict=True)}
+    _MODEL_INDICES.joint_leg_ids = tuple(
+        name_to_id[n] for n in _ACTUATED_JOINT_NAMES[4:8] + _ACTUATED_JOINT_NAMES[10:14])
+    _MODEL_INDICES.joint_spn_ids = tuple(
+        name_to_id[n] for n in _ACTUATED_JOINT_NAMES[0:2] + _ACTUATED_JOINT_NAMES[8:10])
+    _MODEL_INDICES.joint_neck_ids = tuple(
+        name_to_id[n] for n in _ACTUATED_JOINT_NAMES[2:4])
 
     print("\n[SQuRo Hole] 模型索引解析完成:")
     print(f"  F_body_Link -> {_MODEL_INDICES.f_body_id}, H_body_Link -> {_MODEL_INDICES.h_body_id}")

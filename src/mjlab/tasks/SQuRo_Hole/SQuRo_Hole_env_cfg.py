@@ -17,58 +17,18 @@ from mjlab.tasks.SQuRo_Hole import mdp
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
-from mjlab.actuator.xml_actuator import XmlActuatorCfg
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
-    get_spec as get_squro_spec,
-    get_squro_robot_cfg,
-)
-from mjlab.entity import EntityArticulationInfoCfg
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 from dataclasses import replace
 
 
-# 旧版 mouse 机器人只有 12 个执行器 (8 腿 + 4 脊柱), 没有颈部;
-# 当时的检查点也是 12 维动作 / 193 维观测, 这里任务级覆盖回同一个接口
-HOLE_ARTICULATION = EntityArticulationInfoCfg(
-    actuators=(
-        XmlActuatorCfg(
-            target_names_expr=(
-                "FL_shoulder_joint", "FL_elbow_joint",
-                "FR_shoulder_joint", "FR_elbow_joint",
-                "HL_hip_joint", "HL_knee_joint",
-                "HR_hip_joint", "HR_knee_joint",
-                "F_spine1_joint", "F_body_joint",
-                "H_spine1_joint", "H_body_joint",
-            )
-        ),
-    ),
-)
-
-# 旧 XML 里没有颈部执行器, 而 SQuRo.xml 有; 删掉才能复现 12 维 actuator_force
-_HOLE_DROPPED_ACTUATORS = ("Neck_yaw", "Neck_pitch")
-
-
-def get_hole_spec():
-    spec = get_squro_spec()
-    for name in _HOLE_DROPPED_ACTUATORS:
-        try:
-            spec.delete(spec.actuator(name))
-        except Exception:
-            pass
-    return spec
-
-
-# 本任务的机器人配置: 12 执行器 articulation + 去掉颈部执行器的 spec, 其余沿用共享配置
+# 本任务的机器人配置: 直接用共享配置的 14 执行器 (8 腿 + 4 脊柱 + 头颈 2)
 def get_hole_robot_cfg():
-    return replace(
-        get_squro_robot_cfg(),
-        articulation=HOLE_ARTICULATION,
-        spec_fn=get_hole_spec,
-    )
+    return get_squro_robot_cfg()
 
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
-    # 获取 SQuRo 机器人配置 (12 执行器, 与旧版 mouse 一致)
+    # 获取 SQuRo 机器人配置 (14 执行器, 含头颈)
     SQURO_ROBOT_CFG = get_hole_robot_cfg()
 
     # SQuRo 特定配置

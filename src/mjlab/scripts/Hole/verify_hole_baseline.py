@@ -1,6 +1,6 @@
 # uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 # Hole 基线验证: 参考表 / 命令位置表 / 三阶段课程 / 实体碰撞 / 观测维度
-# 对应旧版 (mjlab 0.1.0) 的任务接口, 机器人只有 12 个执行器 (无颈部)
+# 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
 import torch
 
@@ -28,11 +28,11 @@ NUM_MODES = len(CYCLOID_PARAMS)
 
 
 # 从实体本身读限高板碰撞开关, 不缓存"以为改成了什么"
-def hole_contype(env) -> int:
+def hole_collision_enabled(env) -> bool:
     entity = env.scene.entities.get("hole1")
     if entity is None:
-        return -1
-    return int(getattr(entity.cfg, "contype", 0))
+        return False
+    return int(getattr(entity.cfg, "contype", 0)) > 0
 
 
 # 参考表结构与模式/高度档的作用
@@ -40,7 +40,8 @@ def check_reference() -> None:
     tables = Initialize_Tables("cpu")
     front = tables["front_pos"]
     print(f"[1] 参考表 front_pos {tuple(front.shape)} "
-          f"(模式 {NUM_MODES} × 高度档 {len(HEIGHT_LIST)} × 相位 {_TABLE_RESOLUTION} × 4 关节)")
+          f"(模式 {NUM_MODES} × 高度档 {len(HEIGHT_LIST)} × 相位 {_TABLE_RESOLUTION} × 4 关节) "
+          f"被控关节数 {ACTUATOR_NUM}")
     print(f"{'模式':>6}{'高度(mm)':>10}{'FL肩幅度':>12}{'HL髋幅度':>12}{'脊柱H_spine1':>14}")
     for mode in range(NUM_MODES):
         for h_idx, h in enumerate(HEIGHT_LIST):
@@ -89,7 +90,7 @@ def check_command() -> None:
 
 # 课程权重: 三阶段与生效段
 def check_curriculum() -> None:
-    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, 三阶段):")
+    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, 4 段):")
     keys = ["body_contact", "height", "mimic_pos", "height_sigma", "enable_holes"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}")
@@ -119,7 +120,7 @@ def check_env() -> None:
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
         obs = env.reset()
         obs_dict = obs[0] if isinstance(obs, tuple) else obs
-        print(f"     [{tag}] 限高板 contype={hole_contype(env)} (旧版: 训练 0 / 回放 1), "
+        print(f"     [{tag}] 限高板碰撞={hole_collision_enabled(env)} (训练阶段 1~3 关 / 阶段 4 开), "
               f"actor {tuple(obs_dict['actor'].shape)}, "
               f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {ACTUATOR_NUM}")
         if not play:
@@ -134,8 +135,9 @@ def main() -> None:
     check_command()
     check_curriculum()
     check_env()
-    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位、三阶段课程 (step 0/24/96000)、"
-          "实体碰撞训练关/回放开、观测 193 维 / 动作 12 维即为旧版 Hole 基线")
+    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、三阶段课程 "
+          "(随机中等档 / 随机全档 / 位置表 + enable_holes 开碰撞)、"
+          "动作 14 维 / 观测 205 维即为当前 Hole 基线")
 
 
 if __name__ == "__main__":

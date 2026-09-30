@@ -14,15 +14,15 @@
 
 ```
 src/mjlab/tasks/SQuRo_Hole/
-├── SQuRo_Hole_env_cfg.py   # 观测/动作/奖励/终止/场景/实体; 含 12 执行器机器人配置
+├── SQuRo_Hole_env_cfg.py   # 观测/动作/奖励/终止/场景/实体; 机器人用共享 14 执行器配置
 ├── config/{__init__.py, rl_cfg.py}   # 注册 Mjlab-SQuRo-Hole + PPO (512-256-128, 4000 iter)
 ├── mdp/
 │   ├── command.py     # HoleCommand: 6D 命令 + 阶段 1/2 随机采样 + 阶段 3 位移位置表
 │   ├── curriculums.py # 3 段奖励权重课程 + 障碍物开关 enable_holes
-│   ├── events.py      # reset_model: 固定起点 (0,0,0.06)
+│   ├── events.py      # reset_model: 固定起点 (0,0,0.06) + 头颈 0.0/-0.3
 │   ├── hole.py        # HoleEntity: 限高板 box
 │   ├── observations.py# 自定义观测 (base_pos / base_lin_vel_w / joint_acc / actuator_force / heading)
-│   ├── reference.py   # [模式3][高度档4][相位500][4] ×3 参考表 + 速度表
+│   ├── reference.py   # [模式3][高度档4][相位500][14] ×3 参考表 + 速度表 (头颈两列恒 0)
 │   ├── rewards.py     # 奖励项 (含 body_contact 虚拟碰撞)
 │   ├── terminations.py# check_fallen
 │   ├── indices.py     # 按名解析关节/site 索引 (版本无关工具, 沿用)
@@ -33,35 +33,41 @@ src/mjlab/scripts/SQuRo_Hole_play.py             # 回放 (命令来源 / 阶段
 src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 ```
 
-## 2. 机器人接口（本次恢复的关键项）
+## 2. 机器人接口（头颈 14 执行器）
 
-旧版机器人是**同一台 SQuRo 的 12 执行器版本**（8 腿 + 4 脊柱，**没有颈部**）。
-当前共享的 `SQuRo_constants.SQURO_ARTICULATION` 是 14 执行器（含 `Neck_yaw/Neck_pitch`），
-其他任务（Slalom/Tunnel/Backup）都在用，**不能改**，所以本任务在 env_cfg 里任务级覆盖：
+旧版备份是 **12 执行器**（8 腿 + 4 脊柱，没有颈部），检查点 `model_3999.pt` 也是 12 维动作 /
+193 维观测。2026-09 起本任务改为**与共享配置一致的 14 执行器**（增加 `Neck_yaw` / `Neck_pitch`）：
 
-- `HOLE_ARTICULATION`：只列 12 个关节；
-- `get_hole_spec()`：从 spec 里**删除** `Neck_yaw` / `Neck_pitch` 两个执行器
-  —— 只改 articulation 是不够的，`data.actuator_force` 读的是**模型里全部执行器**，
-  不删就还是 14 维；
-- `get_hole_robot_cfg()`：`dataclasses.replace` 把上面两项盖到共享配置上。
+- `get_hole_robot_cfg()` 直接返回共享的 `get_squro_robot_cfg()`，不再做任务级覆盖
+  （原先"只列 12 关节 + 从 spec 删颈部执行器"的做法已删除）；
+- 动作维度 14（`JointPositionActionCfg(actuator_names=(".*",))` 自动覆盖全部执行器）；
+- `INIT_STATE` 里头颈初值 `Neck_yaw = 0.0`、`Neck_pitch = -0.3`（见 §4 重置）。
 
-| 量 | 旧备份检查点实测 | 本恢复版实测 |
+| 量 | 旧备份检查点 | 当前 |
 | --- | --- | --- |
-| 观测维度 | 193 | **193** |
-| 动作维度 | 12 | **12** |
-| actor 首层 / 末层 | (512,193) / (12,128) | 同 |
+| 观测维度 | 193 | **205** |
+| 动作维度 | 12 | **14** |
+| actor 首层 / 末层 | (512,193) / (12,128) | (512,205) / (14,128) |
 
-⇒ **旧 `model_3999.pt` 可直接加载回放**（实测加载成功并跑 200 步，累计平均回报 22.01）。
+观测 205 的构成：`actions 42(14×3 历史) + joint_pos 36 + joint_vel 36 + joint_acc 36 +
+base_pos 3 + base_lin_vel_w 3 + actuator_force 14 + heading 1 + ref_joint_pos 14 +
+ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非自由关节**（不受
+执行器数影响），头颈本来就在其中。
 
-## 3. 参考表（[模式, 高度档, 相位, 4 关节] ×3）
+⇒ **旧 12 执行器检查点不能直接回放**（动作/观测维度不同），需要重训。
+
+## 3. 参考表（[模式, 高度档, 相位, 14 关节] ×3）
 
 `HEIGHT_LIST = [0.02, 0.04, 0.05, 0.06]`、`BASE_HEIGHT = 0.06`、相位分辨率 500。
-模式：0 = 前后肢都高、1 = 前肢低、2 = 后肢低。生成规则：
+14 列的列序为 **前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2**（`front_pos 0:4`、`hind_pos 4:8`、
+`spine_pos 8:12`、头颈 12:14）。模式：0 = 前后肢都高、1 = 前肢低、2 = 后肢低。生成规则：
 
 - **模式 0**：前后腿都走生物足端轨迹（`FL_Smooth.csv` / `HR_Smooth.csv`），按各自高度缩放；
 - **模式 1**（前低）：前腿冻结在固定姿态，后腿走**摆线**（`CYCLOID_PARAMS["front_low"]`）；
 - **模式 2**（后低）：对称；
 - **低高度档**（`h < 0.04`）整表冻结；脊柱列 `H_spine1 = −0.65`；
+- **头颈两列恒为 0**（`NECK_REF_POS = NECK_REF_VEL = 0`，不随模式/高度/相位变化）
+  —— 期望"头保持不动"；与 `INIT_STATE` 的 `Neck_pitch = -0.3` 无关，策略需把俯仰拉到 0；
 - `USE_SPINE_CSV = False`：脊柱 CSV 默认不参与（`XoY/YoZ_Spine_Smooth.csv` 已随任务打包，备用）。
 
 实测（`verify_hole_baseline`）：
@@ -142,11 +148,12 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 | 7 | runner 基类 | `rsl_rl.runners.OnPolicyRunner` | `mjlab.rl.runner.MjlabOnPolicyRunner` | 1.5 的统一基类 |
 | 8 | 生物数据路径 | 绝对路径 `D:\Code\Mouse-MuJoCo\...`（已不存在） | 仓库内 `mdp/Bio_Data/*.csv`，4 个文件随任务打包 | 换机器即失效 |
 | 9 | 参考表设备 | `Initialize_Tables` **忽略传入 device**，硬编码 cuda:0 | 尊重调用方 device | 原写法只能跑 GPU，CPU 校验/诊断会 device mismatch |
-| 10 | 机器人 | `get_mouse_robot_cfg()`（12 执行器，无颈部） | 任务级 12 执行器配置 + 从 spec 删颈部执行器 | 共享配置已是 14 执行器；见 §2 |
+| 10 | 机器人 | `get_mouse_robot_cfg()`（12 执行器，无颈部） | 共享 `get_squro_robot_cfg()`（14 执行器，含头颈） | 按用户要求把头颈纳入动作空间；见 §2 |
 | 11 | 命名 | `Mjlab-Mouse` / `Mouse_*` / `mouse_cmd` / `experiment_name="mouse_locomotion"` | `Mjlab-SQuRo-Hole` / `Hole*` / `hole_cmd` / `"SQuRo_Hole"` | 与仓库其余任务统一；任务 ID 是全仓库/文档的引用点 |
-| 12 | 周边脚本 | — | `SQuRo_Hole_play.py` 的碰撞开关就地改写实体；`verify_hole_baseline.py` 按三阶段/193/12 重写 | 原脚本依赖被覆盖的四阶段版内部接口 |
+| 12 | 周边脚本 | — | `SQuRo_Hole_play.py` 的碰撞开关就地改写实体；`verify_hole_baseline.py` 按三阶段/205/14 重写 | 原脚本依赖被覆盖的四阶段版内部接口 |
+| 13 | 头颈纳入 | 参考表 12 列、`JOINT_IDS` 12 项、无头颈重置 | 参考表 14 列（头颈恒 0）、`JOINT_IDS` 加 `[4, 5]`、重置加 `Neck 0.0 / -0.3` | 用户要求头颈进动作空间；`events.py` 两列表同步 30 项 |
 
-除以上 12 项外，任务逻辑、奖励口径、参考表生成、课程数值、位置表均与 Backup 原码一致。
+除以上 13 项外，任务逻辑、奖励口径、参考表生成、课程数值、位置表均与 Backup 原码一致。
 
 ## 8. 回放与验证
 
@@ -155,8 +162,7 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard
 # 回放 (默认: 命令走 8 段位置表)
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt>
-# 旧备份检查点可直接回放 (obs 193 / action 12 已对齐)
-uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file Backup/260403_1/files/model_3999.pt
+# 旧备份检查点不可直接回放 (它是 obs 193 / action 12; 当前是 205 / 14), 需重训
 # 固定/随机命令
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source fixed --fixed-height-F 0.055 --fixed-height-H 0.055 --fixed-velocity 0.2
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random --stage 1

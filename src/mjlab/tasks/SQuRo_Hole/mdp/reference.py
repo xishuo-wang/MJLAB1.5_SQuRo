@@ -58,12 +58,17 @@ CYCLOID_PARAMS = {
     }
 }
 
-# ==================== 关节索引配置 ====================
-ACTUATOR_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8]                  # 执行器ID
-JOINT_IDS = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23]    # 执行器对应关节ID
-LEG_IDS = [6, 8, 12, 14, 24, 26, 30, 32]                    # 腿部执行器对应关节ID 
+# 关节索引配置 (执行器序: 脊柱2 + 头颈2 + 前腿4 + 后腿4; 头颈关节在展开数组里是 4/5)
+ACTUATOR_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]                # 执行器ID
+JOINT_IDS = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23] + [4, 5]    # 执行器对应关节ID (含头颈)
+LEG_IDS = [6, 8, 12, 14, 24, 26, 30, 32]                    # 腿部执行器对应关节ID
 SPINE_IDS = [1, 3, 21, 23]                                  # 脊柱执行器对应关节ID
-ACTUATOR_NUM = len(JOINT_IDS)                               # 执行器数量
+NECK_IDS = [4, 5]                                           # 头颈关节ID (Neck_yaw, Neck_pitch)
+ACTUATOR_NUM = len(JOINT_IDS)                               # 被控关节数 (14)
+
+# 头颈在参考表里的期望位置与速度: 恒为 0 (期望速度 0 即"头保持不动")
+NECK_REF_POS = 0.0
+NECK_REF_VEL = 0.0
 
 
 # ==================== 预计算表配置 ====================
@@ -242,9 +247,9 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         yoz_spine_data = Load_CSV_Spine(CSV_PATHS["yoz_spine"], "yoz_spine")
     
     NUM_MODES = 3
-    front_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, 4, device=device)
-    hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, 4, device=device)
-    spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, 4, device=device)
+    front_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
+    hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
+    spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     
     cycloid_front_low = CYCLOID_PARAMS["front_low"]
     cycloid_hind_low = CYCLOID_PARAMS["hind_low"]
@@ -322,8 +327,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
             hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
             
-            hind_pos_table[mode, height_idx, :, 0:2] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
-            hind_pos_table[mode, height_idx, :, 2:4] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+            hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+            hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
             is_low_height = target_height < 0.04
 
@@ -344,7 +349,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 spine_angles = np.zeros((_TABLE_RESOLUTION, 4))
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
                 
-            spine_pos_table[mode, height_idx, :, :] = spine_tensor
+            # 脊柱占 8:12, 头颈占 12:14 (头颈列保持 0, 期望位置与速度都是 0)
+            spine_pos_table[mode, height_idx, :, 8:12] = spine_tensor
         
                 
     # ===== 4. 计算速度张量 (基于差分，避免空表问题) =====
@@ -370,6 +376,18 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         "mode_periods": mode_periods,
     }
     return tables
+
+
+# 头颈参考位置: 与模式/高度无关, 恒为 NECK_REF_POS (期望头保持不动)
+def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
+    return torch.full((mode.shape[0], len(NECK_IDS)), NECK_REF_POS,
+                      device=mode.device, dtype=torch.float32)
+
+
+# 头颈参考速度: 恒为 NECK_REF_VEL
+def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
+    return torch.full((mode.shape[0], len(NECK_IDS)), NECK_REF_VEL,
+                      device=mode.device, dtype=torch.float32)
 
 
 # 获取参考关节位置
@@ -409,30 +427,18 @@ def get_reference_joint_pos(env) -> torch.Tensor:
     height_diffs_H = torch.abs(desired_heightH.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_H = torch.argmin(height_diffs_H, dim=1)
     
-    # 使用模式索引选择对应的表
-    front_pos = tables["front_pos"][mode, height_indices_F, phase_indices, :]
-    hind_pos = tables["hind_pos"][mode, height_indices_H, phase_indices, :]
+    # 使用模式索引选择对应的表 (三段各取自己的列区间, 头颈两列恒 0)
+    front_pos = tables["front_pos"][mode, height_indices_F, phase_indices, 0:4]
+    hind_pos = tables["hind_pos"][mode, height_indices_H, phase_indices, 4:8]
     
     # 脊柱使用混合模式
     min_height = torch.min(desired_heightF, desired_heightH)
     height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_min = torch.argmin(height_diffs_min, dim=1)
-    spine_pos = tables["spine_pos"][mode, height_indices_min, phase_indices, :]
+    spine_pos = tables["spine_pos"][mode, height_indices_min, phase_indices, 8:12]
     
-    joint_pos = torch.cat([front_pos, hind_pos, spine_pos], dim=1)
-    
-    # ==================== 新增：基于模式动态覆盖特定关节位置 ====================
-    # sine_val = -0.2 * torch.sin(2 * math.pi * current_time)
-    
-    # # Mode 1: 覆盖 JOINT_IDS = 23 (对应总张量索引 11)
-    # mask_mode1 = (mode == 1)
-    # joint_pos[mask_mode1, 11] = sine_val[mask_mode1]
-    
-    # # Mode 2: 覆盖 JOINT_IDS = 3 (对应总张量索引 9)
-    # mask_mode2 = (mode == 2)
-    # joint_pos[mask_mode2, 8] = sine_val[mask_mode2]
-    # =======================================================================
-    
+    joint_pos = torch.cat([front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)], dim=1)
+
     return joint_pos
 
 
@@ -472,26 +478,14 @@ def get_reference_joint_vel(env) -> torch.Tensor:
     height_diffs_H = torch.abs(desired_heightH.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_H = torch.argmin(height_diffs_H, dim=1)
     
-    front_vel = tables["front_vel"][mode, height_indices_F, phase_indices, :]
-    hind_vel = tables["hind_vel"][mode, height_indices_H, phase_indices, :]
+    front_vel = tables["front_vel"][mode, height_indices_F, phase_indices, 0:4]
+    hind_vel = tables["hind_vel"][mode, height_indices_H, phase_indices, 4:8]
     
     min_height = torch.min(desired_heightF, desired_heightH)
     height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_min = torch.argmin(height_diffs_min, dim=1)
-    spine_vel = tables["spine_vel"][mode, height_indices_min, phase_indices, :]
+    spine_vel = tables["spine_vel"][mode, height_indices_min, phase_indices, 8:12]
     
-    joint_vel = torch.cat([front_vel, hind_vel, spine_vel], dim=1)
-    
-    # ==================== 新增：基于模式动态覆盖特定关节速度 ====================
-    # cosine_val = -0.4 * math.pi * torch.cos(2 * math.pi * current_time)
-    
-    # # Mode 1: 覆盖 JOINT_IDS = 23 (对应总张量索引 11)
-    # mask_mode1 = (mode == 1)
-    # joint_vel[mask_mode1, 11] = cosine_val[mask_mode1]
-    
-    # # Mode 2: 覆盖 JOINT_IDS = 3 (对应总张量索引 9)
-    # mask_mode2 = (mode == 2)
-    # joint_vel[mask_mode2, 8] = cosine_val[mask_mode2]
-    # =======================================================================
+    joint_vel = torch.cat([front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)], dim=1)
     
     return joint_vel
