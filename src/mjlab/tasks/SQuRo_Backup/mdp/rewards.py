@@ -206,7 +206,7 @@ def compute_body_track_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
 def compute_leg_action_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     cost = _joint_target_cost(env, _MODEL_INDICES.actuator_leg_ids)
-    weight = get_curriculum_reward_weight(env, "weight_leg")
+    weight = get_curriculum_reward_weight(env, "weight_leg_action")
     penalty = weight * cost * (command.phase == 2)
     return penalty
 
