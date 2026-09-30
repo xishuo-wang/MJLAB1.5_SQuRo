@@ -132,8 +132,24 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 | 48000 | 2000–2999 | **1** | 5.0 | 10 | 1000 | False |
 | 72000 | 3000–3999 | 1 | **10.0** | 10 | 1000 | **True** |
 
-12 个奖励项注册在 `env_cfg.rewards`（`update` 一项 `weight=0.0`，是课程钩子）。
+12 个奖励项注册在 `env_cfg.rewards`（`update` 一项挂课程钩子）。
 跑满 4000 iter（96000 步）时生效的是第 4 段。
+
+### 课程实现形态（2026-09 起与 Backup 任务统一）
+
+`mdp/curriculums.py` 不再是"每阶段一个整字典"，改为 Backup 任务的曲线形态：
+
+- `_STEPS_PER_ITER = 24`（200 Hz，与 `rl_cfg.num_steps_per_env` 一致）；
+- `_STAGES = (0, 1000, 2000, 3000)`：阶段边界用 **iter** 表示（`STAGE1_1_ITER` /
+  `STAGE1_2_ITER` / `STAGE1_3_ITER`），落在第几档就取 `_CURVES` 里对应下标的值；
+- `_CURVES`：每个奖励项 / σ 一条曲线，权重不变的阶段重复同一个值（如 `mimic_pos` 四档都是 10.0）；
+- `should_enable_holes(step)` 用 `ENABLE_HOLES_ITER = 3000` 判定（原实现是权重表里放
+  `enable_holes` 布尔键）；`update_holes()` 按该布尔量切换实体；
+- 保留 `weight_stages` 属性作为**兼容视图**（按 iter×24 生成阈值 → 权重），旧脚本与诊断不用改。
+
+参数与重构前逐键一致（4 段 × 13 项已逐项对拍）。注意 `command.py` 的命令阶段边界
+（`STAGE1_END = STAGE2_END = 24`、`STAGE3_END = 96000`）是**另一套刻度**（决定命令来源），
+与这里的奖励课程边界互不影响。
 
 ## 7. 本次适配项（相对 Backup 原码）
 

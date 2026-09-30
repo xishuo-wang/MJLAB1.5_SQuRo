@@ -88,20 +88,21 @@ def check_command() -> None:
     env.close()
 
 
-# 课程权重: 三阶段与生效段
+# 课程权重: 阶段阈值与生效段
 def check_curriculum() -> None:
-    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, 4 段):")
-    keys = ["body_contact", "height", "mimic_pos", "height_sigma", "enable_holes"]
+    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(reward_weight_curriculum.weight_stages)} 段):")
+    keys = ["body_contact", "height", "mimic_pos", "height_sigma"]
     header = "".join(f"{k:>16}" for k in keys)
-    print(f"{'阶段阈值':>12}{'iter':>8}{header}")
+    print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
     for step in sorted(reward_weight_curriculum.weight_stages.keys()):
         w = reward_weight_curriculum.weight_stages[step]
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
-        print(f"{step:>12}{step // 24:>8}{row}")
+        print(f"{step:>12}{step // 24:>8}{row}"
+              f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_END)
     print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
           f"vel={eff['vel']}, body_contact={eff['body_contact']}, "
-          f"enable_holes={eff['enable_holes']}")
+          f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_END)}")
 
 
 # 实体碰撞与观测维度
