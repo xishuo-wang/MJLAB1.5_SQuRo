@@ -25,7 +25,7 @@ HOLE_ENTITY_NAMES = ("hole1", "hole2", "hole3")
 # 奖励权重课程曲线: 每个奖励项/σ 一条曲线, 按 iter 落在 _STAGES 的第几档取值
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
+    "mimic_pos":                (14.0, 14.0, 14.0, 14.0),
     "mimic_vel":                (5.0, 5.0, 5.0, 5.0),
     "vel":                      (5.0, 5.0, 5.0, 10.0),
     "height":                   (2.5, 2.5, 5.0, 10.0),
