@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import INIT_STATE, get_spec
-from mjlab.tasks.SQuRo_Backup.mdp.spine_deformation import SQuRoSpineDeformation
+from mjlab.tasks.SQuRo_Backup.api.spine_reader import SQuRoSpineDeformation
 
 SPINE_JOINTS = ("F_spine1_joint", "F_body_joint", "H_spine1_joint", "H_body_joint")
 ZERO_SPINE: dict[str, float] = dict.fromkeys(SPINE_JOINTS, 0.0)

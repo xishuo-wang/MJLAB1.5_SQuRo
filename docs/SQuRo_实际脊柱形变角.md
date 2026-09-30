@@ -34,7 +34,7 @@
 已有 MJLAB 环境时，创建一次读取器并按时间顺序调用：
 
 ```python
-from mjlab.tasks.SQuRo_Backup.mdp.spine_deformation import SQuRoSpineDeformation
+from mjlab.tasks.SQuRo_Backup.api.spine_reader import SQuRoSpineDeformation
 
 reader = SQuRoSpineDeformation(env.scene.entities["robot"])
 result = reader.compute()
@@ -46,7 +46,11 @@ reader.reset(env_ids)            # 在这些环境物理复位后、下一次 co
 reader.reset()                  # 全部清理
 ```
 
-接口按实体名称解析索引，不共享训练侧的全局索引缓存。适用于使用同一模型、同名刚体的其他 SQuRo 任务；它不依赖 Backup 的 command 或 phase 状态。这里的导入位置是任务适配层，底层算法位于通用工具模块。
+接口按实体名称解析索引，不共享训练侧的全局索引缓存。适用于使用同一模型、同名刚体的其他 SQuRo 任务；它不依赖 Backup 的 command 或 phase 状态。
+
+分层：`tasks/SQuRo_Backup/api/spine_reader.py` 是**任务侧只读接口**（按名取实体刚体、装配解剖轴），
+放在 `api/` 而不是 `mdp/`，表示它**不参与 MDP**（不接奖励、观测、命令、终止）；
+底层算法在 `utils/spine_deformation.py`，与具体机器人无关。解剖常量仍在 `mdp/indices.py`。
 
 离线分析、其他机器人或自定义参考点可以直接使用纯张量接口：
 

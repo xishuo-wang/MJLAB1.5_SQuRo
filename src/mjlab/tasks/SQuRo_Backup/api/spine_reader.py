@@ -5,7 +5,7 @@ import torch
 from mjlab.utils.lab_api.math import matrix_from_quat
 from mjlab.utils.spine_deformation import SpineDeformation, SpineDeformationTracker
 
-from .indices import (
+from ..mdp.indices import (
   SPINE_FRONT_FRAME,
   SPINE_HIND_FRAME,
   resolve_spine_deformation_indices,

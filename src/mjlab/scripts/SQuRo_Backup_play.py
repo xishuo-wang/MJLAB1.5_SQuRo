@@ -15,7 +15,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
-from mjlab.tasks.SQuRo_Backup.mdp.spine_deformation import SQuRoSpineDeformation
+from mjlab.tasks.SQuRo_Backup.api.spine_reader import SQuRoSpineDeformation
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
     _STEPS_PER_ITER,

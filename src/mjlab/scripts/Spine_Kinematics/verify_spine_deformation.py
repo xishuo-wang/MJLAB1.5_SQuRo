@@ -8,7 +8,7 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_spec
-from mjlab.tasks.SQuRo_Backup.mdp.spine_deformation import SQuRoSpineDeformation
+from mjlab.tasks.SQuRo_Backup.api.spine_reader import SQuRoSpineDeformation
 from mjlab.utils.spine_deformation import (
   SpineDeformationState,
   SpineDeformationTracker,
