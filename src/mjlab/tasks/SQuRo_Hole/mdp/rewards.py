@@ -9,8 +9,8 @@ from .config import BASE_HEIGHT, HEIGHT_THRESHOLD
 from .curriculums import get_curriculum_reward_weight
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
-    JOINT_IDS,
     ACTUATOR_NUM,
+    resolve_joint_ids,
     get_reference_joint_pos,
     get_reference_joint_vel
 )
@@ -25,9 +25,10 @@ _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 # 计算位置模仿奖励
 def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
+    joint_ids = resolve_joint_ids(asset)      # 参考表列序对应的模型关节索引
     joint_pos = asset.data.joint_pos
     target_joint_pos = get_reference_joint_pos(env)
-    current_pos = joint_pos[:, JOINT_IDS]
+    current_pos = joint_pos[:, joint_ids]
     pos_errors = current_pos - target_joint_pos
     mse_errors = torch.mean(pos_errors ** 2, dim=1)
     sigma = get_curriculum_reward_weight(env, "mimic_pos_sigma")
@@ -46,9 +47,10 @@ def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 计算速度模仿奖励
 def compute_mimic_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
+    joint_ids = resolve_joint_ids(asset)
     joint_vel = asset.data.joint_vel
     target_joint_vel = get_reference_joint_vel(env)
-    current_vel = joint_vel[:, JOINT_IDS]
+    current_vel = joint_vel[:, joint_ids]
     vel_errors = current_vel - target_joint_vel
     mse_errors = torch.mean(vel_errors ** 2, dim=1)
     
@@ -305,7 +307,7 @@ def _quaternion_to_roll(quat: torch.Tensor) -> torch.Tensor:
 # 能量消耗惩罚函数
 def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
-    actuator_vel = asset.data.joint_vel[:, JOINT_IDS]
+    actuator_vel = asset.data.joint_vel[:, resolve_joint_ids(asset)]
     actuator_torque = asset.data.actuator_force
     power = actuator_vel * actuator_torque
     total_power = torch.sum(torch.abs(power), dim=1)
@@ -319,7 +321,7 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_cot_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     total_mass = 2.4525
-    actuator_vel = asset.data.joint_vel[:, JOINT_IDS]
+    actuator_vel = asset.data.joint_vel[:, resolve_joint_ids(asset)]
     actuator_torque = asset.data.actuator_force
     power = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
     base_lin_vel_w = asset.data.root_link_lin_vel_w
@@ -353,7 +355,7 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_joint_acc_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     joint_acc = asset.data.joint_acc
-    actuator_acc = joint_acc[:, JOINT_IDS]
+    actuator_acc = joint_acc[:, resolve_joint_ids(asset)]
     penalty = -torch.mean(0.005 * torch.abs(actuator_acc), dim=1)
     weight = get_curriculum_reward_weight(env, "joint_acc")
     
@@ -491,9 +493,9 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     if not mode2_mask.any():
         return reward
     
-    # 获取前肢关节速度 (JOINT_IDS 前 4 项 = FL/FR shoulder+elbow, 由 indices.py 派生)
+    # 获取前肢关节速度 (参考表列序前 4 项 = FL/FR shoulder+elbow)
     joint_vel = asset.data.joint_vel
-    front_leg_vel = joint_vel[:, JOINT_IDS[:4]]  # [num_envs, 4]
+    front_leg_vel = joint_vel[:, resolve_joint_ids(asset)[:4]]  # [num_envs, 4]
     vel_abs = torch.abs(front_leg_vel)
     vel_deficit = torch.clamp(min_velocity - vel_abs, min=0.0)
     vel_deficit_sum = vel_deficit.sum(dim=1)

@@ -286,17 +286,16 @@ class HoleCommand(CommandTerm):
             env_ids = torch.arange(self.num_envs, device=self.device)
             self._update_command_from_schedule(env_ids, schedule)
         else:
-            # 使用传统的定期重采样
-            env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
-            if len(env_ids) > 0:
-                self._resample_command(env_ids)
-                
-                resampling_time_range = self.cfg.resampling_time_range
-                self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-                    resampling_time_range[1] - resampling_time_range[0]
-                ) + resampling_time_range[0]
-            
-            self.time_left -= self._env.step_dt
+            # 定时重采样: 计时器与重采样都由基类 compute() 负责 (基类已做 time_left -= dt
+            # 与到点 _resample), 这里不再重复扣减, 否则实际间隔会减半
+            pass
+
+    # 回合重置: 重新锚定位移起点 (基类 reset 已重采样命令)
+    def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:  # type: ignore[override]
+        extras = super().reset(env_ids)
+        if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
+            self._update_start_positions(env_ids)
+        return extras
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:

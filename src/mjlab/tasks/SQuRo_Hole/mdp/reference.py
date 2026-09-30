@@ -21,6 +21,8 @@ from .indices import (
     REF_NECK_IDS,
     REF_SPINE_IDS,
     REF_TABLE_ORDER,
+    _MODEL_INDICES,
+    resolve_model_indices,
 )
 
 # 生物数据随任务打包 (原版为开发机绝对路径, 迁移到仓库内相对路径)
@@ -68,14 +70,23 @@ CYCLOID_PARAMS = {
     }
 }
 
-# 关节索引: 由 indices.py 的分组定义派生, 顺序与参考表列序一致
-# (前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2)
-JOINT_IDS = list(REF_TABLE_ORDER)
-FRONT_JOINT_IDS = list(REF_FRONT_IDS)
-HIND_JOINT_IDS = list(REF_HIND_IDS)
-SPINE_JOINT_IDS = list(REF_SPINE_IDS)
-NECK_IDS = list(REF_NECK_IDS)
-ACTUATOR_NUM = len(JOINT_IDS)                               # 被控关节数 (14)
+# 参考表列序: REF_TABLE_ORDER 里的数字是**执行器序**的下标, 不是模型关节索引,
+# 必须先用 indices.py 解析出模型关节索引再按该顺序排列 (顺序: 前腿4 + 后腿4 + 脊柱4 + 头颈2)
+MODEL_JOINT_IDS: list = []
+NECK_IDS = [4, 5]                                           # 模型关节索引: Neck_yaw, Neck_pitch
+ACTUATOR_NUM = len(REF_TABLE_ORDER)                         # 被控关节数 (14)
+
+
+# 解析参考表列序对应的模型关节索引 (幂等)
+def resolve_joint_ids(entity) -> list:
+    global MODEL_JOINT_IDS, NECK_IDS
+    if MODEL_JOINT_IDS:
+        return MODEL_JOINT_IDS
+    resolve_model_indices(entity)
+    act = _MODEL_INDICES.joint_ids
+    MODEL_JOINT_IDS = [act[i] for i in REF_TABLE_ORDER]
+    NECK_IDS = [act[i] for i in REF_NECK_IDS]
+    return MODEL_JOINT_IDS
 
 
 _LEG_CSV_CACHE: Dict[str, Optional[Dict[str, Any]]] = {"front": None, "hind": None}

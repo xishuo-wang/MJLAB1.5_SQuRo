@@ -60,13 +60,27 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 - 最高高度档由 0.06 改为 0.055，位置表里命令 0.06 落到该档（缩放 0.055/0.055 = 1.0）；
 - `rewards.py` 的抬脚目标与 `reference.py` 的缩放现在**同一个来源**（此前 `rewards.py` 硬编码 0.06）。
 
-`indices.py` 仍是索引唯一来源：`reference.py` 的 `JOINT_IDS` 由 `REF_TABLE_ORDER`
-（前腿+后腿+脊柱+头颈）派生，`rewards.py` 的躯干/足端/碰撞采样点全部走
+`indices.py` 仍是索引唯一来源：`rewards.py` 的躯干/足端/碰撞采样点全部走
 `_MODEL_INDICES`（原先 `[4,24]`、`[10,11,21,22]`、`range(9)+range(12,21)` 三处硬编码）。
 
 **注意**：`[10,11,21,22]` 与 `range(12,21)` 是**错的**——`indices.py` 解析出足端应为
 `[12,13,25,26]`、后段碰撞点应为 `14..22`。修正后 `foot_clearance` 改为读真足端
 （Mode 0 下奖励从 ≈0.5 变为 ≈0.999），`body_contact` 的后段不再混入 `FL/FR_elbow_site`。
+
+### 参考表列序与关节索引（2026-09-30 二次修正）
+
+`indices.py` 里的 `REF_TABLE_ORDER`（`4,5,6,7,10,11,12,13,0,1,8,9,2,3`）等数值是
+**执行器序的下标**，不是模型关节索引——曾一度被直接当作 `JOINT_IDS` 用于
+`joint_pos[:, ...]`，导致 14 列**全部错位**（第 0 列本应取 `FL_shoulder_joint`(6)，
+却取了 `Neck_yaw_joint`(4)）。
+
+现在由 `reference.py:resolve_joint_ids(entity)` 运行时解析：先用 `indices.py` 把执行器序
+映射成模型关节索引，再按 `REF_TABLE_ORDER` 排列，得到
+`MODEL_JOINT_IDS = (6,8,12,14,24,26,30,32,1,3,21,23,4,5)`（与 Backup 原码硬编码一致）。
+`rewards.py` 的模仿/`stop` 等 6 处用法全部改为调用该函数。
+
+实测：把 14 个关节写成参考值后，`mimic_pos` = **14.0 / 14.0（100%）**；
+若用错位索引则只有 **4.98 / 14.0（35.6%）**。
 
 ## 2. 机器人接口（头颈 14 执行器）
 
