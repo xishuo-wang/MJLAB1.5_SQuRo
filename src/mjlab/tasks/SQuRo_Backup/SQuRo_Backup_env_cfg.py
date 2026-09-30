@@ -21,12 +21,8 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
 
-# 受限空间开关: mjwarp 在 put_model 时固化碰撞对与几何位置, 运行期都改不了,
-# 所以"STAGE1 不开碰撞 / STAGE2 开"只能靠编译期取值实现 (见 mdp/entity.py)。
-ENABLE_RESTRICTED_SPACE = True
-# 初始墙宽: None = 按当前阶段取课程值 (STAGE1 得到 CORRIDOR_WIDTH_START);
-# 指定数值 = 从一开始就用这个 a, 且**全程锁死** (runner 不再为宽度变化重建环境)。
-RESTRICTED_SPACE_WIDTH: float | None = None
+ENABLE_RESTRICTED_SPACE = True                  # 受限空间开关
+RESTRICTED_SPACE_WIDTH: float | None = None     # 初始墙宽
 
 
 
@@ -78,38 +74,34 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 事件
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
-        # 受限空间: 环境构造完成时按训练阶段写入碰撞开关 (几何位置已在编译期定好)
         "init_restricted_space": EventTermCfg(func=mdp.init_restricted_space, mode="startup"),
     }
 
 
     # 奖励函数
     rewards = {
-        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
-        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
-        "spine_target": RewardTermCfg(func=mdp.compute_spine_target_cost, weight=1.0),
-        "leg_target": RewardTermCfg(func=mdp.compute_leg_target_cost, weight=1.0),
-        "leg_pose": RewardTermCfg(func=mdp.compute_leg_pose_cost, weight=1.0),
-        "track_joint": RewardTermCfg(func=mdp.compute_joint_track_cost, weight=1.0),
-        "body_att": RewardTermCfg(func=mdp.compute_body_attitude_cost, weight=1.0),
-        "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
+        # 奖励项目
         "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=1.0),
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),
-        "milestone_success": RewardTermCfg(func=mdp.compute_task_success_milestone_reward, weight=1.0),
+        "milestone_success": RewardTermCfg(func=mdp.compute_success_milestone_reward, weight=1.0),
         "progress_s1": RewardTermCfg(func=mdp.compute_s1_progress_reward, weight=1.0),
-        "s1_shape": RewardTermCfg(func=mdp.compute_s1_shape_reward, weight=1.0),
         "progress_s2": RewardTermCfg(func=mdp.compute_s2_progress_reward, weight=1.0),
         "progress_s3": RewardTermCfg(func=mdp.compute_s3_progress_reward, weight=1.0),
-        "stand_still": RewardTermCfg(func=mdp.compute_stand_still_reward, weight=1.0),
-        "action_excess": RewardTermCfg(func=mdp.compute_action_ctrl_excess_penalty, weight=1.0),
+        "s1_shape": RewardTermCfg(func=mdp.compute_s1_shape_reward, weight=1.0),
+        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
+        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
+        "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
+        # 惩罚项
+        "joint_track": RewardTermCfg(func=mdp.compute_joint_track_penalty, weight=1.0),
+        "spn_track": RewardTermCfg(func=mdp.compute_spn_track_penalty, weight=1.0),
+        "body_track": RewardTermCfg(func=mdp.compute_body_track_penalty, weight=1.0),      
+        "leg_action": RewardTermCfg(func=mdp.compute_leg_action_penalty, weight=1.0),
+        "leg_pose": RewardTermCfg(func=mdp.compute_leg_pos_penalty, weight=1.0),
+        "stand_still": RewardTermCfg(func=mdp.compute_stand_reward, weight=1.0),
+        "action_excess": RewardTermCfg(func=mdp.compute_action_excess_penalty, weight=1.0),
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
-        # 未启用, 需要时取消注释并在 _CURVES 补对应权重
-        # "upright":     RewardTermCfg(func=mdp.compute_upright_reward),
-        # "stand":       RewardTermCfg(func=mdp.compute_stand_reward),
-        # "fallen":      RewardTermCfg(func=mdp.compute_fallen_penalty),
-        # "corridor":    RewardTermCfg(func=mdp.compute_corridor_reward),
     }
 
 
@@ -140,16 +132,13 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
 
     
-    # 受限空间: 是否加入实体、墙位、碰撞开关都在这里定 (编译期固化, 见文件头的说明)
+    # 受限空间实体
     restricted_space_entities: dict = {}
     if ENABLE_RESTRICTED_SPACE:
-        # 初始配置**按当前阶段**决定: STAGE1 必须从第一帧起就不开碰撞 (硬编码 True 会让
-        # 首轮采样带着碰撞跑, 与阶段一语义不符)。墙位取课程第 0 档; 给 RESTRICTED_SPACE_WIDTH
-        # 则改用对称简写并锁死 (诊断/消融用)。
         if RESTRICTED_SPACE_WIDTH is not None:
             wall_kwargs: dict = {"corridor_width": float(RESTRICTED_SPACE_WIDTH)}
         else:
-            neg0, pos0 = mdp.get_wall_positions_for_level(0)
+            neg0, pos0 = mdp.get_wall_positions(0)
             wall_kwargs = {"wall_x_neg": neg0, "wall_x_pos": pos0}
         restricted_space_entities["restricted_space"] = mdp.build_restricted_space_cfg(
             enable_collision=mdp.get_training_phase(0) == 1,
