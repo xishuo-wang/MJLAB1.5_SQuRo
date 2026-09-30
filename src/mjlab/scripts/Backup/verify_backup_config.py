@@ -42,9 +42,10 @@ def main() -> None:
     for name, term in cfg.rewards.items():
         # 权重键默认按 weight_<奖励项名> 推导, 只有命名不一致的少数项需要显式映射
         key = {
-            "spine_target": "weight_spine_target", "height": "weight_height",
-            "energy": "weight_energy",
+            "height": "weight_height", "energy": "weight_energy",
             "action_L1": "weight_smooth_L1_leg", "action_L2": "weight_smooth_L2_leg",
+            # 项名与权重键不一致的两项 (实现侧的键名保持旧口径)
+            "joint_track": "weight_track_joint", "stand_still": "weight_stand",
         }.get(name, f"weight_{name}")
         if key not in _CURVES:
             print(f"  {name:20s} ** _CURVES 缺少 {key} **")

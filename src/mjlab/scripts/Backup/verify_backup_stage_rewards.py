@@ -30,6 +30,14 @@ from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.reference import P2_ONSET as _P2_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.reference import P3_ONSET as _P3_ONSET
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import STAND_STILL_FULL_SPEED as _STAND_STILL_FULL_SPEED
+
+# 任务包已把这些标定常量内联进实现; 按"任务包不动"的口径, 脚本内保留同名副本。
+# 数值必须与实现一致 (mdp/rewards.py 的 _joint_group_weights / compute_s1_shape_reward),
+# 改动实现时这里要同步, 否则本回归作为标定锚点的意义会消失。
+S1_SHAPE_DEPTH_TOL = 0.02
+TRACK_W_SPN = 1.57
+TRACK_W_LEG = 1.0
+TRACK_W_NECK = 0.30
 # 站立窗口长度是可调超参, 步数一律从常量推导 —— 写死步数会在调窗口时长时假失败。
 from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_CONFIRM_DURATION as _STAND_CONFIRM_DURATION
 
@@ -252,8 +260,8 @@ class StageRewardTests(unittest.TestCase):
         env, cmd = make_env([0] * 3)
         cmd.test_u[:] = torch.tensor([[-1.0, 1.0]] * 3)
         z0 = _GROUND_TH_S1 - 0.005
-        z_mid = _GROUND_TH_S1 + rewards.S1_SHAPE_DEPTH_TOL / 2.0
-        z_far = _GROUND_TH_S1 + rewards.S1_SHAPE_DEPTH_TOL * 3.0
+        z_mid = _GROUND_TH_S1 + S1_SHAPE_DEPTH_TOL / 2.0
+        z_far = _GROUND_TH_S1 + S1_SHAPE_DEPTH_TOL * 3.0
         self._set_body_heights(env, [z0, z_mid, z_far], [z0, z_mid, z_far])
         r = rewards.compute_s1_shape_reward(env)
         self.assertAlmostEqual(r[2].item(), 0.0, places=6)
@@ -313,7 +321,7 @@ class StageRewardTests(unittest.TestCase):
         # 形成局部最优 (与 s2_progress 当初必须在 P1 关闭同一个道理)。
         env, cmd = make_env([0, 1, 2])
         self._set_joint_error(env, [4, 5, 10, 11], 0.5)
-        r = rewards.compute_leg_pose_cost(env)
+        r = rewards.compute_leg_pos_penalty(env)
         self.assertAlmostEqual(r[0].item(), 0.0, places=6)
         self.assertAlmostEqual(r[1].item(), 0.0, places=6)
         self.assertLess(r[2].item(), 0.0)
@@ -322,9 +330,9 @@ class StageRewardTests(unittest.TestCase):
         # [§7.13] 二次代价: 误差翻倍 -> 代价 ×4。保证大误差有强信号 (指数核在高误差区恰好失效)。
         env, cmd = make_env([2, 2])
         env = self._set_joint_error(env, [4, 5, 10, 11], 0.3)
-        r1 = rewards.compute_leg_pose_cost(env)[0].item()
+        r1 = rewards.compute_leg_pos_penalty(env)[0].item()
         env = self._set_joint_error(env, [4, 5, 10, 11], 0.6)
-        r2 = rewards.compute_leg_pose_cost(env)[0].item()
+        r2 = rewards.compute_leg_pos_penalty(env)[0].item()
         self.assertAlmostEqual(r2 / r1, 4.0, places=4)
 
     def test_leg_pose_averages_only_leg_joints(self):
@@ -335,7 +343,7 @@ class StageRewardTests(unittest.TestCase):
         env, cmd = make_env([2])
         leg_cols = list(_MODEL_INDICES.actuator_leg_ids)[:4]
         env = self._set_joint_error(env, leg_cols, 0.5)
-        r = rewards.compute_leg_pose_cost(env)[0].item()
+        r = rewards.compute_leg_pos_penalty(env)[0].item()
         self.assertAlmostEqual(r, -w * 0.125, places=6)
 
     def test_leg_pose_denominator_is_eight(self):
@@ -343,7 +351,7 @@ class StageRewardTests(unittest.TestCase):
         w = _CURVES['weight_leg_pose'][0]
         env, cmd = make_env([2])
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
-        r = rewards.compute_leg_pose_cost(env)[0].item()
+        r = rewards.compute_leg_pos_penalty(env)[0].item()
         self.assertAlmostEqual(r, -w * 0.25, places=6)
 
     def test_leg_pose_average_is_per_env_not_global(self):
@@ -357,7 +365,7 @@ class StageRewardTests(unittest.TestCase):
             q[0, c] += 0.5     # 环境0: 8 腿全偏 0.5 -> -w×0.25
             q[1, c] += 1.0     # 环境1: 8 腿全偏 1.0 -> -w×1.0
         env.make_robot.data = NS(joint_pos=q, body_link_pos_w=torch.zeros(2, 2, 3))
-        r = rewards.compute_leg_pose_cost(env)
+        r = rewards.compute_leg_pos_penalty(env)
         self.assertAlmostEqual(r[0].item(), -w * 0.25, places=6)
         self.assertAlmostEqual(r[1].item(), -w * 1.0, places=6)
 
@@ -372,7 +380,7 @@ class StageRewardTests(unittest.TestCase):
         for c in _MODEL_INDICES.actuator_leg_ids:
             q[0, c] += 1.0
         env.make_robot.data = NS(joint_pos=q, body_link_pos_w=torch.zeros(2, 2, 3))
-        rewards.compute_leg_pose_cost(env)
+        rewards.compute_leg_pos_penalty(env)
         log = env.extras["log"]
         # P3 只有一个环境且它完全准确 -> 读数必须是 0, 不能被 P1 的 1.0 污染
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.0, places=6)
@@ -383,7 +391,7 @@ class StageRewardTests(unittest.TestCase):
         # 理由: Logger 跨步 torch.mean 聚合, 缺键会被跳过, 而一个 NaN 步会把整轮读数抹掉。
         env, cmd = make_env([0])
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 1.0)
-        rewards.compute_leg_pose_cost(env)
+        rewards.compute_leg_pos_penalty(env)
         log = env.extras["log"]
         self.assertNotIn("Data/leg_pose_rmse_p3", log)
         self.assertNotIn("Data/leg_pose_rmse_hold", log)
@@ -398,7 +406,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cmd.t_phase = torch.tensor([2.0, 1.0, 0.0])      # λ·T4 = 1.5, 故只有 env0 在保持段
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
-        rewards.compute_leg_pose_cost(env)
+        rewards.compute_leg_pos_penalty(env)
         log = env.extras["log"]
         self.assertIn("Data/leg_pose_rmse_p3", log)
         self.assertIn("Data/leg_pose_rmse_hold", log)
@@ -415,7 +423,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cmd.t_phase = torch.tensor([1.0, 2.0])
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
-        rewards.compute_leg_pose_cost(env)
+        rewards.compute_leg_pos_penalty(env)
         log = env.extras["log"]
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
         self.assertAlmostEqual(log["Data/leg_pose_rmse_hold"], 0.5, places=6)   # 只有 env1
@@ -428,7 +436,7 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cmd.t_phase = torch.tensor([1.0])           # < λ·T4 = 1.5
         env = self._set_joint_error(env, list(_MODEL_INDICES.actuator_leg_ids), 0.5)
-        rewards.compute_leg_pose_cost(env)
+        rewards.compute_leg_pos_penalty(env)
         log = env.extras["log"]
         self.assertAlmostEqual(log["Data/leg_pose_rmse_p3"], 0.5, places=6)
         self.assertNotIn("Data/leg_pose_rmse_hold", log)    # 无保持段样本 -> 省略键
@@ -438,12 +446,12 @@ class StageRewardTests(unittest.TestCase):
         # 判据: 只改指令 (动作项) 而关节角不变时, 本项取值必须完全不变。
         env, cmd = make_env([2])
         env = self._set_joint_error(env, [4, 5, 10, 11], 0.4)
-        before = rewards.compute_leg_pose_cost(env)[0].item()
+        before = rewards.compute_leg_pos_penalty(env)[0].item()
         fake_action = NS(raw_action=torch.full((1, 14), 9.0), scale=0.3,
                          offset=torch.zeros(14),
                          target_names=[n.replace('_joint', '') for n in _ACTUATED_JOINT_NAMES])
         env.action_manager = NS(get_term=lambda _: fake_action)
-        after = rewards.compute_leg_pose_cost(env)[0].item()
+        after = rewards.compute_leg_pos_penalty(env)[0].item()
         self.assertAlmostEqual(before, after, places=6)
 
     def test_leg_pose_stays_below_posture_rewards(self):
@@ -854,14 +862,14 @@ class StageRewardTests(unittest.TestCase):
 
         half = _STAND_STILL_FULL_SPEED * .5
         stub([0., 0., half])
-        reward = rewards.compute_stand_still_reward(env)
-        weight = _CURVES["weight_stand_still"][0]
+        reward = rewards.compute_stand_reward(env)
+        weight = _CURVES["weight_stand"][0]
         self.assertAlmostEqual(reward[0].item(), weight, places=6)      # 完全静止 -> 满分
         self.assertEqual(reward[1].item(), 0.)                          # 非 P3 -> 0
         self.assertAlmostEqual(reward[2].item(), weight * .5, places=6)  # 半速 -> 线性核一半
         # 线性核必须在工作区间内可分辨: 站定实测 V/T 中位约 1.16, 核值不得已饱和
         stub([0., 0., 1.16])
-        r = rewards.compute_stand_still_reward(env)[2].item()
+        r = rewards.compute_stand_reward(env)[2].item()
         self.assertLess(r, weight)
         self.assertGreater(r, weight * .6)
         # 核的支撑区间必须覆盖"判据拒绝"的整个速度带, 否则减速拿不到任何回报:
@@ -871,22 +879,22 @@ class StageRewardTests(unittest.TestCase):
         self.assertGreater(_STAND_STILL_FULL_SPEED, 6.6)
         for v in (5.0, 6.0, 6.6):
             stub([0., 0., v])
-            r = rewards.compute_stand_still_reward(env)[2].item()
+            r = rewards.compute_stand_reward(env)[2].item()
             self.assertGreater(r, 0.0, f"速度 {v} rad/s 处必须仍有梯度")
             self.assertLess(r, weight)
         # 单调性: 速度越高分越低(否则不是"静止奖励")
         stub([0., 0., 3.0])
-        r_low = rewards.compute_stand_still_reward(env)[2].item()
+        r_low = rewards.compute_stand_reward(env)[2].item()
         stub([0., 0., 6.0])
-        r_high = rewards.compute_stand_still_reward(env)[2].item()
+        r_high = rewards.compute_stand_reward(env)[2].item()
         self.assertGreater(r_low, r_high)
         # 门控用宽松 hold: 几何只掉出 strict(u 在 0.8~0.9 之间)时仍须给分
         stub([0., 0., 0.])
         cmd.test_u[:] = torch.tensor([[1., .85]])
-        self.assertGreater(rewards.compute_stand_still_reward(env)[2].item(), 0.0)
+        self.assertGreater(rewards.compute_stand_reward(env)[2].item(), 0.0)
         # 姿态不达标时不给分: 不存在"不进锥就不被罚"的反向作弊路线(惩罚形式才有)
         cmd.test_u[:] = torch.tensor([-1., 1.])
-        self.assertEqual(rewards.compute_stand_still_reward(env).abs().sum().item(), 0.)
+        self.assertEqual(rewards.compute_stand_reward(env).abs().sum().item(), 0.)
 
     def test_stand_still_reward_shares_criterion_quantity(self):
         # 奖励与判据必须读同一个量: stand_still 的核输入 == 判据用的窗口均值 V/T。
@@ -905,15 +913,15 @@ class StageRewardTests(unittest.TestCase):
         # 窗口均值应为 (6.0 + 0.0)/2 = 3.0
         for i in range(2):
             self.assertAlmostEqual(mean_vel[i].item(), 3.0, places=4)
-        weight = _CURVES["weight_stand_still"][0]
+        weight = _CURVES["weight_stand"][0]
         expected = weight * (1.0 - 3.0 / _STAND_STILL_FULL_SPEED)
-        got = rewards.compute_stand_still_reward(env)
+        got = rewards.compute_stand_reward(env)
         for i in range(2):
             self.assertAlmostEqual(got[i].item(), expected, places=4)
         # 只读性: 奖励项不得推进窗口或消费完成脉冲
         t_before = cmd._stand_elapsed.clone()
         pulse_before = cmd._last_cycle_end_pulse.clone()
-        rewards.compute_stand_still_reward(env)
+        rewards.compute_stand_reward(env)
         self.assertTrue(torch.equal(cmd._stand_elapsed, t_before))
         self.assertTrue(torch.equal(cmd._last_cycle_end_pulse, pulse_before))
 
@@ -1003,10 +1011,10 @@ class StageRewardTests(unittest.TestCase):
                     s = torch.tensor(scale)
                     # 四关节误差全为 1 时, 平方代价按 scale^2 加权
                     action.raw_action.fill_(1.)
-                    torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                    torch.testing.assert_close(rewards.compute_spn_track_penalty(env),
                                                torch.full((3,), -2. * float((s ** 2).mean())))
-                    with patch.dict(_CURVES, weight_spine_target=(4.,)):
-                        torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                    with patch.dict(_CURVES, weight_spn_track=(4.,)):
+                        torch.testing.assert_close(rewards.compute_spn_track_penalty(env),
                                                    torch.full((3,), -4. * float((s ** 2).mean())))
                     # 单一关节误差放 2.0: 扭转全程全额, 侧摆/俯仰按 scale 缩放。
                     # 同时锁住"缩放接在哪一列" —— 接错列会立刻不等。
@@ -1015,7 +1023,7 @@ class StageRewardTests(unittest.TestCase):
                                          ('H_spine1_joint', -2. * float(s[2] ** 2))):
                         action.raw_action.zero_()
                         action.raw_action[:, action.target_names.index(name)] = 2.
-                        torch.testing.assert_close(rewards.compute_spine_target_cost(env),
+                        torch.testing.assert_close(rewards.compute_spn_track_penalty(env),
                                                    torch.full((3,), expect))
 
     def test_action_ctrl_excess_penalty(self):
@@ -1026,22 +1034,22 @@ class StageRewardTests(unittest.TestCase):
         with patch.dict(_CURVES, weight_action_excess=(1.,)):
             # 命令落在 ctrlrange 内 -> 零成本 (贴住限位撑地不受罚)
             action.raw_action[:, action.target_names.index('F_body_joint')] = 1.0
-            self.assertEqual(rewards.compute_action_ctrl_excess_penalty(env).item(), 0.)
+            self.assertEqual(rewards.compute_action_excess_penalty(env).item(), 0.)
             # 只对被丢弃的那一段计成本: HL_hip 上限 0.8, 目标 5.0 -> 超出 4.2, 均值除以 14 列
             action.raw_action.zero_()
             action.raw_action[:, action.target_names.index('HL_hip_joint')] = 5.0
-            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+            self.assertAlmostEqual(rewards.compute_action_excess_penalty(env).item(),
                                    -4.2 / 14, places=6)
             # 必须计入 scale: 同样 action=6.0, scale 0.3 时 F_body 目标 1.8 才刚超出 1.57
             action.scale = 0.3
             action.raw_action.zero_()
             action.raw_action[:, action.target_names.index('F_body_joint')] = 6.0
-            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+            self.assertAlmostEqual(rewards.compute_action_excess_penalty(env).item(),
                                    -0.23 / 14, places=6)
             # 负方向同样计成本
             action.raw_action.zero_()
             action.raw_action[:, action.target_names.index('F_spine1_joint')] = -6.0
-            self.assertAlmostEqual(rewards.compute_action_ctrl_excess_penalty(env).item(),
+            self.assertAlmostEqual(rewards.compute_action_excess_penalty(env).item(),
                                    -(1.8 - 0.6) / 14, places=6)
 
     def test_phase_is_monotone_and_milestones_once_per_episode(self):
@@ -1199,14 +1207,14 @@ class StageRewardTests(unittest.TestCase):
         env.action_manager = NS(get_term=lambda _: action)
         with patch.object(rewards, 'get_reference_joint_state',
                           return_value=(torch.zeros(3, 14), torch.zeros(3, 14))):
-            with patch.dict(_CURVES, weight_leg_target=(1.,)):
+            with patch.dict(_CURVES, weight_leg_action=(1.,)):
                 # 目标全 0 = 参考 -> 代价 0
-                out = rewards.compute_leg_target_cost(env)
+                out = rewards.compute_leg_action_penalty(env)
                 torch.testing.assert_close(out, torch.tensor([0., 0., 0.]))
                 # 只给 P3(phase==2) 的环境一个偏大的腿目标
                 leg_col = action.target_names.index('HL_hip_joint')
                 action.raw_action[2, leg_col] = 1.5
-                out = rewards.compute_leg_target_cost(env)
+                out = rewards.compute_leg_action_penalty(env)
                 # env2 在 P3 且腿目标偏离 -> 负值; env0/env1 不在 P3 -> 恒 0
                 self.assertLess(out[2].item(), 0.)
                 self.assertEqual(out[0].item(), 0.)
@@ -1215,7 +1223,7 @@ class StageRewardTests(unittest.TestCase):
                 self.assertAlmostEqual(out[2].item(), -1.5 ** 2 / 8, places=6)
                 # 超出 ctrlrange 的指令必须被计入(限幅前口径): HL_hip 上限 0.8
                 action.raw_action[2, leg_col] = 5.0
-                self.assertAlmostEqual(rewards.compute_leg_target_cost(env)[2].item(),
+                self.assertAlmostEqual(rewards.compute_leg_action_penalty(env)[2].item(),
                                        -5.0 ** 2 / 8, places=6)
 
     def test_confirmation_wins_before_window_closes(self):
@@ -1599,9 +1607,9 @@ class StageRewardTests(unittest.TestCase):
         cmd2._stand_vel_integral[0] = 0.
         cmd2._update_dt = 0.                              # 不推进窗口, 直接结算已攒满的状态
         with patch.dict(_CURVES, weight_milestone_success=(35.,)):
-            paid = rewards.compute_task_success_milestone_reward(env2)
+            paid = rewards.compute_success_milestone_reward(env2)
             self.assertGreater(paid.item(), 0.)
-            again = rewards.compute_task_success_milestone_reward(env2)
+            again = rewards.compute_success_milestone_reward(env2)
             self.assertEqual(again.item(), 0.)
             # 下一步执行复位后, 下一个循环重新可以结算。
             cmd2._update_command()
@@ -1628,14 +1636,15 @@ class StageRewardTests(unittest.TestCase):
     def test_cycle_reset_writes_all_state_before_forward(self):
         # 物理一致性: 写入 qpos/qvel 之后必须 forward, 否则观测里的 site/body 派生量
         # 仍是复位前状态 (entity/data.py 明确要求"写后读前先 forward")。
-        from mjlab.tasks.SQuRo_Backup.mdp import events as ev
+        from mjlab.tasks.SQuRo_Backup.mdp import command as cmd_mod
         env, cmd = make_env([2])
         order: list[str] = []
         env.sim = NS(reset=lambda ids: order.append('sim.reset'), forward=lambda: order.append('sim.forward'))
         env.scene.reset = lambda ids: order.append('scene.reset')
         env.observation_manager.reset = lambda ids: order.append('obs.reset')
         env.action_manager.reset = lambda ids: order.append('act.reset')
-        with patch.object(ev, 'apply_fallen_state', lambda e, i: order.append('fallen')):
+        with patch.object(cmd_mod, 'apply_fallen_state',
+                          lambda e, i: order.append('fallen')):
             cmd._stand_elapsed[0] = 1.5
             cmd._update_dt = 0.
             cmd.stand_reward_and_pulse()
@@ -1911,16 +1920,16 @@ class StageRewardTests(unittest.TestCase):
         cmd.time_scale_command = cmd.command_tensor[:, 5]
         cmd.t_phase[:] = _P1_ONSET + _P1_SPAN    # 相位时钟 -> P1 段末
         cmd.test_u = torch.tensor([[-1.0, 1.0]])  # 正确 S1
-        correct = RW.compute_body_attitude_cost(env).item()
+        correct = RW.compute_body_track_penalty(env).item()
         cmd.test_u = torch.tensor([[1.0, 1.0]])   # 提前双正置
-        shortcut = RW.compute_body_attitude_cost(env).item()
+        shortcut = RW.compute_body_track_penalty(env).item()
         self.assertGreater(correct, shortcut,
                            "P1 末端: 正确 S1 的代价必须高于提前双正置(即罚得更少)")
         # 而到 P2 末端, 双正置才应当是最优 (在 phase=1 下断, 否则冻结段停在 P1 段末参考)
         cmd.phase[:] = 1
         cmd.t_phase[:] = _P2_SPAN
         cmd.test_u = torch.tensor([[1.0, 1.0]])
-        torch.testing.assert_close(RW.compute_body_attitude_cost(env), torch.zeros(1))
+        torch.testing.assert_close(RW.compute_body_track_penalty(env), torch.zeros(1))
 
     def test_body_attitude_cost_sign_and_zero(self):
         # [§7.8] 实际姿态等于参考 -> 代价 0; 偏离 -> 负值且随偏离增大; NaN 不得污染。
@@ -1930,15 +1939,15 @@ class StageRewardTests(unittest.TestCase):
         cmd.phase[:] = 2                          # P3: 参考为 (1,1)
         cmd.t_phase[:] = 0.0
         cmd.test_u = torch.tensor([[1.0, 1.0]])
-        torch.testing.assert_close(RW.compute_body_attitude_cost(env), torch.zeros(1))
+        torch.testing.assert_close(RW.compute_body_track_penalty(env), torch.zeros(1))
         cmd.test_u = torch.tensor([[0.0, 1.0]])
-        half = RW.compute_body_attitude_cost(env)
+        half = RW.compute_body_track_penalty(env)
         cmd.test_u = torch.tensor([[-1.0, 1.0]])
-        full = RW.compute_body_attitude_cost(env)
+        full = RW.compute_body_track_penalty(env)
         self.assertLess(half.item(), 0.0)
         self.assertLess(full.item(), half.item())
         cmd.test_u = torch.tensor([[float("nan"), 1.0]])
-        self.assertTrue(torch.isfinite(RW.compute_body_attitude_cost(env)).all())
+        self.assertTrue(torch.isfinite(RW.compute_body_track_penalty(env)).all())
 
     def test_joint_track_cost_is_order_invariant(self):
         # [P2] 实际关节/参考/权重必须同序。旧实现把实际关节按 actions 名称顺序重排,
@@ -1956,18 +1965,18 @@ class StageRewardTests(unittest.TestCase):
             env.make_robot.data = NS(joint_pos=ref.clone())
             env.scene['robot'] = env.make_robot
             with patch.object(R, 'get_reference_joint_state', return_value=(ref.clone(), ref.clone())):
-                cost = R.compute_joint_track_cost(env)
+                cost = R.compute_joint_track_penalty(env)
         finally:
             _MODEL_INDICES.joint_ids = saved
         # 完全等于参考 -> 代价必须是 0, 与动作项列序无关
         torch.testing.assert_close(cost, _t.zeros(n))
         # 权重向量按参考表顺序构造: 脊柱位为 1.57、颈位为 0.3、其余 1.0
         w = R._joint_group_weights(_t.device('cpu'), _t.float32)
-        self.assertAlmostEqual(w[0].item(), R.TRACK_W_SPN, places=6)    # F_spine1
-        self.assertAlmostEqual(w[1].item(), R.TRACK_W_SPN, places=6)    # F_body
-        self.assertAlmostEqual(w[2].item(), R.TRACK_W_NECK, places=6)   # Neck_yaw
-        self.assertAlmostEqual(w[4].item(), R.TRACK_W_LEG, places=6)    # FL_shoulder
-        self.assertAlmostEqual(w[8].item(), R.TRACK_W_SPN, places=6)    # H_spine1
+        self.assertAlmostEqual(w[0].item(), TRACK_W_SPN, places=6)    # F_spine1
+        self.assertAlmostEqual(w[1].item(), TRACK_W_SPN, places=6)    # F_body
+        self.assertAlmostEqual(w[2].item(), TRACK_W_NECK, places=6)   # Neck_yaw
+        self.assertAlmostEqual(w[4].item(), TRACK_W_LEG, places=6)    # FL_shoulder
+        self.assertAlmostEqual(w[8].item(), TRACK_W_SPN, places=6)    # H_spine1
 
     def test_curriculum_level_table_reaches_target_walls(self):
         # 墙位课程是显式档位表 + 索引推进 (几何只能在编译期定)。

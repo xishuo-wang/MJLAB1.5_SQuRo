@@ -21,7 +21,8 @@ from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Backup.mdp.indices import resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp import config as T
-from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_TRANSITION_END as _STAND_TRANSITION_END
+# 任务包已删除该派生常量; 累计口径边界 = P2_END + T4 (与 reference._TRANS_END 同值 1.95)
+_STAND_TRANSITION_END = T.P2_END + T.T4
 from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET
 
 
@@ -61,7 +62,7 @@ def cmp_reference() -> bool:
     # 训练参考表: 用同一套查询接口 (λ=1)
     # 手调轴以 T1 起点为 T_OFFSET, 参考表以 P1_ONSET 为 T1 起点, 故 手调时刻 = 表时刻 + P1_ONSET。
     # 全部 14 个关节都参与比对: 只比脊柱无法证明 P0 收腿轨迹一致。
-    ts = np.arange(0.0, T.STAND_TRANSITION_END + 1e-9, 0.005)
+    ts = np.arange(0.0, _STAND_TRANSITION_END + 1e-9, 0.005)
     errs = []
     rows = []
     for tn in ts:

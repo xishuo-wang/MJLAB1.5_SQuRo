@@ -13,7 +13,9 @@ from mjlab.tasks.SQuRo_Backup.mdp.config import (
     P2_END,
     REFERENCE_TOTAL_TIME,
 )
-from mjlab.tasks.SQuRo_Backup.mdp.rewards import QUALITY_SIGMA_EARLY_FRAC, QUALITY_SIGMA_LATE_S
+# 任务包已把 σ 内联进 _milestone_time_quality; 脚本内保留同名副本, 数值须与实现一致。
+QUALITY_SIGMA_EARLY_FRAC = 0.40
+QUALITY_SIGMA_LATE_S = 0.35
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
 
 
