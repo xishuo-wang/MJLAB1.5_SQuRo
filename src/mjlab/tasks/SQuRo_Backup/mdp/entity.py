@@ -24,6 +24,7 @@ class RestrictedSpaceEntityCfg(EntityCfg):
     wall_half_thickness: float = WALL_HALF_THICKNESS
     wall_half_length: float = WALL_HALF_LENGTH
     rgba: tuple[float, float, float, float] = (0.55, 0.62, 0.72, 0.45)
+    # rgba: tuple[float, float, float, float] = (0.55, 0.62, 0.72, 0.0)       # 备用无色透明版本
     contype: int = 1
     conaffinity: int = 1
     solref: tuple[float, float] = (0.005, 1.0)
