@@ -14,7 +14,7 @@ from mjlab.viewer import NativeMujocoViewer
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommandCfg
-from mjlab.tasks.SQuRo_Backup.mdp.command import _P1_EXPECT
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END
 from mjlab.tasks.SQuRo_Backup.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
@@ -233,7 +233,7 @@ class StateMachinePolicy:
         s2_confirmed = self._update_confirmation("_s2_confirm_t", self._is_S2(), dt)
         inverted_confirmed = self._update_confirmation("_inverted_confirm_t", self._is_both_inverted(), dt)
         if self.phase == "P1":
-            expected = _P1_EXPECT * self.lam
+            expected = P1_END * self.lam
             close_t = expected + self.window_late_s
             # 与训练同步: 可接受区间 = [段末, 段末+晚侧余量]。段末门控防参考瞬移;
             # 过窗仍未确认则本次尝试作废(重播本段参考)。
