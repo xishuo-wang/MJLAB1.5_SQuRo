@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 
-# 只读判定: 站立窗口是否已达标 (不写任何状态, 不推进窗口)。
+# 判定站立是否成功
 def check_stand_success(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast(BackupCommand, env.command_manager.get_term("backup_cmd"))
     hold, strict = command.stand_gate()
