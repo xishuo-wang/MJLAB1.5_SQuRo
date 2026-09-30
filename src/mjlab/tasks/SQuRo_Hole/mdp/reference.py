@@ -6,12 +6,22 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional
 
-# ==================== 配置开关 ====================
-USE_SPINE_CSV = False       # 是否启用脊柱CSV
-
-# 高度配置列表
-HEIGHT_LIST = [0.02, 0.04, 0.05, 0.06]
-BASE_HEIGHT = 0.06
+from .config import (
+    BASE_HEIGHT,
+    HEIGHT_LIST,
+    HEIGHT_THRESHOLD,
+    NECK_REF_POS,
+    NECK_REF_VEL,
+    TABLE_RESOLUTION as _TABLE_RESOLUTION,
+    USE_SPINE_CSV,
+)
+from .indices import (
+    REF_FRONT_IDS,
+    REF_HIND_IDS,
+    REF_NECK_IDS,
+    REF_SPINE_IDS,
+    REF_TABLE_ORDER,
+)
 
 # 生物数据随任务打包 (原版为开发机绝对路径, 迁移到仓库内相对路径)
 _BIO_DATA_DIR = Path(__file__).resolve().parent / "Bio_Data"
@@ -58,21 +68,15 @@ CYCLOID_PARAMS = {
     }
 }
 
-# 关节索引配置 (执行器序: 脊柱2 + 头颈2 + 前腿4 + 后腿4; 头颈关节在展开数组里是 4/5)
-ACTUATOR_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]                # 执行器ID
-JOINT_IDS = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23] + [4, 5]    # 执行器对应关节ID (含头颈)
-LEG_IDS = [6, 8, 12, 14, 24, 26, 30, 32]                    # 腿部执行器对应关节ID
-SPINE_IDS = [1, 3, 21, 23]                                  # 脊柱执行器对应关节ID
-NECK_IDS = [4, 5]                                           # 头颈关节ID (Neck_yaw, Neck_pitch)
+# 关节索引: 由 indices.py 的分组定义派生, 顺序与参考表列序一致
+# (前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2)
+JOINT_IDS = list(REF_TABLE_ORDER)
+FRONT_JOINT_IDS = list(REF_FRONT_IDS)
+HIND_JOINT_IDS = list(REF_HIND_IDS)
+SPINE_JOINT_IDS = list(REF_SPINE_IDS)
+NECK_IDS = list(REF_NECK_IDS)
 ACTUATOR_NUM = len(JOINT_IDS)                               # 被控关节数 (14)
 
-# 头颈在参考表里的期望位置与速度: 恒为 0 (期望速度 0 即"头保持不动")
-NECK_REF_POS = 0.0
-NECK_REF_VEL = 0.0
-
-
-# ==================== 预计算表配置 ====================
-_TABLE_RESOLUTION = 500
 
 _LEG_CSV_CACHE: Dict[str, Optional[Dict[str, Any]]] = {"front": None, "hind": None}
 _SPINE_CSV_CACHE: Dict[str, Optional[Dict[str, Any]]] = {"xoy_spine": None, "yoz_spine": None}
@@ -125,7 +129,7 @@ def CSV_Leg_Trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: 
                                   x_offset: float = 0.0, z_offset: float = 0.0,
                                   current_height: float = BASE_HEIGHT,
                                   is_front: bool = True) -> tuple[np.ndarray, np.ndarray]:
-    if current_height < 0.04:
+    if current_height < HEIGHT_THRESHOLD:
         x_val = 0.005 if is_front else 0.002
         return np.full_like(phases, x_val), np.full_like(phases, -0.02)
     
@@ -330,7 +334,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
             hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
-            is_low_height = target_height < 0.04
+            is_low_height = target_height < HEIGHT_THRESHOLD
 
             if is_low_height or mode in [1, 2]:
                 # 低高度模式：固定脊柱姿态
@@ -404,9 +408,8 @@ def get_reference_joint_pos(env) -> torch.Tensor:
     current_time = env.episode_length_buf.float() * env.step_dt  # [num_envs]
     
     # 1. 先计算 mode
-    height_threshold = 0.04
-    front_low = desired_heightF < height_threshold
-    hind_low = desired_heightH < height_threshold
+    front_low = desired_heightF < HEIGHT_THRESHOLD
+    hind_low = desired_heightH < HEIGHT_THRESHOLD
     
     mode = torch.zeros_like(desired_heightF, dtype=torch.long)
     mode[(front_low) & (~hind_low)] = 1
@@ -455,7 +458,7 @@ def get_reference_joint_vel(env) -> torch.Tensor:
     
     current_time = env.episode_length_buf.float() * env.step_dt
     
-    height_threshold = 0.04
+    height_threshold = HEIGHT_THRESHOLD
     front_low = desired_heightF < height_threshold
     hind_low = desired_heightH < height_threshold
     

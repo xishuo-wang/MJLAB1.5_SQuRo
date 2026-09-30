@@ -17,8 +17,9 @@ src/mjlab/tasks/SQuRo_Hole/
 ├── SQuRo_Hole_env_cfg.py   # 观测/动作/奖励/终止/场景/实体; 机器人用共享 14 执行器配置
 ├── config/{__init__.py, rl_cfg.py}   # 注册 Mjlab-SQuRo-Hole + PPO (512-256-128, 4000 iter)
 ├── mdp/
+│   ├── config.py      # 任务级全局常量 (基准高度/速度/阈值/高度档/阶段边界), 见 §3
 │   ├── command.py     # HoleCommand: 6D 命令 + 阶段 1/2 随机采样 + 阶段 3 位移位置表
-│   ├── curriculums.py # 3 段奖励权重课程 + 障碍物开关 enable_holes
+│   ├── curriculums.py # 4 段奖励权重曲线 _CURVES + 障碍物开关 enable_holes
 │   ├── events.py      # reset_model: 固定起点 (0,0,0.06) + 头颈 0.0/-0.3
 │   ├── hole.py        # HoleEntity: 限高板 box
 │   ├── observations.py# 自定义观测 (base_pos / base_lin_vel_w / joint_acc / actuator_force / heading)
@@ -32,6 +33,36 @@ src/mjlab/tasks/SQuRo_Hole/
 src/mjlab/scripts/SQuRo_Hole_play.py             # 回放 (命令来源 / 阶段 / 视频 / CSV)
 src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 ```
+
+## 2b. 全局常量（mdp/config.py）
+
+多文件共用的基准值集中在 `mdp/config.py`（形态参考 `SQuRo_Backup/mdp/config.py`），
+其余模块一律 `from .config import ...`，不再各自定义。当前值：
+
+| 常量 | 值 | 含义 |
+| --- | --- | --- |
+| `BASE_HEIGHT` | **0.055** | 正常行走高度；既是参考表轨迹缩放基准（`h/BASE_HEIGHT`），也是速度基准 |
+| `BASE_SPEED` | 0.2 | 基准速度（对应基准高度 + 名义步频） |
+| `HEIGHT_THRESHOLD` | 0.04 | 高低肢判定阈值（低于则该段腿冻结） |
+| `GAIT_FREQ` | 2.0 | 名义步频（表内摆线/CSV 轨迹按此生成） |
+| `HEIGHT_LIST` | `[0.02, 0.04, 0.05, 0.055]` | 参考表高度档（第二维） |
+| `TABLE_RESOLUTION` | 500 | 参考表相位分辨率 |
+| `STEPS_PER_ITER` | 24 | 每 iter 采样步数（= `rl_cfg.num_steps_per_env`） |
+| `STAGE{1,2,3}_END` | 24 / 24 / 96000 | 命令阶段边界（全局步数） |
+
+**改动带来的行为变化**（相对上一版）：原先 0.06 基准统一为 0.055，因此
+
+- 参考表轨迹由 `h/0.06` 变为 `h/0.055`（同一高度档的步幅/抬脚略增）；
+- 最高高度档由 0.06 改为 0.055，位置表里命令 0.06 落到该档（缩放 0.055/0.055 = 1.0）；
+- `rewards.py` 的抬脚目标与 `reference.py` 的缩放现在**同一个来源**（此前 `rewards.py` 硬编码 0.06）。
+
+`indices.py` 仍是索引唯一来源：`reference.py` 的 `JOINT_IDS` 由 `REF_TABLE_ORDER`
+（前腿+后腿+脊柱+头颈）派生，`rewards.py` 的躯干/足端/碰撞采样点全部走
+`_MODEL_INDICES`（原先 `[4,24]`、`[10,11,21,22]`、`range(9)+range(12,21)` 三处硬编码）。
+
+**注意**：`[10,11,21,22]` 与 `range(12,21)` 是**错的**——`indices.py` 解析出足端应为
+`[12,13,25,26]`、后段碰撞点应为 `14..22`。修正后 `foot_clearance` 改为读真足端
+（Mode 0 下奖励从 ≈0.5 变为 ≈0.999），`body_contact` 的后段不再混入 `FL/FR_elbow_site`。
 
 ## 2. 机器人接口（头颈 14 执行器）
 
@@ -194,11 +225,18 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 ### 输出命名与视频录制
 
 - 文件名 = `<run目录名>_<checkpoint步数>` + 后缀，例如
-  `logs/rsl_rl/SQuRo_Hole/2026-09-30_17-23-55/model_3999.pt` → `2026-09-30_17-23-55_3999.mp4`
+  `logs/rsl_rl/SQuRo_Hole/2026-09-30_20-01-07/model_1900.pt` → `2026-09-30_20-01-07_1900-random.mp4`
   （与 Backup 回放口径一致；mp4 与 csv 同名，便于对照）。
-- 后缀只记录**实际生效的非默认配置**（任务里没有受限空间 / `fixed_time_scale` 这类项，故不加）：
-  命令来源（`fixed`/`random`）、`fixed` 的 `hF/hH/v` 数值、`--stage`、`--enable-collision`。
-  例如 `..._3999-random-s2-col0.mp4`。默认（schedule + 按 checkpoint 推断阶段）时无后缀。
+- **`--command-source` 三选一始终作为后缀首段**：`schedule` / `random` / `fixed`，
+  例如 `..._1900-schedule.mp4`、`..._1900-random.mp4`。
+- 其余后缀只记录非默认配置：`fixed` 的 `hF/hH/v` 数值、`--stage`、`--enable-collision`。
+  例如 `..._1900-fixed-hF50-hH50-v0.15.mp4`、`..._1900-random-s2-col0.mp4`
+  （任务里没有受限空间 / `fixed_time_scale` 这类项，故不加）。
+- **命令来源是 play 侧最高优先级**（同 Backup 回放要求）：选了 `random`/`fixed` 时，
+  即使 `env_cfg` 里配了位置表也会被覆盖。实现上除了清掉 `position_schedule`，
+  还置 `use_height_schedule=False` 与 `stage_schedule_fallback=False`
+  ——后者专门关掉 `_should_use_schedule` 里"stage 3 兜底走内置位置表"的分支，
+  否则跑到 stage 3 后命令会被位置表接管。
 - 视频默认开启（`video=True`、1000 帧、1920×1080），写入 `<run>/videos/`；
   `--no-video` 关闭。**`render_mode="rgb_array"` 必须传进 `ManagerBasedRlEnv`**，
   否则 `VideoRecorder` 抓不到帧（早期版本漏传，导致只出 csv 不出 mp4）。

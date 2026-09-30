@@ -1,9 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
-
-
-_STEPS_PER_ITER = 24            # 控制 dt 0.005 s, 24 步 = 0.12 s 仿真 (200 Hz, 与 rl_cfg 一致)
+from .config import STEPS_PER_ITER as _STEPS_PER_ITER
 
 
 

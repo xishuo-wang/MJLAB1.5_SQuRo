@@ -12,27 +12,21 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
+from .config import (
+    ANGLE_VALUES,
+    BASE_HEIGHT,
+    BASE_SPEED,
+    HEIGHT_THRESHOLD,
+    STAGE1_END,
+    STAGE1_HEIGHT_VALUES,
+    STAGE2_END,
+    STAGE2_HEIGHT_VALUES,
+    STAGE3_END,
+    STAGE3_HEIGHT_VALUES,
+)
 
-# ==================== 课程配置 ====================
-# 阶段定义（步数）
-STAGE1_END = 1 * 24   # 第一阶段结束步数
-STAGE2_END = 1 * 24   # 第二阶段结束步数
-STAGE3_END = 4000 * 24   # 第三阶段结束步数
 
-BASE_HEIGHT = 0.055                    # 基准高度
-BASE_SPEED = 0.2                     # 基准速度（对应基准高度0.06m时的速度）
-
-# 各阶段的高度值配置
-STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]  # 第一阶段：中等高度
-STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]  # 第二阶段：全部高度
-STAGE3_HEIGHT_VALUES = None  # 第三阶段：使用位置表，不使用随机采样
-
-ANGLE_VALUES = [0.0]  # 所有可能的角度值（度）
-
-# 高度阈值（用于判断前后肢是否都高于此值）
-HEIGHT_THRESHOLD = 0.04
-
-# 第三阶段固定位置表（基于移动距离）
+# 第三阶段固定位置表（基于移动距离, 任务专属: 位移 → 前肢高度, 后肢高度）
 STAGE3_POSITION_SCHEDULE = [
     (0.0, 0.02, 0.05),
     (0.2, 0.06, 0.02),
@@ -43,12 +37,11 @@ STAGE3_POSITION_SCHEDULE = [
     (1.2, 0.06, 0.02),
     (1.32, 0.06, 0.06),
 ]
-# ================================================
 
 
 # 根据目标高度计算缩放因子
 def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
-    if target_height < 0.04:
+    if target_height < HEIGHT_THRESHOLD:
         return 0.1
     return target_height / base_height
 
@@ -118,7 +111,7 @@ class HoleCommand(CommandTerm):
         if self.use_height_schedule and self.height_schedule:
             return True
         
-        if stage == 3:
+        if stage == 3 and self.cfg.stage_schedule_fallback:
             return True
         
         return False
@@ -134,7 +127,7 @@ class HoleCommand(CommandTerm):
             return self.height_schedule
         
         # 第三阶段：使用默认位置表
-        if stage == 3:
+        if stage == 3 and self.cfg.stage_schedule_fallback:
             return STAGE3_POSITION_SCHEDULE
         
         return []
@@ -370,6 +363,8 @@ class HoleCommandCfg(CommandTermCfg):
     height_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(开始时间, 前肢高度, 后肢高度), ...]
     use_position_schedule: bool = False  # 是否使用位置表
     position_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(距离阈值, 前肢高度, 后肢高度), ...]
+    # 阶段 3 是否兜底使用内置位置表; 回放侧选择 fixed/random 时置 False, 保证 play 优先
+    stage_schedule_fallback: bool = True
     
     @dataclass
     class VizCfg:

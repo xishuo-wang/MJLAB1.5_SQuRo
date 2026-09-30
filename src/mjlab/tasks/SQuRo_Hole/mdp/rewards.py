@@ -5,9 +5,10 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
+from .config import BASE_HEIGHT, HEIGHT_THRESHOLD
 from .curriculums import get_curriculum_reward_weight
+from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
-    ACTUATOR_IDS,
     JOINT_IDS,
     ACTUATOR_NUM,
     get_reference_joint_pos,
@@ -125,20 +126,18 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
     desired_height_F = cmd_term.command[:, 3]
     desired_height_H = cmd_term.command[:, 4]
     
-    # Mode 0: 前后肢高度都 >= 0.04
-    height_threshold = 0.04
-    mode0_mask = (desired_height_F >= height_threshold) & (desired_height_H >= height_threshold)
+    # Mode 0: 前后肢高度都 >= 阈值
+    mode0_mask = (desired_height_F >= HEIGHT_THRESHOLD) & (desired_height_H >= HEIGHT_THRESHOLD)
     
     # 非 Mode 0 直接返回零奖励
     if not mode0_mask.any():
         return torch.zeros(env.num_envs, device=env.device)
     
-    foot_site_ids = [10, 11, 21, 22]
-    foot_z = asset.data.site_pos_w[:, foot_site_ids, 2]
+    resolve_model_indices(asset)
+    foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
     
-    base_height = 0.06
-    height_scale_F = desired_height_F / base_height
-    height_scale_H = desired_height_H / base_height
+    height_scale_F = desired_height_F / BASE_HEIGHT
+    height_scale_H = desired_height_H / BASE_HEIGHT
     
     target_height_F = target_base_height * height_scale_F
     target_height_H = target_base_height * height_scale_H
@@ -445,8 +444,10 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     obs_x_max = torch.tensor([0.215, 0.7, 1.215], device=device)
     obs_z_thresh = torch.tensor([0.045, 0.07, 0.045], device=device)
     
-    # 前肢(body 4)和后肢(body 24)的X坐标 [num_envs, 2]
-    body_x = asset.data.body_link_pos_w[:, [4, 24], 0]
+    # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
+    resolve_model_indices(asset)
+    body_x = asset.data.body_link_pos_w[
+        :, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
     
     # 判断是否在障碍物X范围内 [num_envs, 2, 3]
     in_obs_matrix = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
@@ -456,8 +457,9 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     
     active_z_thresh = (in_obs_matrix.float() @ obs_z_thresh)
     in_any_obs = in_obs_matrix.any(dim=-1)
-    combined_site_ids = list(range(9)) + list(range(12, 21))
-    all_sites_z = asset.data.site_pos_w[:, combined_site_ids, 2]
+    # 采样点: 前段 9 点 + 后段 9 点 (索引由 indices.py 按名字解析)
+    seg_site_ids = list(_MODEL_INDICES.front_seg_site_ids) + list(_MODEL_INDICES.rear_seg_site_ids)
+    all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2]
     all_sites_z = all_sites_z.view(num_envs, 2, 9)
     diff = all_sites_z - active_z_thresh.unsqueeze(-1)
     excess = torch.clamp(diff, min=0.0)
@@ -482,15 +484,14 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     desired_heightF = cmd_term.command[:, 3]
     desired_heightH = cmd_term.command[:, 4]
     
-    # Mode 2 判断：前肢高度 >= 0.04，后肢高度 < 0.04
-    height_threshold = 0.04
-    mode2_mask = (desired_heightF >= height_threshold) & (desired_heightH < height_threshold)
+    # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
+    mode2_mask = (desired_heightF >= HEIGHT_THRESHOLD) & (desired_heightH < HEIGHT_THRESHOLD)
     reward = torch.zeros(env.num_envs, device=env.device)
     
     if not mode2_mask.any():
         return reward
     
-    # 获取前肢关节速度（JOINT_IDS 中前4个是 FL shoulder, FL elbow, FR shoulder, FR elbow）
+    # 获取前肢关节速度 (JOINT_IDS 前 4 项 = FL/FR shoulder+elbow, 由 indices.py 派生)
     joint_vel = asset.data.joint_vel
     front_leg_vel = joint_vel[:, JOINT_IDS[:4]]  # [num_envs, 4]
     vel_abs = torch.abs(front_leg_vel)

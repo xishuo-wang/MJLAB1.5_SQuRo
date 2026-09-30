@@ -41,7 +41,7 @@ class PlayConfig:
     record_data: bool = True
     # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
     # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
-    command_source: Literal["schedule", "fixed", "random"] = "schedule"
+    command_source: Literal["schedule", "fixed", "random"] = "random"
     fixed_velocity: float | None = None
     fixed_height_F: float | None = None
     fixed_height_H: float | None = None
@@ -264,13 +264,17 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
-    # 命令来源: schedule = 位置表 (阶段 3/4); fixed = 固定高度/速度; random = 随机高度 (阶段 1/2)
+    # 命令来源 (play 侧最高优先级): 显式覆盖 env_cfg 里的位置表设定。
+    # schedule = 位置表; fixed = 锁死给定值; random = 按阶段随机采样
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
         if cfg.command_source != "schedule":
-            # 关掉位置表 → 走 _resample_command: fixed 锁死给定值, random 按阶段 1/2 随机采样
+            # 关掉配置里的位置表与时间表, 并禁用 stage==3 的内置兜底
             cmd_cfg.use_position_schedule = False  # type: ignore[attr-defined]
             cmd_cfg.position_schedule = None  # type: ignore[attr-defined]
+            cmd_cfg.use_height_schedule = False  # type: ignore[attr-defined]
+            cmd_cfg.height_schedule = None  # type: ignore[attr-defined]
+            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
         if cfg.fixed_velocity is not None:
             cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
         if cfg.fixed_height_F is not None:
@@ -291,10 +295,8 @@ def run_play(cfg: PlayConfig):
                 ent.conaffinity = mask # type: ignore
         print(f"[INFO] 限高板碰撞 = {'开' if cfg.enable_collision else '关'}")
 
-    # 构建输出名后缀: 只记录实际生效的非默认配置 (任务里没有受限空间/fixed_time_scale 这类项)
-    suffix_parts = []
-    if cfg.command_source != "schedule":
-        suffix_parts.append(cfg.command_source)
+    # 构建输出名后缀: command_source 始终带上 (三选一), 其余只记录非默认配置
+    suffix_parts = [cfg.command_source]
     if cfg.command_source == "fixed":
         if cfg.fixed_height_F is not None:
             suffix_parts.append(f"hF{cfg.fixed_height_F * 1000:.0f}")
