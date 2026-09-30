@@ -25,31 +25,39 @@ if TYPE_CHECKING:
 
 
 
-# 前置收腿段在参考表时间轴上的绝对位置 (本文件与 verify_backup_config 用)。
-P1_ONSET = T0                                # T1 起点
-P2_ONSET = T0 + T1 + T2                      # T3 起点
-P3_ONSET = T0 + T1 + T2 + T3                 # T4 起点
+# 前置收腿段在参考表时间轴上的绝对位置
+P1_ONSET = T0                               # T1 起点
+P2_ONSET = T0 + T1 + T2                     # T3 起点
+P3_ONSET = T0 + T1 + T2 + T3                # T4 起点
 
-# 躯干姿态参考的端点与翻正时刻 (量 = 背腹轴世界 Z 余弦 u, -1 仰卧 / +1 俯卧)。
-ATTITUDE_SUPINE_U = -1.0              # 仰卧时的姿态余弦
-ATTITUDE_PRONE_U = 1.0                # 俯卧时的姿态余弦
-ATTITUDE_H_HOLD_T = 0.0               # 后段开始翻正的名义时刻
-ATTITUDE_H_RIGHTED_T = 0.30           # 后段翻正完成 (须早于 P1 段末)
-ATTITUDE_F_HOLD_T = 0.78              # 前段开始翻正 (窗口窄是实测如此)
-ATTITUDE_F_RIGHTED_T = P2_SPAN         # 前段翻正完成 = P2 段末(段内), 使 P1 末参考正好是 S1 姿态
 
-# 录制身体轨迹表的采集时序 (只在本文件用于把新动作时间映射回旧采集时间)。
-BODY_TRAJ_BUILD_END = 0.65            # 录制表中 T1 末端
-BODY_TRAJ_P1_END = 0.80               # 录制表中 P1 末端
 
-# 参考表总长 = 累计口径的 REFERENCE_TOTAL_TIME (前置收腿 0.50 + 动作 0.95 + 过渡 0.50 + 保持 1.05)。
+# 躯干姿态参考的端点与翻正时刻
+ATTITUDE_SUPINE_U = -1.0                    # 仰卧时的姿态余弦
+ATTITUDE_PRONE_U = 1.0                      # 俯卧时的姿态余弦
+ATTITUDE_H_HOLD_T = 0.0                     # 后段开始翻正的名义时刻
+ATTITUDE_H_RIGHTED_T = 0.30                 # 后段翻正完成 (须早于 P1 段末)
+ATTITUDE_F_HOLD_T = 0.78                    # 前段开始翻正 (窗口窄是实测如此)
+ATTITUDE_F_RIGHTED_T = P2_SPAN              # 前段翻正完成 = P2 段末(段内), 使 P1 末参考正好是 S1 姿态
+
+
+
+# 录制身体轨迹表的采集时序
+BODY_TRAJ_BUILD_END = 0.65                  # 录制表中 T1 末端
+BODY_TRAJ_P1_END = 0.80                     # 录制表中 P1 末端
+
+
+
+# 参考表总长 = 累计口径的 REFERENCE_TOTAL_TIME
 REF_TOTAL_TIME = REFERENCE_TOTAL_TIME
-_REF_DT = 0.005             # 参考表分辨率 (s)
-_ACTION_END = P3_ONSET      # 三段动作结束 (含前置段后的绝对时刻)
+_REF_DT = 0.005                             # 参考表分辨率 (s)
+_ACTION_END = P3_ONSET                      # 三段动作结束 (含前置段后的绝对时刻)
 _SEG1_END = P1_ONSET                        # T1 起点 = 0.50
-_SEG1_TAIL = P1_ONSET + T1                   # T1 末端 = T2 起点
+_SEG1_TAIL = P1_ONSET + T1                  # T1 末端 = T2 起点
 _SEG2_END = P2_ONSET                        # T2 末端 = T3 起点 = 1.30
 _TRANS_END = P3_ONSET + T4
+
+
 
 # 身体轨迹表
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
@@ -63,8 +71,8 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)
     ref = np.zeros((n, 14), dtype=np.float64)
-    leg_col = (4, 5, 6, 7, 10, 11, 12, 13)      # MJLAB 中腿列: FL/FR 4-7, HL/HR 10-13
-    spn_col = (0, 1, 8, 9)                      # MJLAB 中脊柱列
+    leg_col = (4, 5, 6, 7, 10, 11, 12, 13)
+    spn_col = (0, 1, 8, 9)
     leg_init = np.array(LEG_INIT, dtype=np.float64)
 
     for i, tn in enumerate(t_grid):
@@ -76,9 +84,7 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
             for c in range(8):
                 hold = FL_HOLD[c % 2] if c < 4 else HL_HOLD[c % 2]
                 leg[c] = leg_init[c] + u * (hold - leg_init[c])
-        # P2 专用表在边界保留 T3 左极限；普通表在同一时间点取 T4 起点。
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
-        # 下界 _SEG1_END 不可省: 否则前置段会掉进 T4 分支被腿过渡覆盖(实测腿变成 HL_HOLD[1])。
         if _SEG1_END <= tn < _ACTION_END or at_p2_end:
             leg[0], leg[1], leg[2], leg[3] = FL_HOLD[0], FL_HOLD[1], FL_HOLD[0], FL_HOLD[1]
             leg[4], leg[5], leg[6], leg[7] = HL_HOLD[0], HL_HOLD[1], HL_HOLD[0], HL_HOLD[1]
@@ -157,10 +163,10 @@ def _get_body_traj(device: str) -> dict:
 
 
 
-# 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段 (参考重定时, 不是重新仿真)。
+# 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
     t_rel = (t_nom - P1_ONSET).clamp(min=0.0)
-    tail = T1                                # T1 时长
+    tail = T1
     recover_fraction = (t_rel - tail) / (P1_SPAN - tail)
     recover_t = BODY_TRAJ_BUILD_END + recover_fraction * (BODY_TRAJ_P1_END - BODY_TRAJ_BUILD_END)
     return torch.where(
@@ -196,14 +202,12 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
 
 
 
-# 获取参考躯干姿态。见技术细节 §7.8。
+# 获取参考躯干姿态
 def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    # _stage_t_nom 已是参考表绝对时间; 姿态参考的时间基准是"P1 起点", 故减去 P1_ONSET。
     t_nom = _stage_t_nom(env) - P1_ONSET  # [N], 已按 λ 缩放
     climb = ATTITUDE_PRONE_U - ATTITUDE_SUPINE_U
 
     def ramp(hold: float, righted: float) -> torch.Tensor:
-        # 先保持仰卧到 hold, 再在 [hold, righted] 内升到俯卧, 之后保持。
         span = max(righted - hold, 1e-6)
         prog = ((t_nom - hold) / span).clamp(0.0, 1.0)
         return ATTITUDE_SUPINE_U + climb * prog
@@ -214,7 +218,7 @@ def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 
-# 阶段时间映射到参考表绝对时间(含前置收腿段), 各段加自己的表起点。语义见技术细节 §5.4。
+# 阶段时间映射到参考表绝对时间(含前置收腿段), 各段加自己的表起点
 def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
@@ -234,17 +238,13 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     cmd = cmd_term.command
     lam = cmd[:, 5].clamp(min=0.1)  # [N] 第 6 维 time_scale (放慢倍数)
-    # _stage_t_nom 已是参考表绝对时间。
     t_nom = _stage_t_nom(env).clamp(0.0, REF_TOTAL_TIME)  # [N]
-    # 精确落在节点时取右侧导数, 尤其 P3 起点不能读到 T3->T4 的跳变速度。
     idx = torch.searchsorted(cache["t"], t_nom, right=True).clamp(1, len(cache["t"]) - 1)
     idx_p = idx - 1
     frac = (t_nom - cache["t"][idx_p]) / (cache["t"][idx] - cache["t"][idx_p] + 1e-12)
     pos = cache["pos"][idx_p] + frac.unsqueeze(1) * (cache["pos"][idx] - cache["pos"][idx_p])
-    # 参考速度: dref/dt = dref/dt_nom * (1/λ)
     vel = cache["vel"][idx_p] / lam.unsqueeze(1)
     phase = cmd_term.phase  # type: ignore[attr-defined]
-    # 同一名义时间有两个边界值: P2 保持 T3 末端, P3 用全零脊柱。
     p2_pos = cache["p2_pos"][idx_p] + frac.unsqueeze(1) * (cache["p2_pos"][idx] - cache["p2_pos"][idx_p])
     p2_vel = cache["p2_vel"][idx_p] / lam.unsqueeze(1)
     pos = torch.where((phase == 1).unsqueeze(1), p2_pos, pos)
