@@ -53,7 +53,7 @@ INIT_STATE = EntityCfg.InitialStateCfg(
     joint_pos={
         # 14个执行器对应的关节
         "Neck_yaw_joint": 0.0,
-        "Neck_pitch_joint": 0.0,
+        "Neck_pitch_joint": -0.3,
         "FL_shoulder_joint": 0.1,
         "FL_elbow_joint": -0.3,
         "FR_shoulder_joint": 0.1,
@@ -66,7 +66,7 @@ INIT_STATE = EntityCfg.InitialStateCfg(
         "F_body_joint": 0.0,
         "H_spine1_joint": 0.0,
         "H_body_joint": 0.0,
-        
+
         # 其他需要设置的关节（闭链机构相关）
         "FL_shoulder1_joint": -0.0943,
         "FL_elbow1_joint": 0.3867,
