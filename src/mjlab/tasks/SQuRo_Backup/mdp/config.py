@@ -25,3 +25,4 @@ STAND_GROUND_HEIGHT = 0.024             # 实测趴平时的躯干中心高度
 STAND_TARGET_HEIGHT = 0.055             # 实测站立时的躯干中心高度
 STAND_CONFIRM_DURATION = 1.0            # 判断站立成功所需的连续窗口时长
 STAND_VEL_MEAN_MAX = 4.5                # 判断站立成功所需的平均关节速度上限
+STAND_STILL_FULL_SPEED = 2 * STAND_VEL_MEAN_MAX
