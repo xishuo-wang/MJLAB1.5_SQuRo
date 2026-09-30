@@ -22,14 +22,10 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 from dataclasses import replace
 
 
-# 本任务的机器人配置: 直接用共享配置的 14 执行器 (8 腿 + 4 脊柱 + 头颈 2)
-def get_hole_robot_cfg():
-    return get_squro_robot_cfg()
-
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
     # 获取 SQuRo 机器人配置 (14 执行器, 含头颈)
-    SQURO_ROBOT_CFG = get_hole_robot_cfg()
+    SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
     # SQuRo 特定配置
     foot_names = ("FR", "FL", "HR", "HL")
@@ -56,16 +52,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
     observations = {
-        "actor": ObservationGroupCfg(
-            terms=policy_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
-        "critic": ObservationGroupCfg(
-            terms=critic_terms,
-            concatenate_terms=True,
-            enable_corruption=False,
-        ),
+        "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
+        "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
 
@@ -101,7 +89,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "update": RewardTermCfg(func=mdp.update_curriculum, weight=1.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
         "reached": RewardTermCfg(func=mdp.compute_reached_reward, weight=1.0),
-        
     }
 
 
@@ -109,7 +96,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
-        # "reached": TerminationTermCfg(func=mdp.check_reach_goal, time_out=True),
     }
 
 
@@ -200,9 +186,9 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.001,  
-                iterations=10,
-                ls_iterations=20,
+                timestep=0.002,  
+                iterations=100,
+                ls_iterations=50,
             ),
         ),
         decimation=5,
