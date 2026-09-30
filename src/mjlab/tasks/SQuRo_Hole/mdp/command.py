@@ -1,43 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Tuple
-import numpy as np
+from typing import TYPE_CHECKING, Optional, Tuple, List
 import torch
 
 from mjlab.entity import Entity
 from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers import CommandTermCfg
-from .curriculums import BASE_HEIGHT, GAIT_FREQ, HEIGHT_THRESHOLD
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 四阶段课程 (全局步数; 与 rewards 课程阈值 1000/2000/3000 iter 同刻度)
-# 1) 0~1k   随机中等高度 [0.04..0.06], 不开碰撞
-# 2) 1k~2k  随机全高度 (含 0.02, 配对约束), 不开碰撞
-# 3) 2k~3k  位置表 + body_contact 软约束, 实体碰撞关
-# 4) 3k~4k  位置表 + 实体碰撞开 (编译期固化, 由 runner 在边界重建环境)
-STAGE1_END_ITER = 1000
-STAGE2_END_ITER = 2000
-STAGE3_END_ITER = 3000
-STAGE1_END = STAGE1_END_ITER * 24
-STAGE2_END = STAGE2_END_ITER * 24
-STAGE3_END = STAGE3_END_ITER * 24
+# ==================== 课程配置 ====================
+# 阶段定义（步数）
+STAGE1_END = 1 * 24   # 第一阶段结束步数
+STAGE2_END = 1 * 24   # 第二阶段结束步数
+STAGE3_END = 4000 * 24   # 第三阶段结束步数
 
-# 基准速度 (m/s): 由"速度 = 步频 × 步幅"标定 —— 基准高度 + 双肢都在动时的推进速度
-BASE_STRIDE_PER_HEIGHT = 1.25          # 参考步幅 = 1.25 × 高度 (摆线 stride/body_height 之比)
-BASE_SPEED = GAIT_FREQ * BASE_STRIDE_PER_HEIGHT * BASE_HEIGHT   # = 0.1375 m/s
+BASE_HEIGHT = 0.06                    # 基准高度
+BASE_SPEED = 0.25                     # 基准速度（对应基准高度0.06m时的速度）
 
-STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055, 0.06]        # 阶段1: 中等高度
-STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]  # 阶段2: 全部高度
-STAGE3_HEIGHT_VALUES = None            # 阶段3: 用位置表, 不随机采样
+# 各阶段的高度值配置
+STAGE1_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055, 0.06]  # 第一阶段：中等高度
+STAGE2_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055, 0.06]  # 第二阶段：全部高度
+STAGE3_HEIGHT_VALUES = None  # 第三阶段：使用位置表，不使用随机采样
 
-ANGLE_VALUES = [0.0]                   # 角度命令候选 (度)
+ANGLE_VALUES = [0.0]  # 所有可能的角度值（度）
 
-# 阶段3固定位置表 (移动距离 m, 前肢高度, 后肢高度)
+# 高度阈值（用于判断前后肢是否都高于此值）
+HEIGHT_THRESHOLD = 0.04
+
+# 第三阶段固定位置表（基于移动距离）
 STAGE3_POSITION_SCHEDULE = [
     (0.0, 0.02, 0.05),
     (0.2, 0.06, 0.02),
@@ -48,272 +43,342 @@ STAGE3_POSITION_SCHEDULE = [
     (1.2, 0.06, 0.02),
     (1.32, 0.06, 0.06),
 ]
+# ================================================
 
 
-# 高度缩放系数 (按解耦口径: 每段用**自己的**高度; 冻结段不参与运动)
+# 根据目标高度计算缩放因子
 def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
+    if target_height < 0.04:
+        return 0.1
     return target_height / base_height
 
 
-# 速度: v = BASE_SPEED × scale × (2 − n) / 2, n = 处于低高度的肢体数
-# (2-n)/2 是"参与运动的肢体比例": 双腿都在动=1, 单肢=0.5, 双低=0
-def speed_for_heights(height_F: torch.Tensor, height_H: torch.Tensor) -> torch.Tensor:
-    low_f = height_F < HEIGHT_THRESHOLD
-    low_h = height_H < HEIGHT_THRESHOLD
-    n_low = low_f.float() + low_h.float()
-    moving_height = torch.maximum(height_F, height_H)
-    scale = moving_height / BASE_HEIGHT
-    return BASE_SPEED * scale * (2.0 - n_low) / 2.0
-
-
-# 按全局步数取命令阶段 (1~4)
+# 根据步数获取当前阶段
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_END:
         return 1
-    if step_counter < STAGE2_END:
+    elif step_counter < STAGE2_END:
         return 2
-    if step_counter < STAGE3_END:
+    else:
         return 3
-    return 4
 
 
-# 是否跟随位置表: 阶段 3/4
-def stage_uses_schedule(stage: int) -> bool:
-    return stage >= 3
-
-
-# 6D 命令 [vel_x, vel_y, vel_z, height_F, height_H, angle]
 class HoleCommand(CommandTerm):
-    cfg: "HoleCommandCfg"
-
-    def __init__(self, cfg: "HoleCommandCfg", env: ManagerBasedRlEnv):
-        super().__init__(cfg, env)
+    cfg: HoleCommandCfg 
+    
+    def __init__(self, cfg: HoleCommandCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
-
         self.command_tensor = torch.zeros(self.num_envs, 6, device=self.device)
-        self.vel_command_w = self.command_tensor[:, :3]
-        self.height_F_command = self.command_tensor[:, 3]
-        self.height_H_command = self.command_tensor[:, 4]
-        self.angle_command = self.command_tensor[:, 5]
-
-        # 位置/时间表配置 (cfg 优先, 否则用阶段3内置表)
-        self.use_position_schedule = cfg.use_position_schedule
-        self.position_schedule = cfg.position_schedule
-        self.use_height_schedule = cfg.use_height_schedule
-        self.height_schedule = cfg.height_schedule
-        self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
-        self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
+        self.vel_command_w = self.command_tensor[:, :3]         # 速度命令（x, y, z）
+        self.height_F_command = self.command_tensor[:, 3]       # 前肢高度命令
+        self.height_H_command = self.command_tensor[:, 4]       # 后肢高度命令
+        self.angle_command = self.command_tensor[:, 5]          # 角度命令
         self.has_printed_current_cmd = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
+        self.use_height_schedule = cfg.use_height_schedule
+        self.height_schedule = cfg.height_schedule or [] 
+        self.use_position_schedule = cfg.use_position_schedule
+        self.position_schedule = cfg.position_schedule or []
+        self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
+        
+        # 记录每个环境的起始位置（用于计算移动距离）
+        self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
+        
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
-        t_range = self.cfg.resampling_time_range
+        
+        # 记录起始位置
+        self._update_start_positions(env_ids)
+        
+        resampling_time_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-            t_range[1] - t_range[0]
-        ) + t_range[0]
+            resampling_time_range[1] - resampling_time_range[0]
+        ) + resampling_time_range[0]
 
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
 
-    # 记录 episode 起点 (位置表按 x 位移查表)
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
         self.start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
 
-    # 按阶段取可随机采样的高度集合
+    # 根据阶段获取可用的高度值列表
     def _get_available_heights(self, stage: int) -> Optional[list]:
         if stage == 1:
             return STAGE1_HEIGHT_VALUES
-        if stage == 2:
+        elif stage == 2:
             return STAGE2_HEIGHT_VALUES
-        return None
-
-    # 是否使用位置/时间表
+        else:
+            return None  # 第三阶段使用位置表
+    
     def _should_use_schedule(self, stage: int) -> bool:
         if self.use_position_schedule and self.position_schedule:
             return True
+        
         if self.use_height_schedule and self.height_schedule:
             return True
-        return stage_uses_schedule(stage)
+        
+        if stage == 3:
+            return True
+        
+        return False
 
-    # 取位置/时间表 (cfg 位置表 > cfg 时间表 > 阶段3/4 内置表)
+    
     def _get_schedule(self, stage: int) -> List[Tuple[float, float, float]]:
+        # 最高优先级：cfg 中配置的位置表
         if self.use_position_schedule and self.position_schedule:
             return self.position_schedule
+        
+        # 次优先级：cfg 中配置的时间表
         if self.use_height_schedule and self.height_schedule:
             return self.height_schedule
-        if stage_uses_schedule(stage):
+        
+        # 第三阶段：使用默认位置表
+        if stage == 3:
             return STAGE3_POSITION_SCHEDULE
+        
         return []
 
-    # 采样前后肢高度组合: 避免双低 (一侧低时另一侧必须 >= 阈值)
-    def _sample_heights(self, available_heights: list) -> tuple:
-        device = self.device
-        values = torch.tensor(available_heights, device=device)
-        for _ in range(10):
-            h_f = values[torch.randint(0, len(available_heights), (1,), device=device)]
-            h_h = values[torch.randint(0, len(available_heights), (1,), device=device)]
-            if bool(h_f < HEIGHT_THRESHOLD) != bool(h_h < HEIGHT_THRESHOLD):
-                return h_f, h_h
-            if h_f >= HEIGHT_THRESHOLD and h_h >= HEIGHT_THRESHOLD:
-                return h_f, h_f
-        fallback = torch.tensor(BASE_HEIGHT, device=device)
-        return fallback, fallback
-
-    # 按高度组合定速度 (v = 基准速度 × 高度缩放 × (2−n))
-    def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        return float(speed_for_heights(height_F.reshape(1), height_H.reshape(1))[0])
-
-    # 按高度组合定角度命令
-    def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        if height_F >= HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD:
-            return 0.0
-        idx = torch.randint(0, len(ANGLE_VALUES), (1,), device=self.device)
-        return self.angle_values_tensor[idx].item()
-
-    # 按位移查位置表批量更新命令
-    def _update_command_from_schedule(self, env_ids: torch.Tensor,
-                                      schedule: List[Tuple[float, float, float]]) -> None:
-        if not schedule:
-            return
-        device = self.device
-        current_positions = self.robot.data.root_link_pos_w[env_ids]
-        start_positions = self.start_positions[env_ids]
-        travel_distance = torch.clamp(current_positions[:, 0] - start_positions[:, 0], min=0.0)
-
-        schedule_distances = torch.tensor([s[0] for s in schedule], device=device)
-        schedule_hF = torch.tensor([s[1] for s in schedule], device=device)
-        schedule_hH = torch.tensor([s[2] for s in schedule], device=device)
-
-        schedule_indices = torch.searchsorted(schedule_distances, travel_distance, side="right") - 1
-        schedule_indices = torch.clamp(schedule_indices, min=0, max=len(schedule) - 1)
-
-        height_F = schedule_hF[schedule_indices]
-        height_H = schedule_hH[schedule_indices]
-        vel_x = speed_for_heights(height_F, height_H)
-
-        self.vel_command_w[env_ids, 0] = vel_x
-        self.vel_command_w[env_ids, 1] = 0.0
-        self.vel_command_w[env_ids, 2] = 0.0
-        self.height_F_command[env_ids] = height_F
-        self.height_H_command[env_ids] = height_H
-        self.angle_command[env_ids] = 0.0
-        self.has_printed_current_cmd[env_ids] = False
-
-    # 采样命令: 位置表模式走位移查表, 否则按阶段随机采样
     def _resample_command(self, env_ids: torch.Tensor) -> None:
-        n_envs = len(env_ids)
-        stage = get_current_stage(self._env.common_step_counter)
+        n_envs = len(env_ids)  
+        current_step = self._env.common_step_counter
+        stage = get_current_stage(current_step)
+        
+        # 判断是否使用时间表
         use_schedule = self._should_use_schedule(stage)
         schedule = self._get_schedule(stage) if use_schedule else []
-
+        
         if use_schedule and schedule:
-            self._update_start_positions(env_ids)
+            # 使用时间表更新命令
             self._update_command_from_schedule(env_ids, schedule)
             return
-
+        
+        # 使用随机采样
+        available_heights = self._get_available_heights(stage)
+        if available_heights is None:
+            # 降级到第二阶段的高度值
+            available_heights = STAGE2_HEIGHT_VALUES
+        
+        # 初始化命令张量
         vel_x = torch.zeros(n_envs, device=self.device)
         height_F = torch.zeros(n_envs, device=self.device)
         height_H = torch.zeros(n_envs, device=self.device)
         angle = torch.zeros(n_envs, device=self.device)
-        available_heights = self._get_available_heights(stage) or STAGE2_HEIGHT_VALUES
-
+        
+        # 为每个环境采样
         for i in range(n_envs):
+            # 检查是否使用固定值
             if self.cfg.fixed_velocity is not None:
                 vel_x[i] = self.cfg.fixed_velocity
             if self.cfg.fixed_height_F is not None:
                 height_F[i] = self.cfg.fixed_height_F
             if self.cfg.fixed_height_H is not None:
                 height_H[i] = self.cfg.fixed_height_H
+            if self.cfg.fixed_angle is not None:
+                angle[i] = self.cfg.fixed_angle
+            
+            # 如果固定值未设置，则使用采样逻辑
             if self.cfg.fixed_height_F is None or self.cfg.fixed_height_H is None:
-                sampled_F, sampled_H = self._sample_heights(available_heights)
+                sampled_height_F, sampled_height_H = self._sample_heights(available_heights)
                 if self.cfg.fixed_height_F is None:
-                    height_F[i] = sampled_F
+                    height_F[i] = sampled_height_F
                 if self.cfg.fixed_height_H is None:
-                    height_H[i] = sampled_H
+                    height_H[i] = sampled_height_H
+            
+            # 如果固定速度未设置，则根据高度计算速度
             if self.cfg.fixed_velocity is None:
                 vel_x[i] = self._determine_velocity(height_F[i], height_H[i])
-            angle[i] = self._determine_angle(height_F[i], height_H[i])
 
+            if self.cfg.fixed_angle is None:
+                angle[i] = self._determine_angle(height_F[i], height_H[i])
+        
+        # 更新命令张量
         self.vel_command_w[env_ids, 0] = vel_x
-        self.vel_command_w[env_ids, 1] = 0.0
-        self.vel_command_w[env_ids, 2] = 0.0
+        self.vel_command_w[env_ids, 1] = 0
+        self.vel_command_w[env_ids, 2] = 0
         self.height_F_command[env_ids] = height_F
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
+        self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
+        self.command_tensor[env_ids, 3] = height_F
+        self.command_tensor[env_ids, 4] = height_H
+        self.command_tensor[env_ids, 5] = angle
         self.has_printed_current_cmd[env_ids] = False
+        
+        # 重置起始位置
         self._update_start_positions(env_ids)
 
-    # 每步更新: 位置表模式下持续按位移查表
+    def _sample_heights(self, available_heights: list) -> tuple:
+        """采样前后肢高度组合"""
+        device = self.device
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            height_F = torch.tensor(available_heights, device=device)[
+                torch.randint(0, len(available_heights), (1,), device=device)
+            ]
+            height_H = torch.tensor(available_heights, device=device)[
+                torch.randint(0, len(available_heights), (1,), device=device)
+            ]
+            
+            # 确保高度组合的合理性
+            if (height_F < HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD):
+                return height_F, height_H
+            elif (height_F >= HEIGHT_THRESHOLD and height_H < HEIGHT_THRESHOLD):
+                return height_F, height_H
+            elif (height_F >= HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD):
+                return height_F, height_F
+        
+        # 如果无法采样到合理组合，返回默认值
+        return torch.tensor(0.06, device=device), torch.tensor(0.06, device=device)
+
+    def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
+        effective_height = min(height_F.item(), height_H.item())
+        height_scale = get_height_scale_factor(effective_height, BASE_HEIGHT)
+        speed = BASE_SPEED * height_scale
+        return speed
+
+
+    def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
+        """根据高度决定角度命令"""
+        if height_F >= HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD:
+            return 0.0
+        else:
+            angle_idx = torch.randint(0, len(ANGLE_VALUES), (1,), device=self.device)
+            return self.angle_values_tensor[angle_idx].item()
+
+    def _update_command_from_schedule(self, env_ids: torch.Tensor, schedule: List[Tuple[float, float, float]]) -> None:
+        """根据位置表批量更新命令 - 基于移动距离"""
+        if not schedule:
+            return
+        
+        n_envs = len(env_ids)
+        device = self.device
+        
+        # 获取当前位置
+        current_positions = self.robot.data.root_link_pos_w[env_ids]  # [n_envs, 3]
+        start_positions = self.start_positions[env_ids]  # [n_envs, 3]
+        
+        # 计算移动距离（X方向，只考虑前进方向）
+        travel_distance = current_positions[:, 0] - start_positions[:, 0]  # [n_envs]
+        travel_distance = torch.clamp(travel_distance, min=0.0)  # 不允许负距离
+        
+        # 将位置表转换为张量
+        schedule_distances = torch.tensor([s[0] for s in schedule], device=device)  # [len(schedule)]
+        schedule_hF = torch.tensor([s[1] for s in schedule], device=device)         # [len(schedule)]
+        schedule_hH = torch.tensor([s[2] for s in schedule], device=device)         # [len(schedule)]
+        
+        # 向量化查找：对于每个距离，找到最后一个 <= 当前距离的索引
+        schedule_indices = torch.searchsorted(schedule_distances, travel_distance, side='right') - 1
+        schedule_indices = torch.clamp(schedule_indices, min=0, max=len(schedule) - 1)
+        
+        # 批量获取高度值
+        height_F = schedule_hF[schedule_indices]  # [n_envs]
+        height_H = schedule_hH[schedule_indices]  # [n_envs]
+        
+        # 批量计算速度（使用向量化操作）
+        effective_height = torch.minimum(height_F, height_H)  # [n_envs]
+        height_scale = effective_height / BASE_HEIGHT        # [n_envs]
+        vel_x = BASE_SPEED * height_scale                    # [n_envs]
+        
+        # 批量计算角度
+        both_high = (height_F >= HEIGHT_THRESHOLD) & (height_H >= HEIGHT_THRESHOLD)
+        angle = torch.zeros(n_envs, device=device)
+        
+        # 批量更新命令张量
+        self.vel_command_w[env_ids, 0] = vel_x
+        self.vel_command_w[env_ids, 1] = 0
+        self.vel_command_w[env_ids, 2] = 0
+        self.height_F_command[env_ids] = height_F
+        self.height_H_command[env_ids] = height_H
+        self.angle_command[env_ids] = angle
+        self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
+        self.command_tensor[env_ids, 3] = height_F
+        self.command_tensor[env_ids, 4] = height_H
+        self.command_tensor[env_ids, 5] = angle
+        self.has_printed_current_cmd[env_ids] = False
+
     def _update_command(self) -> None:
-        stage = get_current_stage(self._env.common_step_counter)
+        current_step = self._env.common_step_counter
+        stage = get_current_stage(current_step)
+        
+        # 判断是否使用时间表
         use_schedule = self._should_use_schedule(stage)
         schedule = self._get_schedule(stage) if use_schedule else []
-
+        
+        # 使用时间表模式，每个时间步都需要更新命令（因为距离在变化）
         if use_schedule and schedule:
             env_ids = torch.arange(self.num_envs, device=self.device)
             self._update_command_from_schedule(env_ids, schedule)
-            return
-
-        env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
-        if len(env_ids) > 0:
-            self._resample_command(env_ids)
-            t_range = self.cfg.resampling_time_range
-            self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-                t_range[1] - t_range[0]
-            ) + t_range[0]
-        self.time_left -= self._env.step_dt
-
-    def _update_metrics(self) -> None:
-        pass
+        else:
+            # 使用传统的定期重采样
+            env_ids = (self.time_left <= 0.0).nonzero(as_tuple=False).flatten()
+            if len(env_ids) > 0:
+                self._resample_command(env_ids)
+                
+                resampling_time_range = self.cfg.resampling_time_range
+                self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
+                    resampling_time_range[1] - resampling_time_range[0]
+                ) + resampling_time_range[0]
+            
+            self.time_left -= self._env.step_dt
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:
             return
+            
         batch = visualizer.env_idx
+        
         if batch >= self.num_envs:
             return
+        
         base_pos = self.robot.data.root_link_pos_w[batch].cpu().numpy()
-        base_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
-        vel_cmd = self.command_tensor[batch, :3].cpu().numpy()
+        actual_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
+        cmd_vel = self.vel_command_w[batch].cpu().numpy()
+        
+        if torch.norm(self.robot.data.root_link_pos_w[batch]) < 1e-6:
+            return
+        
         scale = self.cfg.viz.scale
-        z_off = self.cfg.viz.z_offset
+        z_offset = self.cfg.viz.z_offset
+        arrow_width = 0.01
+        
+        cmd_start = base_pos + [0, 0, z_offset]
+        cmd_end = cmd_start + cmd_vel * scale
         visualizer.add_arrow(
-            start=np.array([base_pos[0], base_pos[1], base_pos[2] + z_off]),
-            end=np.array([base_pos[0] + vel_cmd[0] * scale, base_pos[1] + vel_cmd[1] * scale,
-                          base_pos[2] + z_off + vel_cmd[2] * scale]),
-            color=(1.0, 0.4, 0.2, 0.8),
-            label=f"cmd_{batch}",
+            cmd_start, cmd_end, color=(0.2, 0.2, 0.8, 0.8), width=arrow_width
         )
+        
+        actual_end = cmd_start + actual_vel * scale
         visualizer.add_arrow(
-            start=np.array([base_pos[0], base_pos[1], base_pos[2] + z_off]),
-            end=np.array([base_pos[0] + base_vel[0] * scale, base_pos[1] + base_vel[1] * scale,
-                          base_pos[2] + z_off + base_vel[2] * scale]),
-            color=(0.2, 0.6, 1.0, 0.8),
-            label=f"act_{batch}",
+            cmd_start, actual_end, color=(0.2, 0.8, 0.2, 0.8), width=arrow_width
         )
 
+    def _update_metrics(self) -> None:
+        pass
 
-@dataclass(kw_only=True)
+
+@dataclass(kw_only=True)  
 class HoleCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
-    resampling_time_range: Tuple[float, float] = (4.0, 6.0)
+    resampling_time_range: Tuple[float, float] = (3.0, 4.0)  # 默认值
     debug_vis: bool = False
-    use_position_schedule: bool = False
-    position_schedule: Optional[List[Tuple[float, float, float]]] = None
-    use_height_schedule: bool = False
-    height_schedule: Optional[List[Tuple[float, float, float]]] = None
     fixed_velocity: Optional[float] = None
     fixed_height_F: Optional[float] = None
     fixed_height_H: Optional[float] = None
-
+    fixed_angle: Optional[float] = None  
+    use_height_schedule: bool = False  
+    height_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(开始时间, 前肢高度, 后肢高度), ...]
+    use_position_schedule: bool = False  # 是否使用位置表
+    position_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(距离阈值, 前肢高度, 后肢高度), ...]
+    
     @dataclass
     class VizCfg:
         z_offset: float = 0.1
         scale: float = 1.0
-
+    
     viz: VizCfg = field(default_factory=VizCfg)
     class_type: type[CommandTerm] = HoleCommand
 
-    def build(self, env: "ManagerBasedRlEnv") -> CommandTerm:
+    # 1.5 把 CommandTermCfg.build 变成抽象方法, 子类必须自己实现
+    def build(self, env: ManagerBasedRlEnv) -> CommandTerm:
         return self.class_type(self, env)

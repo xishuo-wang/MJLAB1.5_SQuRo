@@ -277,9 +277,13 @@ def run_play(cfg: PlayConfig):
                  f"vel={cfg.fixed_velocity})" if cfg.command_source != "schedule" else " (8 段位移位置表)"))
 
     # 限高板碰撞开关 (编译期固化): 显式传入优先, 否则用 cfg 默认
+    # 旧版任务把开关直接写在 env_cfg 里 (训练关/回放开), 这里就地改写实体
     if cfg.enable_collision is not None:
-        from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import configure_hole_collision
-        configure_hole_collision(env_cfg, enable_collision=cfg.enable_collision)
+        mask = 1 if cfg.enable_collision else 0
+        for key, ent in env_cfg.scene.entities.items():
+            if key.startswith("hole"):
+                ent.contype = mask
+                ent.conaffinity = mask
         print(f"[INFO] 限高板碰撞 = {'开' if cfg.enable_collision else '关'}")
 
     suffix = f"-it{extract_iter_from_checkpoint(resume_path)}" if resume_path else ""

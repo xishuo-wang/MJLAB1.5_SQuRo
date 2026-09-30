@@ -19,3 +19,6 @@ benchmark_results/
 **/_build/*
 **/generated/*
 diag/
+
+# 旧版任务备份 (含训练检查点与 wandb 产物, 体积大, 不入库)
+Backup/

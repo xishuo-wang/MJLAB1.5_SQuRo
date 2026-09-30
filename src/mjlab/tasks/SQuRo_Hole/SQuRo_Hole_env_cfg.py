@@ -1,3 +1,5 @@
+# uv run train Mjlab-SQuRo-Hole
+# uv run play Mjlab-SQuRo-Hole-Play --checkpoint_file
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -15,56 +17,66 @@ from mjlab.tasks.SQuRo_Hole import mdp
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
-
-
-# 三块限高板: (x 中心, 板底高度, 半长, 半宽, 半厚)
-# 板底 0.05 = 含脊柱情况的最低可通行高度; 0.075 = 不含脊柱(匍匐)的最低可通行高度
-HOLE_LAYOUT = (
-    ("Hole1", 0.2, 0.050, 0.015),
-    ("Hole2", 0.6, 0.075, 0.100),
-    ("Hole3", 1.2, 0.050, 0.015),
+from mjlab.actuator.xml_actuator import XmlActuatorCfg
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
+    get_spec as get_squro_spec,
+    get_squro_robot_cfg,
 )
-HOLE_HALF_WIDTH = 0.1
-HOLE_HALF_THICKNESS = 0.005
+from mjlab.entity import EntityArticulationInfoCfg
+
+from dataclasses import replace
 
 
-# 建三块限高板实体 (contype/conaffinity 在编译期固化, 运行期改无效;
-# 阶段 3 不开碰撞, 阶段 4 开, 边界处由 runner 重建环境)
-def build_hole_entities(enable_collision: bool) -> dict:
-    mask = 1 if enable_collision else 0
-    entities: dict = {}
-    for name, x_center, bottom, half_len in HOLE_LAYOUT:
-        entities[name.lower()] = mdp.HoleEntityCfg(
-            name=name,
-            position=(x_center, 0.0, bottom),
-            size=(half_len, HOLE_HALF_WIDTH, HOLE_HALF_THICKNESS),
-            contype=mask,
-            conaffinity=mask,
-        )
-    return entities
+# 旧版 mouse 机器人只有 12 个执行器 (8 腿 + 4 脊柱), 没有颈部;
+# 当时的检查点也是 12 维动作 / 193 维观测, 这里任务级覆盖回同一个接口
+HOLE_ARTICULATION = EntityArticulationInfoCfg(
+    actuators=(
+        XmlActuatorCfg(
+            target_names_expr=(
+                "FL_shoulder_joint", "FL_elbow_joint",
+                "FR_shoulder_joint", "FR_elbow_joint",
+                "HL_hip_joint", "HL_knee_joint",
+                "HR_hip_joint", "HR_knee_joint",
+                "F_spine1_joint", "F_body_joint",
+                "H_spine1_joint", "H_body_joint",
+            )
+        ),
+    ),
+)
+
+# 旧 XML 里没有颈部执行器, 而 SQuRo.xml 有; 删掉才能复现 12 维 actuator_force
+_HOLE_DROPPED_ACTUATORS = ("Neck_yaw", "Neck_pitch")
 
 
-# 改写环境配置里的限高板碰撞开关 (必须在建环境之前调用; 换开关用)
-def configure_hole_collision(env_cfg, enable_collision: bool) -> None:
-    entities = {k: v for k, v in env_cfg.scene.entities.items()
-                if not k.startswith("hole")}
-    env_cfg.scene.entities = {**entities, **build_hole_entities(enable_collision)}
+def get_hole_spec():
+    spec = get_squro_spec()
+    for name in _HOLE_DROPPED_ACTUATORS:
+        try:
+            spec.delete(spec.actuator(name))
+        except Exception:
+            pass
+    return spec
 
 
-# 当前配置里限高板的碰撞开关 (从实体本身读, 不缓存"以为改成了什么")
-def hole_collision_enabled(env) -> bool:
-    entity = env.scene.entities.get("hole1")
-    return bool(entity is not None and entity.collision_enabled)
+# 本任务的机器人配置: 12 执行器 articulation + 去掉颈部执行器的 spec, 其余沿用共享配置
+def get_hole_robot_cfg():
+    return replace(
+        get_squro_robot_cfg(),
+        articulation=HOLE_ARTICULATION,
+        spec_fn=get_hole_spec,
+    )
 
 
-def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    SQURO_ROBOT_CFG = get_squro_robot_cfg()
+def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
+    # 获取 SQuRo 机器人配置 (12 执行器, 与旧版 mouse 一致)
+    SQURO_ROBOT_CFG = get_hole_robot_cfg()
 
+    # SQuRo 特定配置
     foot_names = ("FR", "FL", "HR", "HL")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+    
 
-    # 观测空间: 201 维 (含 joint_acc / base_pos / 全关节位置速度)
+    # 观测空间配置
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=3),
         "joint_pos": ObservationTermCfg(func=mdp.joint_pos_rel),
@@ -72,23 +84,32 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "joint_acc": ObservationTermCfg(func=mdp.joint_acc),
         "base_pos": ObservationTermCfg(func=mdp.base_pos),
         "base_lin_vel_w": ObservationTermCfg(func=mdp.base_lin_vel_w),
-        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),
+        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),     
         "heading": ObservationTermCfg(func=mdp.heading),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
         "ref_joint_vel": ObservationTermCfg(func=mdp.ref_joint_vel),
-        "command": ObservationTermCfg(func=mdp.generated_commands,
-                                      params={"command_name": "hole_cmd"}),
+        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "hole_cmd"}),
     }
-    critic_terms = {**policy_terms}
+
+    critic_terms = {
+        **policy_terms,
+    }
 
     observations = {
-        "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True,
-                                     enable_corruption=False),
-        "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True,
-                                      enable_corruption=False),
+        "actor": ObservationGroupCfg(
+            terms=policy_terms,
+            concatenate_terms=True,
+            enable_corruption=False,
+        ),
+        "critic": ObservationGroupCfg(
+            terms=critic_terms,
+            concatenate_terms=True,
+            enable_corruption=False,
+        ),
     }
 
-    # 动作空间: 9 个执行器位置控制 (旧版只有 9 个被控关节)
+
+    # 动作空间配置
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -98,31 +119,41 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
+
+    # 事件配置
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励: 权重由 curriculums 的 4 段课程给出, 这里一律 1.0
+
+    # 奖励函数配置
     rewards = {
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_velocity_reward, weight=1.0),
         "velocity": RewardTermCfg(func=mdp.compute_linear_velocity_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
-        "foot_clearance": RewardTermCfg(func=mdp.compute_foot_clearance_reward, weight=1.0),
-        "angle": RewardTermCfg(func=mdp.compute_angle_reward, weight=1.0),
-        "orientation": RewardTermCfg(func=mdp.compute_orientation_reward, weight=1.0),
+        "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),
+        "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
+        "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
+        # "cot": RewardTermCfg(func=mdp.compute_cot_penalty, weight=1.0),
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
         "body_contact": RewardTermCfg(func=mdp.compute_body_contact_penalty, weight=1.0),
+        "update": RewardTermCfg(func=mdp.update_curriculum, weight=0.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
         "reached": RewardTermCfg(func=mdp.compute_reached_reward, weight=1.0),
+        
     }
 
+
+    # 终止条件配置
     terminations = {
-        "timeout": TerminationTermCfg(
-            func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
+        "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
+        # "reached": TerminationTermCfg(func=mdp.check_reach_goal, time_out=True),
     }
 
+
+    # 足部接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
@@ -133,29 +164,55 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-    episode_length_s = 20.0
+
+    # 播放模式配置
     if play:
+        episode_length_s = 20.0 
         commands: dict[str, CommandTermCfg] = {
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
-                resampling_time_range=(2.0, 3.0),
-                use_position_schedule=True,
-                position_schedule=list(mdp.STAGE3_POSITION_SCHEDULE),
-                debug_vis=False,
-                viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0),
+                resampling_time_range=(2.0, 3.0),  
+                use_position_schedule=True,  # 启用位置表
+                position_schedule=[
+                    (0.0, 0.02, 0.05),
+                    (0.2, 0.06, 0.02),
+                    (0.32, 0.06, 0.06),
+                    (0.4, 0.04, 0.04),
+                    (0.8, 0.06, 0.06),
+                    (1.0, 0.02, 0.05),
+                    (1.2, 0.06, 0.02),
+                    (1.32, 0.06, 0.06),
+                ],
+                debug_vis=True, 
+                viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
             )
+        }
+        entities={
+            "robot": SQURO_ROBOT_CFG,
+            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
+            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005)),
+            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
         }
     else:
-        commands = {
+        episode_length_s = 20.0
+        commands: dict[str, CommandTermCfg] = {
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
-                debug_vis=False,
+                debug_vis=False, 
             )
         }
+        entities = {
+            "robot": SQURO_ROBOT_CFG,
+            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
+                                       contype=0, conaffinity=0),
+            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005),
+                                       contype=0, conaffinity=0),
+            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
+                                       contype=0, conaffinity=0),
+        }
 
-    # 限高板碰撞: 阶段 1~3 编译为关 (阶段 3 只有 body_contact 软约束), 阶段 4 由 runner 重建为开
-    entities = {"robot": SQURO_ROBOT_CFG, **build_hole_entities(enable_collision=False)}
 
+    # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             num_envs=1024,
@@ -173,7 +230,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             origin_type=ViewerConfig.OriginType.ASSET_BODY,
             entity_name="robot",
             body_name="base_Link",
-            distance=0.3,
+            distance=0.5,     
             elevation=0.0,
             azimuth=90.0,
             height=1080,
@@ -183,7 +240,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=35,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.001,
+                timestep=0.001,  
                 iterations=10,
                 ls_iterations=20,
             ),

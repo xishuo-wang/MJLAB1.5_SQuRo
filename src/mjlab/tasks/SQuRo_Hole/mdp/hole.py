@@ -8,7 +8,7 @@ class HoleEntityCfg(EntityCfg):
     name: str = "hole"
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
     size: tuple[float, float, float] = (0.01, 0.1, 0.01)
-    rgba: tuple[float, float, float, float] = (0.95, 0.55, 0.22, 0.3)
+    rgba: tuple[float, float, float, float] = (0.5, 0.5, 0.5, 0.5)
     mass: float = 1.0
     contype: int = 1 
     conaffinity: int = 1 
@@ -60,11 +60,6 @@ class HoleEntity(Entity):
         else:
             self.disable_collision()
     
-    # 碰撞是否开启 (编译期决定, 运行期不可改)
-    @property
-    def collision_enabled(self) -> bool:
-        return int(self.cfg.contype) > 0
-
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec
