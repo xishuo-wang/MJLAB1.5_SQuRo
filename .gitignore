@@ -1,24 +1,21 @@
-wandb/
-logs/
+/wandb/
+/logs/
 **/turn_data/
-onnx/
-videos/
+/onnx/
+/videos/
 __pycache__/
 MUJOCO_LOG.TXT
 debug.py
-.vscode/
+/.vscode/
 *.ipynb_checkpoints/
-motions/
+/motions/
 *_rerun*
-artifacts/
-.venv/
+/artifacts/
+/.venv/
 render_robots.py
-benchmark_results/
+/benchmark_results/
 
 # Documentation outputs.
 **/_build/*
 **/generated/*
-diag/
-
-# 旧版任务备份 (含训练检查点与 wandb 产物, 体积大, 不入库)
-Backup/
+/diag/
