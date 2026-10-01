@@ -74,31 +74,13 @@ class RewardWeightCurriculum:
         }
 
 
-    # 关卡是否要求开启限高板碰撞
+    # 关卡是否要求开启限高板碰撞 (只读元数据; 实际切换由 runner 重建环境完成)
     def should_enable_holes(self, current_step: int) -> bool:
         return current_step // _STEPS_PER_ITER >= ENABLE_HOLES_ITER
 
 
-    # 按课程阶段切换限高板碰撞状态
-    def update_holes(self, env, current_step: int) -> None:
-        should_enable = self.should_enable_holes(current_step)
-        if should_enable == self._holes_enabled:
-            return
-        for name in HOLE_ENTITY_NAMES:
-            hole = env.scene.entities.get(name)
-            if hole is None:
-                continue
-            if should_enable and hasattr(hole, "enable_collision"):
-                hole.enable_collision()
-            elif not should_enable and hasattr(hole, "disable_collision"):
-                hole.disable_collision()
-        self._holes_enabled = should_enable
-        print(f"[Curriculum] 限高板碰撞 {'开' if should_enable else '关'} "
-              f"@ iter {current_step // _STEPS_PER_ITER}")
-
-
     def __init__(self):
-        self._holes_enabled = False
+        pass
 
 
     # 兼容旧接口: 按阶段阈值 (步数) 展开的权重表视图
@@ -117,7 +99,6 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
 
 
-
-# 获取障碍物碰撞状态
-def update_curriculum_holes(env) -> None:
-    reward_weight_curriculum.update_holes(env, env.common_step_counter)
+# 课程是否要求开启限高板碰撞 (只读; 切换由 runner 重建环境完成)
+def curriculum_requires_collision(env) -> bool:
+    return reward_weight_curriculum.should_enable_holes(env.common_step_counter)

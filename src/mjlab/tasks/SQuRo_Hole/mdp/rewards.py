@@ -7,6 +7,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .config import BASE_HEIGHT, HEIGHT_THRESHOLD
 from .curriculums import get_curriculum_reward_weight
+from .hole import hole_geometry
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
     ACTUATOR_NUM,
@@ -442,9 +443,11 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     device = env.device
     num_envs = env.num_envs
 
-    obs_x_min = torch.tensor([0.185, 0.5, 1.185], device=device)
-    obs_x_max = torch.tensor([0.215, 0.7, 1.215], device=device)
-    obs_z_thresh = torch.tensor([0.045, 0.07, 0.045], device=device)
+    # 板几何 (x 覆盖区间 / 虚拟阈值) 与实体碰撞共用同一份定义
+    geo = hole_geometry()
+    obs_x_min = torch.tensor([g["x_min"] for g in geo], device=device)
+    obs_x_max = torch.tensor([g["x_max"] for g in geo], device=device)
+    obs_z_thresh = torch.tensor([g["virtual_z_threshold"] for g in geo], device=device)
     
     # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
     resolve_model_indices(asset)
@@ -472,10 +475,18 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return -total_penalty * weight * 10
 
 
-# 更新课程学习状态（障碍物碰撞等）
+# 课程阶段元数据项 (碰撞开关由 runner 在重建环境时处理, 这里只读状态)
+_last_collision_target: bool | None = None
+
+
 def update_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
-    from .curriculums import update_curriculum_holes
-    update_curriculum_holes(env)
+    from .curriculums import curriculum_requires_collision
+    global _last_collision_target
+    want = curriculum_requires_collision(env)
+    if want != _last_collision_target:
+        print(f"[Curriculum] 课程要求限高板碰撞 = {want} "
+              f"@ iter {env.common_step_counter // 24} (实际切换由 runner 重建环境)")
+        _last_collision_target = want
     return torch.zeros(env.num_envs, device=env.device)
 
 

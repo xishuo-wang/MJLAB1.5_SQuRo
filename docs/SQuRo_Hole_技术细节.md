@@ -172,22 +172,69 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 位移 = root 世界 x − episode 起点 x（`start_positions`），负值 clamp 到 0。
 `HEIGHT_THRESHOLD = 0.04` 用于判定"是否压低"，`get_height_scale_factor` 在 `h < 0.04` 时返回 0.1。
 
-**阶段 4 的现状**：`STAGE_COLLISION = (False, False, False, True)` 只声明了意图；
-限高板的 `contype` 在 `put_model` 时固化，运行期改无效，所以真正开启需要
-"按阶段重建环境"的机制（Backup 任务有，Hole 目前没有）。实现前，训练全程
-`contype=0`（只有 `body_contact` 软约束），回放为 1。
+## 5. 三块限高板、虚拟净空与真实碰撞
 
-## 5. 三块限高板与虚拟碰撞
+### 几何（`mdp/hole.py` 单一来源）
 
-三块板：x = 0.2 / 0.6 / 1.2，板底高 0.05 / 0.075 / 0.05，半长 0.015 / 0.1 / 0.015。
+`HOLE_LAYOUT` 定义三块板，**`position.z` 就是板底**，板体中心由 `板底 + 半厚` 计算
+（此前是 `position.z + 局部偏移 size[2]/2`，两套口径混用）。实测保留原有几何：
 
-- **训练**：`contype=conaffinity=0`（只有 `body_contact` 软约束生效）；
-- **回放**：`contype=conaffinity=1`（真实碰撞）。
-  两者都编译期固化，回放脚本的 `--enable-collision` 在建环境前改写实体 cfg。
+| 板 | x 中心 | x 覆盖 | 板底 | 板顶 | 虚拟阈值 | 余量 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hole1 | 0.2 | [0.185, 0.215] | 0.0475 | 0.0575 | 0.0450 | 2.5 mm |
+| Hole2 | 0.6 | [0.500, 0.700] | 0.0725 | 0.0825 | 0.0700 | 2.5 mm |
+| Hole3 | 1.2 | [1.185, 1.215] | 0.0475 | 0.0575 | 0.0450 | 2.5 mm |
 
-旧版还有一条 `enable_holes` 课程开关（stage 3 起调 `HoleEntity.enable_collision()` 改 spec）。
-**该开关挂在 `weight=0.0` 的奖励项 `update` 上，且运行期改 contype 在 mjwarp 下无效** ——
-旧版从未真正生效，训练全程没有限高板碰撞。本次按原样保留代码，不改其语义。
+`VIRTUAL_CLEARANCE_MARGIN = 0.0025`：**虚拟净空阈值 = 板底 − 2.5 mm**，与实测阈值一致
+（原先 `rewards.py` 里的 0.045/0.070 是另一套硬编码常量，现已由几何推导）。
+统一查询接口 `hole_geometry()` 返回 x 区间 / 板底 / 板顶 / 虚拟阈值，
+实体构造、虚拟奖励与验收脚本共用；`HoleEntity` 也提供
+`bottom_z` / `top_z` / `virtual_z_threshold` / `x_range`。
+
+### 两种约束的职责（四阶段）
+
+| 阶段 | 命令 | 虚拟净空奖励 | 板体真实碰撞 |
+| --- | --- | --- | --- |
+| 0–1k | 正常高度随机 | 关（权重 0） | 关 |
+| 1k–2k | 含单侧压低随机 | 关（权重 0） | 关 |
+| 2k–3k | 位移课程 | 开（权重 1） | 关 |
+| 3k 后 | 位移课程 | 保留 | **开，重建环境** |
+
+虚拟净空负责提前引导压低姿态，真实碰撞提供物理约束。**首版不为接触力新增奖励项**，
+权重表不变；接触只用于诊断。
+
+### 碰撞开关由 Runner 重建（参考 Backup）
+
+限高板的 `contype/conaffinity` 在 `put_model` 时固化，**运行期改无效**，所以切换只能重建环境。
+职责划分：
+
+- `curriculums.should_enable_holes` / `curriculum_requires_collision`：只读声明课程目标；
+  原先的 `update_holes()`（对已编译 spec 调 `enable_collision()`）**已删除**；
+- `rl/runner.py`：`_hole_change_needed()` 比较「课程目标」与「实际编译值」
+  （从实体本身读，不缓存），不一致则 `_apply_hole_rebuild()`；
+- 重建发生在**上一轮 PPO 更新完成后、下一轮采样开始前**，避免同一批优势估计混合两种动力学。
+
+重建时保留：Actor/Critic/观测归一化器、优化器与学习率、动作标准差、全局控制步数、
+训练迭代进度、已完成的日志。重置：机器人状态与动作历史、回合计数与命令位移起点、
+未完成回合的奖励累计。环境数 / 观测 205 / 动作 14 不变，因此算法对象与 rollout storage 可继续使用。
+实现要点：新环境建好后先接管 `common_step_counter`（否则判据又读到阶段 1 而反复重建），
+换掉 `RslRlVecEnvWrapper`，清空 logger 里未结束回合的累计，旧环境验收成功后再关闭。
+
+`save()` 写入 `hole_state = {version, stage, collision, layout}`；
+续训时若实际编译值与课程目标不符则重建，回放（`load_cfg.actor=True`）保留入口已编译的配置、不重建。
+旧 checkpoint 没有 `hole_state`，无法判断其当时的碰撞配置 —— **不要把它当作已完成真实碰撞训练**。
+
+### 验收（`src/mjlab/scripts/Hole/verify_hole_collision.py`）
+
+| 检查 | 结果 |
+| --- | --- |
+| 几何一致性 | 三块板 `bottom_z/top_z/virtual_z_threshold` 与统一查询一致，余量均 2.5 mm |
+| 编译掩码 | 关 = `(0,0)`、开 = `(1,1)`，在编译后的模型里真实生效 |
+| 物理开关 | 同一初态从板顶上方落下：关时 root z 落到 0.0235（穿过板到地面），开时 0.0811（被板挡住） |
+| Runner 重建 | step 71999 不需重建 / step 72000 需重建；重建后 `num_envs`、步数、观测保留，不反复重建，算法对象未变 |
+
+注：物理开关测试必须禁用 `terminations`（`fallen` 会触发 `auto_reset` 把机器人拉回原点，
+导致两组"测量"都变成重置后的状态）。
 
 ## 6. 奖励与课程（3 段）
 

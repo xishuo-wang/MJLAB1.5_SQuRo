@@ -133,11 +133,11 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
                 viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
             )
         }
-        entities={
+        entities = {
             "robot": SQURO_ROBOT_CFG,
-            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
-            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005)),
-            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005)),
+            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.0475), size=(0.015, 0.1, 0.005)),
+            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.0725), size=(0.100, 0.1, 0.005)),
+            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.0475), size=(0.015, 0.1, 0.005)),
         }
     else:
         episode_length_s = 20.0
@@ -147,15 +147,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
                 debug_vis=False, 
             )
         }
-        entities = {
-            "robot": SQURO_ROBOT_CFG,
-            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.075), size=(0.1, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.05), size=(0.015, 0.1, 0.005),
-                                       contype=0, conaffinity=0),
-        }
+        # 板几何统一由 hole.py 的 HOLE_LAYOUT 生成; 训练默认关碰撞 (阶段 4 由 runner 重建开)
+        entities = {"robot": SQURO_ROBOT_CFG, **mdp.build_hole_entities(enable_collision=False)}
 
 
     # 完整配置
