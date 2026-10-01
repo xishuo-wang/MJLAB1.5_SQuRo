@@ -41,6 +41,6 @@ def SQuRo_Hole_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     num_steps_per_env=24,
     max_iterations=4_000,
 
-    clip_actions=3.14,
+    clip_actions=None,
     seed=42,
   )
