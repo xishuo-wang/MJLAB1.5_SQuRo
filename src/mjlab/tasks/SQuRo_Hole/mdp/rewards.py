@@ -475,21 +475,6 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return -total_penalty * weight * 10
 
 
-# 课程阶段元数据项 (碰撞开关由 runner 在重建环境时处理, 这里只读状态)
-_last_collision_target: bool | None = None
-
-
-def update_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
-    from .curriculums import curriculum_requires_collision
-    global _last_collision_target
-    want = curriculum_requires_collision(env)
-    if want != _last_collision_target:
-        print(f"[Curriculum] 课程要求限高板碰撞 = {want} "
-              f"@ iter {env.common_step_counter // 24} (实际切换由 runner 重建环境)")
-        _last_collision_target = want
-    return torch.zeros(env.num_envs, device=env.device)
-
-
 # Mode 2 前腿运动奖励（防止前腿不动）
 def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
     asset: Entity = env.scene["robot"]

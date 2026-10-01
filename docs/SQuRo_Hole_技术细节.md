@@ -293,9 +293,16 @@ x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start
 `height_sigma` = **500 / 1000 / 1000 / 1000**。不随阶段变的还有 `mimic_vel`(5.0)、
 `foot_clearance`(1.0)、`reached`(1.0)、`angle`(1.0)。
 
-**13 个奖励项**注册在 `env_cfg.rewards`（`mimic_pos / mimic_vel / velocity / height /
-foot_clearance / angle / orientation / smoothness / body_contact / update / stop / reached`
-共 12 项参与打分，`update` 只挂课程钩子、恒返回 0）。跑满 4000 iter（96000 步）时生效的是第 4 段。
+**11 个奖励项**注册在 `env_cfg.rewards`（`mimic_pos / mimic_vel / velocity / height /
+foot_clearance / angle / orientation / smoothness / body_contact / stop / reached`）。
+跑满 4000 iter（96000 步）时生效的是第 4 段。
+
+原先还有一个 `"update": RewardTermCfg(func=mdp.update_curriculum, weight=1.0)`，它是旧版
+`enable_holes` 碰撞钩子的残留：只打印一行课程意图、恒返回 0。碰撞更新现已完全由
+`rl/runner.py` 的重建机制负责（`_hole_change_needed` → `_apply_hole_rebuild`），
+该钩子已无职责，故**连同 `rewards.update_curriculum` 与 `curriculums.curriculum_requires_collision`
+一并删除**（对训练行为零影响；TensorBoard 里 `Episode_Reward/update` 这条恒 0 曲线也随之消失）。
+`curriculums.should_enable_holes` 作为只读视图保留，供基线脚本展示课程意图。
 
 `_CURVES` 里还有 `height_sigma`、`mimic_pos_sigma`、`mimic_vel_sigma` 三条非权重曲线，
 以及若干**已定义但未注册**的项（`energy` / `cot` / `joint_acc` / `y_offset` / `joint_limits` /

@@ -6,6 +6,8 @@ from .config import (
     STAGE2_END_ITER,
     STAGE3_END_ITER,
     STEPS_PER_ITER as _STEPS_PER_ITER,
+    get_current_stage,
+    stage_requires_collision,
 )
 
 
@@ -18,9 +20,8 @@ _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 
 
 
-# 障碍物碰撞开关 (编译期固化, 运行期改 contype 无效)
-ENABLE_HOLES_ITER = STAGE3_END_ITER  # 3k 起进入真实碰撞阶段
-HOLE_ENTITY_NAMES = ("hole1", "hole2", "hole3")
+# 障碍物碰撞开关由 config.stage_requires_collision 判定, 实际切换由 runner 重建环境完成;
+# 这里只保留只读视图 should_enable_holes 供基线脚本展示课程意图
 
 
 
@@ -74,9 +75,9 @@ class RewardWeightCurriculum:
         }
 
 
-    # 关卡是否要求开启限高板碰撞 (只读元数据; 实际切换由 runner 重建环境完成)
+    # 关卡是否要求开启限高板碰撞 (只读视图, 供基线脚本展示课程意图)
     def should_enable_holes(self, current_step: int) -> bool:
-        return current_step // _STEPS_PER_ITER >= ENABLE_HOLES_ITER
+        return stage_requires_collision(get_current_stage(current_step))
 
 
     def __init__(self):
@@ -97,8 +98,3 @@ reward_weight_curriculum = RewardWeightCurriculum()
 # 获取课程奖励权重
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
-
-
-# 课程是否要求开启限高板碰撞 (只读; 切换由 runner 重建环境完成)
-def curriculum_requires_collision(env) -> bool:
-    return reward_weight_curriculum.should_enable_holes(env.common_step_counter)
