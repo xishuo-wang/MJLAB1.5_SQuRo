@@ -179,6 +179,64 @@ def check_state_roundtrip() -> None:
     shutil.rmtree("tmp_verify_log", ignore_errors=True)
 
 
+# 虚拟约束必须读实际场景几何 (自定义板位下不能仍按默认表算)
+def check_reward_geometry() -> None:
+    print("\n[7] 虚拟约束读实际场景几何 (自定义板位)")
+    cfg = load_env_cfg(TASK)
+    cfg.scene.num_envs = 1
+    ent = cfg.scene.entities["hole1"]
+    ent.position = (0.35, 0.0, 0.0675)
+    ent.solref = (0.03, 1.0)
+    configure_hole_entities(cfg, enable_collision=False)
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    g0 = hole_geometry(env)[0]
+    check("x 区间跟随自定义位置", abs(g0["x_min"] - 0.335) < 1e-9 and abs(g0["x_max"] - 0.365) < 1e-9,
+          f"[{g0['x_min']:.3f},{g0['x_max']:.3f}]")
+    check("板底跟随自定义位置", abs(g0["bottom_z"] - 0.0675) < 1e-9, f"{g0['bottom_z']:.4f}")
+    check("虚拟阈值 = 板底 - 2.5mm", abs(g0["virtual_z_threshold"] - 0.0650) < 1e-9,
+          f"{g0['virtual_z_threshold']:.4f}")
+    env.close()
+
+
+# checkpoint 保存的几何/接触参数能在回放侧复现
+def check_layout_roundtrip() -> None:
+    print("\n[8] checkpoint 几何/接触参数 保存 → 回放复现")
+    import os
+    import shutil
+    from mjlab.tasks.SQuRo_Hole.mdp.hole import apply_saved_layout
+    probe_dir = "tmp_hole_geom_probe"
+    os.makedirs(probe_dir, exist_ok=True)
+    cfg = load_env_cfg(TASK)
+    cfg.scene.num_envs = 2
+    ent = cfg.scene.entities["hole1"]
+    ent.position = (0.35, 0.0, 0.0675)
+    ent.solref = (0.03, 1.0)
+    configure_hole_entities(cfg, enable_collision=True)
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    vec = RslRlVecEnvWrapper(env, None)
+    runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), probe_dir, device="cpu")
+    path = f"{probe_dir}/model_0.pt"
+    runner.save(path)
+    from mjlab.tasks.SQuRo_Hole.rl.runner import read_hole_state
+    saved = read_hole_state(path)
+    d0 = (saved.get("layout") or [{}])[0]
+    check("保存自定义位置", d0.get("position") == [0.35, 0.0, 0.0675], f"{d0.get('position')}")
+    check("保存 solref", d0.get("solref") == [0.03, 1.0], f"{d0.get('solref')}")
+    # 干净配置 + apply_saved_layout → 复现
+    cfg2 = load_env_cfg(TASK, play=True)
+    n = apply_saved_layout(cfg2, saved.get("layout") or [])
+    e2 = cfg2.scene.entities["hole1"]
+    check("回放复现位置", tuple(e2.position) == (0.35, 0.0, 0.0675), f"{tuple(e2.position)}")
+    check("回放复现 solref", e2.solref is not None and tuple(e2.solref) == (0.03, 1.0),
+          f"{e2.solref}")
+    check("三块板都被应用", n == 3, f"{n}")
+    try:
+        runner.env.close()
+    except Exception:
+        pass
+    shutil.rmtree(probe_dir, ignore_errors=True)
+
+
 def main() -> None:
     check_geometry()
     check_mask()
@@ -186,13 +244,15 @@ def main() -> None:
     check_rebuild()
     check_rebuild_preserves_custom()
     check_state_roundtrip()
+    check_reward_geometry()
+    check_layout_roundtrip()
     print()
     if _FAILURES:
         print(f"[结论] 失败 {len(_FAILURES)} 项: {_FAILURES}")
         sys.exit(1)
     print("[结论] 全部通过: 几何单一来源且与实际一致; 碰撞掩码按开关编译生效; "
           "开碰撞时机器人被板挡住; Runner 在 3k 边界重建一次且保留计数器; "
-          "自定义板位/接触参数不被重建覆盖; hole_state 可真实保存与读取")
+          "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现")
 
 
 if __name__ == "__main__":

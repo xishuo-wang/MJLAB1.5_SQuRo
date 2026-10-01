@@ -443,8 +443,8 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     device = env.device
     num_envs = env.num_envs
 
-    # 板几何 (x 覆盖区间 / 虚拟阈值) 与实体碰撞共用同一份定义
-    geo = hole_geometry()
+    # 板几何 (x 覆盖区间 / 虚拟阈值) 读**实际场景实体**, 与实体碰撞共用同一份定义
+    geo = hole_geometry(env)
     obs_x_min = torch.tensor([g["x_min"] for g in geo], device=device)
     obs_x_max = torch.tensor([g["x_max"] for g in geo], device=device)
     obs_z_thresh = torch.tensor([g["virtual_z_threshold"] for g in geo], device=device)

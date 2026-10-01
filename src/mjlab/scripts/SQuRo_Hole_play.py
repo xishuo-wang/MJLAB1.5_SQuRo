@@ -24,7 +24,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.hole import configure_hole_entities
+from mjlab.tasks.SQuRo_Hole.mdp.hole import apply_saved_layout, configure_hole_entities
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
@@ -53,8 +53,9 @@ class PlayConfig:
     # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
     command_source: Literal["schedule", "fixed", "random"] = "fixed"
     fixed_velocity: float | None = None
-    fixed_height_F: float | None = 0.055
-    fixed_height_H: float | None = 0.02
+    # 默认 None: 只有 fixed 模式才补默认高度, schedule/random 只在显式给出时覆盖
+    fixed_height_F: float | None = None
+    fixed_height_H: float | None = None
     stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
     enable_collision: bool | None = None   # None = 按 cfg (训练默认关, 阶段 4 才开)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
@@ -276,6 +277,13 @@ def run_play(cfg: PlayConfig):
 
     # 命令来源 (play 侧最高优先级): 显式覆盖 env_cfg 里的位置表设定。
     # schedule = 位置表 (fixed_* 仍可覆盖对应字段); fixed = 锁死给定值; random = 按阶段随机采样
+    # fixed 模式补默认高度 (其余模式不给默认, 避免把 schedule 位置表或 random 采样锁死)
+    fixed_hF = cfg.fixed_height_F
+    fixed_hH = cfg.fixed_height_H
+    if cfg.command_source == "fixed":
+        fixed_hF = 0.055 if fixed_hF is None else fixed_hF
+        fixed_hH = 0.055 if fixed_hH is None else fixed_hH
+
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
         if cfg.command_source != "schedule":
@@ -285,45 +293,62 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.use_height_schedule = False  # type: ignore[attr-defined]
             cmd_cfg.height_schedule = None  # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
-        if cfg.command_source != "random":
-            # fixed 与 schedule 才写显式值; random 必须留空, 否则随机评估被固定值锁死
-            if cfg.fixed_velocity is not None:
-                cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
-            if cfg.fixed_height_F is not None:
-                cmd_cfg.fixed_height_F = cfg.fixed_height_F  # type: ignore[attr-defined]
-            if cfg.fixed_height_H is not None:
-                cmd_cfg.fixed_height_H = cfg.fixed_height_H  # type: ignore[attr-defined]
+        # 显式给出的字段一律写入 (schedule 下在位置表算完后覆盖, random 下只固定这些字段)
+        if cfg.fixed_velocity is not None:
+            cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
+        if fixed_hF is not None:
+            cmd_cfg.fixed_height_F = fixed_hF  # type: ignore[attr-defined]
+        if fixed_hH is not None:
+            cmd_cfg.fixed_height_H = fixed_hH  # type: ignore[attr-defined]
         print(f"[INFO] 命令来源 = {cfg.command_source}"
-              + (f" (固定 h_F={cfg.fixed_height_F}, h_H={cfg.fixed_height_H}, "
-                 f"vel={cfg.fixed_velocity})" if cfg.command_source == "fixed" else
-                 (" (8 段位移位置表)" if cfg.command_source == "schedule" else " (按阶段随机采样)")))
+              + (f" (固定 h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity})"
+                 if cfg.command_source == "fixed" else
+                 (" (8 段位移位置表)" if cfg.command_source == "schedule" else " (按阶段随机采样)"))
+              + ("" if cfg.command_source == "fixed" else
+                 f" [显式覆盖: h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity}]"
+                 if (fixed_hF is not None or fixed_hH is not None
+                     or cfg.fixed_velocity is not None) else ""))
 
-    # 限高板碰撞 (编译期固化, 必须在建环境前定好)。解析优先级:
-    #   显式 --enable-collision > 检查点记录的实际碰撞 > 阶段推断
+    # 在建环境前统一解析"最终阶段"与"碰撞开关", 供碰撞与后续课程对齐共用
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
-    if cfg.enable_collision is not None:
-        collision, src = cfg.enable_collision, "命令行显式指定"
-    elif saved_hole.get("collision") is not None:
-        collision, src = bool(saved_hole["collision"]), "检查点 hole_state"
+    if cfg.stage is not None:
+        final_step, stage_src = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage], "命令行 --stage"
+    elif resume_path is not None:
+        recorded = read_env_step(resume_path)
+        if recorded is not None:
+            final_step, stage_src = recorded, "检查点 env_state"
+        else:
+            train_iter = extract_iter_from_checkpoint(resume_path)
+            final_step, stage_src = max(0, train_iter - 10) * STEPS_PER_ITER, "检查点文件名轮次"
     else:
-        stage_for_collision = cfg.stage if cfg.stage is not None else (
-            get_current_stage(read_env_step(resume_path) or 0) if resume_path is not None else 1)
-        collision, src = stage_requires_collision(stage_for_collision), "按阶段推断"
+        final_step, stage_src = 0, "默认 (无检查点)"
+    final_stage = get_current_stage(final_step)
+
+    # 碰撞优先级: 显式 > 检查点记录 > 按上面解析出的最终阶段推断
+    if cfg.enable_collision is not None:
+        collision, coll_src = cfg.enable_collision, "命令行显式指定"
+    elif saved_hole.get("collision") is not None:
+        collision, coll_src = bool(saved_hole["collision"]), "检查点 hole_state"
+    else:
+        collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
     configure_hole_entities(env_cfg, enable_collision=collision)
-    print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {src})")
+    # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
+    applied = apply_saved_layout(env_cfg, saved_hole.get("layout") or [])
+    print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
+    print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
+          + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
     if saved_hole:
         print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
               f"stage={saved_hole.get('stage')}, 记录碰撞={saved_hole.get('collision')}")
 
-    # 构建输出名后缀: command_source 始终带上 (三选一), 其余只记录非默认配置
+    # 构建输出名后缀: command_source 始终带上 (三选一), 其余只记录实际生效的非默认配置
     suffix_parts = [cfg.command_source]
-    if cfg.command_source == "fixed":
-        if cfg.fixed_height_F is not None:
-            suffix_parts.append(f"hF{cfg.fixed_height_F * 1000:.0f}")
-        if cfg.fixed_height_H is not None:
-            suffix_parts.append(f"hH{cfg.fixed_height_H * 1000:.0f}")
-        if cfg.fixed_velocity is not None:
-            suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
+    if fixed_hF is not None:
+        suffix_parts.append(f"hF{fixed_hF * 1000:.0f}")
+    if fixed_hH is not None:
+        suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
+    if cfg.fixed_velocity is not None:
+        suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
     if cfg.stage is not None:
         suffix_parts.append(f"s{cfg.stage}")
     if cfg.enable_collision is not None:
@@ -385,22 +410,11 @@ def run_play(cfg: PlayConfig):
         # 基类 load 会恢复检查点的 common_step_counter, 显式阶段必须在它之后最终生效
         env = runner.env
 
-    # 阶段对齐: 命令来源/课程权重都由 common_step_counter 决定
-    if cfg.stage is not None:
-        stage_start = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage]
-        env.unwrapped.common_step_counter = stage_start
-        print(f"[INFO] 强制阶段 {cfg.stage} (common_step_counter={stage_start})")
-    elif resume_path is not None:
-        step = read_env_step(resume_path)
-        if step is not None:
-            env.unwrapped.common_step_counter = step
-            print(f"[INFO] 恢复检查点步数 {step} (iter {step // STEPS_PER_ITER}, "
-                  f"stage {get_current_stage(step)})")
-        else:
-            train_iter = extract_iter_from_checkpoint(resume_path)
-            env.unwrapped.common_step_counter = max(0, train_iter - 10) * STEPS_PER_ITER
-            print(f"[INFO] 按 checkpoint 文件名推断: iter {train_iter} → "
-                  f"common_step_counter={env.unwrapped.common_step_counter}")
+    # 阶段对齐: 用建环境前就解析好的 final_step (与碰撞来源同一口径);
+    # 基类 load 会用检查点的 common_step_counter 覆盖, 所以必须放在加载之后
+    env.unwrapped.common_step_counter = final_step
+    print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)}"
+          + (" (命令行 --stage 强制)" if cfg.stage is not None else " (按检查点记录)"))
 
     if cfg.smoke_steps is not None:
         # 无窗自检: 推 N 步打印命令/高度统计

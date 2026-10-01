@@ -226,15 +226,34 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 
 ### 验收（`src/mjlab/scripts/Hole/verify_hole_collision.py`）
 
+脚本是**断言式**的：32 项 `check()`，任一失败即收集并以非零码退出（此前只打印、失败也返回 0）。
+
 | 检查 | 结果 |
 | --- | --- |
 | 几何一致性 | 三块板 `bottom_z/top_z/virtual_z_threshold` 与统一查询一致，余量均 2.5 mm |
 | 编译掩码 | 关 = `(0,0)`、开 = `(1,1)`，在编译后的模型里真实生效 |
 | 物理开关 | 同一初态从板顶上方落下：关时 root z 落到 0.0235（穿过板到地面），开时 0.0811（被板挡住） |
 | Runner 重建 | step 71999 不需重建 / step 72000 需重建；重建后 `num_envs`、步数、观测保留，不反复重建，算法对象未变 |
+| 重建保留自定义 | 自定义位置 `(0.35,0,0.0675)` 与 `solref=(0.03,1)` 重建后仍在，只换掩码 |
+| `hole_state` 往返 | version/stage/collision/实际 layout/env_state 步数均可真实保存并读回 |
+| 虚拟约束读实际几何 | 板位改到 x=0.35/板底 0.0675 后，`hole_geometry(env)` 与奖励同步为 `[0.335,0.365]`/0.0650 |
+| 几何保存→回放复现 | 保存的 position/solref 经 `apply_saved_layout` 在回放配置上完整复现 |
 
 注：物理开关测试必须禁用 `terminations`（`fallen` 会触发 `auto_reset` 把机器人拉回原点，
 导致两组"测量"都变成重置后的状态）。
+
+### 回放的参数优先级
+
+| 参数 | 优先级 |
+| --- | --- |
+| `--command-source` | play 侧最高优先级（`fixed`/`random` 会关掉位置表与阶段兜底） |
+| `--fixed-height-F/H`、`--fixed-velocity` | **显式给出即生效**：`fixed` 下锁死；`schedule` 下在位置表算完后覆盖对应字段；`random` 下只固定这些字段、其余按阶段采样 |
+| `--stage` | 显式阶段在建环境前解析，且在 `runner.load` **之后**最终生效（基类 load 会用检查点的步数覆盖计数器） |
+| `--enable-collision` | 显式 > 检查点 `hole_state.collision` > 按最终阶段推断 |
+| 板几何/接触参数 | 检查点 `hole_state.layout` 会在建环境前应用（`apply_saved_layout`） |
+
+`fixed_height_F/H` 的默认值是 `None`：**只有 `fixed` 模式才补 0.055**，
+以免把 schedule 的位置表或 random 的采样锁死。
 
 ## 6. 奖励与课程（3 段）
 

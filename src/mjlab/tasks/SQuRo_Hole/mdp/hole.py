@@ -150,16 +150,59 @@ def hole_collision_enabled(env) -> bool:
     return bool(entity is not None and int(entity.cfg.contype) > 0)
 
 
-# 统一几何查询: 返回三块板的 x 区间 / 板底 / 虚拟阈值 (奖励与诊断共用同一来源)
+# 单块板的几何字典 (实体口径: position.z 是板底, 半厚在 size[2])
+def _entity_geometry(cfg) -> dict:
+    x, y, bottom_z = (float(v) for v in cfg.position)
+    half_len, _, half_t = (float(v) for v in cfg.size)
+    return {
+        "name": cfg.name,
+        "x_min": x - half_len,
+        "x_max": x + half_len,
+        "bottom_z": bottom_z,
+        "top_z": bottom_z + 2.0 * half_t,
+        "virtual_z_threshold": bottom_z - VIRTUAL_CLEARANCE_MARGIN,
+    }
+
+
+# 统一几何查询: 返回三块板的 x 区间 / 板底 / 虚拟阈值。
+# 传 env 时读**实际场景实体** (支持自定义板位), 否则退回 HOLE_LAYOUT 默认表。
+# 实体构造、虚拟奖励与诊断必须共用这一份, 否则自定义几何下约束会与实体脱节
 def hole_geometry(env=None) -> list[dict]:
-    out = []
-    for name, x, y, bottom_z, half_len, half_t in HOLE_LAYOUT:
-        out.append({
-            "name": name,
-            "x_min": x - half_len,
-            "x_max": x + half_len,
-            "bottom_z": bottom_z,
-            "top_z": bottom_z + 2.0 * half_t,
-            "virtual_z_threshold": bottom_z - VIRTUAL_CLEARANCE_MARGIN,
-        })
-    return out
+    if env is not None:
+        scene = getattr(env, "scene", env)
+        entities = getattr(scene, "entities", None) or {}
+        out = []
+        for name, *_ in HOLE_LAYOUT:
+            ent = entities.get(name.lower())
+            if ent is not None and isinstance(getattr(ent, "cfg", None), HoleEntityCfg):
+                out.append(_entity_geometry(ent.cfg))
+        if out:
+            return out
+    return [_entity_geometry(HoleEntityCfg(name=n, position=(x, y, bz),
+                                           size=(hl, 0.1, ht)))
+            for n, x, y, bz, hl, ht in HOLE_LAYOUT]
+
+
+# 把 checkpoint 里记录的板几何/接触参数应用到 env_cfg (回放复现保存的配置)
+def apply_saved_layout(env_cfg, layout: list) -> int:
+    if not layout:
+        return 0
+    entities = dict(env_cfg.scene.entities)
+    applied = 0
+    for d in layout:
+        key = str(d.get("name", "")).lower()
+        existing = entities.get(key)
+        if not isinstance(existing, HoleEntityCfg):
+            continue
+        keep: dict = {}
+        if d.get("position") is not None:
+            keep["position"] = tuple(float(v) for v in d["position"])
+        if d.get("size") is not None:
+            keep["size"] = tuple(float(v) for v in d["size"])
+        for f in ("solref", "solimp"):
+            if d.get(f) is not None:
+                keep[f] = tuple(float(v) for v in d[f])
+        entities[key] = replace(existing, **keep)
+        applied += 1
+    env_cfg.scene.entities = entities
+    return applied
