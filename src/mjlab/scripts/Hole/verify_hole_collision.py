@@ -237,6 +237,27 @@ def check_layout_roundtrip() -> None:
     shutil.rmtree(probe_dir, ignore_errors=True)
 
 
+# 障碍物可见性: 只改 rgba 外观, 不改碰撞
+def check_visibility() -> None:
+    print("\n[9] 限高板可见性开关 (仅外观)")
+    from mjlab.tasks.SQuRo_Hole.mdp.hole import set_obstacle_visibility
+    for visible in (True, False):
+        cfg = load_env_cfg(TASK)
+        cfg.scene.num_envs = 1
+        configure_hole_entities(cfg, enable_collision=True)
+        n = set_obstacle_visibility(cfg, visible=visible)
+        env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+        m = env.sim.mj_model
+        rows = [(np.round(m.geom_rgba[i], 3).tolist(), int(m.geom_contype[i]))
+                for i in range(m.ngeom) if "Hole" in (m.geom(i).name or "")]
+        want_rgba = [0.5, 0.5, 0.5, 0.5] if visible else [0.0, 0.0, 0.0, 0.0]
+        check(f"可见={visible} rgba={want_rgba} ({n} 块)",
+              len(rows) == 3 and all(r[0] == want_rgba for r in rows))
+        check(f"可见={visible} 碰撞掩码不受影响 (仍为 1)",
+              all(r[1] == 1 for r in rows))
+        env.close()
+
+
 def main() -> None:
     check_geometry()
     check_mask()
@@ -246,13 +267,15 @@ def main() -> None:
     check_state_roundtrip()
     check_reward_geometry()
     check_layout_roundtrip()
+    check_visibility()
     print()
     if _FAILURES:
         print(f"[结论] 失败 {len(_FAILURES)} 项: {_FAILURES}")
         sys.exit(1)
     print("[结论] 全部通过: 几何单一来源且与实际一致; 碰撞掩码按开关编译生效; "
           "开碰撞时机器人被板挡住; Runner 在 3k 边界重建一次且保留计数器; "
-          "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现")
+          "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现; "
+          "可见性开关只改外观不改碰撞")
 
 
 if __name__ == "__main__":

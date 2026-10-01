@@ -183,6 +183,23 @@ def hole_geometry(env=None) -> list[dict]:
             for n, x, y, bz, hl, ht in HOLE_LAYOUT]
 
 
+# 统一设置三块板的可见性: 仅改 rgba, 不影响碰撞 (碰撞只由 contype/conaffinity 决定)
+def set_obstacle_visibility(env_cfg, visible: bool,
+                            hidden_rgba: tuple = (0.0, 0.0, 0.0, 0.0),
+                            shown_rgba: tuple = (0.5, 0.5, 0.5, 0.5)) -> int:
+    entities = dict(env_cfg.scene.entities)
+    rgba = tuple(shown_rgba) if visible else tuple(hidden_rgba)
+    n = 0
+    for name, *_ in HOLE_LAYOUT:
+        key = name.lower()
+        ent = entities.get(key)
+        if isinstance(ent, HoleEntityCfg):
+            entities[key] = replace(ent, rgba=rgba)
+            n += 1
+    env_cfg.scene.entities = entities
+    return n
+
+
 # 把 checkpoint 里记录的板几何/接触参数应用到 env_cfg (回放复现保存的配置)
 def apply_saved_layout(env_cfg, layout: list) -> int:
     if not layout:

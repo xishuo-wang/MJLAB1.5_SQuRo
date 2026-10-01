@@ -24,7 +24,11 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.hole import apply_saved_layout, configure_hole_entities
+from mjlab.tasks.SQuRo_Hole.mdp.hole import (
+    apply_saved_layout,
+    configure_hole_entities,
+    set_obstacle_visibility,
+)
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
@@ -51,13 +55,14 @@ class PlayConfig:
     record_data: bool = True
     # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
     # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
-    command_source: Literal["schedule", "fixed", "random"] = "fixed"
+    command_source: Literal["schedule", "fixed", "random"] = "schedule"
     fixed_velocity: float | None = None
     # 默认 None: 只有 fixed 模式才补默认高度, schedule/random 只在显式给出时覆盖
     fixed_height_F: float | None = None
     fixed_height_H: float | None = None
     stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
-    enable_collision: bool | None = None   # None = 按 cfg (训练默认关, 阶段 4 才开)
+    enable_collision: bool | None = False   # None = 按 cfg (训练默认关, 阶段 4 才开)
+    show_obstacles: bool = True            # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
 
 
@@ -334,9 +339,13 @@ def run_play(cfg: PlayConfig):
     configure_hole_entities(env_cfg, enable_collision=collision)
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
     applied = apply_saved_layout(env_cfg, saved_hole.get("layout") or [])
+    # 障碍物可见性: 仅改 rgba, 不改碰撞; 放在几何应用之后以免被覆盖
+    n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.show_obstacles)
     print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
     print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
           + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
+    if not cfg.show_obstacles:
+        print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
     if saved_hole:
         print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
               f"stage={saved_hole.get('stage')}, 记录碰撞={saved_hole.get('collision')}")
@@ -353,6 +362,8 @@ def run_play(cfg: PlayConfig):
         suffix_parts.append(f"s{cfg.stage}")
     if cfg.enable_collision is not None:
         suffix_parts.append("col1" if cfg.enable_collision else "col0")
+    if not cfg.show_obstacles:
+        suffix_parts.append("noobs")
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{suffix}"
