@@ -121,13 +121,13 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
                 use_position_schedule=True,  # 启用位置表
                 position_schedule=[
                     (0.0, 0.02, 0.05),
-                    (0.2, 0.06, 0.02),
-                    (0.32, 0.06, 0.06),
+                    (0.2, 0.055, 0.02),
+                    (0.32, 0.055, 0.055),
                     (0.4, 0.04, 0.04),
-                    (0.8, 0.06, 0.06),
+                    (0.8, 0.055, 0.055),
                     (1.0, 0.02, 0.05),
-                    (1.2, 0.06, 0.02),
-                    (1.32, 0.06, 0.06),
+                    (1.2, 0.055, 0.02),
+                    (1.32, 0.055, 0.055),
                 ],
                 debug_vis=True, 
                 viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
