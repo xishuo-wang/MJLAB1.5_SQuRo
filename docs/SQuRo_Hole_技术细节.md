@@ -7,6 +7,10 @@
 恢复原则：**只做接口适配，任务逻辑一律照旧**。上一版（2026-07 起、被本次覆盖的四阶段重写版）
 及其文档已由 git 历史保留。
 
+> **文档状态（2026-10 复核）**：本文件已按当前代码逐条复核。原 §3 / §4 / §6 / §9 中若干描述
+> 停留在"基准高度 0.06、两套 stage 刻度、碰撞机制未实现"的旧口径，均已更新为实测值；
+> 仍未消除的偏差集中在本文件 §9 末尾的"已知偏差"一节。
+
 备份来源：`Backup/` 下的 `mouse_env_cfg.py` + `mdp/` + `config/` + `rl/`，以及当年训练产物
 `Backup/260403_1/files/`（`model_3999.pt`、`config.yaml`、`mjlab.diff`）。
 
@@ -52,7 +56,7 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 | `STAGE{1,2,3}_END` | 24000 / 48000 / 72000 | 同上，折算成全局步数 |
 | `RANDOM_HEIGHT_VALUES` | `[0.04, 0.045, 0.05, 0.055]` | 阶段 1 随机采样池（正常档） |
 | `FULL_HEIGHT_VALUES` | `[0.02, 0.04, 0.045, 0.05, 0.055]` | 阶段 2 随机采样池（含低高度） |
-| `STAGE_COLLISION` | `(F, F, F, T)` | 各阶段是否要求实体碰撞（阶段 4 机制未实现） |
+| `STAGE_COLLISION` | `(F, F, F, T)` | 各阶段是否要求实体碰撞（由 `rl/runner.py` 重建环境落实，见 §5） |
 
 **改动带来的行为变化**（相对上一版）：原先 0.06 基准统一为 0.055，因此
 
@@ -60,8 +64,11 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 - 最高高度档由 0.06 改为 0.055，位置表里命令 0.06 落到该档（缩放 0.055/0.055 = 1.0）；
 - `rewards.py` 的抬脚目标与 `reference.py` 的缩放现在**同一个来源**（此前 `rewards.py` 硬编码 0.06）。
 
-`indices.py` 仍是索引唯一来源：`rewards.py` 的躯干/足端/碰撞采样点全部走
-`_MODEL_INDICES`（原先 `[4,24]`、`[10,11,21,22]`、`range(9)+range(12,21)` 三处硬编码）。
+`indices.py` 是**关节/site 索引的唯一来源**：`rewards.py` 的足端与碰撞采样点全部走
+`_MODEL_INDICES`，关节列序走 `reference.resolve_joint_ids`（原先 `[4,24]`、
+`[10,11,21,22]`、`range(9)+range(12,21)` 三处硬编码）。
+**唯一例外是 `f_body_id` / `h_body_id`**：`rewards.py` 仍有 6 处字面量 4 / 24，未走解析
+（实测值相同，见 §9.7）。
 
 **注意**：`[10,11,21,22]` 与 `range(12,21)` 是**错的**——`indices.py` 解析出足端应为
 `[12,13,25,26]`、后段碰撞点应为 `14..22`。修正后 `foot_clearance` 改为读真足端
@@ -107,26 +114,32 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 
 ## 3. 参考表（[模式, 高度档, 相位, 14 关节] ×3）
 
-`HEIGHT_LIST = [0.02, 0.04, 0.05, 0.06]`、`BASE_HEIGHT = 0.06`、相位分辨率 500。
+`HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]`、`BASE_HEIGHT = 0.055`、相位分辨率 500。
 14 列的列序为 **前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2**（`front_pos 0:4`、`hind_pos 4:8`、
 `spine_pos 8:12`、头颈 12:14）。模式：0 = 前后肢都高、1 = 前肢低、2 = 后肢低。生成规则：
 
 - **模式 0**：前后腿都走生物足端轨迹（`FL_Smooth.csv` / `HR_Smooth.csv`），按各自高度缩放；
 - **模式 1**（前低）：前腿冻结在固定姿态，后腿走**摆线**（`CYCLOID_PARAMS["front_low"]`）；
 - **模式 2**（后低）：对称；
-- **低高度档**（`h < 0.04`）整表冻结；脊柱列 `H_spine1 = −0.65`；
+- **低高度档**（`h < 0.04`）整表冻结；脊柱列 `F_spine1 = −0.65`；
 - **头颈两列恒为 0**（`NECK_REF_POS = NECK_REF_VEL = 0`，不随模式/高度/相位变化）
   —— 期望"头保持不动"；与 `INIT_STATE` 的 `Neck_pitch = -0.3` 无关，策略需把俯仰拉到 0；
 - `USE_SPINE_CSV = False`：脊柱 CSV 默认不参与（`XoY/YoZ_Spine_Smooth.csv` 已随任务打包，备用）。
 
-实测（`verify_hole_baseline`）：
+实测（取值经表内列序核对，`spine_pos` 四列 = `[F_spine1, F_body, H_spine1, H_body]`）：
 
-| 模式 | 高度档 (mm) | 前腿幅度 | 后腿幅度 | H_spine1 |
-| --- | --- | --- | --- | --- |
-| 0 | 20 | 0.0000 | 0.0000 | −0.65 |
-| 0 | 40/50/60 | 1.07/1.06/1.04 | 0.90/0.92/0.96 | 0.00 |
-| 1 | 20~60 | 0.0000 | 1.0447 | −0.65 |
-| 2 | 20~60 | 0.9054 | 0.0000 | −0.65 |
+| 模式 | 高度档 (mm) | 前腿幅度 | 后腿幅度 | F_spine1 | H_spine1 |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 20 | 0.0000 | 0.0000 | −0.65 | 0.00 |
+| 0 | 40/50/55 | 1.0669/1.0490/1.0418 | 0.9073/0.9350/0.9588 | 0.00 | 0.00 |
+| 1 | 20~55 | 0.0000 | 1.0447 | −0.65 | 0.00 |
+| 2 | 20~55 | 0.9054 | 0.0000 | −0.65 | 0.00 |
+
+**脊柱只有 F_spine1 被压低**：`reference.py` 只写 `spine_angles[:, 2]` 一列，落在表列 10，
+即 F_spine1；H_spine1（表列 12）恒为 0。"前后脊柱都压"从未生效（详见 §9 已知偏差）。
+模式 0 前腿幅度随高度档递减、后腿幅度递增，是因为两者共用同一个
+`height_scale = h/BASE_HEIGHT`，缩放基准由 0.06 改成 0.055 后 40/50/55 mm 三档的
+缩放系数变为 0.727/0.909/1.000。
 
 ## 4. 命令与四阶段课程
 
@@ -138,7 +151,7 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 | 1 | 0–1k | 随机采样，正常档 `RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]` | 否 | 否 |
 | 2 | 1k–2k | 随机采样，含低高度全档 `FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]` | 否 | 否 |
 | 3 | 2k–3k | **位置表**（按位移查表，每步更新）+ 虚拟碰撞软约束 | 是 | 否 |
-| 4 | 3k 以后 | 位置表 | 是 | **是（机制未实现）** |
+| 4 | 3k 以后 | 位置表 | 是 | **是**（`rl/runner.py` 在 3k 边界重建环境，见 §5） |
 
 常量：`STAGE{1,2,3}_END_ITER = 1000 / 2000 / 3000`、`STEPS_PER_ITER = 24`，
 步数边界由二者相乘得到（24000 / 48000 / 72000）。
@@ -156,18 +169,26 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 含低高度占比 **33.0%**。低档 `0.02` 只与正常档配对——这是 `_sample_heights`
 的既有约束（避免双低），不是新引入的。
 
+> 2026-10 复测（4000 次/阶段，桩环境）：阶段 1 前低/后低/任一低 = 0.0% / 0.0% / **0.0%**；
+> 阶段 2 = 16.1% / 17.9% / **34.0%**，双低 0.0%，共 12 种组合。与上表一致。
+
 位置表在阶段 3/4 生效（`stage_uses_schedule`），每步按位移推进：
 
-| 位移 (m) | h_F | h_H | 对应障碍 |
+| 位移 (m) | h_F | h_H | 作用（按几何推断） |
 | --- | --- | --- | --- |
-| 0.00 | 0.02 | 0.05 | Hole1 (x=0.2) 前肢低 |
-| 0.20 | 0.06 | 0.02 | Hole2 (x=0.6) 后肢低 |
-| 0.32 | 0.06 | 0.06 | 段间恢复正常 |
-| 0.40 | 0.04 | 0.04 | Hole2 板顶通过 |
+| 0.00 | 0.02 | 0.05 | 前肢压低（Hole1 板底 0.0475，x=0.2） |
+| 0.20 | 0.06 | 0.02 | 后肢压低（Hole2 板底 0.0725，x=0.6） |
+| 0.32 | 0.06 | 0.06 | 恢复正常（Hole2 板长段中） |
+| 0.40 | 0.04 | 0.04 | 双侧中等高度（Hole2 板长段尾） |
 | 0.80 | 0.06 | 0.06 | 恢复 |
-| 1.00 | 0.02 | 0.05 | Hole3 (x=1.2) 前肢低 |
-| 1.20 | 0.06 | 0.02 | 后肢低 |
+| 1.00 | 0.02 | 0.05 | 前肢压低（Hole3 板底 0.0475，x=1.2） |
+| 1.20 | 0.06 | 0.02 | 后肢压低 |
 | 1.32 | 0.06 | 0.06 | 末段 |
+
+**注意：位置表的位移刻度与板的世界 x 不是同一个坐标**（表在 1.32 m 处结束，而 Hole3 在
+x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start_positions` 的前进量"，
+与板位之间没有建立换算，因此上表的"作用"列是按板底高度反推的**推断**，不是代码里的显式绑定；
+改板位时不需要同步改位置表，但也无法自动对齐。
 
 位移 = root 世界 x − episode 起点 x（`start_positions`），负值 clamp 到 0。
 `HEIGHT_THRESHOLD = 0.04` 用于判定"是否压低"，`get_height_scale_factor` 在 `h < 0.04` 时返回 0.1。
@@ -249,25 +270,37 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 | `--command-source` | play 侧最高优先级（`fixed`/`random` 会关掉位置表与阶段兜底） |
 | `--fixed-height-F/H`、`--fixed-velocity` | **显式给出即生效**：`fixed` 下锁死；`schedule` 下在位置表算完后覆盖对应字段；`random` 下只固定这些字段、其余按阶段采样 |
 | `--stage` | 显式阶段在建环境前解析，且在 `runner.load` **之后**最终生效（基类 load 会用检查点的步数覆盖计数器） |
-| `--enable-collision` | 显式 > 检查点 `hole_state.collision` > 按最终阶段推断 |
+| `--enable-collision` | **默认值是 `False`（不是 `None`）**，因此不显式传参时"检查点 `hole_state.collision`"与"按阶段推断"两级都会被跳过、碰撞一律关。想走检查点记录必须显式传 `--enable-collision None`；想强制开启传 `--enable-collision True` |
 | 板几何/接触参数 | 检查点 `hole_state.layout` 会在建环境前应用（`apply_saved_layout`） |
+| `--show-obstacles`（默认 `True`） | **只影响外观**：`--no-show-obstacles` 把三块板的 `rgba` 设为 `(0,0,0,0)`（`set_obstacle_visibility`），`contype/conaffinity` 不变、碰撞照常生效，便于在看不到板的情况下观察策略的低头/抬身时机。隐藏时文件名后缀加 `noobs` |
 
 `fixed_height_F/H` 的默认值是 `None`：**只有 `fixed` 模式才补 0.055**，
 以免把 schedule 的位置表或 random 的采样锁死。
 
-## 6. 奖励与课程（3 段）
+## 6. 奖励与课程（4 段）
 
-权重集中在 `curriculums.RewardWeightCurriculum.weight_stages`，`env_cfg` 里一律 1.0。
+权重集中在 `curriculums._CURVES`（每条曲线 4 档，按 iter 落在 `_STAGES = (0, 1000, 2000, 3000)`
+的第几档取值），`env_cfg` 里 13 个 `RewardTermCfg` 的 `weight` 一律 1.0。
 
-| 阶段阈值（步） | iter | body_contact | height | mimic_pos | height_sigma | enable_holes |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0–999 | 0 | 2.5 | 10 | 500 | False |
-| 24000 | 1000–1999 | 0 | 2.5 | 10 | 1000 | False |
-| 48000 | 2000–2999 | **1** | 5.0 | 10 | 1000 | False |
-| 72000 | 3000–3999 | 1 | **10.0** | 10 | 1000 | **True** |
+| 阶段阈值（步） | iter | body_contact | height | velocity(vel) | orientation | smoothness | mimic_pos |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0–999 | 0 | 2.5 | 5.0 | 2.0 | 0.1 | 14.0 |
+| 24000 | 1000–1999 | 0 | 2.5 | 5.0 | 2.0 | 0.2 | 14.0 |
+| 48000 | 2000–2999 | **1.0** | 5.0 | 5.0 | **4.0** | **0.5** | 14.0 |
+| 72000 | 3000–3999 | 1.0 | **10.0** | **10.0** | 4.0 | **1.0** | 14.0 |
 
-12 个奖励项注册在 `env_cfg.rewards`（`update` 一项挂课程钩子）。
-跑满 4000 iter（96000 步）时生效的是第 4 段。
+σ 曲线：`mimic_pos_sigma` = 5.0 / **10.0** / 10.0 / **5.0**，`mimic_vel_sigma` 恒 0.1，
+`height_sigma` = **500 / 1000 / 1000 / 1000**。不随阶段变的还有 `mimic_vel`(5.0)、
+`foot_clearance`(1.0)、`reached`(1.0)、`angle`(1.0)。
+
+**13 个奖励项**注册在 `env_cfg.rewards`（`mimic_pos / mimic_vel / velocity / height /
+foot_clearance / angle / orientation / smoothness / body_contact / update / stop / reached`
+共 12 项参与打分，`update` 只挂课程钩子、恒返回 0）。跑满 4000 iter（96000 步）时生效的是第 4 段。
+
+`_CURVES` 里还有 `height_sigma`、`mimic_pos_sigma`、`mimic_vel_sigma` 三条非权重曲线，
+以及若干**已定义但未注册**的项（`energy` / `cot` / `joint_acc` / `y_offset` / `joint_limits` /
+`action_acc`），它们的取值在 `_CURVES` 里查不到、会落到 `get_curriculum_reward_weight`
+的默认 1.0。
 
 ### 课程实现形态（2026-09 起与 Backup 任务统一）
 
@@ -275,15 +308,13 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 
 - `_STEPS_PER_ITER = 24`（200 Hz，与 `rl_cfg.num_steps_per_env` 一致）；
 - `_STAGES = (0, 1000, 2000, 3000)`：阶段边界用 **iter** 表示（`STAGE1_1_ITER` /
-  `STAGE1_2_ITER` / `STAGE1_3_ITER`），落在第几档就取 `_CURVES` 里对应下标的值；
-- `_CURVES`：每个奖励项 / σ 一条曲线，权重不变的阶段重复同一个值（如 `mimic_pos` 四档都是 10.0）；
-- `should_enable_holes(step)` 用 `ENABLE_HOLES_ITER = 3000` 判定（原实现是权重表里放
-  `enable_holes` 布尔键）；`update_holes()` 按该布尔量切换实体；
+  `STAGE1_2_ITER` / `STAGE1_3_ITER`），这三个常量**直接从 `config.py` 导入**，与
+  `command.py` 的阶段判定是同一来源；
+- `_CURVES`：每个奖励项 / σ 一条曲线，权重不变的阶段重复同一个值（如 `mimic_pos` 四档都是 14.0）；
+- `should_enable_holes(step)` 用 `ENABLE_HOLES_ITER = STAGE3_END_ITER = 3000` 判定；
+  原先的 `update_holes()`（对已编译 spec 调 `enable_collision()`）**已删除**，实际切换由
+  `rl/runner.py` 重建环境完成（见 §5）；
 - 保留 `weight_stages` 属性作为**兼容视图**（按 iter×24 生成阈值 → 权重），旧脚本与诊断不用改。
-
-参数与重构前逐键一致（4 段 × 13 项已逐项对拍）。注意 `command.py` 的命令阶段边界
-（`STAGE1_END = STAGE2_END = 24`、`STAGE3_END = 96000`）是**另一套刻度**（决定命令来源），
-与这里的奖励课程边界互不影响。
 
 ## 7. 本次适配项（相对 Backup 原码）
 
@@ -348,17 +379,80 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 
 ## 9. 注意与未决项
 
-1. **训练时限高板实际不碰撞**：`contype=0` 编译期固化，`enable_holes` 的运行期开关无效。
-   要真正启用实体碰撞，需要像其他任务那样"按阶段重建环境"；旧版没有这套机制，本次未加。
-2. **stage 2 不可达**：`STAGE1_END = STAGE2_END = 24`，第 2 个控制步起即为 stage 3，
-   `STAGE2_HEIGHT_VALUES`（含 0.02 档）不会被采样到。
-3. **`body_contact` 的 x 区间是硬编码的**，与三块板位置（0.2/0.6/1.2）绑定；
-   改板位置必须同步改 `rewards.py` 里的阈值。
-4. **`BASE_SPEED = 0.25`**：旧版未按步态能力标定，实测命令速度可能高于参考步态的行走能力。
-5. **200 Hz 与 24 步/iter**：每 iter 只推进 0.12 s 仿真，20 s 回合需 167 iter，
+1. **`body_contact` 的虚拟阈值跟随实际几何**（`hole_geometry(env)`），但 **x 区间之外没有约束**：
+   板体之外机器人可以任意高度通过，虚拟净空只防"穿过板"。
+2. **`BASE_SPEED = 0.2`**（不再是 0.25）：按 `BASE_HEIGHT + 名义步频` 标定；但位置表里
+   速度 = `BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT`，第 1 段 h_F=0.02 时命令只有 **0.073 m/s**，
+   实测策略跑不出这个速度（见 §10）。
+3. **200 Hz 与 24 步/iter**：每 iter 只推进 0.12 s 仿真，20 s 回合需 167 iter，
    4000 iter 全程约 24 个完整回合 —— 与其他任务（50 Hz）样本量口径不同，比较时注意。
-6. **未注册项**：旧版还有若干未注册的奖励函数（`energy`/`cot`/`joint_acc`/`base_y_offset`/
-   `limits`/`action_acc`），本次按原样保留为可选项，未加入 `env_cfg.rewards`。
-7. **`mdp/indices.py` 是沿用项**（非旧码）：旧版把关节/site 索引硬编码在 `reference.py` /
-   `rewards.py` / `events.py` 里，本次保持原样；`indices.py` 只被回放脚本用于按名取
-   F/H 躯干 id，不影响训练口径。
+4. **未注册项**：`energy` / `cot` / `joint_acc` / `base_y_offset` / `limits` / `action_acc`
+   保留为可选项，未加入 `env_cfg.rewards`；它们的权重不在 `_CURVES` 里，一旦注册会拿到默认 1.0，
+   注册前应先补曲线。
+5. **`reached` 是事实上的死项**：目标 x=1.5、σ=10，距离 1.5 m 时奖励 `exp(-22.5) ≈ 1.7e-10`，
+   相当于 0。实测阶段 3/4 该项恒为 0.000（§10）。
+6. **`foot_clearance` 与位置表不匹配**：该奖励只在 mode 0（前后肢都 ≥ 0.04）触发，而位置表
+   第 1 段 h_F=0.02 使 robot 一出生就处于 mode 1，第 2 段 h_H=0.02 仍是单低——**位置表全程没有
+   mode 0 段**，所以阶段 3/4 该项恒为 0（实测 2500 iter 后 0.000）。
+7. **`mdp/indices.py` 已覆盖关节/site/足端**，但 `rewards.py` 的 `f_body_id` / `h_body_id`
+   仍写死字面量 4 / 24（`body_link_pos_w[:, 4]`、`[:, 24]`、`[:, 4]` 等 6 处），
+   违反 AGENTS.md"索引不硬编码"。实测解析结果确实等于 4 / 24，所以**当前结果正确**，
+   但 `indices.py` 里的 `resolve_model_indices` 已解析出 `f_body_id` / `h_body_id`，应当改用。
+
+## 10. 当前训练状态（实测）
+
+`logs/rsl_rl/SQuRo_Hole/2026-10-01_15-36-52`，跑满 4000 iter（96000 步）：
+
+| 指标 | 500 iter | 2000 iter | 3999 iter | 解读 |
+| --- | --- | --- | --- | --- |
+| `Train/mean_reward` | 266 | 407 | **709** | 单调上升 |
+| `Train/mean_episode_length` | 1707 | 2000 | 2000 | 走满（不摔） |
+| `Episode_Termination/fallen` | 0.25 | 0.00 | 0.00 | 后期不触发跌倒终止 |
+| `Episode_Reward/mimic_pos` | 11.94 | 11.77 | 12.74 (/14) | 关节模仿 91% |
+| `Episode_Reward/height` | 2.35 | 2.44 | 9.35 (/10) | 高度跟踪良好 |
+| `Metrics/height_F_error_mean` | 0.005 | 0.008 | 0.010 | 前躯干高度误差 1 cm |
+| `Episode_Reward/velocity` | 1.33 | 3.55 | 6.75 (/10) | 速度奖励上去了 |
+| **`Metrics/actual_vel_x_mean`** | 0.036 | 0.071 | **0.002** | ⚠️ **策略几乎原地不动** |
+| `Metrics/cmd_vel_x_mean` | 0.146 | 0.087 | 0.073 | 命令速度（位置表第 1 段） |
+| `Episode_Reward/reached` | 0.008 | 0.221 | 0.000 | 死项（§9.5） |
+| `Episode_Reward/foot_clearance` | 0.945 | 0.692 | 0.000 | 死项（§9.6） |
+
+**核心问题：学到的策略是"压低姿态站着不动"**，不是"走"：末段命令 0.073 m/s，
+实测机体前进速度只有 **0.002 m/s**，而 `velocity` 奖励仍有 6.75/10、
+`mimic_pos` 有 12.74/14、`height` 有 9.35/10。也就是说**高度跟踪与关节模仿的收益
+足以覆盖速度不足的损失**（`velocity` 里 `min_speed_mask` 只对 `|v|<0.01` 且命令 >0.01
+给 −1 的惩罚，权重曲线此时为 10.0，实测仍在 6.75 说明该项并未把策略推到动起来）。
+
+复现命令（无窗自检，确认策略确实不动）：
+
+```powershell
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file logs/rsl_rl/SQuRo_Hole/2026-10-01_15-36-52/model_3999.pt --smoke_steps 200 --no-video
+```
+
+下一步可能的着力点（**未做实验，仅列出假设**）：
+位置表第 1 段的 0.073 m/s 命令是否在参考步态能力之下 / `velocity` 的 σ=100 是否过严 /
+`reached` 与 `foot_clearance` 是两个废项、等于 12 项奖励里少了 2 项引导。
+
+检查点 `model_3999.pt` 的 `hole_state`：`version=1, stage=4, collision=True`，
+三块板 `contype/conaffinity = 1/1`，`env_state.common_step_counter = 96000`
+—— **阶段 4 的真实碰撞重建机制在本次训练中确实触发过并生效**（推翻旧文档"未实现"的说法）。
+
+## 11. 已知偏差（文档/脚本 vs 代码）
+
+以下是 2026-10 复核时仍未消除的偏差，**都只影响自检输出与文档可信度，不影响训练口径**：
+
+1. **`verify_hole_baseline` 的脊柱读数取错列**：脚本读 `spine_pos[mode, h_idx][:, 2].mean()`，
+   但 `spine_pos` 的列序是 `[F_spine1, F_body, H_spine1, H_body]` → 列 2 是 `H_spine1`，
+   而代码写入的是 `spine_angles[:, 2]`（表列 10 = `F_spine1`）。因此脚本打印的脊柱值**恒为 0.0000**，
+   与 `reference.py` 的真实取值（F_spine1 = −0.65）不符。正确读法是 `sp[:, 10]`。
+2. **`verify_hole_baseline` 的后腿幅度读错张量列**：`hind_pos[mode, h_idx][:, 0]` 恒为 0
+   （`hind_pos` 只在列 4:8 有值），所以脚本打印的后腿幅度**全是 0**。
+   正确读法是 `hind_pos[mode, h_idx][:, 4]`。
+   两处一错，脚本的"参考表"表格自事件起就与真实表不符；§3 的表是本次用正确列序重算的。
+3. **`compute_angle_reward` 的"都高"分支用误差之和而非均值**：
+   单侧分支用 `|roll|`，都高分支用 `|roll_F| + |roll_H|`，等效把容差收紧一倍。
+   实测该分支能正常给出分值（训练中 `angle` 从 0.003 升到 0.59），**不影响运行**，
+   但验收日志里 `Mean Error: 360.8°` 就是它（180° 偏差被加倍成 360° 后仍落在
+   `min(err, 2π−err)` 的范围内）。
+4. **脊柱"前后都压"未实现**：`reference.py` 只写一列，注释写"后脊柱关节"但实际落到 F_spine1；
+   H_spine1 始终为 0。若要前后都压，需要同时写表列 10 与 12。
