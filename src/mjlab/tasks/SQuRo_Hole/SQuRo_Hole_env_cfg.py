@@ -34,16 +34,15 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 观测空间配置
     policy_terms = {
-        "actions": ObservationTermCfg(func=mdp.last_action, history_length=3),
-        "joint_pos": ObservationTermCfg(func=mdp.joint_pos_rel),
-        "joint_vel": ObservationTermCfg(func=mdp.joint_vel_rel),
-        "joint_acc": ObservationTermCfg(func=mdp.joint_acc),
-        "base_pos": ObservationTermCfg(func=mdp.base_pos),
-        "base_lin_vel_w": ObservationTermCfg(func=mdp.base_lin_vel_w),
-        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),     
-        "heading": ObservationTermCfg(func=mdp.heading),
+        "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
         "ref_joint_vel": ObservationTermCfg(func=mdp.ref_joint_vel),
+        "actuator_pos": ObservationTermCfg(func=mdp.actuator_pos),
+        "actuator_vel": ObservationTermCfg(func=mdp.actuator_vel),
+        "actuator_force": ObservationTermCfg(func=mdp.actuator_force),
+        "base_ang_vel": ObservationTermCfg(func=mdp.base_ang_vel),
+        "base_lin_vel": ObservationTermCfg(func=mdp.base_lin_vel),
+        "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "hole_cmd"}),
     }
 
