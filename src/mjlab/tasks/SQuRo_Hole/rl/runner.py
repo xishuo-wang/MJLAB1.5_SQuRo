@@ -21,6 +21,31 @@ from rsl_rl.utils import check_nan
 HOLE_STATE_VERSION = 1
 
 
+# 读取 checkpoint 里记录的 hole_state / env_state (回放侧在建环境前要用)
+def read_hole_state(checkpoint_path) -> dict:
+    try:
+        loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+    except Exception as exc:
+        print(f"[WARN] 读取检查点信息失败, 将按文件名轮次推算: {exc}")
+        return {}
+    infos = loaded.get("infos") or {}
+    state = infos.get("hole_state") if isinstance(infos, dict) else None
+    return state if isinstance(state, dict) else {}
+
+
+# 读取 checkpoint 里记录的全局步数
+def read_env_step(checkpoint_path) -> int | None:
+    try:
+        loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    infos = loaded.get("infos") or {}
+    env_state = infos.get("env_state") if isinstance(infos, dict) else None
+    if isinstance(env_state, dict) and env_state.get("common_step_counter") is not None:
+        return int(env_state["common_step_counter"])
+    return None
+
+
 class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     env: RslRlVecEnvWrapper
 
@@ -177,6 +202,24 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[INFO] 检查点 hole_state: 版本={saved.get('version')}, "
                   f"stage={saved.get('stage')}, 实际碰撞={saved.get('collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
+            # 校验保存的几何/接触参数与当前场景是否一致 (不一致时训练数据口径会变)
+            mismatch = []
+            current = {d["name"]: d for d in self._hole_scene_state()}
+            for d in saved.get("layout") or []:
+                cur = current.get(d.get("name"))
+                if cur is None:
+                    continue
+                for f in ("position", "size", "solref", "solimp"):
+                    a = d.get(f)
+                    b = cur.get(f)
+                    if a is None and b is None:
+                        continue
+                    if a != b:
+                        mismatch.append(f"{d.get('name')}.{f}: 保存={a} 当前={b}")
+            if mismatch:
+                print("[WARN] 检查点记录的板几何/接触参数与当前场景不一致, 精度口径可能变化:")
+                for line in mismatch:
+                    print(f"       {line}")
 
         if self._hole_change_needed():
             print(f"[INFO] 续训: 实际碰撞={self._hole_compiled_collision()} "
@@ -184,17 +227,35 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_hole_rebuild(refresh_obs=False)
         return infos
 
-    # 保存模型 (记录**实际编译生效**的碰撞与几何, 供续训/回放复现)
+    # 记录**实际场景里**的板几何与碰撞开关 (不是全局默认表), 供续训/回放复现
+    def _hole_scene_state(self) -> dict:
+        scene = self.env.unwrapped.scene
+        layout = []
+        for key in ("hole1", "hole2", "hole3"):
+            ent = scene.entities.get(key)
+            if ent is None:
+                continue
+            layout.append({
+                "name": ent.cfg.name,
+                "position": list(ent.cfg.position),
+                "size": list(ent.cfg.size),
+                "contype": int(ent.cfg.contype),
+                "conaffinity": int(ent.cfg.conaffinity),
+                "solref": (list(ent.cfg.solref) if getattr(ent.cfg, "solref", None) is not None
+                           else None),
+                "solimp": (list(ent.cfg.solimp) if getattr(ent.cfg, "solimp", None) is not None
+                           else None),
+            })
+        return layout
+
+    # 保存模型 (记录实际编译生效的碰撞与几何)
     def save(self, path: str, infos=None):
         step = int(self.env.unwrapped.common_step_counter)
         extra = {
             "version": HOLE_STATE_VERSION,
             "stage": get_current_stage(step),
             "collision": self._hole_compiled_collision(),
-            "layout": [
-                {"name": n, "x": x, "y": y, "bottom_z": bz, "half_len": hl, "half_t": ht}
-                for n, x, y, bz, hl, ht in HOLE_LAYOUT
-            ],
+            "layout": self._hole_scene_state(),
         }
         super().save(path, infos={**(infos or {}), "hole_state": extra})
         try:

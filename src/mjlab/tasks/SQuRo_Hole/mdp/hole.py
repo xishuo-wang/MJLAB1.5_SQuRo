@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import mujoco
 from mjlab.entity import Entity, EntityCfg
 
@@ -120,10 +120,26 @@ def build_hole_entities(enable_collision: bool,
     return entities
 
 
-# 改写场景里的三块板 (供 runner 重建与回放选择配置)
-def configure_hole_entities(env_cfg, enable_collision: bool) -> dict:
+# 改写场景里的三块板: 保留已有实体的位置/尺寸/接触参数, 只替换碰撞掩码。
+# 重建时不能整体替换为默认几何, 否则会丢掉命令行或脚本自定义的板位与 solref/solimp
+def configure_hole_entities(env_cfg, enable_collision: bool,
+                            solref: tuple[float, ...] | None = None,
+                            solimp: tuple[float, ...] | None = None) -> dict:
+    mask = 1 if enable_collision else 0
     entities = dict(env_cfg.scene.entities)
-    entities.update(build_hole_entities(enable_collision=enable_collision))
+    defaults = build_hole_entities(enable_collision=enable_collision,
+                                   solref=solref, solimp=solimp)
+    for key, fresh in defaults.items():
+        existing = entities.get(key)
+        if isinstance(existing, HoleEntityCfg):
+            keep: dict = {"contype": mask, "conaffinity": mask}
+            if solref is not None:
+                keep["solref"] = fresh.solref
+            if solimp is not None:
+                keep["solimp"] = fresh.solimp
+            entities[key] = replace(existing, **keep)
+        else:
+            entities[key] = fresh
     env_cfg.scene.entities = entities
     return entities
 

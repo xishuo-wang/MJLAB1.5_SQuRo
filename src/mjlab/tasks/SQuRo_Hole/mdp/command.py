@@ -256,9 +256,19 @@ class HoleCommand(CommandTerm):
         height_scale = effective_height / BASE_HEIGHT        # [n_envs]
         vel_x = BASE_SPEED * height_scale                    # [n_envs]
         
+        # 显式值优先于位置表: 显式指定的字段在位置表算完后覆盖
+        if self.cfg.fixed_height_F is not None:
+            height_F = torch.full_like(height_F, float(self.cfg.fixed_height_F))
+        if self.cfg.fixed_height_H is not None:
+            height_H = torch.full_like(height_H, float(self.cfg.fixed_height_H))
+        if self.cfg.fixed_velocity is not None:
+            vel_x = torch.full_like(vel_x, float(self.cfg.fixed_velocity))
+        
         # 批量计算角度
         both_high = (height_F >= HEIGHT_THRESHOLD) & (height_H >= HEIGHT_THRESHOLD)
         angle = torch.zeros(n_envs, device=device)
+        if self.cfg.fixed_angle is not None:
+            angle = torch.full_like(angle, float(self.cfg.fixed_angle))
         
         # 批量更新命令张量
         self.vel_command_w[env_ids, 0] = vel_x

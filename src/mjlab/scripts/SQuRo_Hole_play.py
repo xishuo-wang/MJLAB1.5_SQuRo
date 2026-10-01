@@ -16,6 +16,16 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.command import HEIGHT_THRESHOLD
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    STAGE1_END,
+    STAGE2_END,
+    STAGE3_END,
+    STEPS_PER_ITER,
+    get_current_stage,
+    stage_requires_collision,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.hole import configure_hole_entities
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     get_reference_joint_pos,
@@ -41,10 +51,10 @@ class PlayConfig:
     record_data: bool = True
     # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
     # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
-    command_source: Literal["schedule", "fixed", "random"] = "random"
+    command_source: Literal["schedule", "fixed", "random"] = "fixed"
     fixed_velocity: float | None = None
-    fixed_height_F: float | None = None
-    fixed_height_H: float | None = None
+    fixed_height_F: float | None = 0.055
+    fixed_height_H: float | None = 0.02
     stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
     enable_collision: bool | None = None   # None = 按 cfg (训练默认关, 阶段 4 才开)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
@@ -265,35 +275,45 @@ def run_play(cfg: PlayConfig):
         env_cfg.viewer.width = cfg.video_width
 
     # 命令来源 (play 侧最高优先级): 显式覆盖 env_cfg 里的位置表设定。
-    # schedule = 位置表; fixed = 锁死给定值; random = 按阶段随机采样
+    # schedule = 位置表 (fixed_* 仍可覆盖对应字段); fixed = 锁死给定值; random = 按阶段随机采样
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
         if cfg.command_source != "schedule":
-            # 关掉配置里的位置表与时间表, 并禁用 stage==3 的内置兜底
+            # 关掉配置里的位置表与时间表, 并禁用 stage>=3 的内置兜底
             cmd_cfg.use_position_schedule = False  # type: ignore[attr-defined]
             cmd_cfg.position_schedule = None  # type: ignore[attr-defined]
             cmd_cfg.use_height_schedule = False  # type: ignore[attr-defined]
             cmd_cfg.height_schedule = None  # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
-        if cfg.fixed_velocity is not None:
-            cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
-        if cfg.fixed_height_F is not None:
-            cmd_cfg.fixed_height_F = cfg.fixed_height_F  # type: ignore[attr-defined]
-        if cfg.fixed_height_H is not None:
-            cmd_cfg.fixed_height_H = cfg.fixed_height_H  # type: ignore[attr-defined]
+        if cfg.command_source != "random":
+            # fixed 与 schedule 才写显式值; random 必须留空, 否则随机评估被固定值锁死
+            if cfg.fixed_velocity is not None:
+                cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
+            if cfg.fixed_height_F is not None:
+                cmd_cfg.fixed_height_F = cfg.fixed_height_F  # type: ignore[attr-defined]
+            if cfg.fixed_height_H is not None:
+                cmd_cfg.fixed_height_H = cfg.fixed_height_H  # type: ignore[attr-defined]
         print(f"[INFO] 命令来源 = {cfg.command_source}"
               + (f" (固定 h_F={cfg.fixed_height_F}, h_H={cfg.fixed_height_H}, "
-                 f"vel={cfg.fixed_velocity})" if cfg.command_source != "schedule" else " (8 段位移位置表)"))
+                 f"vel={cfg.fixed_velocity})" if cfg.command_source == "fixed" else
+                 (" (8 段位移位置表)" if cfg.command_source == "schedule" else " (按阶段随机采样)")))
 
-    # 限高板碰撞开关 (编译期固化): 显式传入优先, 否则用 cfg 默认
-    # 旧版任务把开关直接写在 env_cfg 里 (训练关/回放开), 这里就地改写实体
+    # 限高板碰撞 (编译期固化, 必须在建环境前定好)。解析优先级:
+    #   显式 --enable-collision > 检查点记录的实际碰撞 > 阶段推断
+    saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
     if cfg.enable_collision is not None:
-        mask = 1 if cfg.enable_collision else 0
-        for key, ent in env_cfg.scene.entities.items():
-            if key.startswith("hole"):
-                ent.contype = mask # type: ignore
-                ent.conaffinity = mask # type: ignore
-        print(f"[INFO] 限高板碰撞 = {'开' if cfg.enable_collision else '关'}")
+        collision, src = cfg.enable_collision, "命令行显式指定"
+    elif saved_hole.get("collision") is not None:
+        collision, src = bool(saved_hole["collision"]), "检查点 hole_state"
+    else:
+        stage_for_collision = cfg.stage if cfg.stage is not None else (
+            get_current_stage(read_env_step(resume_path) or 0) if resume_path is not None else 1)
+        collision, src = stage_requires_collision(stage_for_collision), "按阶段推断"
+    configure_hole_entities(env_cfg, enable_collision=collision)
+    print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {src})")
+    if saved_hole:
+        print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
+              f"stage={saved_hole.get('stage')}, 记录碰撞={saved_hole.get('collision')}")
 
     # 构建输出名后缀: command_source 始终带上 (三选一), 其余只记录非默认配置
     suffix_parts = [cfg.command_source]
@@ -319,19 +339,7 @@ def run_play(cfg: PlayConfig):
     # render_mode 必须传进环境, 否则 VideoRecorder 抓不到帧 (rgb_array 才录)
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
-    # 阶段对齐: 命令来源/课程权重都由 common_step_counter 决定, 强制到指定阶段的第一轮
-    if cfg.stage is not None:
-        from mjlab.tasks.SQuRo_Hole.mdp.command import (
-            STAGE1_END, STAGE2_END, STAGE3_END,
-        )
-        stage_start = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage]
-        env.common_step_counter = stage_start
-        print(f"[INFO] 强制阶段 {cfg.stage} (common_step_counter={stage_start})")
-    elif resume_path is not None:
-        train_iter = extract_iter_from_checkpoint(resume_path)
-        env.common_step_counter = max(0, train_iter - 10) * 24
-        print(f"[INFO] 按 checkpoint 推断阶段: iter {train_iter} → "
-              f"common_step_counter={env.common_step_counter}")
+    # 阶段对齐延后到 actor 加载之后 (基类 load 会用检查点的 common_step_counter 覆盖)
 
     data_recorder = None
     if cfg.record_data:
@@ -374,6 +382,25 @@ def run_play(cfg: PlayConfig):
         runner = runner_cls(env, asdict(agent_cfg), str(log_dir), device=device)
         runner.load(str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device)
         policy = runner.get_inference_policy(device=device)
+        # 基类 load 会恢复检查点的 common_step_counter, 显式阶段必须在它之后最终生效
+        env = runner.env
+
+    # 阶段对齐: 命令来源/课程权重都由 common_step_counter 决定
+    if cfg.stage is not None:
+        stage_start = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage]
+        env.unwrapped.common_step_counter = stage_start
+        print(f"[INFO] 强制阶段 {cfg.stage} (common_step_counter={stage_start})")
+    elif resume_path is not None:
+        step = read_env_step(resume_path)
+        if step is not None:
+            env.unwrapped.common_step_counter = step
+            print(f"[INFO] 恢复检查点步数 {step} (iter {step // STEPS_PER_ITER}, "
+                  f"stage {get_current_stage(step)})")
+        else:
+            train_iter = extract_iter_from_checkpoint(resume_path)
+            env.unwrapped.common_step_counter = max(0, train_iter - 10) * STEPS_PER_ITER
+            print(f"[INFO] 按 checkpoint 文件名推断: iter {train_iter} → "
+                  f"common_step_counter={env.unwrapped.common_step_counter}")
 
     if cfg.smoke_steps is not None:
         # 无窗自检: 推 N 步打印命令/高度统计
