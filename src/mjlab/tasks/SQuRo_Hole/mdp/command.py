@@ -27,13 +27,13 @@ from .config import (
 # 第三阶段固定位置表（基于移动距离, 任务专属: 位移 → 前肢高度, 后肢高度）
 STAGE3_POSITION_SCHEDULE = [
     (0.0, 0.02, 0.05),
-    (0.2, 0.06, 0.02),
-    (0.32, 0.06, 0.06),
+    (0.2, 0.055, 0.02),
+    (0.32, 0.055, 0.055),
     (0.4, 0.04, 0.04),
-    (0.8, 0.06, 0.06),
+    (0.8, 0.055, 0.055),
     (1.0, 0.02, 0.05),
-    (1.2, 0.06, 0.02),
-    (1.32, 0.06, 0.06),
+    (1.2, 0.055, 0.02),
+    (1.32, 0.055, 0.055),
 ]
 
 
@@ -205,7 +205,7 @@ class HoleCommand(CommandTerm):
                 return height_F, height_F
         
         # 如果无法采样到合理组合，返回默认值
-        return torch.tensor(0.06, device=device), torch.tensor(0.06, device=device)
+        return torch.tensor(0.055, device=device), torch.tensor(0.055, device=device)
 
     def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
         effective_height = min(height_F.item(), height_H.item())
