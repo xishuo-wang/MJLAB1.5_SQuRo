@@ -3,6 +3,7 @@
 
 import re
 import tyro
+import math
 import torch
 import pandas as pd
 from pathlib import Path
@@ -54,14 +55,14 @@ class PlayConfig:
     record_data: bool = True
     # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
     # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
-    command_source: Literal["schedule", "fixed", "random"] = "schedule"
+    command_source: Literal["schedule", "fixed", "random"] = "fixed"
     fixed_velocity: float | None = None
     # 默认 None: 只有 fixed 模式才补默认高度, schedule/random 只在显式给出时覆盖
-    fixed_height_F: float | None = None
-    fixed_height_H: float | None = None
+    fixed_height_F: float | None = 0.055
+    fixed_height_H: float | None = 0.055
     stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
     enable_collision: bool | None = False   # None = 按 cfg (训练默认关, 阶段 4 才开)
-    show_obstacles: bool = True            # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
+    show_obstacles: bool = False            # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
     smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
 
 
@@ -133,6 +134,8 @@ class JointDataRecorder:
         self.foot_names = ['FL', 'FR', 'HL', 'HR']
         self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
         self._foot_site_ids = None
+        self._joint_ids_resolved = None   # ← 新增: 按名称缓存的关节 id
+
         # 参考表 12 列顺序: 前腿(4) + 后腿(4) + 脊柱(4)
         self.ref_names = ['FL_shoulder', 'FL_elbow', 'FR_shoulder', 'FR_elbow',
                           'HL_hip', 'HL_knee', 'HR_hip', 'HR_knee',
@@ -145,12 +148,13 @@ class JointDataRecorder:
         resolve_model_indices(asset)
         idx = 0
 
+        # ---------- 动作 ----------
         if actions is not None:
             for i in range(actions.shape[1]):
                 name = self.action_names[i] if i < len(self.action_names) else f'action_{i}'
                 record[f'{name}_action'] = float(actions[0, i].item())
 
-        # 足端接触力与位置
+        # ---------- 足端接触力与位置 ----------
         contact_sensor = unwrapped.scene["feet_ground_contact"]
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)
         if self._foot_site_ids is None:
@@ -159,33 +163,85 @@ class JointDataRecorder:
         for i, name in enumerate(self.foot_names):
             force = feet_contact[idx, i * 3: i * 3 + 3]
             record[f'contact_{name}_mag'] = float(torch.norm(force).item())
+            record[f'contact_{name}_x'] = float(force[0].item())
+            record[f'contact_{name}_y'] = float(force[1].item())
+            record[f'contact_{name}_z'] = float(force[2].item())
             record[f'foot_{name}_x'] = float(foot_pos[i, 0].item())
+            record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
             record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
 
-        # 36 个关节的全量状态 (旧版观测口径)
-        record['base_pos_x'] = float(asset.data.root_link_pos_w[idx, 0].item())
-        record['base_pos_y'] = float(asset.data.root_link_pos_w[idx, 1].item())
-        record['base_pos_z'] = float(asset.data.root_link_pos_w[idx, 2].item())
-        record['base_vel_x'] = float(asset.data.root_link_lin_vel_w[idx, 0].item())
-        record['base_vel_y'] = float(asset.data.root_link_lin_vel_w[idx, 1].item())
-        record['base_vel_z'] = float(asset.data.root_link_lin_vel_w[idx, 2].item())
+        # ---------- 基座位姿/速度/角速度 ----------
+        base_pos = asset.data.root_link_pos_w[idx]
+        base_lin_vel = asset.data.root_link_lin_vel_w[idx]
+        base_ang_vel = asset.data.root_link_ang_vel_w[idx]
+        record['base_pos_x'] = float(base_pos[0].item())
+        record['base_pos_y'] = float(base_pos[1].item())
+        record['base_pos_z'] = float(base_pos[2].item())
+        record['base_vel_x'] = float(base_lin_vel[0].item())
+        record['base_vel_y'] = float(base_lin_vel[1].item())
+        record['base_vel_z'] = float(base_lin_vel[2].item())
+        # 分析脚本使用的别名
+        record['base_lin_vel_x'] = float(base_lin_vel[0].item())
+        record['base_lin_vel_y'] = float(base_lin_vel[1].item())
+        record['base_lin_vel_z'] = float(base_lin_vel[2].item())
+        record['base_ang_vel_x'] = float(base_ang_vel[0].item())
+        record['base_ang_vel_y'] = float(base_ang_vel[1].item())
+        record['base_ang_vel_z'] = float(base_ang_vel[2].item())
 
-        # 前后躯干高度 (奖励口径: F_body / H_body)
+        # ---------- 朝向 ----------
+        def _quat_to_yaw(q):
+            w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+            return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+        f_quat = asset.data.body_link_quat_w[idx, _MODEL_INDICES.f_body_id]
+        h_quat = asset.data.body_link_quat_w[idx, _MODEL_INDICES.h_body_id]
+        f_body_yaw = _quat_to_yaw(f_quat)
+        h_body_yaw = _quat_to_yaw(h_quat)
+        record['f_body_heading'] = f_body_yaw
+        record['h_body_heading'] = h_body_yaw
+        # 分析脚本回退分支用的 'heading': 用根链接四元数算; 无该属性时退用 f_body_yaw
+        if hasattr(asset.data, 'root_link_quat_w'):
+            record['heading'] = _quat_to_yaw(asset.data.root_link_quat_w[idx])
+        else:
+            record['heading'] = f_body_yaw
+
+        # ---------- 前后躯干高度 ----------
         f_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.f_body_id, 2].item())
         h_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.h_body_id, 2].item())
         record['F_body_height'] = f_height
         record['H_body_height'] = h_height
 
-        # 命令与参考
+        # ---------- 命令 ----------
         command = unwrapped.command_manager.get_command("hole_cmd")[idx]
         for i, name in enumerate(['vel_command_x', 'vel_command_y', 'vel_command_z',
                                   'height_F_command', 'height_H_command', 'angle_command']):
             record[name] = float(command[i].item())
-        record['mode'] = mode_of(float(command[3]), float(command[4])) # type: ignore
+        record['mode'] = mode_of(float(command[3]), float(command[4]))  # type: ignore
         record['height_F_error'] = f_height - float(command[3].item())
         record['height_H_error'] = h_height - float(command[4].item())
+        # 步态基频 (Hole 任务参考表固定 2.0 Hz, 与 config.BASE_FREQ 一致)
+        record['gait_freq_command'] = 2.0
 
-        ref_pos_all, ref_vel_all = get_reference_joint_state(unwrapped)  # 各 shape (num_envs, 14)
+        # ---------- 每个关节的 pos / vel / acc / torque ----------
+        if self._joint_ids_resolved is None:
+            self._joint_ids_resolved, _ = asset.find_joints(self.joint_names, preserve_order=True)
+        joint_ids = self._joint_ids_resolved
+        joint_pos_all = asset.data.joint_pos[idx, joint_ids]
+        joint_vel_all = asset.data.joint_vel[idx, joint_ids]
+        joint_acc_all = asset.data.joint_acc[idx, joint_ids] if hasattr(asset.data, 'joint_acc') else None
+        # actuator_force 的顺序与 self.joint_names 一一对应 (F_spine1 ... HR_knee)
+        actuator_force_all = asset.data.actuator_force[idx]
+
+        for i, name in enumerate(self.joint_names):
+            record[f'{name}_pos'] = float(joint_pos_all[i].item())
+            record[f'{name}_vel'] = float(joint_vel_all[i].item())
+            if joint_acc_all is not None:
+                record[f'{name}_acc'] = float(joint_acc_all[i].item())
+            if i < actuator_force_all.shape[0]:
+                record[f'{name}_torque'] = float(actuator_force_all[i].item())
+
+        # ---------- 参考 ----------
+        ref_pos_all, ref_vel_all = get_reference_joint_state(unwrapped)
         ref_pos = ref_pos_all[idx]
         ref_vel = ref_vel_all[idx]
         for i, name in enumerate(self.ref_names):
