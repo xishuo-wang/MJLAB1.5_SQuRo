@@ -24,10 +24,10 @@ _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 # 奖励权重课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "mimic_pos":                (14.0, 14.0, 14.0, 14.0),
+    "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
     "mimic_vel":                (5.0, 5.0, 5.0, 5.0),
     "vel":                      (5.0, 5.0, 5.0, 10.0),
-    "height":                   (2.5, 2.5, 5.0, 10.0),
+    "height":                   (2.5, 2.5, 5.0, 5.0),
     "foot_clearance":           (1.0, 1.0, 1.0, 1.0),
     "reached":                  (1.0, 1.0, 1.0, 1.0),
     "orientation":              (2.0, 2.0, 4.0, 4.0),
