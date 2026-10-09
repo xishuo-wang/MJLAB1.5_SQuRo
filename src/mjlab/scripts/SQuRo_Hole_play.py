@@ -185,8 +185,9 @@ class JointDataRecorder:
         record['height_F_error'] = f_height - float(command[3].item())
         record['height_H_error'] = h_height - float(command[4].item())
 
-        ref_pos, _ = get_reference_joint_state(unwrapped)[idx]
-        _, ref_vel = get_reference_joint_state(unwrapped)[idx]
+        ref_pos_all, ref_vel_all = get_reference_joint_state(unwrapped)  # 各 shape (num_envs, 14)
+        ref_pos = ref_pos_all[idx]
+        ref_vel = ref_vel_all[idx]
         for i, name in enumerate(self.ref_names):
             record[f'{name}_ref_pos'] = float(ref_pos[i].item())
             record[f'{name}_ref_vel'] = float(ref_vel[i].item())
