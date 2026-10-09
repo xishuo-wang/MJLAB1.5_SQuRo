@@ -104,10 +104,7 @@ class ModelIndices:
         "f_body_id", "h_body_id",
         "foot_site_ids",
         "f_body_site_ids", "h_body_site_ids",
-        "joint_ids", 
-        "joint_leg_ids", "joint_spn_ids", "joint_neck_ids",
-        "actuator_leg_ids", "actuator_spn_ids", "actuator_neck_ids",
-        "actuator_spn_lateral_id", "actuator_spn_body_ids",
+        "joint_ids",
     )
 
 
@@ -118,14 +115,6 @@ class ModelIndices:
         self.h_body_site_ids: tuple[int, ...] = ()
         self.foot_site_ids: tuple[int, ...] = ()
         self.joint_ids: tuple[int, ...] = ()
-        self.joint_leg_ids: tuple[int, ...] = ()
-        self.joint_spn_ids: tuple[int, ...] = ()
-        self.joint_neck_ids: tuple[int, ...] = ()
-        self.actuator_leg_ids: tuple[int, ...] = _ACT_LEG_IDS
-        self.actuator_spn_ids: tuple[int, ...] = _ACT_SPN_IDS
-        self.actuator_neck_ids: tuple[int, ...] = _ACT_NECK_IDS
-        self.actuator_spn_lateral_id: int = _ACT_F_SPINE1_ID
-        self.actuator_spn_body_ids: tuple[int, ...] = _ACT_SPN_ROLL_IDS
 
 _MODEL_INDICES = ModelIndices()
 
@@ -151,15 +140,6 @@ def resolve_model_indices(entity) -> None:
         f"只解析到 {len(joint_ids)}/{len(_ACT_JOINT_NAMES)} 个被控关节: "
         f"{list(joint_names)}")
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
-    # 前腿 4-7 / 后腿 10-13 / 脊柱 0-1,8-9 / 头颈 2-3
-    name_to_id = {
-        n: i for n, i in zip(_ACT_JOINT_NAMES, joint_ids, strict=True)}
-    _MODEL_INDICES.joint_leg_ids = tuple(
-        name_to_id[n] for n in _ACT_JOINT_NAMES[4:8] + _ACT_JOINT_NAMES[10:14])
-    _MODEL_INDICES.joint_spn_ids = tuple(
-        name_to_id[n] for n in _ACT_JOINT_NAMES[0:2] + _ACT_JOINT_NAMES[8:10])
-    _MODEL_INDICES.joint_neck_ids = tuple(
-        name_to_id[n] for n in _ACT_JOINT_NAMES[2:4])
 
     print("\n[SQuRo Hole] 模型索引解析完成:")
     print(f"  F_body_Link -> {_MODEL_INDICES.f_body_id}, H_body_Link -> {_MODEL_INDICES.h_body_id}")
