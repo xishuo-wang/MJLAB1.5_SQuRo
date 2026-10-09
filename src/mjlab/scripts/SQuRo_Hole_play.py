@@ -24,14 +24,12 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.hole import (
     apply_saved_layout,
-    configure_hole_entities,
     set_obstacle_visibility,
+    configure_hole_entities,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
-from mjlab.tasks.SQuRo_Hole.mdp.reference import (
-    get_reference_joint_state,
-)
 
 
 
@@ -52,12 +50,12 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    command_source: Literal["schedule", "fixed", "random"] = "fixed"
-    fixed_velocity: float | None = None
-    fixed_height_F: float | None = 0.055
-    fixed_height_H: float | None = 0.02
-    collision: bool | None = False          # None = 按 cfg (训练默认关, 阶段 4 才开)
-    obstacles_viz: bool = False             # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
+    command_source: Literal["schedule", "fixed", "random"] = "schedule"
+    fixed_velocity: float | None = None     # 期望速度
+    fixed_height_F: float | None = 0.055    # 期望前肢高度
+    fixed_height_H: float | None = 0.055    # 期望后肢高度
+    collision: bool | None = None           # 障碍物碰撞
+    obstacles_viz: bool = True              # 可视化障碍物
 
 
 
@@ -83,7 +81,7 @@ def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
 
 
 
-# 选择可写输出目录: 受限环境无法新建目录时退回系统临时目录
+# 选择可写输出目录
 def resolve_output_dir(preferred: Path) -> Path:
     import tempfile
     videos_dir = preferred / "videos"
@@ -240,7 +238,7 @@ class JointDataRecorder:
             if i < actuator_force_all.shape[0]:
                 record[f'{name}_torque'] = float(actuator_force_all[i].item())
 
-        # ---------- 参考 ----------
+        # 记录参考状态
         ref_pos_all, ref_vel_all = get_reference_joint_state(unwrapped)
         ref_pos = ref_pos_all[idx]
         ref_vel = ref_vel_all[idx]
@@ -335,36 +333,47 @@ def run_play(cfg: PlayConfig):
         env_cfg.viewer.width = cfg.video_width
 
     # 命令来源
-    fixed_hF = cfg.fixed_height_F
-    fixed_hH = cfg.fixed_height_H
-    if cfg.command_source == "fixed":
-        fixed_hF = 0.055 if fixed_hF is None else fixed_hF
-        fixed_hH = 0.055 if fixed_hH is None else fixed_hH
+    fixed_hF: float | None = None
+    fixed_hH: float | None = None
 
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
-        if cfg.command_source != "schedule":
-            # 关掉配置里的位置表与时间表, 并禁用 stage>=3 的内置兜底
-            cmd_cfg.use_position_schedule = False  # type: ignore[attr-defined]
-            cmd_cfg.position_schedule = None  # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False  # type: ignore[attr-defined]
-            cmd_cfg.height_schedule = None  # type: ignore[attr-defined]
+        if cfg.command_source == "schedule":
+            # 强制开启位置表 + stage>=3 兜底
+            cmd_cfg.use_position_schedule = True     # type: ignore[attr-defined]
+            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
+            cmd_cfg.stage_schedule_fallback = True   # type: ignore[attr-defined]
+            cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
+            print("[INFO] 命令来源 = schedule (8 段位移位置表, 忽略所有 fixed_* 字段)")
+
+        elif cfg.command_source == "fixed":
+            # 关闭位置表与时间表
+            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
+            cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
+            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
+            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
-        # 显式给出的字段一律写入 (schedule 下在位置表算完后覆盖, random 下只固定这些字段)
-        if cfg.fixed_velocity is not None:
+            fixed_hF = 0.055 if cfg.fixed_height_F is None else cfg.fixed_height_F
+            fixed_hH = 0.055 if cfg.fixed_height_H is None else cfg.fixed_height_H
+            cmd_cfg.fixed_height_F = fixed_hF        # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_H = fixed_hH        # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
-        if fixed_hF is not None:
-            cmd_cfg.fixed_height_F = fixed_hF  # type: ignore[attr-defined]
-        if fixed_hH is not None:
-            cmd_cfg.fixed_height_H = fixed_hH  # type: ignore[attr-defined]
-        print(f"[INFO] 命令来源 = {cfg.command_source}"
-              + (f" (固定 h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity})"
-                 if cfg.command_source == "fixed" else
-                 (" (8 段位移位置表)" if cfg.command_source == "schedule" else " (按阶段随机采样)"))
-              + ("" if cfg.command_source == "fixed" else
-                 f" [显式覆盖: h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity}]"
-                 if (fixed_hF is not None or fixed_hH is not None
-                     or cfg.fixed_velocity is not None) else ""))
+            print(f"[INFO] 命令来源 = fixed "
+                  f"(h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity})")
+
+        else:  # random
+            # 关闭位置表与时间表
+            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
+            cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
+            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
+            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
+            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
+            print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
     if resume_path is not None:
@@ -401,12 +410,13 @@ def run_play(cfg: PlayConfig):
 
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]
-    if fixed_hF is not None:
-        suffix_parts.append(f"hF{fixed_hF * 1000:.0f}")
-    if fixed_hH is not None:
-        suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
-    if cfg.fixed_velocity is not None:
-        suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
+    if cfg.command_source == "fixed":
+        if fixed_hF is not None:
+            suffix_parts.append(f"hF{fixed_hF * 1000:.0f}")
+        if fixed_hH is not None:
+            suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
+        if cfg.fixed_velocity is not None:
+            suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
     if cfg.collision is not None:
         suffix_parts.append("col1" if cfg.collision else "col0")
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
