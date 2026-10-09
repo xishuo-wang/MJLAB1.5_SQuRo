@@ -27,16 +27,11 @@ RESTRICTED_SPACE_WIDTH: float | None = None     # 初始墙宽
 
 
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    # SQuRo 机器人配置:
+    # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
 
-    # 足端碰撞体名称
-    foot_names = ("FL", "FR", "HL", "HR")
-    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
-
-
-    # 观测空间
+    # 观测空间配置
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
@@ -60,7 +55,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
 
-    # 动作空间
+    # 动作空间配置
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -71,16 +66,16 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
 
-    # 事件
+    # 事件配置
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
         "init_restricted_space": EventTermCfg(func=mdp.init_restricted_space, mode="startup"),
     }
 
 
-    # 奖励函数
+    # 奖励函数配置
     rewards = {
-        # 奖励项目
+        # 奖励项
         "milestone_s1": RewardTermCfg(func=mdp.compute_s1_milestone_reward, weight=1.0),
         "milestone_s2": RewardTermCfg(func=mdp.compute_s2_milestone_reward, weight=1.0),
         "milestone_success": RewardTermCfg(func=mdp.compute_success_milestone_reward, weight=1.0),
@@ -105,22 +100,18 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
 
-    # 终止条件
+    # 终止条件配置
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
     }
 
 
-    # 命令系统
-    commands: dict[str, CommandTermCfg] = {
-        "backup_cmd": mdp.BackupCommandCfg(
-            asset_name="robot",
-            debug_vis=play,
-        )
-    }
-
-
-    # 足端接触传感器
+    # 足端碰撞体配置
+    foot_names = ("FR", "FL", "HR", "HL")
+    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+    
+        
+    # 足部接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
@@ -131,7 +122,16 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-    
+
+    # 命令系统配置
+    commands: dict[str, CommandTermCfg] = {
+        "backup_cmd": mdp.BackupCommandCfg(
+            asset_name="robot",
+            debug_vis=play,
+        )
+    }
+
+
     # 受限空间实体
     restricted_space_entities: dict = {}
     if ENABLE_RESTRICTED_SPACE:
@@ -145,6 +145,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             fixed_width=RESTRICTED_SPACE_WIDTH is not None,
             **wall_kwargs,
         )
+
 
     # 完整配置
     return ManagerBasedRlEnvCfg(
