@@ -270,9 +270,9 @@ x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start
 | `--command-source` | play 侧最高优先级（`fixed`/`random` 会关掉位置表与阶段兜底） |
 | `--fixed-height-F/H`、`--fixed-velocity` | **显式给出即生效**：`fixed` 下锁死；`schedule` 下在位置表算完后覆盖对应字段；`random` 下只固定这些字段、其余按阶段采样 |
 | 阶段（无命令行开关） | 阶段**只能来自检查点**：优先 `env_state.common_step_counter`，缺失时按文件名轮次 `(iter-10)×STEPS_PER_ITER` 推算，无检查点时取 0。原 `--stage` 选项已删除（见 §8） |
-| `--enable-collision` | **默认值是 `False`（不是 `None`）**，因此不显式传参时"检查点 `hole_state.collision`"与"按阶段推断"两级都会被跳过、碰撞一律关。想走检查点记录必须显式传 `--enable-collision None`；想强制开启传 `--enable-collision True` |
+| `--collision` | **默认值是 `False`（不是 `None`）**，因此不显式传参时"检查点 `hole_state.collision`"与"按阶段推断"两级都会被跳过、碰撞一律关。想走检查点记录必须显式传 `--collision None`；想强制开启传 `--collision True` |
 | 板几何/接触参数 | 检查点 `hole_state.layout` 会在建环境前应用（`apply_saved_layout`） |
-| `--show-obstacles`（默认 `False`） | **只影响外观**：默认真值为 `False` 即板体 `rgba` 设为 `(0,0,0,0)`（`set_obstacle_visibility`），`contype/conaffinity` 不变、碰撞照常生效；传 `--show-obstacles` 才显示板体。隐藏时文件名后缀加 `noobs` |
+| `--obstacles-viz`（默认 `False`） | **只影响外观**：默认真值为 `False` 即板体 `rgba` 设为 `(0,0,0,0)`（`set_obstacle_visibility`），`contype/conaffinity` 不变、碰撞照常生效；传 `--obstacles-viz` 才显示板体。隐藏时文件名后缀加 `noobs` |
 
 `fixed_height_F/H` 的默认值是 `None`：**只有 `fixed` 模式才补 0.055**，
 以免把 schedule 的位置表或 random 的采样锁死。
@@ -355,7 +355,9 @@ uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt>
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source fixed --fixed-height-F 0.055 --fixed-height-H 0.055 --fixed-velocity 0.2
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random
 # 显式开关限高板碰撞
-uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --enable-collision False
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --collision False
+# 显示限高板实体 (默认隐藏, 仅外观)
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --obstacles-viz
 # 关视频
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --no-video
 # 基线验证 (参考表 / 位置表 / 课程 / 碰撞 / 观测维度)
@@ -377,7 +379,7 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
   （与 Backup 回放口径一致；mp4 与 csv 同名，便于对照）。
 - **`--command-source` 三选一始终作为后缀首段**：`schedule` / `random` / `fixed`，
   例如 `..._1900-schedule.mp4`、`..._1900-random.mp4`。
-- 其余后缀只记录非默认配置：`fixed` 的 `hF/hH/v` 数值、`--enable-collision`、`noobs`。
+- 其余后缀只记录非默认配置：`fixed` 的 `hF/hH/v` 数值、`--collision`、`noobs`。
   例如 `..._1900-fixed-hF50-hH50-v0.15.mp4`、`..._1900-random-col0.mp4`
   （任务里没有受限空间 / `fixed_time_scale` 这类项，故不加；`--stage` 的后缀 `s<N>` 已随该选项删除）。
 - **命令来源是 play 侧最高优先级**（同 Backup 回放要求）：选了 `random`/`fixed` 时，

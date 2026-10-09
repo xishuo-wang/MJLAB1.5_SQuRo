@@ -54,8 +54,8 @@ class PlayConfig:
     fixed_velocity: float | None = None
     fixed_height_F: float | None = 0.055
     fixed_height_H: float | None = 0.02
-    enable_collision: bool | None = False       # None = 按 cfg (训练默认关, 阶段 4 才开)
-    show_obstacles: bool = False                # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
+    collision: bool | None = False          # None = 按 cfg (训练默认关, 阶段 4 才开)
+    obstacles_viz: bool = False             # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -373,8 +373,8 @@ def run_play(cfg: PlayConfig):
     final_stage = get_current_stage(final_step)
 
     # 碰撞优先级: 显式 > 检查点记录 > 按上面解析出的最终阶段推断
-    if cfg.enable_collision is not None:
-        collision, coll_src = cfg.enable_collision, "命令行显式指定"
+    if cfg.collision is not None:
+        collision, coll_src = cfg.collision, "命令行显式指定"
     elif saved_hole.get("collision") is not None:
         collision, coll_src = bool(saved_hole["collision"]), "检查点 hole_state"
     else:
@@ -383,11 +383,11 @@ def run_play(cfg: PlayConfig):
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
     applied = apply_saved_layout(env_cfg, saved_hole.get("layout") or [])
     # 障碍物可见性: 仅改 rgba, 不改碰撞; 放在几何应用之后以免被覆盖
-    n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.show_obstacles)
+    n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.obstacles_viz)
     print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
     print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
           + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
-    if not cfg.show_obstacles:
+    if not cfg.obstacles_viz:
         print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
     if saved_hole:
         print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
@@ -401,9 +401,9 @@ def run_play(cfg: PlayConfig):
         suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
     if cfg.fixed_velocity is not None:
         suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
-    if cfg.enable_collision is not None:
-        suffix_parts.append("col1" if cfg.enable_collision else "col0")
-    if not cfg.show_obstacles:
+    if cfg.collision is not None:
+        suffix_parts.append("col1" if cfg.collision else "col0")
+    if not cfg.obstacles_viz:
         suffix_parts.append("noobs")
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:
