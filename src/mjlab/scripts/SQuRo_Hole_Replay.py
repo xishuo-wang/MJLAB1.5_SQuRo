@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Literal, cast
-
+import torch
 import numpy as np
 import pandas as pd
-import torch
-
+from pathlib import Path
+from datetime import datetime
+from types import SimpleNamespace
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 import mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionAction
@@ -162,7 +160,7 @@ class ReferenceTablePolicy:
         if not conflicts.any():
             print("[限位检查] 当前高度对应的参考未超出关节和执行器控制范围")
 
-    # ---------- 关键改动：一次写入 CSV_Anaylsis.py 所需的全部列 ----------
+    # ---------- 写入 CSV_Anaylsis.py 所需的全部列 ----------
     def record(self, reference: torch.Tensor, velocity: torch.Tensor,
                action: torch.Tensor | None = None) -> None:
         env = self.env
@@ -183,6 +181,12 @@ class ReferenceTablePolicy:
         pos = robot.data.joint_pos[0, self.joint_ids].cpu().numpy()
         vel = robot.data.joint_vel[0, self.joint_ids].cpu().numpy()
         force = robot.data.actuator_force[0, self.force_columns].cpu().numpy()
+
+        # joint_acc 某些版本没有暴露，读不到就填 0（RL 脚本有这一列，保证列一致）
+        try:
+            acc = robot.data.joint_acc[0, self.joint_ids].cpu().numpy()
+        except (AttributeError, IndexError):
+            acc = np.zeros_like(pos)
 
         # ---- 动作按参考顺序重排 ----
         if action is not None:
@@ -215,7 +219,7 @@ class ReferenceTablePolicy:
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)[0].cpu().numpy()  # (12,)
 
         # ---- 命令 ----
-        cmd = env.command_manager.get_command("hole_cmd")[0].cpu().numpy() # type: ignore
+        cmd = env.command_manager.get_command("hole_cmd")[0].cpu().numpy()  # type: ignore
         hF_cmd = float(cmd[3])
         hH_cmd = float(cmd[4])
         hF_act = float(robot.data.body_link_pos_w[0, idx.f_body_id, 2])
@@ -303,6 +307,7 @@ class ReferenceTablePolicy:
         for col, cname in enumerate(self.clean_names):
             row[f"{cname}_pos"] = float(pos[col])
             row[f"{cname}_vel"] = float(vel[col])
+            row[f"{cname}_acc"] = float(acc[col])           # 与 RL 脚本同名
             row[f"{cname}_force"] = float(force[col])
             # 分析脚本使用的别名
             row[f"{cname}_torque"] = float(force[col])
@@ -311,6 +316,10 @@ class ReferenceTablePolicy:
             row[f"{cname}_control_target"] = float(target[col])
             if action_in_ref is not None:
                 row[f"{cname}_action"] = float(action_in_ref[col])
+
+        # ---- RL 专用字段：参考回放里没有，填 NaN / 0 保持列一致 ----
+        row["reward"] = float("nan")
+        row["done"] = 0.0
 
         self.records.append(row)
 
