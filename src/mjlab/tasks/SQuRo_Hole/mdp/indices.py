@@ -12,17 +12,36 @@ _ACTUATED_JOINT_NAMES = [
     "HR_hip_joint", "HR_knee_joint",
 ]
 
-# 执行器顺序下的关节索引 (执行器序: 脊柱2 + 头颈2 + 前腿4 + 后腿4)
-ACTUATOR_LEG_IDS = (
-    (4, 5, 6, 7, 10, 11, 12, 13)
-)
-REF_SPINE_IDS = (0, 1, 8, 9)      # F_spine1, F_body, H_spine1, H_body
-REF_NECK_IDS = (2, 3)             # Neck_yaw, Neck_pitch (参考期望恒 0)
-REF_FRONT_IDS = (4, 5, 6, 7)      # FL/FR shoulder, elbow
-REF_HIND_IDS = (10, 11, 12, 13)   # HL/HR hip, knee
+# action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
+# 注意: 这些是**执行器序下标**, 不是模型关节索引, 不要拿去索引 joint_pos
+_ACTION_LEG_IDS = (4, 5, 6, 7, 10, 11, 12, 13)
+_ACTION_SPN_IDS = (0, 1, 8, 9)      # F_spine1, F_body, H_spine1, H_body
+_ACTION_NECK_IDS = (2, 3)           # Neck_yaw, Neck_pitch
+_ACTION_SPN_LATERAL_ID = 0          # F_spine1
+_ACTION_SPN_BODY_IDS = (1, 9)       # F_body, H_body
+_ACTION_FRONT_IDS = (4, 5, 6, 7)    # FL/FR shoulder, elbow
+_ACTION_HIND_IDS = (10, 11, 12, 13) # HL/HR hip, knee
 
 # 参考表 14 列的列序: 前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2
-REF_TABLE_ORDER = REF_FRONT_IDS + REF_HIND_IDS + REF_SPINE_IDS + REF_NECK_IDS
+REF_TABLE_ORDER = _ACTION_FRONT_IDS + _ACTION_HIND_IDS + _ACTION_SPN_IDS + _ACTION_NECK_IDS
+
+# 执行器控制范围 (取自 SQuRo.xml 的 actuator ctrlrange; 与关节 range 取小者才是有效限位)
+_ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
+    "F_spine1_joint":    (-0.6, 0.6),
+    "F_body_joint":      (-1.57, 1.57),
+    "Neck_yaw_joint":    (-0.8, 0.8),
+    "Neck_pitch_joint":  (-0.9, 0.9),
+    "FL_shoulder_joint": (-1.5, 1.9),
+    "FL_elbow_joint":    (-1.8, 2.5),
+    "FR_shoulder_joint": (-1.5, 1.9),
+    "FR_elbow_joint":    (-1.8, 2.5),
+    "H_spine1_joint":    (-0.6, 0.6),
+    "H_body_joint":      (-1.57, 1.57),
+    "HL_hip_joint":      (-1.5, 0.8),
+    "HL_knee_joint":     (-0.5, 1.9),
+    "HR_hip_joint":      (-1.5, 0.8),
+    "HR_knee_joint":     (-0.5, 1.9),
+}
 
 # 模型 joint_names 里的头颈索引与初值姿态
 NECK_JOINT_NAMES = ("Neck_yaw_joint", "Neck_pitch_joint")
@@ -46,6 +65,8 @@ class ModelIndices:
         "f_body_id", "h_body_id",
         "front_seg_site_ids", "rear_seg_site_ids", "foot_site_ids",
         "joint_ids", "joint_leg_ids", "joint_spn_ids", "joint_neck_ids",
+        "actuator_leg_ids", "actuator_spn_ids", "actuator_neck_ids",
+        "actuator_spn_lateral_id", "actuator_spn_body_ids",
     )
 
     def __init__(self):
@@ -58,6 +79,11 @@ class ModelIndices:
         self.joint_leg_ids: tuple[int, ...] = ()
         self.joint_spn_ids: tuple[int, ...] = ()
         self.joint_neck_ids: tuple[int, ...] = ()
+        self.actuator_leg_ids: tuple[int, ...] = _ACTION_LEG_IDS
+        self.actuator_spn_ids: tuple[int, ...] = _ACTION_SPN_IDS
+        self.actuator_neck_ids: tuple[int, ...] = _ACTION_NECK_IDS
+        self.actuator_spn_lateral_id: int = _ACTION_SPN_LATERAL_ID
+        self.actuator_spn_body_ids: tuple[int, ...] = _ACTION_SPN_BODY_IDS
 
 
 _MODEL_INDICES = ModelIndices()
