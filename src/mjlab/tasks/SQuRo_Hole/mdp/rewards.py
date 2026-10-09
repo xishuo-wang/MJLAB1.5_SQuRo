@@ -3,23 +3,25 @@ import re
 import math
 import torch
 from mjlab.entity import Entity
+from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
+from .hole import hole_geometry
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
 from .curriculums import get_curriculum_reward_weight
-from .hole import hole_geometry
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
-    ACTUATOR_NUM,
     resolve_joint_ids,
     get_reference_joint_state,
 )
 
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
+
+
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
 
 
 # 计算位置模仿奖励
@@ -462,7 +464,7 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     active_z_thresh = (in_obs_matrix.float() @ obs_z_thresh)
     in_any_obs = in_obs_matrix.any(dim=-1)
     # 采样点: 前段 9 点 + 后段 9 点 (索引由 indices.py 按名字解析)
-    seg_site_ids = list(_MODEL_INDICES.front_seg_site_ids) + list(_MODEL_INDICES.rear_seg_site_ids)
+    seg_site_ids = list(_MODEL_INDICES.f_body_site_ids) + list(_MODEL_INDICES.h_body_site_ids)
     all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2]
     all_sites_z = all_sites_z.view(num_envs, 2, 9)
     diff = all_sites_z - active_z_thresh.unsqueeze(-1)

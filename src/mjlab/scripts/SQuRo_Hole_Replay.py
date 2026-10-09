@@ -272,8 +272,8 @@ class ReferenceTablePolicy:
             "height_H_actual": hH_act,
             "F_body_height": hF_act,
             "H_body_height": hH_act,
-            "front_surface_max_z": float(robot.data.site_pos_w[0, list(idx.front_seg_site_ids), 2].max()),
-            "rear_surface_max_z": float(robot.data.site_pos_w[0, list(idx.rear_seg_site_ids), 2].max()),
+            "front_surface_max_z": float(robot.data.site_pos_w[0, list(idx.f_body_site_ids), 2].max()),
+            "rear_surface_max_z": float(robot.data.site_pos_w[0, list(idx.h_body_site_ids), 2].max()),
         }
 
         # ---- 高度模式与误差 ----
