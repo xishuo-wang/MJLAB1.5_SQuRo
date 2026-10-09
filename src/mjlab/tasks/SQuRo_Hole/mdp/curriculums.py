@@ -33,7 +33,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "orientation":              (2.0, 2.0, 4.0, 4.0),
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
-    "body_contact":             (0.0, 0.0, 1.0, 1.0),
+    "body_contact":             (0.0, 0.0, 5.0, 5.0),
     # 非权重项
     "mimic_pos_sigma":          (5.0, 10.0, 10.0, 5.0),
     "mimic_vel_sigma":          (0.1, 0.1, 0.1, 0.1),
