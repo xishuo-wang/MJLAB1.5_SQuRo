@@ -59,7 +59,7 @@ class PlayConfig:
     fixed_velocity: float | None = None
     # 默认 None: 只有 fixed 模式才补默认高度, schedule/random 只在显式给出时覆盖
     fixed_height_F: float | None = 0.055
-    fixed_height_H: float | None = 0.055
+    fixed_height_H: float | None = 0.02
     stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
     enable_collision: bool | None = False   # None = 按 cfg (训练默认关, 阶段 4 才开)
     show_obstacles: bool = False            # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
