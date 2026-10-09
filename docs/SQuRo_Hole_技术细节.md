@@ -269,10 +269,10 @@ x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start
 | --- | --- |
 | `--command-source` | play 侧最高优先级（`fixed`/`random` 会关掉位置表与阶段兜底） |
 | `--fixed-height-F/H`、`--fixed-velocity` | **显式给出即生效**：`fixed` 下锁死；`schedule` 下在位置表算完后覆盖对应字段；`random` 下只固定这些字段、其余按阶段采样 |
-| `--stage` | 显式阶段在建环境前解析，且在 `runner.load` **之后**最终生效（基类 load 会用检查点的步数覆盖计数器） |
+| 阶段（无命令行开关） | 阶段**只能来自检查点**：优先 `env_state.common_step_counter`，缺失时按文件名轮次 `(iter-10)×STEPS_PER_ITER` 推算，无检查点时取 0。原 `--stage` 选项已删除（见 §8） |
 | `--enable-collision` | **默认值是 `False`（不是 `None`）**，因此不显式传参时"检查点 `hole_state.collision`"与"按阶段推断"两级都会被跳过、碰撞一律关。想走检查点记录必须显式传 `--enable-collision None`；想强制开启传 `--enable-collision True` |
 | 板几何/接触参数 | 检查点 `hole_state.layout` 会在建环境前应用（`apply_saved_layout`） |
-| `--show-obstacles`（默认 `True`） | **只影响外观**：`--no-show-obstacles` 把三块板的 `rgba` 设为 `(0,0,0,0)`（`set_obstacle_visibility`），`contype/conaffinity` 不变、碰撞照常生效，便于在看不到板的情况下观察策略的低头/抬身时机。隐藏时文件名后缀加 `noobs` |
+| `--show-obstacles`（默认 `False`） | **只影响外观**：默认真值为 `False` 即板体 `rgba` 设为 `(0,0,0,0)`（`set_obstacle_visibility`），`contype/conaffinity` 不变、碰撞照常生效；传 `--show-obstacles` 才显示板体。隐藏时文件名后缀加 `noobs` |
 
 `fixed_height_F/H` 的默认值是 `None`：**只有 `fixed` 模式才补 0.055**，
 以免把 schedule 的位置表或 random 的采样锁死。
@@ -313,7 +313,7 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 
 `mdp/curriculums.py` 不再是"每阶段一个整字典"，改为 Backup 任务的曲线形态：
 
-- `_STEPS_PER_ITER = 24`（200 Hz，与 `rl_cfg.num_steps_per_env` 一致）；
+- `_STEPS_PER_ITER = 24`（与 `rl_cfg.num_steps_per_env` 同源，配置里当前为 48）；
 - `_STAGES = (0, 1000, 2000, 3000)`：阶段边界用 **iter** 表示（`STAGE1_1_ITER` /
   `STAGE1_2_ITER` / `STAGE1_3_ITER`），这三个常量**直接从 `config.py` 导入**，与
   `command.py` 的阶段判定是同一来源；
@@ -346,22 +346,29 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 ## 8. 回放与验证
 
 ```powershell
-# 训练 (200 Hz, 4000 iter; 必须显式 tensorboard)
+# 训练 (100 Hz 控制, 48 步/iter, 4000 iter; 必须显式 tensorboard)
 uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard
 # 回放 (默认即录视频 + CSV, 输出到 <run>/videos/)
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt>
-# 旧备份检查点不可直接回放 (它是 obs 193 / action 12; 当前是 205 / 14), 需重训
+# 旧备份检查点不可直接回放 (它是 obs 193 / action 12; 当前是 113 / 14), 需重训
 # 固定/随机命令
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source fixed --fixed-height-F 0.055 --fixed-height-H 0.055 --fixed-velocity 0.2
-uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random --stage 1
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --command-source random
 # 显式开关限高板碰撞
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --enable-collision False
-# 关视频 / 只跑 N 步自检
+# 关视频
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt> --no-video
-uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 60 --no-video
 # 基线验证 (参考表 / 位置表 / 课程 / 碰撞 / 观测维度)
 uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 ```
+
+**已删除的两个选项**（阶段与无窗自检都改为由检查点/脚本负责，命令行不再提供）：
+
+- `--stage`：阶段现在**只能从检查点解析**（`env_state` 步数 → 文件名轮次 → 0）。
+  原先它还能覆盖文件名后缀里的 `s<N>` 段，该段也一并删除。
+- `--smoke_steps`：无窗快速自检的代码路径已移除，连带删除
+  `DataRecordingEnvWrapper.step_inference()`。要无窗看数据，用
+  `--no-video --num-envs 1` 配合 CSV 输出即可（仍会打开 viewer 窗口）。
 
 ### 输出命名与视频录制
 
@@ -370,9 +377,9 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
   （与 Backup 回放口径一致；mp4 与 csv 同名，便于对照）。
 - **`--command-source` 三选一始终作为后缀首段**：`schedule` / `random` / `fixed`，
   例如 `..._1900-schedule.mp4`、`..._1900-random.mp4`。
-- 其余后缀只记录非默认配置：`fixed` 的 `hF/hH/v` 数值、`--stage`、`--enable-collision`。
-  例如 `..._1900-fixed-hF50-hH50-v0.15.mp4`、`..._1900-random-s2-col0.mp4`
-  （任务里没有受限空间 / `fixed_time_scale` 这类项，故不加）。
+- 其余后缀只记录非默认配置：`fixed` 的 `hF/hH/v` 数值、`--enable-collision`、`noobs`。
+  例如 `..._1900-fixed-hF50-hH50-v0.15.mp4`、`..._1900-random-col0.mp4`
+  （任务里没有受限空间 / `fixed_time_scale` 这类项，故不加；`--stage` 的后缀 `s<N>` 已随该选项删除）。
 - **命令来源是 play 侧最高优先级**（同 Backup 回放要求）：选了 `random`/`fixed` 时，
   即使 `env_cfg` 里配了位置表也会被覆盖。实现上除了清掉 `position_schedule`，
   还置 `use_height_schedule=False` 与 `stage_schedule_fallback=False`
@@ -381,18 +388,22 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 - 视频默认开启（`video=True`、1000 帧、1920×1080），写入 `<run>/videos/`；
   `--no-video` 关闭。**`render_mode="rgb_array"` 必须传进 `ManagerBasedRlEnv`**，
   否则 `VideoRecorder` 抓不到帧（早期版本漏传，导致只出 csv 不出 mp4）。
-- 自检循环必须走 `DataRecordingEnvWrapper.step_inference()`：观测历史缓冲区是 in-place 写入，
-  带 autograd 图会抛 `where(): functions with out=... don't support automatic differentiation`。
+- 观测历史缓冲区是 in-place 写入，**所有推步循环必须在 `torch.inference_mode()` 下执行**，
+  否则会抛 `where(): functions with out=... don't support automatic differentiation`。
 
 ## 9. 注意与未决项
 
 1. **`body_contact` 的虚拟阈值跟随实际几何**（`hole_geometry(env)`），但 **x 区间之外没有约束**：
    板体之外机器人可以任意高度通过，虚拟净空只防"穿过板"。
-2. **`BASE_SPEED = 0.2`**（不再是 0.25）：按 `BASE_HEIGHT + 名义步频` 标定；但位置表里
-   速度 = `BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT`，第 1 段 h_F=0.02 时命令只有 **0.073 m/s**，
-   实测策略跑不出这个速度（见 §10）。
-3. **200 Hz 与 24 步/iter**：每 iter 只推进 0.12 s 仿真，20 s 回合需 167 iter，
-   4000 iter 全程约 24 个完整回合 —— 与其他任务（50 Hz）样本量口径不同，比较时注意。
+2. **`BASE_SPEED = 0.2`**：速度命令为
+   `v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2`（双高满速 / 单低减半 / 双低归零）。
+   位置表第 1 段 `h_F=0.02` 属单低，命令 = `0.2 × 0.02/0.055 × 0.5 = 0.0364 m/s`；
+   第 2 段 `h_H=0.02` 同为 0.0364。**这两个单低工况下参考姿态本身几乎走不动**
+   （参考回放实测 vx = −0.002 / +0.012 m/s），所以该速度命令是参考达不到的目标，
+   速度与低高度姿态标定见 §10。
+3. **100 Hz 与 48 步/iter**：`timestep 0.002 × decimation 5 = 0.01 s → 100 Hz`；
+   20 s 回合 = **2000 控制步**，每 iter 推进 `48 × 0.01 = 0.48 s` 仿真，
+   4000 iter 全程约 42 个完整回合 —— 与其他任务（50 Hz）样本量口径不同，比较时注意。
 4. **未注册项**：`energy` / `cot` / `joint_acc` / `base_y_offset` / `limits` / `action_acc`
    保留为可选项，未加入 `env_cfg.rewards`；它们的权重不在 `_CURVES` 里，一旦注册会拿到默认 1.0，
    注册前应先补曲线。
@@ -430,15 +441,19 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 足以覆盖速度不足的损失**（`velocity` 里 `min_speed_mask` 只对 `|v|<0.01` 且命令 >0.01
 给 −1 的惩罚，权重曲线此时为 10.0，实测仍在 6.75 说明该项并未把策略推到动起来）。
 
-复现命令（无窗自检，确认策略确实不动）：
+复现命令（回放该检查点，CSV 会给出 `base_vel_x` 实测序列）：
 
 ```powershell
-uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file logs/rsl_rl/SQuRo_Hole/2026-10-01_15-36-52/model_3999.pt --smoke_steps 200 --no-video
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file logs/rsl_rl/SQuRo_Hole/2026-10-01_15-36-52/model_3999.pt --no-video
 ```
 
-下一步可能的着力点（**未做实验，仅列出假设**）：
-位置表第 1 段的 0.073 m/s 命令是否在参考步态能力之下 / `velocity` 的 σ=100 是否过严 /
-`reached` 与 `foot_clearance` 是两个废项、等于 12 项奖励里少了 2 项引导。
+**勘误**：本文档早先版本据此写过"策略几乎原地不动"，与实测不符——同一检查点回放 200 步
+平均 `base_vel_x` = **+0.0735 m/s**（命令 0.0727，误差 1%），另有独立探测在同一检查点上
+逐工况测得 55/55、50/50、45/45、40/40 的前进速度为 +0.200 / +0.180 / +0.171 / +0.051 m/s，
+对应命令 0.200 / 0.182 / 0.164 / 0.145。`Metrics/actual_vel_x_mean` 取的是当步全体环境
+（含刚重置的）瞬时均值，**不能用来判断"走得动不走得动"**，末值偏低主要是分布与重置帧效应。
+
+下一步可能的着力点：`reached` 与 `foot_clearance` 是两个废项、等于 12 项奖励里少了 2 项引导。
 
 检查点 `model_3999.pt` 的 `hole_state`：`version=1, stage=4, collision=True`，
 三块板 `contype/conaffinity = 1/1`，`env_state.common_step_counter = 96000`

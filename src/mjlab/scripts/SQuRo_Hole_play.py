@@ -1,5 +1,5 @@
 # uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
-# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --smoke_steps 50 --no-video
+# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --no-video
 
 import re
 import tyro
@@ -18,9 +18,6 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
-    STAGE1_END,
-    STAGE2_END,
-    STAGE3_END,
     STEPS_PER_ITER,
     get_current_stage,
     stage_requires_collision,
@@ -53,17 +50,12 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    # Hole 任务: 命令来源。schedule = 位置表(阶段 3/4 口径, 按位移自动推进);
-    # fixed/random = 用 fixed_* 锁死或按阶段 1/2 随机采样 (位置表关闭)
     command_source: Literal["schedule", "fixed", "random"] = "fixed"
     fixed_velocity: float | None = None
-    # 默认 None: 只有 fixed 模式才补默认高度, schedule/random 只在显式给出时覆盖
     fixed_height_F: float | None = 0.055
     fixed_height_H: float | None = 0.02
-    stage: int | None = None               # None = 按 checkpoint 轮次推断; 1~4 = 强制该阶段
-    enable_collision: bool | None = False   # None = 按 cfg (训练默认关, 阶段 4 才开)
-    show_obstacles: bool = False            # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
-    smoke_steps: int | None = None     # 无窗自检: 只跑 N 步打印统计后退出
+    enable_collision: bool | None = False       # None = 按 cfg (训练默认关, 阶段 4 才开)
+    show_obstacles: bool = False                # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -284,11 +276,6 @@ class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
                                                 rewards=rew, dones=dones)
         return obs_dict, rew, dones, extras
 
-    # 推理步: 观测历史缓冲区的 in-place 写入不支持 autograd, 必须关梯度
-    def step_inference(self, actions):
-        with torch.inference_mode():
-            return self.step(actions)
-
 
 def run_play(cfg: PlayConfig):
     configure_torch_backends()
@@ -371,11 +358,10 @@ def run_play(cfg: PlayConfig):
                  if (fixed_hF is not None or fixed_hH is not None
                      or cfg.fixed_velocity is not None) else ""))
 
-    # 在建环境前统一解析"最终阶段"与"碰撞开关", 供碰撞与后续课程对齐共用
+    # 在建环境前解析"最终阶段"与"碰撞开关", 供碰撞与后续课程对齐共用
+    # 阶段只能来自检查点: 有 env_state 用步数, 否则按文件名轮次推算
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
-    if cfg.stage is not None:
-        final_step, stage_src = {1: 0, 2: STAGE1_END, 3: STAGE2_END, 4: STAGE3_END}[cfg.stage], "命令行 --stage"
-    elif resume_path is not None:
+    if resume_path is not None:
         recorded = read_env_step(resume_path)
         if recorded is not None:
             final_step, stage_src = recorded, "检查点 env_state"
@@ -415,8 +401,6 @@ def run_play(cfg: PlayConfig):
         suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
     if cfg.fixed_velocity is not None:
         suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
-    if cfg.stage is not None:
-        suffix_parts.append(f"s{cfg.stage}")
     if cfg.enable_collision is not None:
         suffix_parts.append("col1" if cfg.enable_collision else "col0")
     if not cfg.show_obstacles:
@@ -475,38 +459,12 @@ def run_play(cfg: PlayConfig):
         runner = runner_cls(env, asdict(agent_cfg), str(log_dir), device=device)
         runner.load(str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device)
         policy = runner.get_inference_policy(device=device)
-        # 基类 load 会恢复检查点的 common_step_counter, 显式阶段必须在它之后最终生效
         env = runner.env
 
-    # 阶段对齐: 用建环境前就解析好的 final_step (与碰撞来源同一口径);
+    # 阶段对齐: 用建环境前解析出的 final_step (与碰撞来源同一口径);
     # 基类 load 会用检查点的 common_step_counter 覆盖, 所以必须放在加载之后
     env.unwrapped.common_step_counter = final_step
-    print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)}"
-          + (" (命令行 --stage 强制)" if cfg.stage is not None else " (按检查点记录)"))
-
-    if cfg.smoke_steps is not None:
-        # 无窗自检: 推 N 步打印命令/高度统计
-        obs_dict = env.reset()
-        obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
-        cmd_hist = []
-        for _ in range(cfg.smoke_steps):
-            act = policy(obs_in)
-            obs_dict, rew, dones, extras = env.step_inference(act) # type: ignore
-            obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
-            cmd_hist.append(env.unwrapped.command_manager.get_command("hole_cmd")[0].clone()) # type: ignore
-        cmds = torch.stack(cmd_hist)
-        robot = env.unwrapped.scene["robot"]
-        print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
-        print(f"[INFO] 命令: vel_x {float(cmds[:, 0].mean()):.3f} m/s, "
-              f"h_F {float(cmds[:, 3].mean()) * 1000:.1f} mm, h_H {float(cmds[:, 4].mean()) * 1000:.1f} mm")
-        print(f"[INFO] 实测: 前躯干 {float(robot.data.body_link_pos_w[0, _MODEL_INDICES.f_body_id, 2]) * 1000:.1f} mm, "
-              f"后躯干 {float(robot.data.body_link_pos_w[0, _MODEL_INDICES.h_body_id, 2]) * 1000:.1f} mm, "
-              f"位移 {float(robot.data.root_link_pos_w[0, 0]) * 1000:.1f} mm")
-        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")  # type: ignore
-        if data_recorder:
-            data_recorder.save_to_csv()
-        env.close()
-        return
+    print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)} (按检查点记录)")
 
     try:
         viewer = NativeMujocoViewer(env, policy)
