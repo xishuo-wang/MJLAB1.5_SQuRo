@@ -17,7 +17,7 @@ from .config import (
     BASE_HEIGHT,
     BASE_SPEED,
     FULL_HEIGHT_VALUES,
-    HEIGHT_THRESHOLD,
+    THRESHOLD_HEIGHT,
     get_current_stage,
     heights_for_stage,
     stage_uses_schedule,
@@ -39,7 +39,7 @@ STAGE3_POSITION_SCHEDULE = [
 
 # 根据目标高度计算缩放因子
 def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
-    if target_height < HEIGHT_THRESHOLD:
+    if target_height < THRESHOLD_HEIGHT:
         return 0.1
     return target_height / base_height
 
@@ -197,11 +197,11 @@ class HoleCommand(CommandTerm):
             ]
             
             # 确保高度组合的合理性
-            if (height_F < HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD):
+            if (height_F < THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT):
                 return height_F, height_H
-            elif (height_F >= HEIGHT_THRESHOLD and height_H < HEIGHT_THRESHOLD):
+            elif (height_F >= THRESHOLD_HEIGHT and height_H < THRESHOLD_HEIGHT):
                 return height_F, height_H
-            elif (height_F >= HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD):
+            elif (height_F >= THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT):
                 return height_F, height_F
         
         # 如果无法采样到合理组合，返回默认值
@@ -216,7 +216,7 @@ class HoleCommand(CommandTerm):
 
     def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
         """根据高度决定角度命令"""
-        if height_F >= HEIGHT_THRESHOLD and height_H >= HEIGHT_THRESHOLD:
+        if height_F >= THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT:
             return 0.0
         else:
             angle_idx = torch.randint(0, len(ANGLE_VALUES), (1,), device=self.device)
@@ -265,7 +265,7 @@ class HoleCommand(CommandTerm):
             vel_x = torch.full_like(vel_x, float(self.cfg.fixed_velocity))
         
         # 批量计算角度
-        both_high = (height_F >= HEIGHT_THRESHOLD) & (height_H >= HEIGHT_THRESHOLD)
+        both_high = (height_F >= THRESHOLD_HEIGHT) & (height_H >= THRESHOLD_HEIGHT)
         angle = torch.zeros(n_envs, device=device)
         if self.cfg.fixed_angle is not None:
             angle = torch.full_like(angle, float(self.cfg.fixed_angle))
