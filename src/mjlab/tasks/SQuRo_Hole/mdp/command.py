@@ -1,27 +1,25 @@
 from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Tuple, List
 import torch
-
 from mjlab.entity import Entity
-from mjlab.managers.command_manager import CommandTerm
+from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
+from mjlab.managers.command_manager import CommandTerm
+from typing import TYPE_CHECKING, Optional, Tuple, List
+from .config import (
+    BASE_SPEED,
+    BASE_HEIGHT,
+    ANGLE_VALUES,
+    THRESHOLD_HEIGHT,
+    FULL_HEIGHT_VALUES,
+    get_current_stage,
+    heights_for_stage,
+    stage_uses_schedule,
+)
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
-from .config import (
-    ANGLE_VALUES,
-    BASE_HEIGHT,
-    BASE_SPEED,
-    FULL_HEIGHT_VALUES,
-    THRESHOLD_HEIGHT,
-    get_current_stage,
-    heights_for_stage,
-    stage_uses_schedule,
-)
 
 
 # 第三阶段固定位置表（基于移动距离, 任务专属: 位移 → 前肢高度, 后肢高度）
@@ -59,9 +57,8 @@ def get_height_mode(height_F: float, height_H: float) -> int:
     return MODE_BOTH_HIGH
 
 
-# 按高度命令生成前向速度: 先按较低一侧做腿长缩放, 再按低高度侧数降速
-# v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2
-# 双高满速; 单低减半; 双低归零 (趴地保持静止)
+
+# 根据高度命令生成前向速度：v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2
 def compute_command_velocity(height_F, height_H):
     lower = torch.minimum(height_F, height_H)
     height_scale = lower / BASE_HEIGHT
@@ -70,9 +67,9 @@ def compute_command_velocity(height_F, height_H):
     return BASE_SPEED * height_scale * speed_scale
 
 
+
 class HoleCommand(CommandTerm):
     cfg: HoleCommandCfg 
-    
     def __init__(self, cfg: HoleCommandCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
@@ -87,8 +84,6 @@ class HoleCommand(CommandTerm):
         self.use_position_schedule = cfg.use_position_schedule
         self.position_schedule = cfg.position_schedule or []
         self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
-        
-        # 记录每个环境的起始位置（用于计算移动距离）
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -98,20 +93,22 @@ class HoleCommand(CommandTerm):
         self._update_start_positions(env_ids)
         
         resampling_time_range = self.cfg.resampling_time_range
-        self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (
-            resampling_time_range[1] - resampling_time_range[0]
-        ) + resampling_time_range[0]
+        self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (resampling_time_range[1] - resampling_time_range[0]) + resampling_time_range[0]
+
 
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
 
+
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
         self.start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
+
 
     # 根据阶段获取可用的高度值列表 (阶段 1 正常档 / 阶段 2 含低高度全档 / 阶段 3+ 位置表)
     def _get_available_heights(self, stage: int) -> Optional[list]:
         return heights_for_stage(stage)
+
     
     def _should_use_schedule(self, stage: int) -> bool:
         if self.use_position_schedule and self.position_schedule:
@@ -140,6 +137,7 @@ class HoleCommand(CommandTerm):
             return STAGE3_POSITION_SCHEDULE
         
         return []
+
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n_envs = len(env_ids)  
@@ -292,6 +290,7 @@ class HoleCommand(CommandTerm):
         self.command_tensor[env_ids, 5] = angle
         self.has_printed_current_cmd[env_ids] = False
 
+
     def _update_command(self) -> None:
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
@@ -300,21 +299,21 @@ class HoleCommand(CommandTerm):
         use_schedule = self._should_use_schedule(stage)
         schedule = self._get_schedule(stage) if use_schedule else []
         
-        # 使用时间表模式，每个时间步都需要更新命令（因为距离在变化）
+        # 使用时间表模式，每个时间步都需要更新命令
         if use_schedule and schedule:
             env_ids = torch.arange(self.num_envs, device=self.device)
             self._update_command_from_schedule(env_ids, schedule)
         else:
-            # 定时重采样: 计时器与重采样都由基类 compute() 负责 (基类已做 time_left -= dt
-            # 与到点 _resample), 这里不再重复扣减, 否则实际间隔会减半
             pass
 
-    # 回合重置: 重新锚定位移起点 (基类 reset 已重采样命令)
+
+    # 回合重置: 重新锚定位移起点
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:  # type: ignore[override]
         extras = super().reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._update_start_positions(env_ids)
         return extras
+
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:
@@ -338,14 +337,11 @@ class HoleCommand(CommandTerm):
         
         cmd_start = base_pos + [0, 0, z_offset]
         cmd_end = cmd_start + cmd_vel * scale
-        visualizer.add_arrow(
-            cmd_start, cmd_end, color=(0.2, 0.2, 0.8, 0.8), width=arrow_width
-        )
+        visualizer.add_arrow(cmd_start, cmd_end, color=(0.2, 0.2, 0.8, 0.8), width=arrow_width)
         
         actual_end = cmd_start + actual_vel * scale
-        visualizer.add_arrow(
-            cmd_start, actual_end, color=(0.2, 0.8, 0.2, 0.8), width=arrow_width
-        )
+        visualizer.add_arrow(cmd_start, actual_end, color=(0.2, 0.8, 0.2, 0.8), width=arrow_width)
+
 
     def _update_metrics(self) -> None:
         pass
@@ -375,6 +371,5 @@ class HoleCommandCfg(CommandTermCfg):
     viz: VizCfg = field(default_factory=VizCfg)
     class_type: type[CommandTerm] = HoleCommand
 
-    # 1.5 把 CommandTermCfg.build 变成抽象方法, 子类必须自己实现
     def build(self, env: ManagerBasedRlEnv) -> CommandTerm:
         return self.class_type(self, env)
