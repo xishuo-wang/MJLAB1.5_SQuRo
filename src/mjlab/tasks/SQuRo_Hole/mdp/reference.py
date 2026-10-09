@@ -16,7 +16,7 @@ from .config import (
     USE_SPINE_CSV,
 )
 from .indices import (
-    _ACTUATED_NECK_IDS,
+    _ACT_NECK_IDS,
     _MODEL_INDICES,
     REF_TABLE_ORDER,
     resolve_model_indices,
@@ -82,7 +82,7 @@ def resolve_joint_ids(entity) -> list:
     resolve_model_indices(entity)
     act = _MODEL_INDICES.joint_ids
     MODEL_JOINT_IDS = [act[i] for i in REF_TABLE_ORDER]
-    NECK_IDS = [act[i] for i in _ACTUATED_NECK_IDS]
+    NECK_IDS = [act[i] for i in _ACT_NECK_IDS]
     return MODEL_JOINT_IDS
 
 
