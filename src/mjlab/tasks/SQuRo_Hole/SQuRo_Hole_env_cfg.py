@@ -19,17 +19,11 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
-from dataclasses import replace
-
 
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
-    # 获取 SQuRo 机器人配置 (14 执行器, 含头颈)
+    # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
-
-    # SQuRo 特定配置
-    foot_names = ("FR", "FL", "HR", "HL")
-    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
     
 
     # 观测空间配置
@@ -46,9 +40,9 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "hole_cmd"}),
     }
 
-    critic_terms = {
-        **policy_terms,
-    }
+
+    critic_terms = {**policy_terms,}
+
 
     observations = {
         "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
@@ -75,6 +69,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 奖励函数配置
     rewards = {
+        # 奖励项
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_velocity_reward, weight=1.0),
         "velocity": RewardTermCfg(func=mdp.compute_linear_velocity_reward, weight=1.0),
@@ -82,6 +77,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),
         "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
         "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
+        # 惩罚项
         # "cot": RewardTermCfg(func=mdp.compute_cot_penalty, weight=1.0),
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
         "body_contact": RewardTermCfg(func=mdp.compute_body_contact_penalty, weight=1.0),
@@ -96,7 +92,12 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
     }
 
+    
+    # 足端碰撞体配置
+    foot_names = ("FR", "FL", "HR", "HL")
+    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
 
+    
     # 足部接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
@@ -111,7 +112,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 播放模式配置
     if play:
-        episode_length_s = 20.0 
         commands: dict[str, CommandTermCfg] = {
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
@@ -138,15 +138,12 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.0475), size=(0.015, 0.1, 0.005)),
         }
     else:
-        episode_length_s = 20.0
         commands: dict[str, CommandTermCfg] = {
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
                 debug_vis=False, 
             )
         }
-        # 板几何统一由 hole.py 的 HOLE_LAYOUT 生成; 训练默认关碰撞 (阶段 4 由 runner 重建开)
-        entities = {"robot": SQURO_ROBOT_CFG, **mdp.build_hole_entities(enable_collision=False)}
 
 
     # 完整配置
@@ -154,7 +151,10 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities=entities,
+            entities={
+                "robot": SQURO_ROBOT_CFG,
+                **mdp.build_hole_entities(enable_collision=False)
+            },
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,
@@ -174,7 +174,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             width=1920,
         ),
         sim=SimulationCfg(
-            nconmax=35,
+            nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
                 timestep=0.002,  
@@ -183,5 +183,5 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=5,
-        episode_length_s=episode_length_s,
+        episode_length_s=20.0,
     )
