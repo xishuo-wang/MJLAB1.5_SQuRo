@@ -15,7 +15,7 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.SQuRo_Hole.mdp.command import HEIGHT_THRESHOLD
+from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STAGE1_END,
     STAGE2_END,
@@ -104,8 +104,8 @@ def resolve_output_dir(preferred: Path) -> Path:
 
 # 受限模式: 0 都高 / 1 前低 / 2 后低
 def mode_of(height_F: float, height_H: float) -> str:
-    low_F = height_F < HEIGHT_THRESHOLD
-    low_H = height_H < HEIGHT_THRESHOLD
+    low_F = height_F < THRESHOLD_HEIGHT
+    low_H = height_H < THRESHOLD_HEIGHT
     if low_F and not low_H:
         return "前低后高"
     if low_H and not low_F:
