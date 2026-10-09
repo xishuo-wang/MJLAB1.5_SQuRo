@@ -64,12 +64,6 @@ def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_pos")
 
-    # 调试信息
-    if env.common_step_counter % 1000 == 0:
-        print(f"Position Imitation Reward - Mean: {reward.mean().item():.3f}, "
-              f"Leg MSE: {mse_leg.mean().item():.4f}, Spn MSE: {mse_spn.mean().item():.4f}, "
-              f"Neck MSE: {mse_neck.mean().item():.4f}")
-
     return reward * weight
 
 
@@ -93,12 +87,6 @@ def compute_mimic_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_neck = torch.exp(-sigma_spn * mse_neck)
     reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_vel")
-
-    # 调试信息
-    if env.common_step_counter % 1000 == 0:
-        print(f"Velocity Imitation Reward - Mean: {reward.mean().item():.3f}, "
-              f"Leg MSE: {mse_leg.mean().item():.4f}, Spn MSE: {mse_spn.mean().item():.4f}, "
-              f"Neck MSE: {mse_neck.mean().item():.4f}")
 
     return reward * weight
 
