@@ -223,13 +223,14 @@ class JointDataRecorder:
         record['gait_freq_command'] = 2.0
 
         # ---------- 每个关节的 pos / vel / acc / torque ----------
-        if self._joint_ids_resolved is None:
-            self._joint_ids_resolved, _ = asset.find_joints(self.joint_names, preserve_order=True)
-        joint_ids = self._joint_ids_resolved
+        joint_ids = _MODEL_INDICES.joint_ids
         joint_pos_all = asset.data.joint_pos[idx, joint_ids]
         joint_vel_all = asset.data.joint_vel[idx, joint_ids]
-        joint_acc_all = asset.data.joint_acc[idx, joint_ids] if hasattr(asset.data, 'joint_acc') else None
-        # actuator_force 的顺序与 self.joint_names 一一对应 (F_spine1 ... HR_knee)
+        joint_acc_all = (
+            asset.data.joint_acc[idx, joint_ids]
+            if hasattr(asset.data, 'joint_acc') else None
+        )
+        # actuator_force 的顺序也是 actuator 顺序，与 self.joint_names 一一对应
         actuator_force_all = asset.data.actuator_force[idx]
 
         for i, name in enumerate(self.joint_names):
