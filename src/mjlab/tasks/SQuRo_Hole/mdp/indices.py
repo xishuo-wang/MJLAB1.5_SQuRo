@@ -22,7 +22,6 @@ _ACT_JOINT_NAMES = [
 ]
 
 
-
 # 执行器对应索引
 _ACT_IDX = {name: i for i, name in enumerate(_ACT_JOINT_NAMES)}
 _ACT_F_SPINE1_ID    = _ACT_IDX["F_spine1_joint"]      # 脊柱侧摆: 0
@@ -41,7 +40,6 @@ _ACT_HR_HIP_ID      = _ACT_IDX["HR_hip_joint"]        # 右后髋: 12
 _ACT_HR_KNEE_ID     = _ACT_IDX["HR_knee_joint"]       # 右后膝: 13
 
 
-
 # 腿部索引
 _ACT_FL_LEG_IDS = (_ACT_FL_SHOULDER_ID, _ACT_FL_ELBOW_ID)       # 左前腿: (4, 5)
 _ACT_FR_LEG_IDS = (_ACT_FR_SHOULDER_ID, _ACT_FR_ELBOW_ID)       # 右前腿: (6, 7)
@@ -50,7 +48,6 @@ _ACT_HR_LEG_IDS = (_ACT_HR_HIP_ID,      _ACT_HR_KNEE_ID)        # 右后腿: (12
 _ACT_F_LEG_IDS  = _ACT_FL_LEG_IDS + _ACT_FR_LEG_IDS             # 前腿合并: (4, 5, 6, 7)
 _ACT_H_LEG_IDS  = _ACT_HL_LEG_IDS + _ACT_HR_LEG_IDS             # 后腿合并: (10, 11, 12, 13)
 _ACT_LEG_IDS    = _ACT_F_LEG_IDS  + _ACT_H_LEG_IDS              # 全腿合并: (4, 5, 6, 7, 10, 11, 12, 13)
-
 
 
 # 脊柱索引
@@ -64,18 +61,16 @@ _ACT_SPN_ROLL_IDS = (_ACT_SPN_F_ROLL_ID, _ACT_SPN_H_ROLL_ID)    # 脊柱扭转�
 _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: (0, 1, 8, 9)
 
 
-
 # 头部索引
 _ACT_NECK_IDS = (_ACT_NECK_YAW_ID, _ACT_NECK_PITCH_ID)          # 头颈两列: (2, 3)
-
 
 
 # 参考表顺序
 REF_TABLE_ORDER = (_ACT_F_LEG_IDS  + _ACT_H_LEG_IDS + _ACT_SPN_IDS + _ACT_NECK_IDS)   # 完整参考表序: (4, 5, 6, 7, 10, 11, 12, 13, 0, 1, 8, 9, 2, 3)
 
 
-# ==================== 执行器控制范围 ====================
-_ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
+# 执行器控制范围
+_ACT_CTRL_RANGE: dict[str, tuple[float, float]] = {
     "F_spine1_joint":    (-0.6, 0.6),
     "F_body_joint":      (-1.57, 1.57),
     "Neck_yaw_joint":    (-0.8, 0.8),
@@ -93,19 +88,15 @@ _ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
 }
 
 
-# ==================== 头颈初值 ====================
-NECK_JOINT_NAMES = ("Neck_yaw_joint", "Neck_pitch_joint")
-NECK_INIT_POS    = (0.0, -0.3)
-
-
-# ==================== 虚拟碰撞采样点 ====================
+# 虚拟碰撞采样点
 FRONT_SEG_SITE_NAMES = tuple(f"F_body_{i}_site" for i in range(1, 10))
 REAR_SEG_SITE_NAMES  = tuple(f"H_body_{i}_site" for i in range(1, 10))
 FOOT_SITE_NAMES      = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site")
 
 
-# ==================== 观测用配置 ====================
+# 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES))
+
 
 
 class ModelIndices:
@@ -135,7 +126,6 @@ class ModelIndices:
         self.actuator_neck_ids: tuple[int, ...] = _ACT_NECK_IDS
         self.actuator_spn_lateral_id: int = _ACT_F_SPINE1_ID
         self.actuator_spn_body_ids: tuple[int, ...] = _ACT_SPN_ROLL_IDS
-
 
 _MODEL_INDICES = ModelIndices()
 
