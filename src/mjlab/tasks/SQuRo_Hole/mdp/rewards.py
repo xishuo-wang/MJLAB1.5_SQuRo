@@ -5,15 +5,14 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-from .config import BASE_HEIGHT, HEIGHT_THRESHOLD
+from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
 from .curriculums import get_curriculum_reward_weight
 from .hole import hole_geometry
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
     ACTUATOR_NUM,
     resolve_joint_ids,
-    get_reference_joint_pos,
-    get_reference_joint_vel
+    get_reference_joint_state,
 )
 
 from typing import TYPE_CHECKING
@@ -28,7 +27,7 @@ def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     joint_ids = resolve_joint_ids(asset)      # 参考表列序对应的模型关节索引
     joint_pos = asset.data.joint_pos
-    target_joint_pos = get_reference_joint_pos(env)
+    target_joint_pos, _ = get_reference_joint_state(env)
     current_pos = joint_pos[:, joint_ids]
     pos_errors = current_pos - target_joint_pos
     mse_errors = torch.mean(pos_errors ** 2, dim=1)
@@ -50,7 +49,7 @@ def compute_mimic_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     joint_ids = resolve_joint_ids(asset)
     joint_vel = asset.data.joint_vel
-    target_joint_vel = get_reference_joint_vel(env)
+    _, target_joint_vel = get_reference_joint_state(env)
     current_vel = joint_vel[:, joint_ids]
     vel_errors = current_vel - target_joint_vel
     mse_errors = torch.mean(vel_errors ** 2, dim=1)
@@ -130,7 +129,7 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
     desired_height_H = cmd_term.command[:, 4]
     
     # Mode 0: 前后肢高度都 >= 阈值
-    mode0_mask = (desired_height_F >= HEIGHT_THRESHOLD) & (desired_height_H >= HEIGHT_THRESHOLD)
+    mode0_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H >= THRESHOLD_HEIGHT)
     
     # 非 Mode 0 直接返回零奖励
     if not mode0_mask.any():
@@ -483,7 +482,7 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     desired_heightH = cmd_term.command[:, 4]
     
     # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
-    mode2_mask = (desired_heightF >= HEIGHT_THRESHOLD) & (desired_heightH < HEIGHT_THRESHOLD)
+    mode2_mask = (desired_heightF >= THRESHOLD_HEIGHT) & (desired_heightH < THRESHOLD_HEIGHT)
     reward = torch.zeros(env.num_envs, device=env.device)
     
     if not mode2_mask.any():
