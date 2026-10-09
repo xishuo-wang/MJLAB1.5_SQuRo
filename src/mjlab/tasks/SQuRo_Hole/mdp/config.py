@@ -28,7 +28,7 @@ NECK_REF_VEL = 0.0
 # 2) 1k-2k    含低高度状态的全高度随机采样
 # 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
 # 4) 3k 以后  位置表 + 真实碰撞
-# 注: 阶段 1~3 已生效; 阶段 4 的真实碰撞需要"按阶段重建环境"的机制, 尚未实现
+# 注: 阶段 4 的实体碰撞由 rl/runner.py 在阶段边界重建环境实现 (contype 编译期固化)
 STAGE1_END_ITER = 1000
 STAGE2_END_ITER = 2000
 STAGE3_END_ITER = 3000
@@ -43,7 +43,7 @@ STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
 
-# 各阶段是否要求限高板实体碰撞 (编译期固化; 阶段 4 的机制未实现, 此处仅声明意图)
+# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
 STAGE_COLLISION = (False, False, False, True)
 
 # 角度命令候选 (度)

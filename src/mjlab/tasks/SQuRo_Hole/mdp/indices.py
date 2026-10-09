@@ -63,9 +63,12 @@ class ModelIndices:
 _MODEL_INDICES = ModelIndices()
 
 
-# 解析 body / site / 关节索引 (幂等, 只解析一次)
+# 解析 body / site / 关节索引。
+# 判据必须同时看 body 与 joint: 旧写法只查 f_body_id, 一旦之前被部分解析过
+# (例如上一轮解析在 find_joints 之前中断), 再调用会直接 return,
+# joint_ids 永远留空 —— 观测项 actuator_pos/actuator_vel 会退化成 0 维。
 def resolve_model_indices(entity) -> None:
-    if _MODEL_INDICES.f_body_id >= 0:
+    if _MODEL_INDICES.f_body_id >= 0 and len(_MODEL_INDICES.joint_ids) > 0:
         return
 
     body_ids, _ = entity.find_bodies(["F_body_Link", "H_body_Link"], preserve_order=True)
@@ -80,6 +83,10 @@ def resolve_model_indices(entity) -> None:
     _MODEL_INDICES.foot_site_ids = tuple(foot_ids)
 
     joint_ids, joint_names = entity.find_joints(_ACTUATED_JOINT_NAMES, preserve_order=True)
+    # 索引表按执行器序写死, 少一个就会整表错位/0 维; 这里直接拦住
+    assert len(joint_ids) == len(_ACTUATED_JOINT_NAMES), (
+        f"只解析到 {len(joint_ids)}/{len(_ACTUATED_JOINT_NAMES)} 个被控关节: "
+        f"{list(joint_names)}")
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
     # 按执行器名分组: 前腿 4-7 / 后腿 10-13 / 脊柱 0-1,8-9 / 头颈 2-3
     name_to_id = {

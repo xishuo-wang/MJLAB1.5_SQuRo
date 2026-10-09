@@ -6,15 +6,13 @@ import torch
 
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.tasks.SQuRo_Hole.mdp.command import (
-    HEIGHT_THRESHOLD,
-    STAGE3_POSITION_SCHEDULE,
-)
-# 阶段边界唯一来源是 config (command 只是转出)
+from mjlab.tasks.SQuRo_Hole.mdp.command import STAGE3_POSITION_SCHEDULE
+# 阶段边界与高度阈值的唯一来源都是 config (command 只是转出)
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STAGE1_END,
     STAGE2_END,
     STAGE3_END,
+    THRESHOLD_HEIGHT,
     get_current_stage,
     heights_for_stage,
     stage_requires_collision,
@@ -56,7 +54,7 @@ def check_reference() -> None:
                   f"{float(front[mode, h_idx, :, 0].max() - front[mode, h_idx, :, 0].min()):>12.4f}"
                   f"{float(tables['hind_pos'][mode, h_idx, :, 0].max() - tables['hind_pos'][mode, h_idx, :, 0].min()):>12.4f}"
                   f"{float(sp[:, 2].mean()):>14.4f}")
-    print(f"     高度阈值 HEIGHT_THRESHOLD = {HEIGHT_THRESHOLD} m (低于此值判为'压低'档)")
+    print(f"     高度阈值 THRESHOLD_HEIGHT = {THRESHOLD_HEIGHT} m (低于此值判为'压低'档)")
 
 
 # 命令: 回放位置表与阶段边界
@@ -154,9 +152,9 @@ def main() -> None:
     check_env()
     print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、四阶段课程 "
           "(0-1k 正常档随机 / 1k-2k 含低高度全档随机 / 2k-3k 位置表+虚拟碰撞 / 3k+ 位置表)、"
-          "动作 14 维 / 观测 205 维即为当前 Hole 基线")
-    print("     注: 阶段 4 的\"真实碰撞\"需要按阶段重建环境的机制, 尚未实现; "
-          "训练时限高板始终 contype=0 (回放为 1)")
+          "动作 14 维 / 观测 113 维即为当前 Hole 基线")
+    print("     注: 阶段 4 的实体碰撞由 rl/runner.py 在阶段边界重建环境完成 "
+          "(contype 编译期固化, 运行期改无效)")
 
 
 if __name__ == "__main__":
