@@ -32,8 +32,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.hole import (
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
-    get_reference_joint_pos,
-    get_reference_joint_vel,
+    get_reference_joint_state,
 )
 
 
@@ -186,8 +185,8 @@ class JointDataRecorder:
         record['height_F_error'] = f_height - float(command[3].item())
         record['height_H_error'] = h_height - float(command[4].item())
 
-        ref_pos = get_reference_joint_pos(unwrapped)[idx]
-        ref_vel = get_reference_joint_vel(unwrapped)[idx]
+        ref_pos, _ = get_reference_joint_state(unwrapped)[idx]
+        _, ref_vel = get_reference_joint_state(unwrapped)[idx]
         for i, name in enumerate(self.ref_names):
             record[f'{name}_ref_pos'] = float(ref_pos[i].item())
             record[f'{name}_ref_vel'] = float(ref_vel[i].item())
@@ -434,7 +433,7 @@ def run_play(cfg: PlayConfig):
         cmd_hist = []
         for _ in range(cfg.smoke_steps):
             act = policy(obs_in)
-            obs_dict, rew, dones, extras = env.step_inference(act)
+            obs_dict, rew, dones, extras = env.step_inference(act) # type: ignore
             obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
             cmd_hist.append(env.unwrapped.command_manager.get_command("hole_cmd")[0].clone()) # type: ignore
         cmds = torch.stack(cmd_hist)
