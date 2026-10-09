@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from .config import (
     BASE_HEIGHT,
     HEIGHT_LIST,
-    HEIGHT_THRESHOLD,
+    THRESHOLD_HEIGHT,
     NECK_REF_POS,
     NECK_REF_VEL,
     TABLE_RESOLUTION as _TABLE_RESOLUTION,
@@ -140,7 +140,7 @@ def CSV_Leg_Trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: 
                                   x_offset: float = 0.0, z_offset: float = 0.0,
                                   current_height: float = BASE_HEIGHT,
                                   is_front: bool = True) -> tuple[np.ndarray, np.ndarray]:
-    if current_height < HEIGHT_THRESHOLD:
+    if current_height < THRESHOLD_HEIGHT:
         x_val = 0.005 if is_front else 0.002
         return np.full_like(phases, x_val), np.full_like(phases, -0.02)
     
@@ -345,7 +345,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
             hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
-            is_low_height = target_height < HEIGHT_THRESHOLD
+            is_low_height = target_height < THRESHOLD_HEIGHT
 
             if is_low_height or mode in [1, 2]:
                 # 低高度模式：固定脊柱姿态
@@ -420,8 +420,8 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     current_time = env.episode_length_buf.float() * env.step_dt  # [num_envs]
 
     # 1. 计算 mode
-    front_low = desired_heightF < HEIGHT_THRESHOLD
-    hind_low = desired_heightH < HEIGHT_THRESHOLD
+    front_low = desired_heightF < THRESHOLD_HEIGHT
+    hind_low = desired_heightH < THRESHOLD_HEIGHT
 
     mode = torch.zeros_like(desired_heightF, dtype=torch.long)
     mode[(front_low) & (~hind_low)] = 1
