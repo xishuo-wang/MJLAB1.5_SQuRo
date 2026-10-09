@@ -405,101 +405,67 @@ def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
                       device=mode.device, dtype=torch.float32)
 
 
-# 获取参考关节位置
-def get_reference_joint_pos(env) -> torch.Tensor:
+# 获取参考状态
+def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     if not _IS_TABLE_INITIALIZED:
         Initialize_Tables(env.device)
-    
+
     tables = _PRECOMPUTED_TABLES
     device = env.device
+
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_heightF = cmd_term.command[:, 3]
     desired_heightH = cmd_term.command[:, 4]
-    
+
     current_time = env.episode_length_buf.float() * env.step_dt  # [num_envs]
-    
-    # 1. 先计算 mode
+
+    # 1. 计算 mode
     front_low = desired_heightF < HEIGHT_THRESHOLD
     hind_low = desired_heightH < HEIGHT_THRESHOLD
-    
+
     mode = torch.zeros_like(desired_heightF, dtype=torch.long)
     mode[(front_low) & (~hind_low)] = 1
     mode[(~front_low) & (hind_low)] = 2
-    
-    # 2. 根据 mode 获取每个环境的周期
+
+    # 2. 根据 mode 获取周期并计算相位
     mode_periods = tables["mode_periods"]  # [3]
-    period = mode_periods[mode] 
-    
-    # 3. 计算相位（向量化）
+    period = mode_periods[mode]
+
     phase = (current_time % period) / period
     phase_scaled = phase * (_TABLE_RESOLUTION - 1)
     phase_indices = phase_scaled.long().clamp(0, _TABLE_RESOLUTION - 1)
-    
+
+    # 3. 高度索引
     height_list = torch.tensor(HEIGHT_LIST, device=device)
+
     height_diffs_F = torch.abs(desired_heightF.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_F = torch.argmin(height_diffs_F, dim=1)
+
     height_diffs_H = torch.abs(desired_heightH.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_H = torch.argmin(height_diffs_H, dim=1)
-    
-    # 使用模式索引选择对应的表 (三段各取自己的列区间, 头颈两列恒 0)
+
+    min_height = torch.minimum(desired_heightF, desired_heightH)
+    height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
+    height_indices_min = torch.argmin(height_diffs_min, dim=1)
+
+    # 4. 取参考位置
     front_pos = tables["front_pos"][mode, height_indices_F, phase_indices, 0:4]
     hind_pos = tables["hind_pos"][mode, height_indices_H, phase_indices, 4:8]
-    
-    # 脊柱使用混合模式
-    min_height = torch.min(desired_heightF, desired_heightH)
-    height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
-    height_indices_min = torch.argmin(height_diffs_min, dim=1)
     spine_pos = tables["spine_pos"][mode, height_indices_min, phase_indices, 8:12]
-    
-    joint_pos = torch.cat([front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)], dim=1)
 
-    return joint_pos
-
-
-# 获取参考关节速度
-def get_reference_joint_vel(env) -> torch.Tensor:
-    if not _IS_TABLE_INITIALIZED:
-        Initialize_Tables(env.device)
-    
-    tables = _PRECOMPUTED_TABLES
-    device = env.device
-    cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_heightF = cmd_term.command[:, 3]
-    desired_heightH = cmd_term.command[:, 4]
-    
-    current_time = env.episode_length_buf.float() * env.step_dt
-    
-    height_threshold = HEIGHT_THRESHOLD
-    front_low = desired_heightF < height_threshold
-    hind_low = desired_heightH < height_threshold
-    
-    mode = torch.zeros_like(desired_heightF, dtype=torch.long)
-    mode[(front_low) & (~hind_low)] = 1
-    mode[(~front_low) & (hind_low)] = 2
-    
-    # 获取每个环境对应的周期
-    mode_periods = tables["mode_periods"]
-    period = mode_periods[mode]
-    
-    # 计算相位
-    phase = (current_time % period) / period    
-    phase_scaled = phase * (_TABLE_RESOLUTION - 1)
-    phase_indices = phase_scaled.long().clamp(0, _TABLE_RESOLUTION - 1)
-    
-    height_list = torch.tensor(HEIGHT_LIST, device=device)
-    height_diffs_F = torch.abs(desired_heightF.unsqueeze(1) - height_list.unsqueeze(0))
-    height_indices_F = torch.argmin(height_diffs_F, dim=1)
-    height_diffs_H = torch.abs(desired_heightH.unsqueeze(1) - height_list.unsqueeze(0))
-    height_indices_H = torch.argmin(height_diffs_H, dim=1)
-    
+    # 5. 取参考速度
     front_vel = tables["front_vel"][mode, height_indices_F, phase_indices, 0:4]
     hind_vel = tables["hind_vel"][mode, height_indices_H, phase_indices, 4:8]
-    
-    min_height = torch.min(desired_heightF, desired_heightH)
-    height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
-    height_indices_min = torch.argmin(height_diffs_min, dim=1)
     spine_vel = tables["spine_vel"][mode, height_indices_min, phase_indices, 8:12]
-    
-    joint_vel = torch.cat([front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)], dim=1)
-    
-    return joint_vel
+
+    # 6. 拼接头颈，头颈位置/速度恒定
+    joint_pos = torch.cat(
+        [front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)],
+        dim=1
+    )
+    joint_vel = torch.cat(
+        [front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)],
+        dim=1
+    )
+
+    return joint_pos, joint_vel
