@@ -37,11 +37,37 @@ STAGE3_POSITION_SCHEDULE = [
 ]
 
 
-# 根据目标高度计算缩放因子
-def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
-    if target_height < THRESHOLD_HEIGHT:
-        return 0.1
-    return target_height / base_height
+# 命令层的四种高度模式: 按前后肢各自是否低于阈值切分, 覆盖全部组合
+# 注: 参考表的 mode 只有 3 个 (它的 0 同时覆盖"双高"与"双低", 见 reference.py),
+# 两者是不同的分层, 不要互相替换
+MODE_BOTH_HIGH = 0
+MODE_FRONT_LOW = 1
+MODE_HIND_LOW = 2
+MODE_BOTH_LOW = 3
+
+
+# 按当前高度命令判定高度模式
+def get_height_mode(height_F: float, height_H: float) -> int:
+    front_low = height_F < THRESHOLD_HEIGHT
+    hind_low = height_H < THRESHOLD_HEIGHT
+    if front_low and hind_low:
+        return MODE_BOTH_LOW
+    if front_low:
+        return MODE_FRONT_LOW
+    if hind_low:
+        return MODE_HIND_LOW
+    return MODE_BOTH_HIGH
+
+
+# 按高度命令生成前向速度: 先按较低一侧做腿长缩放, 再按低高度侧数降速
+# v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2
+# 双高满速; 单低减半; 双低归零 (趴地保持静止)
+def compute_command_velocity(height_F, height_H):
+    lower = torch.minimum(height_F, height_H)
+    height_scale = lower / BASE_HEIGHT
+    n_low = (height_F < THRESHOLD_HEIGHT).long() + (height_H < THRESHOLD_HEIGHT).long()
+    speed_scale = (2.0 - n_low.float()) / 2.0
+    return BASE_SPEED * height_scale * speed_scale
 
 
 class HoleCommand(CommandTerm):
@@ -184,46 +210,31 @@ class HoleCommand(CommandTerm):
         # 重置起始位置
         self._update_start_positions(env_ids)
 
+
+    # 采样前后肢高度组合: 两侧独立采样, 四种模式 (双高/前低/后低/双低) 全部覆盖
     def _sample_heights(self, available_heights: list) -> tuple:
-        """采样前后肢高度组合"""
-        device = self.device
-        max_attempts = 10
-        for attempt in range(max_attempts):
-            height_F = torch.tensor(available_heights, device=device)[
-                torch.randint(0, len(available_heights), (1,), device=device)
-            ]
-            height_H = torch.tensor(available_heights, device=device)[
-                torch.randint(0, len(available_heights), (1,), device=device)
-            ]
-            
-            # 确保高度组合的合理性
-            if (height_F < THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT):
-                return height_F, height_H
-            elif (height_F >= THRESHOLD_HEIGHT and height_H < THRESHOLD_HEIGHT):
-                return height_F, height_H
-            elif (height_F >= THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT):
-                return height_F, height_F
-        
-        # 如果无法采样到合理组合，返回默认值
-        return torch.tensor(0.055, device=device), torch.tensor(0.055, device=device)
+        values = torch.tensor(available_heights, device=self.device)
+        idx_F = torch.randint(0, len(available_heights), (1,), device=self.device)
+        idx_H = torch.randint(0, len(available_heights), (1,), device=self.device)
+        return values[idx_F], values[idx_H]
 
+
+    # 绝对速度 (随机采样路径)
     def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        effective_height = min(height_F.item(), height_H.item())
-        height_scale = get_height_scale_factor(effective_height, BASE_HEIGHT)
-        speed = BASE_SPEED * height_scale
-        return speed
+        return float(compute_command_velocity(height_F, height_H))
 
 
+    # 决定角度
     def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        """根据高度决定角度命令"""
         if height_F >= THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT:
             return 0.0
         else:
             angle_idx = torch.randint(0, len(ANGLE_VALUES), (1,), device=self.device)
             return self.angle_values_tensor[angle_idx].item()
 
+
+    # 根据位置表更新命令
     def _update_command_from_schedule(self, env_ids: torch.Tensor, schedule: List[Tuple[float, float, float]]) -> None:
-        """根据位置表批量更新命令 - 基于移动距离"""
         if not schedule:
             return
         
@@ -251,10 +262,8 @@ class HoleCommand(CommandTerm):
         height_F = schedule_hF[schedule_indices]  # [n_envs]
         height_H = schedule_hH[schedule_indices]  # [n_envs]
         
-        # 批量计算速度（使用向量化操作）
-        effective_height = torch.minimum(height_F, height_H)  # [n_envs]
-        height_scale = effective_height / BASE_HEIGHT        # [n_envs]
-        vel_x = BASE_SPEED * height_scale                    # [n_envs]
+        # 速度与随机采样路径共用同一公式 (见 compute_command_velocity)
+        vel_x = compute_command_velocity(height_F, height_H)
         
         # 显式值优先于位置表: 显式指定的字段在位置表算完后覆盖
         if self.cfg.fixed_height_F is not None:
