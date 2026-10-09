@@ -5,7 +5,7 @@ from .config import (
     STAGE1_END_ITER,
     STAGE2_END_ITER,
     STAGE3_END_ITER,
-    STEPS_PER_ITER as _STEPS_PER_ITER,
+    STEPS_PER_ITER,
     get_current_stage,
     stage_requires_collision,
 )
@@ -20,12 +20,8 @@ _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 
 
 
-# 障碍物碰撞开关由 config.stage_requires_collision 判定, 实际切换由 runner 重建环境完成;
-# 这里只保留只读视图 should_enable_holes 供基线脚本展示课程意图
 
-
-
-# 奖励权重课程曲线: 每个奖励项/σ 一条曲线, 按 iter 落在 _STAGES 的第几档取值
+# 奖励权重课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
     "mimic_pos":                (14.0, 14.0, 14.0, 14.0),
@@ -49,7 +45,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 # 奖励权重课程: 按当前训练 iter 返回各奖励项权重/σ
 class RewardWeightCurriculum:
     def get_reward_weights(self, current_step: int) -> dict[str, float]:
-        current_iter = current_step // _STEPS_PER_ITER
+        current_iter = current_step // STEPS_PER_ITER
         result: dict[str, float] = {}
         for name, values in _CURVES.items():
             idx = 0
@@ -62,7 +58,7 @@ class RewardWeightCurriculum:
 
 
     def get_current_stage_info(self, current_step: int) -> dict[str, Any]:
-        current_iter = current_step // _STEPS_PER_ITER
+        current_iter = current_step // STEPS_PER_ITER
         stage = 0
         for t in _STAGES:
             if current_iter >= t:
@@ -87,7 +83,7 @@ class RewardWeightCurriculum:
     # 兼容旧接口: 按阶段阈值 (步数) 展开的权重表视图
     @property
     def weight_stages(self) -> dict[int, dict[str, float]]:
-        return {t * _STEPS_PER_ITER: self.get_reward_weights(t * _STEPS_PER_ITER)
+        return {t * STEPS_PER_ITER: self.get_reward_weights(t * STEPS_PER_ITER)
                 for t in _STAGES}
 
 
