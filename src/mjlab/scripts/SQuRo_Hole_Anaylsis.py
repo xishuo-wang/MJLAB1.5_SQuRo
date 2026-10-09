@@ -13,7 +13,7 @@ from scipy.signal import welch, savgol_filter, find_peaks
 # ==================================================================================================
 # 文件路径配置
 XML_PATH = r"D:\MuJoCoLab_1.5\src\mjlab\asset_zoo\robots\SQuRo\xmls\SQuRo.xml"
-CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Hole\2026-10-09_15-29-55\videos\SQuRo_Hole_1900-fixed-hF40-hH40-col0-noobs.csv"
+CSV_PATH = r"D:\MuJoCoLab_1.5\logs\rsl_rl\SQuRo_Hole\reference_replay\2026-10-09_16-46-24_458847_fixed-hF55-hH20-col0\reference.csv"
 
 # 控制时间配置
 TIMESTEP = 0.002
@@ -768,11 +768,17 @@ class CSVDataAnalyzer:
         if df is None:
             return
 
-        new_columns = {'time': df['step'] * DT,}
-        for name in FOOT_NAMES:
-            new_columns[f'foot_{name}_rx'] = df[f'foot_{name}_x'] - df['base_pos_x']
+        # 只在缺失时补齐派生列，避免与 CSV 里已有的同名列冲突
+        if 'time' not in df.columns:
+            df['time'] = df['step'] * DT
+        else:
+            # 已有 time 列时保留原值；若类型不是 float 就强制转换一次
+            df['time'] = df['time'].astype(float)
 
-        df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
+        for name in FOOT_NAMES:
+            col = f'foot_{name}_rx'
+            if col not in df.columns:
+                df[col] = df[f'foot_{name}_x'] - df['base_pos_x']
         self.motion_df_full = df.copy()
         self.motion_df = df[(df['time'] >= START_TIME) & (df['time'] <= END_TIME)].copy()
         if len(self.motion_df) == 0:
