@@ -17,9 +17,11 @@ TABLE_RESOLUTION = 500
 # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
 USE_SPINE_CSV = False
 
-# 头颈在参考表里的期望位置与速度: 恒为 0 (期望"头保持不动")
-NECK_REF_POS = 0.0
-NECK_REF_VEL = 0.0
+# 头颈在参考表里的期望位置与速度: 逐关节给出, 顺序固定 (Neck_yaw, Neck_pitch)
+# Neck_pitch = -0.3 与 indices.NECK_INIT_POS 一致: 复位姿态即参考姿态,
+# 于是 action=0 恰好维持头部俯仰, 动作不产生稳态偏置
+NECK_REF_POS = (0.0, -0.3)
+NECK_REF_VEL = (0.0, 0.0)
 
 
 

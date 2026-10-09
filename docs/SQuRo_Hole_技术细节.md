@@ -27,7 +27,7 @@ src/mjlab/tasks/SQuRo_Hole/
 │   ├── events.py      # reset_model: 固定起点 (0,0,0.06) + 头颈 0.0/-0.3
 │   ├── hole.py        # HoleEntity: 限高板 box
 │   ├── observations.py# 自定义观测 (base_pos / base_lin_vel_w / joint_acc / actuator_force / heading)
-│   ├── reference.py   # [模式3][高度档4][相位500][14] ×3 参考表 + 速度表 (头颈两列恒 0)
+│   ├── reference.py   # [模式3][高度档4][相位500][14] ×3 参考表 + 速度表 (头颈两列恒为 (0.0, -0.3))
 │   ├── rewards.py     # 奖励项 (含 body_contact 虚拟碰撞)
 │   ├── terminations.py# check_fallen
 │   ├── indices.py     # 按名解析关节/site 索引 (版本无关工具, 沿用)
@@ -122,8 +122,10 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 - **模式 1**（前低）：前腿冻结在固定姿态，后腿走**摆线**（`CYCLOID_PARAMS["front_low"]`）；
 - **模式 2**（后低）：对称；
 - **低高度档**（`h < 0.04`）整表冻结；脊柱列 `F_spine1 = −0.65`；
-- **头颈两列恒为 0**（`NECK_REF_POS = NECK_REF_VEL = 0`，不随模式/高度/相位变化）
-  —— 期望"头保持不动"；与 `INIT_STATE` 的 `Neck_pitch = -0.3` 无关，策略需把俯仰拉到 0；
+- **头颈两列恒为定值**（`NECK_REF_POS = (0.0, -0.3)`、`NECK_REF_VEL = (0.0, 0.0)`，
+  顺序固定为 `(Neck_yaw, Neck_pitch)`，不随模式/高度/相位变化）—— 期望"头保持不动"；
+  `Neck_pitch = -0.3` **与 `indices.NECK_INIT_POS` 一致**，所以复位姿态 = 参考姿态、
+  `action = 0` 恰好维持该俯仰（见 §9.8）；
 - `USE_SPINE_CSV = False`：脊柱 CSV 默认不参与（`XoY/YoZ_Spine_Smooth.csv` 已随任务打包，备用）。
 
 实测（取值经表内列序核对，`spine_pos` 四列 = `[F_spine1, F_body, H_spine1, H_body]`）：
@@ -339,7 +341,7 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 | 10 | 机器人 | `get_mouse_robot_cfg()`（12 执行器，无颈部） | 共享 `get_squro_robot_cfg()`（14 执行器，含头颈） | 按用户要求把头颈纳入动作空间；见 §2 |
 | 11 | 命名 | `Mjlab-Mouse` / `Mouse_*` / `mouse_cmd` / `experiment_name="mouse_locomotion"` | `Mjlab-SQuRo-Hole` / `Hole*` / `hole_cmd` / `"SQuRo_Hole"` | 与仓库其余任务统一；任务 ID 是全仓库/文档的引用点 |
 | 12 | 周边脚本 | — | `SQuRo_Hole_play.py` 的碰撞开关就地改写实体；`verify_hole_baseline.py` 按三阶段/205/14 重写 | 原脚本依赖被覆盖的四阶段版内部接口 |
-| 13 | 头颈纳入 | 参考表 12 列、`JOINT_IDS` 12 项、无头颈重置 | 参考表 14 列（头颈恒 0）、`JOINT_IDS` 加 `[4, 5]`、重置加 `Neck 0.0 / -0.3` | 用户要求头颈进动作空间；`events.py` 两列表同步 30 项 |
+| 13 | 头颈纳入 | 参考表 12 列、`JOINT_IDS` 12 项、无头颈重置 | 参考表 14 列（头颈取 `NECK_REF_POS = (0.0, -0.3)`）、`JOINT_IDS` 加 `[4, 5]`、重置加 `Neck 0.0 / -0.3` | 用户要求头颈进动作空间；`events.py` 两列表同步 30 项 |
 
 除以上 13 项外，任务逻辑、奖励口径、参考表生成、课程数值、位置表均与 Backup 原码一致。
 
@@ -418,6 +420,15 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
    仍写死字面量 4 / 24（`body_link_pos_w[:, 4]`、`[:, 24]`、`[:, 4]` 等 6 处），
    违反 AGENTS.md"索引不硬编码"。实测解析结果确实等于 4 / 24，所以**当前结果正确**，
    但 `indices.py` 里的 `resolve_model_indices` 已解析出 `f_body_id` / `h_body_id`，应当改用。
+8. **头颈动作偏置（已修）**：`JointPositionActionCfg(use_default_offset=True)` 使动作的
+   零点等于 `init_state`。原先 `NECK_INIT_POS` 的俯仰是 −0.3 而参考表期望 0.0，两者矛盾
+   → 策略必须持续输出 `action ≈ +1.0` 才能维持在参考位，实测动作均值达 **4.2~5.1**，
+   而 `action ∈ [−2, +4]` 才落在 `Neck_pitch` 的 `ctrlrange [-0.9, 0.9]` 内 →
+   **71% 的目标被截断**、执行器每步顶在 `forcerange 0.1` 上、关节剧烈抖动。
+   修法是把参考改成与复位一致（`NECK_REF_POS = (0.0, -0.3)`），使复位姿态即参考姿态：
+   实测零动作推 300 步后 `Neck_pitch = −0.3003`（等效 action **−0.001**）、`Neck_yaw = 0`、
+   与参考误差 0.0003。**注**：关节坐标本身是 XML 绝对量（`Neck_pitch_joint` 无 `ref`，
+   `range` 对称 ±1.57），`init_state` 不改零点；被偏移的只有动作空间。
 
 ## 10. 当前训练状态（实测）
 

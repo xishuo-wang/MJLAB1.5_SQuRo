@@ -393,16 +393,16 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     return tables
 
 
-# 头颈参考位置: 与模式/高度无关, 恒为 NECK_REF_POS (期望头保持不动)
+# 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
 def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
-    return torch.full((mode.shape[0], len(NECK_IDS)), NECK_REF_POS,
-                      device=mode.device, dtype=torch.float32)
+    values = torch.tensor(NECK_REF_POS, device=mode.device, dtype=torch.float32)
+    return values.unsqueeze(0).expand(mode.shape[0], len(NECK_IDS))
 
 
-# 头颈参考速度: 恒为 NECK_REF_VEL
+# 头颈参考速度: 同位置, 逐关节取 NECK_REF_VEL
 def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
-    return torch.full((mode.shape[0], len(NECK_IDS)), NECK_REF_VEL,
-                      device=mode.device, dtype=torch.float32)
+    values = torch.tensor(NECK_REF_VEL, device=mode.device, dtype=torch.float32)
+    return values.unsqueeze(0).expand(mode.shape[0], len(NECK_IDS))
 
 
 # 获取参考状态
