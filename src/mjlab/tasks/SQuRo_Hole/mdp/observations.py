@@ -3,7 +3,7 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from .reference import get_reference_joint_pos, get_reference_joint_vel
+from .reference import get_reference_joint_state
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
 
 if TYPE_CHECKING:
@@ -63,12 +63,12 @@ def actuator_force(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg = ACTUATE
 
 # 参考关节位置
 def ref_joint_pos(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    pos = get_reference_joint_pos(env)
+    pos, _ = get_reference_joint_state(env)
     return pos
 
 
 
 # 参考关节速度
 def ref_joint_vel(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    vel = get_reference_joint_vel(env)
+    _, vel = get_reference_joint_state(env)
     return vel
