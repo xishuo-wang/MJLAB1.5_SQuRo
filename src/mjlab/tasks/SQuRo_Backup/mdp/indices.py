@@ -1,3 +1,4 @@
+from __future__ import annotations
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
