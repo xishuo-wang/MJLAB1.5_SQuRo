@@ -10,20 +10,22 @@ from typing import Any, Literal, cast
 import numpy as np
 import pandas as pd
 import torch
-import tyro
 
 import mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionAction
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Hole.mdp.command import HoleCommandCfg
-from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_LIST, TABLE_RESOLUTION
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    HEIGHT_LIST,
+    TABLE_RESOLUTION,
+    THRESHOLD_HEIGHT,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.hole import build_hole_entities
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     Initialize_Tables,
-    get_reference_joint_pos,
-    get_reference_joint_vel,
+    get_reference_joint_state,
     resolve_joint_ids,
 )
 from mjlab.utils.wrappers import VideoRecorder
@@ -32,23 +34,38 @@ from mjlab.viewer import NativeMujocoViewer
 
 @dataclass(frozen=True)
 class ReplayConfig:
-    # 前躯干目标高度，单位为米。
     height_f: float
-    # 后躯干目标高度，单位为米。
     height_h: float
-    # 显示查看器、录视频或无窗运行。
     visualize: Literal["viewer", "video", "none"] = "viewer"
-    # 最大回放仿真时长，单位为秒。
     duration: float = 10.0
-    # 仿真设备，默认自动选择。
     device: str | None = None
-    # 是否启用限高板真实碰撞。
     enable_collision: bool = False
-    # CSV、曲线和视频的输出根目录。
     output_dir: Path = Path("logs/rsl_rl/SQuRo_Hole/reference_replay")
 
 
-# 锁定高度命令并关闭自动课程，详见 docs/SQuRo_Hole_参考回放.md。
+# ==================== 直接给定的回放参数 ====================
+HEIGHT_F = 0.055
+HEIGHT_H = 0.055
+VISUALIZE = "viewer"
+DURATION = 10.0
+DEVICE = None
+ENABLE_COLLISION = False
+OUTPUT_DIR = Path("logs/rsl_rl/SQuRo_Hole/reference_replay")
+# ==========================================================
+
+
+# ---------- 工具函数 ----------
+def _strip_joint_suffix(name: str) -> str:
+    """'F_spine1_joint' → 'F_spine1'，让列名与 CSV_Anaylsis.py 的约定一致。"""
+    return name[:-6] if name.endswith("_joint") else name
+
+
+def _quat_to_yaw(q: torch.Tensor) -> float:
+    """四元数 (w, x, y, z) → 偏航角 (rad)。"""
+    w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
 def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 1
@@ -68,7 +85,6 @@ def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     return cfg
 
 
-# 按参考列序解析动作和执行器映射，保留模型限位。
 class ReferenceTablePolicy:
     # 按名称绑定参考列、动作列和模型控制范围。
     def __init__(self, env: ManagerBasedRlEnv) -> None:
@@ -76,6 +92,9 @@ class ReferenceTablePolicy:
         self.robot = env.scene["robot"]
         self.joint_ids = resolve_joint_ids(self.robot)
         self.names = [self.robot.joint_names[i] for i in self.joint_ids]
+        # 去掉 "_joint" 后缀，与 CSV_Anaylsis.py 的列名一致
+        self.clean_names = [_strip_joint_suffix(n) for n in self.names]
+
         self.action_term = cast(JointPositionAction, env.action_manager.get_term("joint_pos"))
         column_by_joint = {joint_id: col for col, joint_id in enumerate(self.joint_ids)}
         self.action_columns = [column_by_joint[i] for i in self.action_term.target_ids.tolist()]
@@ -85,6 +104,11 @@ class ReferenceTablePolicy:
             raise ValueError("参考回放要求动作项没有额外裁剪")
         if torch.any(torch.as_tensor(self.action_term.scale) == 0):
             raise ValueError("动作缩放不能为零")
+
+        # 动作顺序 → 参考顺序 的反向映射（用于记录 {joint}_action）
+        self.ref_to_action_col: list[int | None] = [None] * len(self.joint_ids)
+        for act_col, ref_col in enumerate(self.action_columns):
+            self.ref_to_action_col[ref_col] = act_col
 
         model = env.sim.mj_model
         ctrl_ids = self.robot.indexing.ctrl_ids.tolist()
@@ -96,10 +120,23 @@ class ReferenceTablePolicy:
         self.joint_limits = self.robot.data.joint_pos_limits[0, self.joint_ids].cpu().numpy()
         self.ctrl_limits = model.actuator_ctrlrange[self.ctrl_ids].copy()
         self.ctrl_limits[~model.actuator_ctrllimited[self.ctrl_ids].astype(bool)] = [-np.inf, np.inf]
-        self.records: list[dict[str, float]] = []
+
+        # 足端 site —— 与 indices.py 的 FOOT_SITE_NAMES 对应
+        self.foot_names = ["FL", "FR", "HL", "HR"]
+        self.foot_site_names = ["FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site"]
+        self._foot_site_ids: torch.Tensor | None = None
+
+        # 步态基频：参考表固定为 2.0 Hz（CYCLOID_PARAMS / BASE_FREQ）
+        self.gait_freq = 2.0
+
+        self.records: list[dict[str, Any]] = []
         self._last_step: tuple[int, int] | None = None
 
-    # 使用训练侧查询函数扫描完整周期并报告不可达目标。
+    def _ensure_foot_sites(self) -> None:
+        if self._foot_site_ids is None:
+            self._foot_site_ids, _ = self.robot.find_sites(self.foot_site_names, preserve_order=True)
+
+    # ---------- 与原来相同：扫描一个完整周期，检查限位冲突 ----------
     def report_reference_limits(self) -> None:
         command = self.env.command_manager.get_command("hole_cmd")
         tables = Initialize_Tables(self.env.device)
@@ -109,10 +146,11 @@ class ReferenceTablePolicy:
             step_dt=period / TABLE_RESOLUTION,
             episode_length_buf=torch.arange(TABLE_RESOLUTION, device=self.env.device),
             command_manager=SimpleNamespace(_terms={
-                "hole_cmd": SimpleNamespace(command=command.expand(TABLE_RESOLUTION, -1))
+                "hole_cmd": SimpleNamespace(command=command.expand(TABLE_RESOLUTION, -1))  # type: ignore
             }),
         )
-        reference = get_reference_joint_pos(probe).cpu().numpy()
+        reference, _ = get_reference_joint_state(probe)
+        reference = reference.cpu().numpy()
         lower = np.maximum(self.joint_limits[:, 0], self.ctrl_limits[:, 0])
         upper = np.minimum(self.joint_limits[:, 1], self.ctrl_limits[:, 1])
         conflicts = (reference < lower - 1e-6) | (reference > upper + 1e-6)
@@ -124,48 +162,167 @@ class ReferenceTablePolicy:
         if not conflicts.any():
             print("[限位检查] 当前高度对应的参考未超出关节和执行器控制范围")
 
-    # 同一仿真时刻记录原始参考、实际状态与执行器控制范围。
-    def record(self, reference: torch.Tensor, velocity: torch.Tensor) -> None:
+    # ---------- 关键改动：一次写入 CSV_Anaylsis.py 所需的全部列 ----------
+    def record(self, reference: torch.Tensor, velocity: torch.Tensor,
+               action: torch.Tensor | None = None) -> None:
         env = self.env
         step = (int(env.common_step_counter), int(env.episode_length_buf[0]))
         if step == self._last_step:
             return
         self._last_step = step
+
         robot = self.robot
         idx = _MODEL_INDICES
-        cmd = env.command_manager.get_command("hole_cmd")[0].cpu().numpy()
+        self._ensure_foot_sites()
+
+        # ---- 参考 ----
         ref = reference[0].cpu().numpy()
         ref_vel = velocity[0].cpu().numpy()
+
+        # ---- 实际关节状态 ----
         pos = robot.data.joint_pos[0, self.joint_ids].cpu().numpy()
         vel = robot.data.joint_vel[0, self.joint_ids].cpu().numpy()
         force = robot.data.actuator_force[0, self.force_columns].cpu().numpy()
+
+        # ---- 动作按参考顺序重排 ----
+        if action is not None:
+            action_np = action[0].detach().cpu().numpy()
+            action_in_ref = np.zeros(len(self.joint_ids), dtype=np.float32)
+            for ref_col, act_col in enumerate(self.ref_to_action_col):
+                if act_col is not None:
+                    action_in_ref[ref_col] = action_np[act_col]
+        else:
+            action_in_ref = None
+
         target = np.clip(ref, self.ctrl_limits[:, 0], self.ctrl_limits[:, 1])
-        row = {
-            "time": step[0] * env.step_dt,
-            "reference_time": step[1] * env.step_dt,
-            "x": float(robot.data.root_link_pos_w[0, 0]),
-            "vx": float(robot.data.root_link_lin_vel_w[0, 0]),
-            "height_F_command": float(cmd[3]),
-            "height_H_command": float(cmd[4]),
-            "height_F_actual": float(robot.data.body_link_pos_w[0, idx.f_body_id, 2]),
-            "height_H_actual": float(robot.data.body_link_pos_w[0, idx.h_body_id, 2]),
+
+        # ---- 基座位姿 / 速度 / 角速度 ----
+        base_pos = robot.data.root_link_pos_w[0].cpu().numpy()
+        base_lin_vel = robot.data.root_link_lin_vel_w[0].cpu().numpy()
+        base_ang_vel = robot.data.root_link_ang_vel_w[0].cpu().numpy()
+
+        # ---- F_body / H_body 偏航角 ----
+        f_quat = robot.data.body_link_quat_w[0, idx.f_body_id]
+        h_quat = robot.data.body_link_quat_w[0, idx.h_body_id]
+        f_body_yaw = _quat_to_yaw(f_quat)
+        h_body_yaw = _quat_to_yaw(h_quat)
+
+        # ---- 足端世界坐标 ----
+        foot_pos = robot.data.site_pos_w[0, self._foot_site_ids].cpu().numpy()  # (4, 3)
+
+        # ---- 足端接触力 ----
+        contact_sensor = env.scene["feet_ground_contact"]
+        feet_contact = contact_sensor.data.force.flatten(start_dim=1)[0].cpu().numpy()  # (12,)
+
+        # ---- 命令 ----
+        cmd = env.command_manager.get_command("hole_cmd")[0].cpu().numpy() # type: ignore
+        hF_cmd = float(cmd[3])
+        hH_cmd = float(cmd[4])
+        hF_act = float(robot.data.body_link_pos_w[0, idx.f_body_id, 2])
+        hH_act = float(robot.data.body_link_pos_w[0, idx.h_body_id, 2])
+
+        t_global = step[0] * env.step_dt
+        t_episode = step[1] * env.step_dt
+
+        row: dict[str, Any] = {
+            # ---- 时间与步 ----
+            "step": float(step[0]),
+            "time": t_global,
+            "reference_time": t_episode,
+
+            # ---- 基座 ----
+            "base_pos_x": float(base_pos[0]),
+            "base_pos_y": float(base_pos[1]),
+            "base_pos_z": float(base_pos[2]),
+            "base_vel_x": float(base_lin_vel[0]),
+            "base_vel_y": float(base_lin_vel[1]),
+            "base_vel_z": float(base_lin_vel[2]),
+            # 分析脚本使用的命名
+            "base_lin_vel_x": float(base_lin_vel[0]),
+            "base_lin_vel_y": float(base_lin_vel[1]),
+            "base_lin_vel_z": float(base_lin_vel[2]),
+            "base_ang_vel_x": float(base_ang_vel[0]),
+            "base_ang_vel_y": float(base_ang_vel[1]),
+            "base_ang_vel_z": float(base_ang_vel[2]),
+
+            # ---- 朝向（三级回退由分析脚本负责） ----
+            "f_body_heading": float(f_body_yaw),
+            "h_body_heading": float(h_body_yaw),
+            "heading": float(f_body_yaw),
+
+            # ---- 旧字段保留（save() 里的曲线还引用 x / vx） ----
+            "x": float(base_pos[0]),
+            "vx": float(base_lin_vel[0]),
+
+            # ---- 命令 ----
+            "vel_command_x": float(cmd[0]),
+            "vel_command_y": float(cmd[1]),
+            "vel_command_z": float(cmd[2]),
+            "height_F_command": hF_cmd,
+            "height_H_command": hH_cmd,
+            "angle_command": float(cmd[5]),
+            "gait_freq_command": float(self.gait_freq),
+
+            # ---- 高度（命令 vs 实测，两种命名都写） ----
+            "height_F_actual": hF_act,
+            "height_H_actual": hH_act,
+            "F_body_height": hF_act,
+            "H_body_height": hH_act,
             "front_surface_max_z": float(robot.data.site_pos_w[0, list(idx.front_seg_site_ids), 2].max()),
             "rear_surface_max_z": float(robot.data.site_pos_w[0, list(idx.rear_seg_site_ids), 2].max()),
         }
-        for col, name in enumerate(self.names):
-            for suffix, values in [("ref_pos", ref), ("ref_vel", ref_vel), ("pos", pos),
-                                   ("vel", vel), ("control_target", target), ("force", force)]:
-                row[f"{name}_{suffix}"] = float(values[col])
+
+        # ---- 高度模式与误差 ----
+        low_F = hF_cmd < THRESHOLD_HEIGHT
+        low_H = hH_cmd < THRESHOLD_HEIGHT
+        if low_F and not low_H:
+            row["mode"] = "前低后高"
+        elif low_H and not low_F:
+            row["mode"] = "前高后低"
+        elif low_F and low_H:
+            row["mode"] = "双低"
+        else:
+            row["mode"] = "都高"
+        row["height_F_error"] = hF_act - hF_cmd
+        row["height_H_error"] = hH_act - hH_cmd
+
+        # ---- 足端位置 + 接触力 ----
+        for i, fname in enumerate(self.foot_names):
+            row[f"foot_{fname}_x"] = float(foot_pos[i, 0])
+            row[f"foot_{fname}_y"] = float(foot_pos[i, 1])
+            row[f"foot_{fname}_z"] = float(foot_pos[i, 2])
+            fx = float(feet_contact[i * 3])
+            fy = float(feet_contact[i * 3 + 1])
+            fz = float(feet_contact[i * 3 + 2])
+            row[f"contact_{fname}_x"] = fx
+            row[f"contact_{fname}_y"] = fy
+            row[f"contact_{fname}_z"] = fz
+            row[f"contact_{fname}_mag"] = float(np.sqrt(fx * fx + fy * fy + fz * fz))
+
+        # ---- 每个关节 ----
+        for col, cname in enumerate(self.clean_names):
+            row[f"{cname}_pos"] = float(pos[col])
+            row[f"{cname}_vel"] = float(vel[col])
+            row[f"{cname}_force"] = float(force[col])
+            # 分析脚本使用的别名
+            row[f"{cname}_torque"] = float(force[col])
+            row[f"{cname}_ref_pos"] = float(ref[col])
+            row[f"{cname}_ref_vel"] = float(ref_vel[col])
+            row[f"{cname}_control_target"] = float(target[col])
+            if action_in_ref is not None:
+                row[f"{cname}_action"] = float(action_in_ref[col])
+
         self.records.append(row)
 
-    # 将原始参考按动作项实际关节顺序反解为位置控制动作。
+    # ---- 与原版相同，但把 action 传给 record ----
     def __call__(self, obs: Any) -> torch.Tensor:
-        reference = get_reference_joint_pos(self.env)
-        self.record(reference, get_reference_joint_vel(self.env))
+        reference, velocity = get_reference_joint_state(self.env)
         target = reference[:, self.action_columns]
-        return (target - self.action_term.offset) / self.action_term.scale
+        action = (target - self.action_term.offset) / self.action_term.scale
+        self.record(reference, velocity, action=action)
+        return action
 
-    # 保存对照数据与曲线，查看器和视频共用同一记录。
+    # ---------- save：把 self.names 换成 clean_names ----------
     def save(self, output_dir: Path) -> None:
         if not self.records:
             return
@@ -179,21 +336,22 @@ class ReferenceTablePolicy:
         output_dir.mkdir(parents=True, exist_ok=True)
         data = pd.DataFrame(self.records)
         data.to_csv(output_dir / "reference.csv", index=False, encoding="utf-8-sig")
+
         fig, axes = plt.subplots(4, 4, figsize=(16, 11), sharex=True, constrained_layout=True)
-        for col, name in enumerate(self.names):
+        for col, cname in enumerate(self.clean_names):
             ax = axes.flat[col]
-            ax.plot(data.time, data[f"{name}_ref_pos"], label="原始参考", linestyle="--")
-            ax.plot(data.time, data[f"{name}_control_target"], label="限幅控制目标", linestyle=":")
-            ax.plot(data.time, data[f"{name}_pos"], label="实际角度")
+            ax.plot(data.time, data[f"{cname}_ref_pos"], label="原始参考", linestyle="--")
+            ax.plot(data.time, data[f"{cname}_control_target"], label="限幅控制目标", linestyle=":")
+            ax.plot(data.time, data[f"{cname}_pos"], label="实际角度")
             for limit in self.joint_limits[col]:
                 if np.isfinite(limit):
                     ax.axhline(limit, color="red", linewidth=.6, alpha=.5)
-            ax.set_title(f"关节：{name}")
+            ax.set_title(f"关节：{cname}")
             ax.set_ylabel("角度（弧度）")
             ax.set_xlabel("仿真时间（秒）")
             ax.grid(alpha=.2)
             ax.legend(fontsize=7)
-        for ax in list(axes.flat)[len(self.names):]:
+        for ax in list(axes.flat)[len(self.clean_names):]:
             ax.set_visible(False)
         fig.suptitle("Hole 固定高度参考与实际关节对照")
         fig.savefig(output_dir / "joint_tracking.png", dpi=130)
@@ -218,42 +376,68 @@ class ReferenceTablePolicy:
         print(f"[输出] 参考／实际关节与高度曲线、CSV：{output_dir.resolve()}")
 
 
-# 回放固定高度的生产参考，不加载策略检查点。
+# ---------- main 保持原样 ----------
 def main() -> None:
-    args = tyro.cli(ReplayConfig)
+    args = ReplayConfig(
+        height_f=HEIGHT_F,
+        height_h=HEIGHT_H,
+        visualize=VISUALIZE,
+        duration=DURATION,
+        device=DEVICE,
+        enable_collision=ENABLE_COLLISION,
+        output_dir=OUTPUT_DIR,
+    )
+
     if not all(math.isfinite(v) and v > 0 for v in [args.height_f, args.height_h, args.duration]):
         raise ValueError("前后高度和回放时长必须为有限正数")
+
     device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     output_dir = args.output_dir / (
         f"{stamp}_fixed-hF{args.height_f * 1000:g}-hH{args.height_h * 1000:g}"
         f"-col{int(args.enable_collision)}"
     )
+
     cfg = configure_env(args)
-    env = ManagerBasedRlEnv(cfg=cfg, device=device,
-                            render_mode="rgb_array" if args.visualize == "video" else None)
+    env = ManagerBasedRlEnv(
+        cfg=cfg,
+        device=device,
+        render_mode="rgb_array" if args.visualize == "video" else None,
+    )
     policy = None
     try:
         if args.duration < env.step_dt:
             raise ValueError(f"回放时长不能小于控制周期 {env.step_dt:g} 秒")
         steps = math.ceil(args.duration / env.step_dt)
         if args.visualize == "video":
-            env = VideoRecorder(env, video_folder=output_dir, step_trigger=lambda step: step == 0,
-                                video_length=steps, name_prefix="reference", disable_logger=True)
+            env = VideoRecorder(
+                env,
+                video_folder=output_dir,
+                step_trigger=lambda step: step == 0,
+                video_length=steps,
+                name_prefix="reference",
+                disable_logger=True,
+            )
         with torch.no_grad():
             env.reset()
             policy = ReferenceTablePolicy(env.unwrapped)
-            cmd = env.command_manager.get_command("hole_cmd")[0]
-            print(f"[固定参考] 前高 {float(cmd[3]) * 1000:g} mm，后高 {float(cmd[4]) * 1000:g} mm，"
-                  f"限高板碰撞 {'开启' if args.enable_collision else '关闭'}")
+            cmd = env.command_manager.get_command("hole_cmd")[0]  # type: ignore
+            print(
+                f"[固定参考] 前高 {float(cmd[3]) * 1000:g} mm，"
+                f"后高 {float(cmd[4]) * 1000:g} mm，"
+                f"限高板碰撞 {'开启' if args.enable_collision else '关闭'}"
+            )
             for label, col in [("前", 3), ("后", 4)]:
                 height = float(cmd[col])
                 nearest = min(HEIGHT_LIST, key=lambda value: abs(value - height))
                 if not math.isclose(height, nearest, abs_tol=1e-6):
-                    print(f"[参考查表] {label}高度 {height * 1000:g} mm → 最近档 {nearest * 1000:g} mm，沿用训练查询规则")
+                    print(
+                        f"[参考查表] {label}高度 {height * 1000:g} mm → "
+                        f"最近档 {nearest * 1000:g} mm，沿用训练查询规则"
+                    )
             policy.report_reference_limits()
             if args.visualize == "viewer":
-                viewer = NativeMujocoViewer(env, policy, frame_rate=60)
+                viewer = NativeMujocoViewer(env, policy, frame_rate=60)  # type: ignore
                 viewer.run(num_steps=steps)
             else:
                 for _ in range(steps):
