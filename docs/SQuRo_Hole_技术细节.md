@@ -291,13 +291,43 @@ x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start
 | 48000 | 2000–2999 | **1.0** | 5.0 | 5.0 | **4.0** | **0.5** | 14.0 |
 | 72000 | 3000–3999 | 1.0 | **10.0** | **10.0** | 4.0 | **1.0** | 14.0 |
 
-σ 曲线：`mimic_pos_sigma` = 5.0 / **10.0** / 10.0 / **5.0**，`mimic_vel_sigma` 恒 0.1，
+σ 曲线：`sigma_leg_pos` = 5.0 / **10.0** / 10.0 / **5.0**，`sigma_leg_vel` 恒 0.1，
+`sigma_spn_pos` = 5.0 / **10.0** / 10.0 / **5.0**，`sigma_spn_vel` 恒 0.1，
 `height_sigma` = **500 / 1000 / 1000 / 1000**。不随阶段变的还有 `mimic_vel`(5.0)、
-`foot_clearance`(1.0)、`reached`(1.0)、`angle`(1.0)。
+`foot_clearance`(1.0)、`reached`(1.0)、`angle`(1.0)、`alpha_spn_pos/vel`(1.0)、
+`alpha_neck_pos/vel`(0.30)。
+
+### 模仿奖励的分解（2026-10 重构，形态对齐 Backup）
+
+`mimic_pos` / `mimic_vel` 由"整 14 列一个 MSE"改为**按部位分组、各自 σ、加权求和**：
+腿部 8 列、脊柱 4 列、头颈 2 列分别算 MSE，再
+
+```
+reward = (r_leg + alpha_spn · r_spn) / 2 + alpha_neck · r_neck
+```
+
+分组用参考表列区间（前腿 4 + 后腿 4 = 0:8、脊柱 8:12、头颈 12:14），
+**不要用 `_ACT_*` 动作下标**——参考表列序是 `前腿+后腿+脊柱+头颈`，与执行器序不同位。
+
+脊柱误差在算 MSE 前逐轴缩放（`SPN_AXIS_SCALE`，顺序 = 参考表脊柱 4 列）：
+
+| 列 | 关节 | 轴 | 系数 |
+| --- | --- | --- | --- |
+| 8 | `F_spine1` | 侧摆 | **×1.5** |
+| 9 | `F_body` | 扭转 | ×0.7 |
+| 10 | `H_spine1` | 俯仰 | **×1.5** |
+| 11 | `H_body` | 扭转 | ×0.7 |
+
+即**放大俯仰与侧摆、压低扭转**——钻洞主要靠 `H_spine1` 俯仰把后躯干压低，
+而扭转对通过性贡献小。
+
+`height` 同样改为前后各半（原为 `0.4·F + 0.4·H + 0.2·base`）：删掉了 `base` 项
+（它拿 root 高度对比前后命令均值，语义不明确），改为 `0.5·r_F + 0.5·r_H`；
+`Metrics/height_base_error_mean` 这条曲线随之消失。
 
 **11 个奖励项**注册在 `env_cfg.rewards`（`mimic_pos / mimic_vel / velocity / height /
 foot_clearance / angle / orientation / smoothness / body_contact / stop / reached`）。
-跑满 4000 iter（96000 步）时生效的是第 4 段。
+跑满 4000 iter（192000 步）时生效的是第 4 段。
 
 原先还有一个 `"update": RewardTermCfg(func=mdp.update_curriculum, weight=1.0)`，它是旧版
 `enable_holes` 碰撞钩子的残留：只打印一行课程意图、恒返回 0。碰撞更新现已完全由
@@ -306,7 +336,7 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 一并删除**（对训练行为零影响；TensorBoard 里 `Episode_Reward/update` 这条恒 0 曲线也随之消失）。
 `curriculums.should_enable_holes` 作为只读视图保留，供基线脚本展示课程意图。
 
-`_CURVES` 里还有 `height_sigma`、`mimic_pos_sigma`、`mimic_vel_sigma` 三条非权重曲线，
+`_CURVES` 里除上表外还有 `height_sigma` 与模仿奖励的 σ/α 共 8 条非权重曲线，
 以及若干**已定义但未注册**的项（`energy` / `cot` / `joint_acc` / `y_offset` / `joint_limits` /
 `action_acc`），它们的取值在 `_CURVES` 里查不到、会落到 `get_curriculum_reward_weight`
 的默认 1.0。

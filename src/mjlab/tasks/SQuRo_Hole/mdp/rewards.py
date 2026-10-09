@@ -8,7 +8,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .hole import hole_geometry
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
-from .curriculums import get_curriculum_reward_weight
+from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .reference import (
     resolve_joint_ids,
@@ -22,49 +22,83 @@ if TYPE_CHECKING:
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
+# 参考表 14 列的列区间 (列序由 reference.REF_TABLE_ORDER 决定, 见 indices.py)
+_COL_LEG = slice(0, 8)        # 前腿 4 + 后腿 4
+_COL_SPN = slice(8, 12)       # F_spine1, F_body, H_spine1, H_body
+_COL_NECK = slice(12, 14)     # Neck_yaw, Neck_pitch
+
+_SPN_SCALE_CACHE: dict = {}
 
 
-# 计算位置模仿奖励
+
+# 缓存脊柱逐轴误差缩放 (顺序 = 参考表脊柱 4 列)
+def _spn_axis_scale(env, device, dtype) -> torch.Tensor:
+    scale = SPN_AXIS_SCALE
+    key = (str(device), str(dtype), scale)
+    s = _SPN_SCALE_CACHE.get(key)
+    if s is None:
+        s = torch.tensor(scale, device=device, dtype=dtype)
+        _SPN_SCALE_CACHE[key] = s
+    return s
+
+
+
+# 关节位置模仿奖励
 def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     joint_ids = resolve_joint_ids(asset)      # 参考表列序对应的模型关节索引
-    joint_pos = asset.data.joint_pos
-    target_joint_pos, _ = get_reference_joint_state(env)
-    current_pos = joint_pos[:, joint_ids]
-    pos_errors = current_pos - target_joint_pos
-    mse_errors = torch.mean(pos_errors ** 2, dim=1)
-    sigma = get_curriculum_reward_weight(env, "mimic_pos_sigma")
-    reward = torch.exp(-sigma * mse_errors)
+    joint_pos = asset.data.joint_pos[:, joint_ids]
+    ref_pos, _ = get_reference_joint_state(env)
+    error = joint_pos - ref_pos
+    error_spn = error[:, _COL_SPN] * _spn_axis_scale(env, error.device, error.dtype)
+    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
+    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
+    alpha_spn = get_curriculum_reward_weight(env, "alpha_spn_pos")
+    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_pos")
+    mse_leg = torch.mean(error[:, _COL_LEG] ** 2, dim=1)
+    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    mse_neck = torch.mean(error[:, _COL_NECK] ** 2, dim=1)
+    reward_leg = torch.exp(-sigma_leg * mse_leg)
+    reward_spn = torch.exp(-sigma_spn * mse_spn)
+    reward_neck = torch.exp(-sigma_spn * mse_neck)
+    reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_pos")
-    
+
     # 调试信息
     if env.common_step_counter % 1000 == 0:
-        leg_mse = torch.mean(pos_errors[:, :8] ** 2, dim=1).mean().item()
         print(f"Position Imitation Reward - Mean: {reward.mean().item():.3f}, "
-              f"Leg MSE: {leg_mse:.3f}")
-    
+              f"Leg MSE: {mse_leg.mean().item():.4f}, Spn MSE: {mse_spn.mean().item():.4f}, "
+              f"Neck MSE: {mse_neck.mean().item():.4f}")
+
     return reward * weight
 
 
-# 计算速度模仿奖励
+# 关节速度模仿奖励
 def compute_mimic_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     joint_ids = resolve_joint_ids(asset)
-    joint_vel = asset.data.joint_vel
-    _, target_joint_vel = get_reference_joint_state(env)
-    current_vel = joint_vel[:, joint_ids]
-    vel_errors = current_vel - target_joint_vel
-    mse_errors = torch.mean(vel_errors ** 2, dim=1)
-    
-    sigma = get_curriculum_reward_weight(env, "mimic_vel_sigma")
-    reward = torch.exp(-sigma * mse_errors)
+    joint_vel = asset.data.joint_vel[:, joint_ids]
+    _, ref_vel = get_reference_joint_state(env)
+    error = joint_vel - ref_vel
+    error_spn = error[:, _COL_SPN] * _spn_axis_scale(env, error.device, error.dtype)
+    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
+    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
+    alpha_spn = get_curriculum_reward_weight(env, "alpha_spn_vel")
+    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_vel")
+    mse_leg = torch.mean(error[:, _COL_LEG] ** 2, dim=1)
+    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    mse_neck = torch.mean(error[:, _COL_NECK] ** 2, dim=1)
+    reward_leg = torch.exp(-sigma_leg * mse_leg)
+    reward_spn = torch.exp(-sigma_spn * mse_spn)
+    reward_neck = torch.exp(-sigma_spn * mse_neck)
+    reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_vel")
-    
+
     # 调试信息
     if env.common_step_counter % 1000 == 0:
-        leg_mse = torch.mean(vel_errors[:, :8] ** 2, dim=1).mean().item()
         print(f"Velocity Imitation Reward - Mean: {reward.mean().item():.3f}, "
-              f"Leg MSE: {leg_mse:.3f}")
+              f"Leg MSE: {mse_leg.mean().item():.4f}, Spn MSE: {mse_spn.mean().item():.4f}, "
+              f"Neck MSE: {mse_neck.mean().item():.4f}")
 
     return reward * weight
 
@@ -92,35 +126,26 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return reward * weight
 
 
-# 高度奖励 
+# 身体高度跟踪奖励
 def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 获取实际高度
     asset: Entity = env.scene["robot"]
     body_pos_w = asset.data.body_link_pos_w
-    f_body_height = body_pos_w[:, 4, 2]             # 前肢身体高度
-    h_body_height = body_pos_w[:, 24, 2]            # 后肢身体高度
-    base_height = asset.data.root_link_pos_w[:, 2]
-    # 获取期望高度
+    F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_height_F = cmd_term.command[:, 3]       # 前肢高度命令
-    desired_height_H = cmd_term.command[:, 4]       # 后肢高度命令
-    desired_height = (desired_height_F + desired_height_H) / 2
-    # 计算高度误差
-    height_F_error = torch.abs(desired_height_F - f_body_height)
-    height_H_error = torch.abs(desired_height_H - h_body_height)
-    height_base_error = torch.abs(desired_height - base_height)
+    z_ref_F = cmd_term.command[:, 3]                # 前肢高度命令
+    z_ref_H = cmd_term.command[:, 4]                # 后肢高度命令
+    height_F_error = torch.abs(z_ref_F - F_body_height)
+    height_H_error = torch.abs(z_ref_H - H_body_height)
     # 记录 metrics
     env.extras["log"]["Metrics/height_F_error_mean"] = height_F_error.mean().item()
     env.extras["log"]["Metrics/height_H_error_mean"] = height_H_error.mean().item()
-    env.extras["log"]["Metrics/height_base_error_mean"] = height_base_error.mean().item()    
-    # 计算奖励
-    sigma = get_curriculum_reward_weight(env, "height_sigma")
-    reward_F = torch.exp(-sigma * height_F_error ** 2)
-    reward_H = torch.exp(-sigma * height_H_error ** 2)
-    reward_Base = torch.exp(-sigma * height_base_error ** 2)
-    reward = 0.4 * reward_F + 0.4 * reward_H + 0.2 * reward_Base
-    weight = get_curriculum_reward_weight(env, "height")    
-    return reward * weight
+    sigma_height = get_curriculum_reward_weight(env, "height_sigma")
+    w_height = get_curriculum_reward_weight(env, "height")
+    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
+    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)
+    Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
+    return Reward_height
 
 
 # 抬脚高度奖励（仅 Mode 0 触发）

@@ -34,11 +34,25 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
     "body_contact":             (0.0, 0.0, 5.0, 5.0),
-    # 非权重项
-    "mimic_pos_sigma":          (5.0, 10.0, 10.0, 5.0),
-    "mimic_vel_sigma":          (0.1, 0.1, 0.1, 0.1),
+    # 位置/速度模仿的腿部 σ 与颈部权重
+    "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
+    "alpha_neck_pos":           (0.30, 0.30, 0.30, 0.30),
+    "alpha_neck_vel":           (0.30, 0.30, 0.30, 0.30),
+    # 位置/速度模仿的脊柱 σ 与脊柱项权重
+    "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_spn_vel":            (0.1, 0.1, 0.1, 0.1),
+    "alpha_spn_pos":            (1.0, 1.0, 1.0, 1.0),
+    "alpha_spn_vel":            (1.0, 1.0, 1.0, 1.0),
+    # 高度 σ
     "height_sigma":             (500.0, 1000.0, 1000.0, 1000.0),
 }
+
+
+
+# 脊柱误差的逐轴缩放, 顺序 = 参考表脊柱 4 列 (F_spine1, F_body, H_spine1, H_body)
+# 即 (侧摆, 扭转, 俯仰, 扭转): 放大俯仰与侧摆 (>1), 压低扭转 (<1)
+SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)
 
 
 
