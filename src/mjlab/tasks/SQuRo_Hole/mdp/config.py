@@ -7,19 +7,10 @@ THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度 (取 0.0
 
 
 
-
-# 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
-HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]
-
-# 相位分辨率: 参考表第三维的采样点数
-TABLE_RESOLUTION = 500
-
-# 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
-USE_SPINE_CSV = False
-
-# 头颈在参考表里的期望位置与速度: 逐关节给出, 顺序固定 (Neck_yaw, Neck_pitch)
-# Neck_pitch = -0.3 与 indices.NECK_INIT_POS 一致: 复位姿态即参考姿态,
-# 于是 action=0 恰好维持头部俯仰, 动作不产生稳态偏置
+# 预计算表相关配置
+HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]     # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
+TABLE_RESOLUTION = 500                      # 相位分辨率: 参考表第三维的采样点数
+USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
 NECK_REF_POS = (0.0, -0.3)
 NECK_REF_VEL = (0.0, 0.0)
 
