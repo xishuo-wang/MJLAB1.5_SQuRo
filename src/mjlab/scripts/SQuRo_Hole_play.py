@@ -34,7 +34,9 @@ from mjlab.tasks.SQuRo_Hole.mdp.reference import (
 )
 
 
+
 TASK_NAME = "Mjlab-SQuRo-Hole"
+
 
 
 @dataclass(frozen=True)
@@ -58,12 +60,14 @@ class PlayConfig:
     obstacles_viz: bool = False             # False = 板体 rgba 设为全透明 (仅外观, 不影响碰撞)
 
 
+
 # 从 checkpoint 文件名提取训练轮次
 def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
     m = re.search(r"model_(\d+)", checkpoint_path.name)
     if m:
         return int(m.group(1))
     return 0
+
 
 
 # 从检查点路径提取视频名称
@@ -76,6 +80,7 @@ def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
     else:
         timestamp = run_dir_name
     return f"{timestamp}_{step}"
+
 
 
 # 选择可写输出目录: 受限环境无法新建目录时退回系统临时目录
@@ -95,6 +100,7 @@ def resolve_output_dir(preferred: Path) -> Path:
         return fallback
 
 
+
 # 受限模式: 0 都高 / 1 前低 / 2 后低
 def mode_of(height_F: float, height_H: float) -> str:
     low_F = height_F < THRESHOLD_HEIGHT
@@ -106,6 +112,7 @@ def mode_of(height_F: float, height_H: float) -> str:
     if low_F and low_H:
         return "双低"
     return "都高"
+
 
 
 class JointDataRecorder:
@@ -133,6 +140,7 @@ class JointDataRecorder:
                           'HL_hip', 'HL_knee', 'HR_hip', 'HR_knee',
                           'F_spine1', 'F_body', 'H_spine1', 'H_body']
 
+
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
         record = {'step': float(self.step_count)}
         unwrapped = env.unwrapped
@@ -140,13 +148,13 @@ class JointDataRecorder:
         resolve_model_indices(asset)
         idx = 0
 
-        # ---------- 动作 ----------
+        # 记录动作
         if actions is not None:
             for i in range(actions.shape[1]):
                 name = self.action_names[i] if i < len(self.action_names) else f'action_{i}'
                 record[f'{name}_action'] = float(actions[0, i].item())
 
-        # ---------- 足端接触力与位置 ----------
+        # 记录足端接触力以及位置
         contact_sensor = unwrapped.scene["feet_ground_contact"]
         feet_contact = contact_sensor.data.force.flatten(start_dim=1)
         if self._foot_site_ids is None:
@@ -162,7 +170,7 @@ class JointDataRecorder:
             record[f'foot_{name}_y'] = float(foot_pos[i, 1].item())
             record[f'foot_{name}_z'] = float(foot_pos[i, 2].item())
 
-        # ---------- 基座位姿/速度/角速度 ----------
+        # 记录基座位姿、速度、角速度
         base_pos = asset.data.root_link_pos_w[idx]
         base_lin_vel = asset.data.root_link_lin_vel_w[idx]
         base_ang_vel = asset.data.root_link_ang_vel_w[idx]
@@ -180,7 +188,7 @@ class JointDataRecorder:
         record['base_ang_vel_y'] = float(base_ang_vel[1].item())
         record['base_ang_vel_z'] = float(base_ang_vel[2].item())
 
-        # ---------- 朝向 ----------
+        # 记录朝向
         def _quat_to_yaw(q):
             w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
             return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
@@ -197,16 +205,15 @@ class JointDataRecorder:
         else:
             record['heading'] = f_body_yaw
 
-        # ---------- 前后躯干高度 ----------
+        # 记录前后躯干高度
         f_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.f_body_id, 2].item())
         h_height = float(asset.data.body_link_pos_w[idx, _MODEL_INDICES.h_body_id, 2].item())
         record['F_body_height'] = f_height
         record['H_body_height'] = h_height
 
-        # ---------- 命令 ----------
+        # 记录命令
         command = unwrapped.command_manager.get_command("hole_cmd")[idx]
-        for i, name in enumerate(['vel_command_x', 'vel_command_y', 'vel_command_z',
-                                  'height_F_command', 'height_H_command', 'angle_command']):
+        for i, name in enumerate(['vel_command_x', 'vel_command_y', 'vel_command_z', 'height_F_command', 'height_H_command', 'angle_command']):
             record[name] = float(command[i].item())
         record['mode'] = mode_of(float(command[3]), float(command[4]))  # type: ignore
         record['height_F_error'] = f_height - float(command[3].item())
@@ -214,7 +221,7 @@ class JointDataRecorder:
         # 步态基频 (Hole 任务参考表固定 2.0 Hz, 与 config.BASE_FREQ 一致)
         record['gait_freq_command'] = 2.0
 
-        # ---------- 每个关节的 pos / vel / acc / torque ----------
+        # 记录每个关节的 pos / vel / acc / torque
         joint_ids = _MODEL_INDICES.joint_ids
         joint_pos_all = asset.data.joint_pos[idx, joint_ids]
         joint_vel_all = asset.data.joint_vel[idx, joint_ids]
@@ -249,6 +256,7 @@ class JointDataRecorder:
         self.data_records.append(record)
         self.step_count += 1
 
+
     def save_to_csv(self):
         if not self.data_records:
             print("[WARN] 没有数据可保存")
@@ -262,19 +270,21 @@ class JointDataRecorder:
         print(f"[INFO] 数据已保存到: {csv_path} ({len(self.data_records)} 步 × {len(df.columns)} 列)")
 
 
+
 class DataRecordingEnvWrapper(RslRlVecEnvWrapper):
     def __init__(self, env, clip_actions=None, data_recorder=None, action_scale=1.0):
         super().__init__(env, clip_actions)
         self.data_recorder = data_recorder
         self.action_scale = action_scale
 
+
     def step(self, actions):
         scaled_actions = actions * self.action_scale
         obs_dict, rew, dones, extras = super().step(scaled_actions)
         if self.data_recorder:
-            self.data_recorder.record_step_data(self.env, actions=scaled_actions,
-                                                rewards=rew, dones=dones)
+            self.data_recorder.record_step_data(self.env, actions=scaled_actions, rewards=rew, dones=dones)
         return obs_dict, rew, dones, extras
+
 
 
 def run_play(cfg: PlayConfig):
@@ -324,9 +334,7 @@ def run_play(cfg: PlayConfig):
     if cfg.video_width is not None:
         env_cfg.viewer.width = cfg.video_width
 
-    # 命令来源 (play 侧最高优先级): 显式覆盖 env_cfg 里的位置表设定。
-    # schedule = 位置表 (fixed_* 仍可覆盖对应字段); fixed = 锁死给定值; random = 按阶段随机采样
-    # fixed 模式补默认高度 (其余模式不给默认, 避免把 schedule 位置表或 random 采样锁死)
+    # 命令来源
     fixed_hF = cfg.fixed_height_F
     fixed_hH = cfg.fixed_height_H
     if cfg.command_source == "fixed":
@@ -358,8 +366,6 @@ def run_play(cfg: PlayConfig):
                  if (fixed_hF is not None or fixed_hH is not None
                      or cfg.fixed_velocity is not None) else ""))
 
-    # 在建环境前解析"最终阶段"与"碰撞开关", 供碰撞与后续课程对齐共用
-    # 阶段只能来自检查点: 有 env_state 用步数, 否则按文件名轮次推算
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
     if resume_path is not None:
         recorded = read_env_step(resume_path)
@@ -393,7 +399,7 @@ def run_play(cfg: PlayConfig):
         print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
               f"stage={saved_hole.get('stage')}, 记录碰撞={saved_hole.get('collision')}")
 
-    # 构建输出名后缀: command_source 始终带上 (三选一), 其余只记录实际生效的非默认配置
+    # 构建输出名后缀
     suffix_parts = [cfg.command_source]
     if fixed_hF is not None:
         suffix_parts.append(f"hF{fixed_hF * 1000:.0f}")
@@ -403,8 +409,6 @@ def run_play(cfg: PlayConfig):
         suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
     if cfg.collision is not None:
         suffix_parts.append("col1" if cfg.collision else "col0")
-    if not cfg.obstacles_viz:
-        suffix_parts.append("noobs")
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{suffix}"
@@ -413,11 +417,7 @@ def run_play(cfg: PlayConfig):
     if cfg.video and DUMMY_MODE:
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
-    # render_mode 必须传进环境, 否则 VideoRecorder 抓不到帧 (rgb_array 才录)
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
-
-    # 阶段对齐延后到 actor 加载之后 (基类 load 会用检查点的 common_step_counter 覆盖)
-
     data_recorder = None
     if cfg.record_data:
         assert log_dir is not None
@@ -437,8 +437,7 @@ def run_play(cfg: PlayConfig):
         )
         print("[INFO] 播放期间录制视频")
 
-    env = DataRecordingEnvWrapper(env, clip_actions=agent_cfg.clip_actions,
-                                  data_recorder=data_recorder, action_scale=1.0)
+    env = DataRecordingEnvWrapper(env, clip_actions=agent_cfg.clip_actions, data_recorder=data_recorder, action_scale=1.0)
 
     if DUMMY_MODE:
         action_shape: tuple[int, ...] = env.unwrapped.action_space.shape
@@ -461,8 +460,7 @@ def run_play(cfg: PlayConfig):
         policy = runner.get_inference_policy(device=device)
         env = runner.env
 
-    # 阶段对齐: 用建环境前解析出的 final_step (与碰撞来源同一口径);
-    # 基类 load 会用检查点的 common_step_counter 覆盖, 所以必须放在加载之后
+    # 阶段对齐
     env.unwrapped.common_step_counter = final_step
     print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)} (按检查点记录)")
 
@@ -477,9 +475,11 @@ def run_play(cfg: PlayConfig):
         env.close()
 
 
+
 def main():
     args = tyro.cli(PlayConfig, description="播放 SQuRo Hole 智能体 (虚拟碰撞版)")
     run_play(args)
+
 
 
 if __name__ == "__main__":
