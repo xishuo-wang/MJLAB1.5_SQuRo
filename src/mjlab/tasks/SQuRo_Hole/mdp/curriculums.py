@@ -1,20 +1,13 @@
 from __future__ import annotations
 from typing import Any
-
 from .config import FULL_HEIGHT_VALUES, RANDOM_HEIGHT_VALUES
 
 
-
-# 阶段边界 (iter): 唯一来源, command / runner / 验证脚本都从这里取
-# 1) 0-1k     正常高度范围内的随机采样
-# 2) 1k-2k    含低高度状态的全高度随机采样
-# 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
-# 4) 3k 以后  位置表 + 真实碰撞
-# 注: 阶段 4 的实体碰撞由 rl/runner.py 在阶段边界重建环境实现 (contype 编译期固化)
-STAGE1_END_ITER = 1000
-STAGE2_END_ITER = 2000
-STAGE3_END_ITER = 3000
-NUM_STAGES = 4
+# 课程学习边界
+STAGE1_END_ITER = 1000      # 1) 0-1k     正常高度范围内的随机采样
+STAGE2_END_ITER = 2000      # 2) 1k-2k    含低高度状态的全高度随机采样
+STAGE3_END_ITER = 3000      # 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
+NUM_STAGES = 4              # 4) 3k 以后  位置表 + 真实碰撞
 
 STEPS_PER_ITER = 48
 STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
@@ -146,8 +139,7 @@ class RewardWeightCurriculum:
     # 兼容旧接口: 按阶段阈值 (步数) 展开的权重表视图
     @property
     def weight_stages(self) -> dict[int, dict[str, float]]:
-        return {t * STEPS_PER_ITER: self.get_reward_weights(t * STEPS_PER_ITER)
-                for t in _STAGES}
+        return {t * STEPS_PER_ITER: self.get_reward_weights(t * STEPS_PER_ITER)for t in _STAGES}
 
 
 reward_weight_curriculum = RewardWeightCurriculum()
