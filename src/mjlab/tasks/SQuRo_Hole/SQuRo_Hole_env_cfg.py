@@ -72,8 +72,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # 奖励项
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
-        "velocity": RewardTermCfg(func=mdp.compute_linear_velocity_reward, weight=1.0),
-        "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
+        "velocity": RewardTermCfg(func=mdp.compute_vel_reward, weight=1.0),
+        "height": RewardTermCfg(func=mdp.compute_height_reward1, weight=1.0),
         "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
         "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
         "body_contact": RewardTermCfg(func=mdp.compute_body_contact_reward, weight=1.0),

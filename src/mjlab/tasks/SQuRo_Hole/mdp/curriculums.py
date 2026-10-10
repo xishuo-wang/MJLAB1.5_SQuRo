@@ -63,10 +63,10 @@ _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 # 奖励权重课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
-    "mimic_vel":                (5.0, 5.0, 5.0, 5.0),
-    "vel":                      (5.0, 5.0, 5.0, 10.0),
-    "height":                   (2.5, 2.5, 5.0, 5.0),
+    "weight_mimic_pos":         (10.0, 10.0, 10.0, 10.0),
+    "weight_mimic_vel":         (5.0, 5.0, 5.0, 5.0),
+    "weight_vel":               (5.0, 5.0, 5.0, 10.0),
+    "weight_height":            (2.5, 2.5, 5.0, 5.0),
     "orientation":              (2.0, 2.0, 4.0, 4.0),
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
@@ -87,7 +87,9 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
     "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
     # 高度 σ
-    "height_sigma":             (500.0, 1000.0, 1000.0, 1000.0),
+    "sigma_height":             (500.0, 1000.0, 1000.0, 1000.0),
+    # 速度 σ: 恒 100, 与旧版固定的 exp(-100 * err^2) 等效
+    "sigma_vel":                (100.0, 100.0, 100.0, 100.0),
 }
 
 

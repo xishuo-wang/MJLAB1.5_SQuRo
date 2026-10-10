@@ -136,53 +136,6 @@ def compute_height_reward1(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# X线速度跟踪奖励
-def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:    
-    # 获取实际速度
-    asset: Entity = env.scene["robot"]
-    actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
-    # 获取期望速度
-    cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_vel_x = cmd_term.command[:, CMD_VEL_X_IDS]
-    has_velocity_cmd = torch.abs(desired_vel_x) > 0.01
-    min_speed_mask = (torch.abs(actual_vel_x) < 0.01) & has_velocity_cmd
-    # 计算速度误差
-    vel_error = torch.abs(desired_vel_x - actual_vel_x)
-    # 记录 metrics 到 extras["log"]
-    env.extras["log"]["Metrics/vel_error_mean"] = vel_error.mean().item()
-    env.extras["log"]["Metrics/actual_vel_x_mean"] = actual_vel_x.mean().item()
-    env.extras["log"]["Metrics/cmd_vel_x_mean"] = desired_vel_x.mean().item()
-    # 计算奖励
-    reward = torch.exp(-100.0 * vel_error ** 2)
-    reward = torch.where(min_speed_mask, torch.full_like(reward, -1.0), reward)
-    weight = get_curriculum_reward_weight(env, "vel")  
-    return reward * weight
-
-
-
-# 身体高度跟踪奖励
-def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    body_pos_w = asset.data.body_link_pos_w
-    F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
-    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
-    cmd_term = env.command_manager._terms["hole_cmd"]
-    z_ref_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]                # 前肢高度命令
-    z_ref_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]                # 后肢高度命令
-    height_F_error = torch.abs(z_ref_F - F_body_height)
-    height_H_error = torch.abs(z_ref_H - H_body_height)
-    # 记录 metrics
-    env.extras["log"]["Metrics/height_F_error_mean"] = height_F_error.mean().item()
-    env.extras["log"]["Metrics/height_H_error_mean"] = height_H_error.mean().item()
-    sigma_height = get_curriculum_reward_weight(env, "height_sigma")
-    w_height = get_curriculum_reward_weight(env, "height")
-    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
-    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)
-    Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
-    return Reward_height
-
-
-
 # 计算朝向奖励
 def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]

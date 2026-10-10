@@ -105,7 +105,7 @@ def check_command() -> None:
 # 课程权重: 阶段阈值与生效段
 def check_curriculum() -> None:
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(reward_weight_curriculum.weight_stages)} 段):")
-    keys = ["body_contact", "height", "mimic_pos", "height_sigma"]
+    keys = ["body_contact", "weight_height", "weight_mimic_pos", "sigma_height"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
     for step in sorted(reward_weight_curriculum.weight_stages.keys()):
@@ -114,8 +114,9 @@ def check_curriculum() -> None:
         print(f"{step:>12}{step // 24:>8}{row}"
               f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_END)
-    print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
-          f"vel={eff['vel']}, body_contact={eff['body_contact']}, "
+    print(f"     末段生效权重: weight_mimic_pos={eff['weight_mimic_pos']}, "
+          f"weight_height={eff['weight_height']}, "
+          f"weight_vel={eff['weight_vel']}, body_contact={eff['body_contact']}, "
           f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_END)}")
 
 

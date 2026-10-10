@@ -50,7 +50,7 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    command_source: Literal["schedule", "fixed", "random"] = "schedule"
+    command_source: Literal["schedule", "fixed", "random"] = "fixed"
     fixed_velocity: float | None = None     # 期望速度
     fixed_height_F: float | None = 0.055    # 期望前肢高度
     fixed_height_H: float | None = 0.020    # 期望后肢高度
