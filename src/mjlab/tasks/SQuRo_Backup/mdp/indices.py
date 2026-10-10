@@ -104,10 +104,6 @@ _MODEL_INDICES = ModelIndices()
 
 
 
-# 解析 body / site / 关节索引。
-# 判据必须同时看 body 与 joint: 只查 f_body_id 时, 一旦之前被部分解析过
-# (例如解析在 find_joints 之前中断), 再调用会直接 return, joint_ids 永远留空,
-# 观测项 actuator_pos/actuator_vel 会退化成 0 维 (SQuRo_Hole 踩过该崩溃)。
 def resolve_model_indices(entity) -> None:
     if _MODEL_INDICES.f_body_id >= 0 and len(_MODEL_INDICES.joint_ids) > 0:
         return
@@ -127,7 +123,7 @@ def resolve_model_indices(entity) -> None:
 
     joint_ids, joint_names = entity.find_joints(_ACTUATED_JOINT_NAMES, preserve_order=True)
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
-    # 腿: 位置 4-7, 10-13; 脊柱: 0-1, 8-9; 颈: 2-3
+    # 前腿 4-7 / 后腿 10-13 / 脊柱 0-1,8-9 / 头颈 2-3
     _MODEL_INDICES.joint_leg_ids  = tuple(joint_ids[4:8]) + tuple(joint_ids[10:14])
     _MODEL_INDICES.joint_spn_ids  = tuple(joint_ids[0:2]) + tuple(joint_ids[8:10])
     _MODEL_INDICES.joint_neck_ids = tuple(joint_ids[2:4])
