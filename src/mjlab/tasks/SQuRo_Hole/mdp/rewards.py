@@ -8,8 +8,8 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .hole import hole_geometry
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
-from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
-from .indices import _MODEL_INDICES, resolve_model_indices
+from .curriculums import get_curriculum_reward_weight
+from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS
 from .reference import (
     resolve_joint_ids,
     get_reference_joint_state,
@@ -22,18 +22,13 @@ if TYPE_CHECKING:
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
-# 参考表 14 列的列区间 (列序由 reference.REF_TABLE_ORDER 决定, 见 indices.py)
-_COL_LEG = slice(0, 8)        # 前腿 4 + 后腿 4
-_COL_SPN = slice(8, 12)       # F_spine1, F_body, H_spine1, H_body
-_COL_NECK = slice(12, 14)     # Neck_yaw, Neck_pitch
-
 _SPN_SCALE_CACHE: dict = {}
 
 
 
-# 缓存脊柱逐轴误差缩放 (顺序 = 参考表脊柱 4 列)
-def _spn_axis_scale(env, device, dtype) -> torch.Tensor:
-    scale = SPN_AXIS_SCALE
+# 缓存脊柱逐轴误差缩放 (顺序 = F_spine1, F_body, H_spine1, H_body)
+def _error_spn_scale(env, device, dtype) -> torch.Tensor:
+    scale = (1.5, 0.5, 0.5, 0.5)
     key = (str(device), str(dtype), scale)
     s = _SPN_SCALE_CACHE.get(key)
     if s is None:
@@ -44,50 +39,59 @@ def _spn_axis_scale(env, device, dtype) -> torch.Tensor:
 
 
 # 关节位置模仿奖励
-def compute_mimic_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际和期望关节位置
     asset: Entity = env.scene["robot"]
-    joint_ids = resolve_joint_ids(asset)      # 参考表列序对应的模型关节索引
-    joint_pos = asset.data.joint_pos[:, joint_ids]
+    joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
+    # 计算关节位置误差
     error = joint_pos - ref_pos
-    error_spn = error[:, _COL_SPN] * _spn_axis_scale(env, error.device, error.dtype)
+    error_leg = error[:, _ACT_LEG_IDS]
+    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
+    error_neck = error[:, _ACT_NECK_IDS]
+    # 获取 sigma
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
-    alpha_spn = get_curriculum_reward_weight(env, "alpha_spn_pos")
-    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_pos")
-    mse_leg = torch.mean(error[:, _COL_LEG] ** 2, dim=1)
+    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
+    # 计算 MSE 误差
+    mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
-    mse_neck = torch.mean(error[:, _COL_NECK] ** 2, dim=1)
+    mse_neck = torch.mean(error_neck ** 2, dim=1)
+    # 计算奖励
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
+    reward_neck = torch.exp(-sigma_neck * mse_neck)
+    reward = reward_leg + reward_spn + reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_pos")
-
     return reward * weight
 
 
+
 # 关节速度模仿奖励
-def compute_mimic_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际和期望关节位置
     asset: Entity = env.scene["robot"]
-    joint_ids = resolve_joint_ids(asset)
-    joint_vel = asset.data.joint_vel[:, joint_ids]
+    joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
+    # 计算关节位置误差
     error = joint_vel - ref_vel
-    error_spn = error[:, _COL_SPN] * _spn_axis_scale(env, error.device, error.dtype)
+    error_leg = error[:, _ACT_LEG_IDS]
+    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
+    error_neck = error[:, _ACT_NECK_IDS]
+    # 获取 sigma
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
-    alpha_spn = get_curriculum_reward_weight(env, "alpha_spn_vel")
-    alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_vel")
-    mse_leg = torch.mean(error[:, _COL_LEG] ** 2, dim=1)
+    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
+    # 计算 MSE 误差
+    mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
-    mse_neck = torch.mean(error[:, _COL_NECK] ** 2, dim=1)
+    mse_neck = torch.mean(error_neck ** 2, dim=1)
+    # 计算奖励
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
-    reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + alpha_spn * reward_spn) / 2 + alpha_neck * reward_neck
+    reward_neck = torch.exp(-sigma_neck * mse_neck)
+    reward = reward_leg + reward_spn + reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_vel")
-
     return reward * weight
 
 
@@ -150,7 +154,6 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
     if not mode0_mask.any():
         return torch.zeros(env.num_envs, device=env.device)
     
-    resolve_model_indices(asset)
     foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
     
     height_scale_F = desired_height_F / BASE_HEIGHT
@@ -464,7 +467,6 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     obs_z_thresh = torch.tensor([g["virtual_z_threshold"] for g in geo], device=device)
     
     # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
-    resolve_model_indices(asset)
     body_x = asset.data.body_link_pos_w[
         :, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
     

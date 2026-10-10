@@ -70,8 +70,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # 奖励函数配置
     rewards = {
         # 奖励项
-        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_reward, weight=1.0),
-        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_velocity_reward, weight=1.0),
+        "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
+        "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "velocity": RewardTermCfg(func=mdp.compute_linear_velocity_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),

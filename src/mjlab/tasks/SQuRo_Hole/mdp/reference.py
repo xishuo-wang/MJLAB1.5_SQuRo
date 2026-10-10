@@ -18,6 +18,7 @@ from .config import (
 from .indices import (
     _ACT_NECK_IDS,
     _MODEL_INDICES,
+    REF_SLOT_OF_ACT,
     REF_TABLE_ORDER,
     resolve_model_indices,
 )
@@ -465,4 +466,5 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
         dim=1
     )
 
-    return joint_pos, joint_vel
+    # 7. 表列序同步为执行器列序, 与 _MODEL_INDICES.joint_ids / 动作空间对齐 (见 indices.REF_SLOT_OF_ACT)
+    return joint_pos[:, REF_SLOT_OF_ACT], joint_vel[:, REF_SLOT_OF_ACT]

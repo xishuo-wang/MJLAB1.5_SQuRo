@@ -20,11 +20,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     THRESHOLD_HEIGHT,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.hole import build_hole_entities
-from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
+from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     Initialize_Tables,
     get_reference_joint_state,
-    resolve_joint_ids,
 )
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer
@@ -88,7 +87,9 @@ class ReferenceTablePolicy:
     def __init__(self, env: ManagerBasedRlEnv) -> None:
         self.env = env
         self.robot = env.scene["robot"]
-        self.joint_ids = resolve_joint_ids(self.robot)
+        # 参考列序已与执行器序同步, 关节顺序直接取按名解析结果 (执行器序)
+        resolve_model_indices(self.robot)
+        self.joint_ids = list(_MODEL_INDICES.joint_ids)
         self.names = [self.robot.joint_names[i] for i in self.joint_ids]
         # 去掉 "_joint" 后缀，与 CSV_Anaylsis.py 的列名一致
         self.clean_names = [_strip_joint_suffix(n) for n in self.names]
