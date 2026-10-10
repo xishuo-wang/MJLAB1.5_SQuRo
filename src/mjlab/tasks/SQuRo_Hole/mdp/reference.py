@@ -278,6 +278,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     
+    cycloid_front_low = CYCLOID_PARAMS["front_low"]
     cycloid_hind_low = CYCLOID_PARAMS["hind_low"]
     hold_x, hold_z = _hold_foot_xy(HL_HOLD)
     
@@ -327,8 +328,21 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
             # ===== 2. 后肢计算 =====
             if mode == MODE_FRONT_LOW:  
-                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
-                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
+                # 前低后高: 前腿固定支撑, 后腿摆线正常推进
+                freq = cycloid_front_low["freq"]
+                T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_front_low["swing_ratio"]
+                t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["HL"] * T) % T
+                x_leg_hl, z_leg_hl = Cycloid_Trajectory(
+                    t_mods, T_sw, T - T_sw, cycloid_front_low["stride_H"], cycloid_front_low["height_H"],
+                    cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"],
+                    cycloid_front_low["x_offset_H"], 1
+                )
+                t_mods_hr = (phases_np * T + CSV_PARAMS["phase_lag"]["HR"] * T) % T
+                x_leg_hr, z_leg_hr = Cycloid_Trajectory(
+                    t_mods_hr, T_sw, T - T_sw, cycloid_front_low["stride_H"], cycloid_front_low["height_H"],
+                    cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"],
+                    cycloid_front_low["x_offset_H"], 1
+                )
             elif mode == MODE_HIND_LOW:  
                 # 前高后低: 后腿收缩保持 HL_HOLD, 不摆动 (关节角 -> 足端 xy 再走 IK)
                 x_leg_hl = np.full(_TABLE_RESOLUTION, hold_x)
