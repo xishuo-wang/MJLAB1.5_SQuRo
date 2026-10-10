@@ -80,6 +80,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # 惩罚项
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
+        "hind_hold": RewardTermCfg(func=mdp.compute_hind_hold_reward, weight=1.0),
     }
 
 

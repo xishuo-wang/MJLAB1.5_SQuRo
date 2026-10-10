@@ -26,6 +26,7 @@ USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓
 NECK_REF_POS = (0.0, -0.3)                  # 期望头部位置
 NECK_REF_VEL = (0.0, 0.0)                   # 期望头部速度
 HL_HOLD = (-1.50, -0.25)                    # 前高后低时的后腿收缩状态关节角
+HL_HOLD_TOL = (0.5, 0.5)                    # 后腿姿态奖励的容差 (hip, knee): 误差超此值给零奖
 SPINE_LOW_BEND = -0.65                      # 单低情况下的俯仰脊柱
 
 

@@ -71,6 +71,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
     "body_contact":             (0.0, 0.0, 5.0, 5.0),
+    # mode 2 后腿收缩姿态奖励 (与 stop 对称, stop 管前腿); 1k 起随全档采样出现
+    "weight_hind_hold":         (0.0, 2.0, 4.0, 4.0),
     # 虚拟净空 σ: 超出量的指数衰减系数 (超出 5mm 时按 exp(-sigma*0.005^2) 计)
     "sigma_body_contact":       (2000.0, 2000.0, 2000.0, 2000.0),
     # 位置/速度模仿的腿部 σ 与颈部权重

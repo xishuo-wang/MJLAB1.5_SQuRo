@@ -10,10 +10,19 @@ from .config import (
     CMD_ANGLE_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
+    HL_HOLD,
+    HL_HOLD_TOL,
     THRESHOLD_HEIGHT,
 )
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
-from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS
+from .indices import (
+    _ACT_HL_LEG_IDS,
+    _ACT_HR_LEG_IDS,
+    _ACT_LEG_IDS,
+    _ACT_NECK_IDS,
+    _ACT_SPN_IDS,
+    _MODEL_INDICES,
+)
 from .reference import (
     resolve_joint_ids,
     get_reference_joint_state,
@@ -381,6 +390,31 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     env.extras["log"]["Metrics/body_contact_excess"] = v.mean().item()
     env.extras["log"]["Metrics/rear_surface_excess"] = v[:, 1].mean().item()
 
+    return reward * weight
+
+
+
+# Mode 2 后腿收缩姿态奖励: 前高后低时把后腿拉到 HL_HOLD (与 stop 对称, stop 管前腿)
+def compute_hind_hold_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    cmd_term = env.command_manager._terms["hole_cmd"]
+    desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
+    # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
+    mode2_mask = (desired_heightF >= THRESHOLD_HEIGHT) & (desired_heightH < THRESHOLD_HEIGHT)
+    reward = torch.zeros(env.num_envs, device=env.device)
+    if not mode2_mask.any():
+        return reward
+    # 后腿四关节相对 HL_HOLD 的误差, 按容差线性给分 (超出容差为 0)
+    joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
+    ids = list(_ACT_HL_LEG_IDS) + list(_ACT_HR_LEG_IDS)
+    err = torch.abs(joint_pos[:, ids] - torch.tensor(
+        HL_HOLD + HL_HOLD, device=env.device, dtype=joint_pos.dtype))
+    tol = torch.tensor(HL_HOLD_TOL + HL_HOLD_TOL, device=env.device, dtype=joint_pos.dtype)
+    reward[mode2_mask] = torch.clamp(1.0 - err / tol, min=0.0).mean(dim=1)[mode2_mask]
+    weight = get_curriculum_reward_weight(env, "weight_hind_hold")
+    # 记录日志
+    env.extras["log"]["Data/hind_hold_err"] = err.mean().item()
     return reward * weight
 
 
