@@ -4,14 +4,12 @@ import math
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
-from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .entity import hole_geometry
 from .config import (
-    BASE_HEIGHT,
+    CMD_VEL_X_IDS,
     CMD_ANGLE_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    CMD_VEL_X_IDS,
     THRESHOLD_HEIGHT,
 )
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
@@ -26,6 +24,7 @@ if TYPE_CHECKING:
 
 
 
+# =========================================================================================
 # 关节位置模仿奖励
 def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 获取实际和期望关节位置
@@ -37,10 +36,11 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error_leg = error[:, _ACT_LEG_IDS]
     error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
-    # 获取 sigma
+    # 获取课程学习量
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
+    weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
@@ -50,11 +50,11 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = reward_leg + reward_spn + reward_neck
-    weight = get_curriculum_reward_weight(env, "mimic_pos")
     return reward * weight
 
 
 
+# =========================================================================================
 # 关节速度模仿奖励
 def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 获取实际和期望关节速度
@@ -66,10 +66,11 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error_leg = error[:, _ACT_LEG_IDS]
     error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
-    # 获取 sigma
+    # 获取课程学习量
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
+    weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
@@ -79,8 +80,59 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = reward_leg + reward_spn + reward_neck
-    weight = get_curriculum_reward_weight(env, "mimic_vel")
     return reward * weight
+
+
+
+# =========================================================================================
+# 速度跟踪奖励
+def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:    
+    # 获取实际和期望速度
+    asset: Entity = env.scene["robot"]
+    actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
+    cmd_term = env.command_manager._terms["hole_cmd"]
+    desired_vel_x = cmd_term.command[:, CMD_VEL_X_IDS]
+    # 计算速度误差
+    vel_error = torch.abs(desired_vel_x - actual_vel_x)
+    # 获取课程学习量
+    sigma_vel = get_curriculum_reward_weight(env, "sigma_vel")
+    weight = get_curriculum_reward_weight(env, "weight_vel")  
+    # 计算奖励
+    reward = torch.exp(-sigma_vel * vel_error ** 2)
+    # 记录日志
+    env.extras["log"]["Data/vel_act"] = actual_vel_x.mean().item()
+    env.extras["log"]["Data/vel_cmd"] = desired_vel_x.mean().item()
+    return reward * weight
+
+
+
+# =========================================================================================
+# 身体高度跟踪奖励
+def compute_height_reward1(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际和期望高度
+    asset: Entity = env.scene["robot"]
+    body_pos_w = asset.data.body_link_pos_w
+    F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
+    H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
+    cmd_term = env.command_manager._terms["hole_cmd"]
+    z_ref_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    z_ref_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
+    # 计算高度误差
+    height_F_error = torch.abs(z_ref_F - F_body_height)
+    height_H_error = torch.abs(z_ref_H - H_body_height)
+    # 获取课程学习量
+    sigma_height = get_curriculum_reward_weight(env, "sigma_height")
+    weight = get_curriculum_reward_weight(env, "weight_height")
+    # 计算奖励
+    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
+    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)
+    reward = 0.5 * r_height_F + 0.5 * r_height_H
+    # 记录日志
+    env.extras["log"]["Data/height_error"] = ((height_F_error + height_H_error) / 2).mean().item()
+    return reward * weight
+
+
+
 
 
 
