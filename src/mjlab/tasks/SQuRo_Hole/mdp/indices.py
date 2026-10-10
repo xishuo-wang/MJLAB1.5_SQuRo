@@ -20,6 +20,8 @@ _ACT_JOINT_NAMES = [
     "HR_hip_joint",         # 右后髋: 12
     "HR_knee_joint",        # 右后膝: 13
 ]
+_ACT_NUM = len(_ACT_JOINT_NAMES)                                # 驱动关节数量
+_ACT_JOINT_IDS = tuple(range(len(_ACT_JOINT_NAMES)))            # 驱动关节索引
 
 
 # 执行器对应索引
@@ -65,10 +67,6 @@ _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: 
 _ACT_NECK_IDS = (_ACT_NECK_YAW_ID, _ACT_NECK_PITCH_ID)          # 头颈两列: (2, 3)
 
 
-# 被控关节数 (参考表 14 列宽度)
-ACTUATOR_NUM = len(_ACT_JOINT_NAMES)
-
-
 # 执行器控制范围
 _ACT_CTRL_RANGE: dict[str, tuple[float, float]] = {
     "F_spine1_joint":    (-0.6, 0.6),
@@ -95,15 +93,17 @@ FOOT_SITE_NAMES      = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_kn
 
 
 # 观测用配置
-ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES))
+ACT_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES))
 
 
 
 class ModelIndices:
     __slots__ = (
-        "f_body_id", "h_body_id",
+        "f_body_id", 
+        "h_body_id",
         "foot_site_ids",
-        "f_body_site_ids", "h_body_site_ids",
+        "f_body_site_ids", 
+        "h_body_site_ids",
         "joint_ids",
     )
 
