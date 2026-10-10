@@ -1,22 +1,22 @@
 # uv run train Mjlab-SQuRo-Hole
 # uv run play Mjlab-SQuRo-Hole-Play --checkpoint_file
 
-from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
-    ActionTermCfg,
-    CommandTermCfg,
     EventTermCfg,
-    ObservationGroupCfg,
-    ObservationTermCfg,
+    ActionTermCfg,
     RewardTermCfg,
+    CommandTermCfg,
+    ObservationTermCfg,
     TerminationTermCfg,
+    ObservationGroupCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.tasks.SQuRo_Hole import mdp
 from mjlab.viewer import ViewerConfig
+from mjlab.tasks.SQuRo_Hole import mdp
+from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
+from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
@@ -78,7 +78,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
         "body_contact": RewardTermCfg(func=mdp.compute_body_contact_reward, weight=1.0),
         # 惩罚项
-        # "cot": RewardTermCfg(func=mdp.compute_cot_penalty, weight=1.0),
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
     }
@@ -113,27 +112,9 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         commands: dict[str, CommandTermCfg] = {
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
-                resampling_time_range=(2.0, 3.0),  
-                use_position_schedule=True,  # 启用位置表
-                position_schedule=[
-                    (0.0, 0.02, 0.05),
-                    (0.2, 0.055, 0.02),
-                    (0.32, 0.055, 0.055),
-                    (0.4, 0.04, 0.04),
-                    (0.8, 0.055, 0.055),
-                    (1.0, 0.02, 0.05),
-                    (1.2, 0.055, 0.02),
-                    (1.32, 0.055, 0.055),
-                ],
                 debug_vis=True, 
                 viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
             )
-        }
-        entities = {
-            "robot": SQURO_ROBOT_CFG,
-            "hole1": mdp.HoleEntityCfg(name="Hole1", position=(0.2, 0.0, 0.0475), size=(0.015, 0.1, 0.005)),
-            "hole2": mdp.HoleEntityCfg(name="Hole2", position=(0.6, 0.0, 0.0725), size=(0.100, 0.1, 0.005)),
-            "hole3": mdp.HoleEntityCfg(name="Hole3", position=(1.2, 0.0, 0.0475), size=(0.015, 0.1, 0.005)),
         }
     else:
         commands: dict[str, CommandTermCfg] = {
