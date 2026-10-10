@@ -277,6 +277,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         for mode in range(NUM_MODES):
             # ===== 1. 前肢计算 =====
             if mode == 1:  
+                # 前低后高: 前腿收缩不摆动 (0.005, -0.02), 后腿走摆线
                 x_leg_fl, z_leg_fl = np.full(_TABLE_RESOLUTION, 0.005), np.full(_TABLE_RESOLUTION, -0.02)
                 x_leg_fr, z_leg_fr = np.full(_TABLE_RESOLUTION, 0.005), np.full(_TABLE_RESOLUTION, -0.02)
             elif mode == 2:  
@@ -312,14 +313,14 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
             # ===== 2. 后肢计算 =====
             if mode == 1:  
+                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
+                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
+            elif mode == 2:  
                 # 前高后低: 后腿收缩保持 HL_HOLD, 不摆动 (关节角 -> 足端 xy 再走 IK)
                 x_leg_hl = np.full(_TABLE_RESOLUTION, hold_x)
                 z_leg_hl = np.full(_TABLE_RESOLUTION, hold_z)
                 x_leg_hr = np.full(_TABLE_RESOLUTION, hold_x)
                 z_leg_hr = np.full(_TABLE_RESOLUTION, hold_z)
-            elif mode == 2:  
-                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
-                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
             else:  
                 x_leg_hl, z_leg_hl = CSV_Leg_Trajectory(
                     phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"], CSV_PARAMS["rotate_angle_H"], 
