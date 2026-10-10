@@ -19,7 +19,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     TABLE_RESOLUTION,
     THRESHOLD_HEIGHT,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.hole import build_hole_entities
+from mjlab.tasks.SQuRo_Hole.mdp.entity import build_hole_entities
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     Initialize_Tables,
@@ -42,7 +42,7 @@ class ReplayConfig:
 
 # ==================== 直接给定的回放参数 ====================
 HEIGHT_F = 0.055
-HEIGHT_H = 0.055
+HEIGHT_H = 0.02
 VISUALIZE = "viewer"
 DURATION = 10.0
 DEVICE = None

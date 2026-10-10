@@ -65,12 +65,14 @@ _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: 
 _ACT_NECK_IDS = (_ACT_NECK_YAW_ID, _ACT_NECK_PITCH_ID)          # 头颈两列: (2, 3)
 
 
-# 参考表顺序
+# 参考表顺序: 执行器序下标, 按 前腿 + 后腿 + 脊柱 + 头颈 展开
 REF_TABLE_ORDER = (_ACT_F_LEG_IDS  + _ACT_H_LEG_IDS + _ACT_SPN_IDS + _ACT_NECK_IDS)   # 完整参考表序: (4, 5, 6, 7, 10, 11, 12, 13, 0, 1, 8, 9, 2, 3)
 
 
 # 参考表列序 → 执行器列序的逆置换: 执行器 i 的参考值位于表第 REF_SLOT_OF_ACT[i] 列
 REF_SLOT_OF_ACT = tuple(REF_TABLE_ORDER.index(i) for i in range(len(REF_TABLE_ORDER)))
+assert sorted(REF_SLOT_OF_ACT) == list(range(len(REF_TABLE_ORDER))), REF_SLOT_OF_ACT
+REF_COL_OF_ACT = REF_SLOT_OF_ACT   # 同义别名: 强调"执行器 -> 表列"的读法
 
 
 # 执行器控制范围

@@ -22,7 +22,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.hole import (
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_visibility,
     configure_hole_entities,
@@ -50,7 +50,7 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    command_source: Literal["schedule", "fixed", "random"] = "fixed"
+    command_source: Literal["schedule", "fixed", "random"] = "schedule"
     fixed_velocity: float | None = None     # 期望速度
     fixed_height_F: float | None = 0.055    # 期望前肢高度
     fixed_height_H: float | None = 0.020    # 期望后肢高度

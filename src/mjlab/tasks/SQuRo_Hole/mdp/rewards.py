@@ -6,7 +6,13 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-from .hole import hole_geometry
+from .entity import hole_geometry
+from .command import (
+    CMD_ANGLE_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_VEL_X_IDS,
+)
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS
@@ -102,7 +108,7 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
     # 获取期望速度
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_vel_x = cmd_term.command[:, 0]
+    desired_vel_x = cmd_term.command[:, CMD_VEL_X_IDS]
     has_velocity_cmd = torch.abs(desired_vel_x) > 0.01
     min_speed_mask = (torch.abs(actual_vel_x) < 0.01) & has_velocity_cmd
     # 计算速度误差
@@ -125,8 +131,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
     H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    z_ref_F = cmd_term.command[:, 3]                # 前肢高度命令
-    z_ref_H = cmd_term.command[:, 4]                # 后肢高度命令
+    z_ref_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]                # 前肢高度命令
+    z_ref_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]                # 后肢高度命令
     height_F_error = torch.abs(z_ref_F - F_body_height)
     height_H_error = torch.abs(z_ref_H - H_body_height)
     # 记录 metrics
@@ -169,9 +175,9 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_heightF = cmd_term.command[:, 3]  # 前肢高度命令
-    desired_heightH = cmd_term.command[:, 4]  # 后肢高度命令
-    desired_angle = cmd_term.command[:, 5]    # 侧倾角度命令
+    desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]  # 前肢高度命令
+    desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]  # 后肢高度命令
+    desired_angle = cmd_term.command[:, CMD_ANGLE_IDS]       # 侧倾角度命令
     roll_error = torch.zeros(env.num_envs, device=env.device)
     sigma = 50
 
@@ -440,8 +446,8 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_heightF = cmd_term.command[:, 3]
-    desired_heightH = cmd_term.command[:, 4]
+    desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     
     # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
     mode2_mask = (desired_heightF >= THRESHOLD_HEIGHT) & (desired_heightH < THRESHOLD_HEIGHT)
