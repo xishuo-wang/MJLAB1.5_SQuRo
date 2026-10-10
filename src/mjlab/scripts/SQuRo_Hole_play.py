@@ -17,7 +17,7 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
-from mjlab.tasks.SQuRo_Hole.mdp.config import (
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     get_current_stage,
     stage_requires_collision,
@@ -339,7 +339,7 @@ def run_play(cfg: PlayConfig):
         if cfg.command_source == "schedule":
             # 强制开启位置表 + stage>=3 兜底
             cmd_cfg.use_position_schedule = True     # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
+            cmd_cfg.use_time_schedule = False        # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = True   # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
@@ -350,8 +350,8 @@ def run_play(cfg: PlayConfig):
             # 关闭位置表与时间表
             cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
             cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
+            cmd_cfg.use_time_schedule = False        # type: ignore[attr-defined]
+            cmd_cfg.time_schedule = None             # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
             fixed_hF = 0.055 if cfg.fixed_height_F is None else cfg.fixed_height_F
             fixed_hH = 0.055 if cfg.fixed_height_H is None else cfg.fixed_height_H
@@ -365,8 +365,8 @@ def run_play(cfg: PlayConfig):
             # 关闭位置表与时间表
             cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
             cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
+            cmd_cfg.use_time_schedule = False        # type: ignore[attr-defined]
+            cmd_cfg.time_schedule = None             # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]

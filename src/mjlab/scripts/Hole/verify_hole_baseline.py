@@ -7,18 +7,18 @@ import torch
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.SQuRo_Hole.mdp.command import STAGE3_POSITION_SCHEDULE
-# 阶段边界与高度阈值的唯一来源都是 config (command 只是转出)
-from mjlab.tasks.SQuRo_Hole.mdp.config import (
+# 阶段边界与高度阈值的唯一来源: THRESHOLD_HEIGHT 在 config, 阶段相关在 curriculums
+from mjlab.tasks.SQuRo_Hole.mdp.config import THRESHOLD_HEIGHT
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE1_END,
     STAGE2_END,
     STAGE3_END,
-    THRESHOLD_HEIGHT,
     get_current_stage,
     heights_for_stage,
+    reward_weight_curriculum,
     stage_requires_collision,
     stage_uses_schedule,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import reward_weight_curriculum
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     ACTUATOR_NUM,
     CYCLOID_PARAMS,

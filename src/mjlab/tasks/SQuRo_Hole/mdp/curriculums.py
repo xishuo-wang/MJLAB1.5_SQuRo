@@ -1,18 +1,64 @@
 from __future__ import annotations
 from typing import Any
 
-from .config import (
-    STAGE1_END_ITER,
-    STAGE2_END_ITER,
-    STAGE3_END_ITER,
-    STEPS_PER_ITER,
-    get_current_stage,
-    stage_requires_collision,
-)
+from .config import FULL_HEIGHT_VALUES, RANDOM_HEIGHT_VALUES
 
 
 
-# 阶段边界 (iter): 与 command.py 共用 config 里的同一来源, 四段一一对应
+# 阶段边界 (iter): 唯一来源, command / runner / 验证脚本都从这里取
+# 1) 0-1k     正常高度范围内的随机采样
+# 2) 1k-2k    含低高度状态的全高度随机采样
+# 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
+# 4) 3k 以后  位置表 + 真实碰撞
+# 注: 阶段 4 的实体碰撞由 rl/runner.py 在阶段边界重建环境实现 (contype 编译期固化)
+STAGE1_END_ITER = 1000
+STAGE2_END_ITER = 2000
+STAGE3_END_ITER = 3000
+NUM_STAGES = 4
+
+STEPS_PER_ITER = 48
+STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
+STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
+STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
+
+# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
+STAGE_COLLISION = (False, False, False, True)
+
+
+
+# 按全局步数取当前阶段 (1~4); 阶段边界是命令/课程/碰撞的唯一来源
+def get_current_stage(step_counter: int) -> int:
+    if step_counter < STAGE1_END:
+        return 1
+    if step_counter < STAGE2_END:
+        return 2
+    if step_counter < STAGE3_END:
+        return 3
+    return 4
+
+
+# 该阶段是否使用位置表 (阶段 3/4)
+def stage_uses_schedule(stage: int) -> bool:
+    return stage >= 3
+
+
+# 该阶段是否要求实体碰撞
+def stage_requires_collision(stage: int) -> bool:
+    idx = min(max(int(stage), 1), NUM_STAGES) - 1
+    return STAGE_COLLISION[idx]
+
+
+# 按阶段的随机采样高度池; 阶段 3/4 返回 None (用位置表)
+def heights_for_stage(stage: int):
+    if stage == 1:
+        return RANDOM_HEIGHT_VALUES
+    if stage == 2:
+        return FULL_HEIGHT_VALUES
+    return None
+
+
+
+# 四段课程对应的 iter 边界 (供 _CURVES 的 4 段取值)
 STAGE1_1_ITER = STAGE1_END_ITER      # 0-1k:  正常高度随机采样 (纯模仿)
 STAGE1_2_ITER = STAGE2_END_ITER      # 1k-2k: 含低高度全档随机采样 (高度课程收紧)
 STAGE1_3_ITER = STAGE3_END_ITER      # 2k-3k: 位置表 + 虚拟碰撞 (body_contact)

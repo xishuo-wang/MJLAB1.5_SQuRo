@@ -14,24 +14,27 @@ from .config import (
     NECK_REF_VEL,
     HL_HOLD,
     SPINE_LOW_BEND,
-    TABLE_RESOLUTION as _TABLE_RESOLUTION,
-    USE_SPINE_CSV,
-)
-from .command import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     MODE_BOTH_HIGH,
+    MODE_BOTH_LOW,
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
-    REF_TABLE_NUM_MODES,
+    TABLE_RESOLUTION as _TABLE_RESOLUTION,
+    USE_SPINE_CSV,
 )
 from .indices import (
+    _ACT_F_LEG_IDS,
+    _ACT_FL_LEG_IDS,
+    _ACT_FR_LEG_IDS,
+    _ACT_H_LEG_IDS,
+    _ACT_HL_LEG_IDS,
+    _ACT_HR_LEG_IDS,
+    _ACT_JOINT_NAMES,
     _ACT_NECK_IDS,
     _ACT_SPN_H_PITCH_ID,
     _ACT_SPN_IDS,
     _MODEL_INDICES,
-    REF_SLOT_OF_ACT,
-    REF_TABLE_ORDER,
     resolve_model_indices,
 )
 
@@ -80,24 +83,20 @@ CYCLOID_PARAMS = {
     }
 }
 
-# 参考表列序: REF_TABLE_ORDER 里的数字是**执行器序**的下标, 不是模型关节索引,
-# 必须先用 indices.py 解析出模型关节索引再按该顺序排列 (顺序: 前腿4 + 后腿4 + 脊柱4 + 头颈2)
+# 参考值按执行器序输出, 与 _MODEL_INDICES.joint_ids / 动作空间同序
 MODEL_JOINT_IDS: list = []
-ACTUATOR_NUM = len(REF_TABLE_ORDER)                         # 被控关节数 (14)
-# 合并前的三张子表都是"表内局部序": 前腿 0:4 / 后腿 4:8 / 脊柱 8:12, 头颈单独拼在末尾
-_TBL_FRONT, _TBL_HIND, _TBL_SPN = slice(0, 4), slice(4, 8), slice(8, 12)
-# 表内脊柱 4 列局部序 (F_spine1, F_body, H_spine1, H_body) 中 H_spine1 的位置
+ACTUATOR_NUM = len(_ACT_JOINT_NAMES)                        # 被控关节数 (14)
+# 局部脊柱张量按 (F_spine1, F_body, H_spine1, H_body) 排列, 写入时整体散到 _ACT_SPN_IDS
 _SPN_LOCAL_H_PITCH = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
 
 
-# 解析参考表列序对应的模型关节索引 (幂等)
+# 解析执行器序对应的模型关节索引 (幂等)
 def resolve_joint_ids(entity) -> list:
     global MODEL_JOINT_IDS
     if MODEL_JOINT_IDS:
         return MODEL_JOINT_IDS
     resolve_model_indices(entity)
-    act = _MODEL_INDICES.joint_ids
-    MODEL_JOINT_IDS = [act[i] for i in REF_TABLE_ORDER]
+    MODEL_JOINT_IDS = list(_MODEL_INDICES.joint_ids)
     return MODEL_JOINT_IDS
 
 
@@ -273,7 +272,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         xoy_spine_data = Load_CSV_Spine(CSV_PATHS["xoy_spine"], "xoy_spine")
         yoz_spine_data = Load_CSV_Spine(CSV_PATHS["yoz_spine"], "yoz_spine")
     
-    NUM_MODES = REF_TABLE_NUM_MODES
+    # 参考表只用 mode 0/1/2: MODE_BOTH_LOW 恰是参考表的模式数 (它同时覆盖双高与双低)
+    NUM_MODES = MODE_BOTH_LOW
     front_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
@@ -322,9 +322,9 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             z_tensor_F = torch.tensor(np.stack([z_leg_fl, z_leg_fr], axis=-1), device=device, dtype=torch.float32)
             shoulder_angles, elbow_angles = Inverse_Kinematics(x_tensor_F, z_tensor_F, is_front=True)
             
-            # 写入表内局部列: 前腿 FL 占 0:2, FR 占 2:4
-            front_pos_table[mode, height_idx, :, 0:2] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
-            front_pos_table[mode, height_idx, :, 2:4] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
+            # 按执行器索引写入 (FL 占 _ACT_FL_LEG_IDS, FR 占 _ACT_FR_LEG_IDS)
+            front_pos_table[mode, height_idx, :, _ACT_FL_LEG_IDS] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
+            front_pos_table[mode, height_idx, :, _ACT_FR_LEG_IDS] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
 
             # ===== 2. 后肢计算 =====
             if mode == MODE_FRONT_LOW:  
@@ -363,8 +363,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
             hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
             
-            hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
-            hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+            hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+            hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
             is_low_height = target_height < THRESHOLD_HEIGHT
 
@@ -385,8 +385,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 spine_angles = np.zeros((_TABLE_RESOLUTION, 4))
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
                 
-            # 脊柱占 8:12, 头颈占 12:14 (头颈列保持 0, 期望位置与速度都是 0)
-            spine_pos_table[mode, height_idx, :, 8:12] = spine_tensor
+            spine_pos_table[mode, height_idx, :, _ACT_SPN_IDS] = spine_tensor
         
                 
     # ===== 4. 计算速度张量 (基于差分，避免空表问题) =====
@@ -484,24 +483,30 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_min = torch.argmin(height_diffs_min, dim=1)
 
-    # 4. 取参考位置/速度: 三张表都是表内局部布局 (前腿 0:4 / 后腿 4:8 / 脊柱 8:12)
-    front_pos = tables["front_pos"][mode, height_indices_F, phase_indices, _TBL_FRONT]
-    hind_pos = tables["hind_pos"][mode, height_indices_H, phase_indices, _TBL_HIND]
-    spine_pos = tables["spine_pos"][mode, height_indices_min, phase_indices, _TBL_SPN]
+    # 4. 按执行器列取 (索引包成 tensor 才是索引数组, 且保留 batch 维)
+    mi = torch.as_tensor(mode)
+    hfi = torch.as_tensor(height_indices_F)
+    hhi = torch.as_tensor(height_indices_H)
+    hmi = torch.as_tensor(height_indices_min)
+    phi = torch.as_tensor(phase_indices)
+    front_pos = tables["front_pos"][mi, hfi, phi][:, list(_ACT_F_LEG_IDS)]
+    hind_pos = tables["hind_pos"][mi, hhi, phi][:, list(_ACT_H_LEG_IDS)]
+    spine_pos = tables["spine_pos"][mi, hmi, phi][:, list(_ACT_SPN_IDS)]
+    front_vel = tables["front_vel"][mi, hfi, phi][:, list(_ACT_F_LEG_IDS)]
+    hind_vel = tables["hind_vel"][mi, hhi, phi][:, list(_ACT_H_LEG_IDS)]
+    spine_vel = tables["spine_vel"][mi, hmi, phi][:, list(_ACT_SPN_IDS)]
 
-    front_vel = tables["front_vel"][mode, height_indices_F, phase_indices, _TBL_FRONT]
-    hind_vel = tables["hind_vel"][mode, height_indices_H, phase_indices, _TBL_HIND]
-    spine_vel = tables["spine_vel"][mode, height_indices_min, phase_indices, _TBL_SPN]
+    # 5. 按执行器索引散入 14 列: 前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2
+    joint_pos = torch.empty_like(front_pos).new_zeros(front_pos.shape[0], ACTUATOR_NUM)
+    joint_vel = torch.empty_like(front_vel).new_zeros(front_vel.shape[0], ACTUATOR_NUM)
+    joint_pos[:, _ACT_F_LEG_IDS] = front_pos
+    joint_pos[:, _ACT_H_LEG_IDS] = hind_pos
+    joint_pos[:, _ACT_SPN_IDS] = spine_pos
+    joint_pos[:, _ACT_NECK_IDS] = _neck_ref_pos(mode)
+    joint_vel[:, _ACT_F_LEG_IDS] = front_vel
+    joint_vel[:, _ACT_H_LEG_IDS] = hind_vel
+    joint_vel[:, _ACT_SPN_IDS] = spine_vel
+    joint_vel[:, _ACT_NECK_IDS] = _neck_ref_vel(mode)
 
-    # 5. 按参考表列序拼成 14 列: 前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2
-    joint_pos = torch.cat(
-        [front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)],
-        dim=1
-    )
-    joint_vel = torch.cat(
-        [front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)],
-        dim=1
-    )
-
-    # 6. 表列序 -> 执行器列序, 与 _MODEL_INDICES.joint_ids / 动作空间对齐
-    return joint_pos[:, REF_SLOT_OF_ACT], joint_vel[:, REF_SLOT_OF_ACT]
+    # 6. 列序即执行器序, 与 _MODEL_INDICES.joint_ids / 动作空间一致, 无需置换
+    return joint_pos, joint_vel

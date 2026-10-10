@@ -10,7 +10,7 @@ from dataclasses import asdict
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
-from mjlab.tasks.SQuRo_Hole.mdp.config import STAGE3_END, STEPS_PER_ITER, get_current_stage
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import STAGE3_END, STEPS_PER_ITER, get_current_stage
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
     configure_hole_entities,
