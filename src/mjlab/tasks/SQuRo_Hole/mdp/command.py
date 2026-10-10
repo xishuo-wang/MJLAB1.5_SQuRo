@@ -6,18 +6,18 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from typing import TYPE_CHECKING, Optional, Tuple, List
 from .config import (
-    ANGLE_VALUES,
-    BASE_HEIGHT,
     BASE_SPEED,
+    BASE_HEIGHT,
+    ANGLE_VALUES,
     CMD_ANGLE_IDS,
+    MODE_BOTH_LOW,
+    MODE_HIND_LOW,
+    MODE_FRONT_LOW,
+    MODE_BOTH_HIGH,
+    THRESHOLD_HEIGHT,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     FULL_HEIGHT_VALUES,
-    MODE_BOTH_HIGH,
-    MODE_BOTH_LOW,
-    MODE_FRONT_LOW,
-    MODE_HIND_LOW,
-    THRESHOLD_HEIGHT,
 )
 from .curriculums import (
     get_current_stage,
@@ -42,6 +42,7 @@ STAGE3_POSITION_SCHEDULE = [
     (1.2, 0.055, 0.02),
     (1.32, 0.055, 0.055),
 ]
+
 
 
 # 按当前高度命令判定高度模式
