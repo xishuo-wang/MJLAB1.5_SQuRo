@@ -442,18 +442,6 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     mode2_reward = -vel_deficit_sum * 2.0
     reward[mode2_mask] = mode2_reward[mode2_mask]
     
-    if env.common_step_counter % 10 == 0 and mode2_mask.any():
-        mean_deficit = vel_deficit_sum[mode2_mask].mean().item()
-        mean_reward = reward[mode2_mask].mean().item()
-        # 可选：打印每个关节的单独统计
-        mean_joint_vel = vel_abs[mode2_mask].mean(dim=0)
-        print(f"Stop Reward (Mode 2) - Envs: {mode2_mask.sum().item()}, "
-              f"Mean Vel Deficit Sum: {mean_deficit:.3f}, "
-              f"Mean Reward: {mean_reward:.3f}")
-        print(f"  Joint vel means - FL_sh: {mean_joint_vel[0]:.3f}, "
-              f"FL_el: {mean_joint_vel[1]:.3f}, "
-              f"FR_sh: {mean_joint_vel[2]:.3f}, "
-              f"FR_el: {mean_joint_vel[3]:.3f}")
     
     return reward
 
