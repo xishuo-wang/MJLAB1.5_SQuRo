@@ -140,69 +140,6 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return Reward_height
 
 
-# 抬脚高度奖励（仅 Mode 0 触发）
-def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_height_F = cmd_term.command[:, 3]
-    desired_height_H = cmd_term.command[:, 4]
-    
-    # Mode 0: 前后肢高度都 >= 阈值
-    mode0_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H >= THRESHOLD_HEIGHT)
-    
-    # 非 Mode 0 直接返回零奖励
-    if not mode0_mask.any():
-        return torch.zeros(env.num_envs, device=env.device)
-    
-    foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
-    
-    height_scale_F = desired_height_F / BASE_HEIGHT
-    height_scale_H = desired_height_H / BASE_HEIGHT
-    
-    target_height_F = target_base_height * height_scale_F
-    target_height_H = target_base_height * height_scale_H
-    target_heights = torch.stack([target_height_F, target_height_F, target_height_H, target_height_H], dim=1)
-    
-    height_error = torch.abs(foot_z - target_heights)
-    reward_per_foot = torch.exp(-100.0 * torch.square(height_error))
-    reward = torch.mean(reward_per_foot, dim=1)
-    
-    # 只保留 Mode 0 的奖励，其他为 0
-    reward = reward * mode0_mask.float()
-    weight = get_curriculum_reward_weight(env, "foot_clearance")
-    
-    
-    return reward * weight
-
-
-# 目标位置接近奖励（距离x=1.5越近奖励越大）
-def compute_reached_reward(env: ManagerBasedRlEnv, target_x: float = 1.5, sigma: float = 10.0) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    # 获取baselink的当前位置（世界坐标系）
-    current_x = asset.data.root_link_pos_w[:, 0]
-    
-    # 计算x方向距离误差
-    x_error = current_x - target_x
-    distance = torch.abs(x_error)
-    
-    # 使用高斯函数计算奖励：距离越近奖励越大
-    # exp(-sigma * distance^2)，距离为0时奖励为1
-    reward = torch.exp(-sigma * distance ** 2)
-    
-    # 调试打印（每100步打印一次）
-    if env.common_step_counter % 100 == 0:
-        print(f"Target Proximity Reward - Target X: {target_x}, "
-              f"Current X Mean: {current_x.mean().item():.3f}, "
-              f"Distance Mean: {distance.mean().item():.3f}, "
-              f"Reward Mean: {reward.mean().item():.3f}")
-    
-    # 获取课程学习权重（如果有配置的话）
-    weight = get_curriculum_reward_weight(env, "reached")
-    
-    return reward * weight
-
-        
-
 # 计算朝向奖励
 def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]

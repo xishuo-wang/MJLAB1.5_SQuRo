@@ -12,6 +12,7 @@ from .config import (
     THRESHOLD_HEIGHT,
     NECK_REF_POS,
     NECK_REF_VEL,
+    HL_HOLD,
     TABLE_RESOLUTION as _TABLE_RESOLUTION,
     USE_SPINE_CSV,
 )
@@ -264,8 +265,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     
-    cycloid_front_low = CYCLOID_PARAMS["front_low"]
     cycloid_hind_low = CYCLOID_PARAMS["hind_low"]
+    hold_x, hold_z = _hold_foot_xy(HL_HOLD)
     
     # 将相位数组预先准备好，消除最内层循环
     phases_np = np.linspace(0, 1, _TABLE_RESOLUTION)
@@ -311,18 +312,11 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
             # ===== 2. 后肢计算 =====
             if mode == 1:  
-                freq = cycloid_front_low["freq"]
-                T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_front_low["swing_ratio"]
-                t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["HL"] * T) % T
-                x_leg_hl, z_leg_hl = Cycloid_Trajectory(
-                    t_mods, T_sw, T - T_sw, cycloid_front_low["stride_H"], cycloid_front_low["height_H"],
-                    cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"], cycloid_front_low["x_offset_H"], 1
-                )
-                t_mods_hr = (phases_np * T + CSV_PARAMS["phase_lag"]["HR"] * T) % T
-                x_leg_hr, z_leg_hr = Cycloid_Trajectory(
-                    t_mods_hr, T_sw, T - T_sw, cycloid_front_low["stride_H"], cycloid_front_low["height_H"],
-                    cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"], cycloid_front_low["x_offset_H"], 1
-                )
+                # 前高后低: 后腿收缩保持 HL_HOLD, 不摆动 (关节角 -> 足端 xy 再走 IK)
+                x_leg_hl = np.full(_TABLE_RESOLUTION, hold_x)
+                z_leg_hl = np.full(_TABLE_RESOLUTION, hold_z)
+                x_leg_hr = np.full(_TABLE_RESOLUTION, hold_x)
+                z_leg_hr = np.full(_TABLE_RESOLUTION, hold_z)
             elif mode == 2:  
                 x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
                 x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
@@ -389,6 +383,21 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         "mode_periods": mode_periods,
     }
     return tables
+
+
+# 后腿保持姿态的关节角 -> 足端 (x, z): 数值反解 Inverse_Kinematics, 保证还原后角度一致
+def _hold_foot_xy(hold_angles: tuple[float, float]) -> tuple[float, float]:
+    hip_t, knee_t = hold_angles
+    half, best_x, best_z = 0.12, 0.0, 0.0
+    for _ in range(4):
+        ts = torch.linspace(-half, half, 81, dtype=torch.float64)
+        grid_x, grid_z = torch.meshgrid(ts, ts, indexing="ij")
+        gx, gz = grid_x.reshape(-1, 1), grid_z.reshape(-1, 1)
+        hip, knee = Inverse_Kinematics(best_x + gx, best_z + gz, is_front=False)
+        i = int(torch.argmin((hip - hip_t) ** 2 + (knee - knee_t) ** 2))
+        best_x, best_z = best_x + float(gx[i, 0]), best_z + float(gz[i, 0])
+        half /= 40.0
+    return best_x, best_z
 
 
 # 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
