@@ -5,7 +5,6 @@ import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-
 from .entity import hole_geometry
 from .config import (
     BASE_HEIGHT,
@@ -24,24 +23,6 @@ from .reference import (
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
-
-
-
-_DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-
-_SPN_SCALE_CACHE: dict = {}
-
-
-
-# 缓存脊柱逐轴误差缩放 (顺序 = F_spine1, F_body, H_spine1, H_body)
-def _error_spn_scale(env, device, dtype) -> torch.Tensor:
-    scale = SPN_AXIS_SCALE
-    key = (str(device), str(dtype), scale)
-    s = _SPN_SCALE_CACHE.get(key)
-    if s is None:
-        s = torch.tensor(scale, device=device, dtype=dtype)
-        _SPN_SCALE_CACHE[key] = s
-    return s
 
 
 
@@ -76,11 +57,11 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 # 关节速度模仿奖励
 def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 获取实际和期望关节位置
+    # 获取实际和期望关节速度
     asset: Entity = env.scene["robot"]
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
-    # 计算关节位置误差
+    # 计算关节速度误差
     error = joint_vel - ref_vel
     error_leg = error[:, _ACT_LEG_IDS]
     error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
@@ -100,6 +81,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward = reward_leg + reward_spn + reward_neck
     weight = get_curriculum_reward_weight(env, "mimic_vel")
     return reward * weight
+
 
 
 # X线速度跟踪奖励
@@ -125,6 +107,7 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return reward * weight
 
 
+
 # 身体高度跟踪奖励
 def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -147,6 +130,7 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return Reward_height
 
 
+
 # 计算朝向奖励
 def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -157,19 +141,10 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     yaw = torch.atan2(siny_cosp, cosy_cosp) - math.pi/2
     yaw_error = torch.abs(yaw)
     yaw_error_alt = torch.min(yaw_error, 2 * math.pi - yaw_error)
-    
     reward = torch.exp(-5 * yaw_error_alt ** 2)
     weight = get_curriculum_reward_weight(env, "orientation")
-    
-    # 调试信息
-    if env.common_step_counter % 1000 == 0:
-        mean_yaw = torch.rad2deg(yaw).mean().item()
-        mean_error = torch.rad2deg(yaw_error_alt).mean().item()
-        print(f"Orientation Reward - Mean Yaw: {mean_yaw:.1f}°, "
-              f"Mean Error: {mean_error:.1f}°, "
-              f"Reward Mean: {reward.mean().item():.3f}")
-    
     return reward * weight
+
 
 
 # 身体角度奖励
@@ -213,57 +188,10 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         sigma = 100
     
     reward = torch.exp(-sigma * roll_error ** 2)
-    weight = get_curriculum_reward_weight(env, "angle")
-    
-    # 调试信息
-    if env.common_step_counter % 100 == 0:
-        low_F_count = low_heightF_mask.sum().item()
-        low_H_count = low_heightH_mask.sum().item()
-        high_count = high_height_mask.sum().item()
-        
-        if low_F_count > 0:
-            low_F_mean_error = roll_error[low_heightF_mask].mean().item()
-            low_F_mean_reward = reward[low_heightF_mask].mean().item()
-            low_F_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightF_mask, 4]).mean().item()
-            print(f"Body Angle Reward (F low) - Envs: {low_F_count}, "
-                  f"F Body Roll: {torch.rad2deg(torch.tensor(low_F_mean_roll + math.pi/2)).item():.1f}°, "
-                  f"Cmd Angle: {torch.rad2deg(desired_angle[low_heightF_mask].mean()).item():.1f}°, "
-                  f"Mean Error: {torch.rad2deg(torch.tensor(low_F_mean_error)).item():.1f}°, "
-                  f"Mean Reward: {low_F_mean_reward:.3f}")
-        
-        if low_H_count > 0:
-            low_H_mean_error = roll_error[low_heightH_mask].mean().item()
-            low_H_mean_reward = reward[low_heightH_mask].mean().item()
-            low_H_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightH_mask, 24]).mean().item()
-            print(f"Body Angle Reward (H low) - Envs: {low_H_count}, "
-                  f"H Body Roll: {torch.rad2deg(torch.tensor(low_H_mean_roll - math.pi/2)).item():.1f}°, "
-                  f"Cmd Angle: {torch.rad2deg(desired_angle[low_heightH_mask].mean()).item():.1f}°, "
-                  f"Mean Error: {torch.rad2deg(torch.tensor(low_H_mean_error)).item():.1f}°, "
-                  f"Mean Reward: {low_H_mean_reward:.3f}")
-        
-        if high_count > 0:
-            high_mean_error = roll_error[high_height_mask].mean().item()
-            high_mean_reward = reward[high_height_mask].mean().item()
-            print(f"Body Angle Reward (Both high) - Envs: {high_count}, "
-                  f"Mean Error: {torch.rad2deg(torch.tensor(high_mean_error)).item():.1f}°, "
-                  f"Mean Reward: {high_mean_reward:.3f}")
-    
+    weight = get_curriculum_reward_weight(env, "angle")    
     return reward * weight
 
 
-# 辅助函数：四元数转偏航角（绕Z轴旋转）
-def _quaternion_to_roll(quat: torch.Tensor) -> torch.Tensor:
-    if quat.dim() == 1:
-        quat = quat.unsqueeze(0)
-    
-    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    
-    # 计算侧倾角（绕X轴）
-    sinr_cosp = 2 * (w * x + y * z)
-    cosr_cosp = 1 - 2 * (x * x + y * y)
-    roll = torch.atan2(sinr_cosp, cosr_cosp)
-    
-    return roll.squeeze()
 
 
 # 能量消耗惩罚函数
@@ -278,6 +206,7 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     
     return penalty * weight
     
+
 
 # 计算COT惩罚函数
 def compute_cot_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -301,6 +230,7 @@ def compute_cot_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     
     return penalty * weight
 
+
     
 # 动作平滑性惩罚
 def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:    
@@ -311,6 +241,7 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "smoothness")
 
     return penalty * weight
+
 
 
 # 关节加速度惩罚函数
@@ -324,6 +255,7 @@ def compute_joint_acc_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty * weight
 
 
+
 # Y轴基座偏移惩罚函数
 def compute_base_y_offset_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -332,6 +264,7 @@ def compute_base_y_offset_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "y_offset")
     
     return penalty * weight
+
 
 
 # 腿部关节限位惩罚
@@ -370,6 +303,7 @@ def compute_limits_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty * weight
 
 
+
 # 动作加速度惩罚
 def compute_action_acc(env: ManagerBasedRlEnv) -> torch.Tensor:
     policy_obs = env.observation_manager.compute_group("actor", update_history=False)
@@ -399,6 +333,8 @@ def compute_action_acc(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty * weight
 
 
+
+# 虚拟碰撞奖励
 def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset = env.scene["robot"]
     device = env.device
@@ -443,6 +379,7 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return reward * weight
 
 
+
 # Mode 2 前腿运动奖励（防止前腿不动）
 def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -480,3 +417,36 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
               f"FR_el: {mean_joint_vel[3]:.3f}")
     
     return reward
+
+
+
+
+_SPN_SCALE_CACHE: dict = {}
+
+
+
+# 缓存脊柱逐轴误差缩放 (顺序 = F_spine1, F_body, H_spine1, H_body)
+def _error_spn_scale(env, device, dtype) -> torch.Tensor:
+    scale = SPN_AXIS_SCALE
+    key = (str(device), str(dtype), scale)
+    s = _SPN_SCALE_CACHE.get(key)
+    if s is None:
+        s = torch.tensor(scale, device=device, dtype=dtype)
+        _SPN_SCALE_CACHE[key] = s
+    return s
+
+
+
+# 辅助函数：四元数转偏航角（绕Z轴旋转）
+def _quaternion_to_roll(quat: torch.Tensor) -> torch.Tensor:
+    if quat.dim() == 1:
+        quat = quat.unsqueeze(0)
+    
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    
+    # 计算侧倾角（绕X轴）
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+    
+    return roll.squeeze()
