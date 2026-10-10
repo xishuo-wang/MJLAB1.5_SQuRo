@@ -1,11 +1,10 @@
 from __future__ import annotations
 import math
-from pathlib import Path
 import torch
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from typing import Dict, Any, Optional
-
 from .config import (
     BASE_HEIGHT,
     HEIGHT_LIST,
@@ -37,6 +36,8 @@ from .indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
+
+
 
 # 生物数据随任务打包 (原版为开发机绝对路径, 迁移到仓库内相对路径)
 _BIO_DATA_DIR = Path(__file__).resolve().parent / "Bio_Data"
@@ -90,7 +91,8 @@ ACTUATOR_NUM = len(_ACT_JOINT_NAMES)                        # 被控关节数 (1
 _SPN_LOCAL_H_PITCH = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
 
 
-# 解析执行器序对应的模型关节索引 (幂等)
+
+# 解析执行器序对应的模型关节索引
 def resolve_joint_ids(entity) -> list:
     global MODEL_JOINT_IDS
     if MODEL_JOINT_IDS:
@@ -106,20 +108,21 @@ _PRECOMPUTED_TABLES: Dict[str, Any] = {}
 _IS_TABLE_INITIALIZED = False
 
 
+
 # 根据目标高度计算缩放因子
 def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIGHT) -> float:
     return target_height / base_height
 
-# 加载CSV数据
+
+
+# 加载腿部 CSV 数据
 def Load_CSV_Leg(csv_path: str, is_front: bool = True) -> Optional[Dict[str, Any]]:
     cache_key = "front" if is_front else "hind"
     if _LEG_CSV_CACHE[cache_key] is not None:
         return _LEG_CSV_CACHE[cache_key]    
     
     df = pd.read_csv(csv_path)
-    fps = CSV_PARAMS["fps"]
-    time_data = np.arange(len(df)) / fps
-    
+    time_data = np.arange(len(df)) / CSV_PARAMS["fps"]
     data = {
         "x_data": df['X'].values * CSV_PARAMS["foot_scale"],
         "z_data": df['Z'].values * CSV_PARAMS["foot_scale"],
@@ -129,6 +132,9 @@ def Load_CSV_Leg(csv_path: str, is_front: bool = True) -> Optional[Dict[str, Any
     _LEG_CSV_CACHE[cache_key] = data
     return data
 
+
+
+# 加载脊柱 CSV 数据
 def Load_CSV_Spine(csv_path: str, spine_type: str) -> Optional[Dict[str, Any]]:
     cache_key = spine_type
     if _SPINE_CSV_CACHE[cache_key] is not None:
@@ -145,6 +151,7 @@ def Load_CSV_Spine(csv_path: str, spine_type: str) -> Optional[Dict[str, Any]]:
     return data
 
 
+
 # 向量化CSV腿部轨迹
 def CSV_Leg_Trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: float, 
                                   rotate_angle: float, height_scale: float = 1.0, 
@@ -157,7 +164,6 @@ def CSV_Leg_Trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: 
     
     t_time = ((phases + phase_lag) % 1.0) * csv_data["T"]
     
-    # 利用 np.interp 进行高速批量一维插值
     x_raw = np.interp(t_time, csv_data["time_data"], csv_data["x_data"])
     z_raw = np.interp(t_time, csv_data["time_data"], csv_data["z_data"])
     
@@ -171,10 +177,12 @@ def CSV_Leg_Trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: 
     return x_rotated, z_rotated
 
 
+
 # 向量化CSV脊柱轨迹
 def CSV_Spine_Trajectory(phases: np.ndarray, spine_data: Dict[str, Any]) -> np.ndarray:
     t_time = (phases % 1.0) * spine_data["T"]
     return np.interp(t_time, spine_data["time_data"], spine_data["angle_data"])
+
 
 
 # 向量化摆线轨迹
@@ -208,10 +216,10 @@ def Cycloid_Trajectory(t_mods: np.ndarray, T_sw: float, T_st: float, stride: flo
     return x_leg, z_leg
 
 
-# 逆运动学求解器
+
+# 逆运动学
 def Inverse_Kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
     L1, L2 = (0.040, 0.040) if is_front else (0.040, 0.036)
-    
     R = torch.sqrt(x**2 + y**2)
     K = (L2**2 - x**2 - y**2 - L1**2) / (2 * L1)
     theta = torch.atan2(y, x)
@@ -242,21 +250,20 @@ def Inverse_Kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True) 
         return hip_angle, knee_angle
 
 
+
 # 初始化预计算表
 def Initialize_Tables(device=None, force_reload=False) -> Dict[str, Any]:
     global _PRECOMPUTED_TABLES, _IS_TABLE_INITIALIZED
-    
     if _IS_TABLE_INITIALIZED and not force_reload:
         if "device" in _PRECOMPUTED_TABLES and _PRECOMPUTED_TABLES["device"] == device:
             return _PRECOMPUTED_TABLES
             
-    # 原版忽略传入的 device 而硬编码 cuda:0, 只能在 GPU 上跑; 这里改为尊重调用方设备
-    target = torch.device(device) if device is not None else torch.device(
-        "cuda:0" if torch.cuda.is_available() else "cpu")
+    target = torch.device(device) if device is not None else torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     tables = Initialize_Tables_Hole(target)
     _PRECOMPUTED_TABLES = tables
     _IS_TABLE_INITIALIZED = True
     return tables
+
 
 
 # 初始化钻洞用预计算表
@@ -413,6 +420,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     return tables
 
 
+
 # 后腿保持姿态的关节角 -> 足端 (x, z): 数值反解 Inverse_Kinematics, 保证还原后角度一致
 def _hold_foot_xy(hold_angles: tuple[float, float]) -> tuple[float, float]:
     hip_t, knee_t = hold_angles
@@ -428,16 +436,19 @@ def _hold_foot_xy(hold_angles: tuple[float, float]) -> tuple[float, float]:
     return best_x, best_z
 
 
+
 # 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
 def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
     values = torch.tensor(NECK_REF_POS, device=mode.device, dtype=torch.float32)
     return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
 
 
+
 # 头颈参考速度: 同位置, 逐关节取 NECK_REF_VEL
 def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
     values = torch.tensor(NECK_REF_VEL, device=mode.device, dtype=torch.float32)
     return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
+
 
 
 # 获取参考状态
@@ -451,18 +462,16 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-
     current_time = env.episode_length_buf.float() * env.step_dt  # [num_envs]
 
-    # 1. 计算 mode
+    # 计算 mode
     front_low = desired_heightF < THRESHOLD_HEIGHT
     hind_low = desired_heightH < THRESHOLD_HEIGHT
-
     mode = torch.zeros_like(desired_heightF, dtype=torch.long)
     mode[(front_low) & (~hind_low)] = 1
     mode[(~front_low) & (hind_low)] = 2
 
-    # 2. 根据 mode 获取周期并计算相位
+    # 根据 mode 获取周期并计算相位
     mode_periods = tables["mode_periods"]  # [3]
     period = mode_periods[mode]
 
@@ -470,20 +479,17 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     phase_scaled = phase * (_TABLE_RESOLUTION - 1)
     phase_indices = phase_scaled.long().clamp(0, _TABLE_RESOLUTION - 1)
 
-    # 3. 高度索引
+    # 高度索引
     height_list = torch.tensor(HEIGHT_LIST, device=device)
-
     height_diffs_F = torch.abs(desired_heightF.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_F = torch.argmin(height_diffs_F, dim=1)
-
     height_diffs_H = torch.abs(desired_heightH.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_H = torch.argmin(height_diffs_H, dim=1)
-
     min_height = torch.minimum(desired_heightF, desired_heightH)
     height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_min = torch.argmin(height_diffs_min, dim=1)
 
-    # 4. 按执行器列取 (索引包成 tensor 才是索引数组, 且保留 batch 维)
+    # 按执行器列取
     mi = torch.as_tensor(mode)
     hfi = torch.as_tensor(height_indices_F)
     hhi = torch.as_tensor(height_indices_H)
@@ -496,7 +502,7 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     hind_vel = tables["hind_vel"][mi, hhi, phi][:, list(_ACT_H_LEG_IDS)]
     spine_vel = tables["spine_vel"][mi, hmi, phi][:, list(_ACT_SPN_IDS)]
 
-    # 5. 按执行器索引散入 14 列: 前腿 4 + 后腿 4 + 脊柱 4 + 头颈 2
+    # 按执行器索引散入 14 列
     joint_pos = torch.empty_like(front_pos).new_zeros(front_pos.shape[0], ACTUATOR_NUM)
     joint_vel = torch.empty_like(front_vel).new_zeros(front_vel.shape[0], ACTUATOR_NUM)
     joint_pos[:, _ACT_F_LEG_IDS] = front_pos
@@ -507,6 +513,4 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     joint_vel[:, _ACT_H_LEG_IDS] = hind_vel
     joint_vel[:, _ACT_SPN_IDS] = spine_vel
     joint_vel[:, _ACT_NECK_IDS] = _neck_ref_vel(mode)
-
-    # 6. 列序即执行器序, 与 _MODEL_INDICES.joint_ids / 动作空间一致, 无需置换
     return joint_pos, joint_vel
