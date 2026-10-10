@@ -13,11 +13,15 @@ from .config import (
     NECK_REF_POS,
     NECK_REF_VEL,
     HL_HOLD,
+    SPINE_LOW_BEND,
     TABLE_RESOLUTION as _TABLE_RESOLUTION,
     USE_SPINE_CSV,
 )
+from .command import MODE_BOTH_HIGH, MODE_FRONT_LOW, MODE_HIND_LOW, REF_TABLE_NUM_MODES
 from .indices import (
     _ACT_NECK_IDS,
+    _ACT_SPN_H_PITCH_ID,
+    _ACT_SPN_IDS,
     _MODEL_INDICES,
     REF_SLOT_OF_ACT,
     REF_TABLE_ORDER,
@@ -72,19 +76,19 @@ CYCLOID_PARAMS = {
 # 参考表列序: REF_TABLE_ORDER 里的数字是**执行器序**的下标, 不是模型关节索引,
 # 必须先用 indices.py 解析出模型关节索引再按该顺序排列 (顺序: 前腿4 + 后腿4 + 脊柱4 + 头颈2)
 MODEL_JOINT_IDS: list = []
-NECK_IDS = [4, 5]                                           # 模型关节索引: Neck_yaw, Neck_pitch
 ACTUATOR_NUM = len(REF_TABLE_ORDER)                         # 被控关节数 (14)
+# 表内脊柱 4 列局部序 (F_spine1, F_body, H_spine1, H_body) 中 H_spine1 的位置
+_SPN_LOCAL_H_PITCH = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
 
 
 # 解析参考表列序对应的模型关节索引 (幂等)
 def resolve_joint_ids(entity) -> list:
-    global MODEL_JOINT_IDS, NECK_IDS
+    global MODEL_JOINT_IDS
     if MODEL_JOINT_IDS:
         return MODEL_JOINT_IDS
     resolve_model_indices(entity)
     act = _MODEL_INDICES.joint_ids
     MODEL_JOINT_IDS = [act[i] for i in REF_TABLE_ORDER]
-    NECK_IDS = [act[i] for i in _ACT_NECK_IDS]
     return MODEL_JOINT_IDS
 
 
@@ -260,7 +264,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         xoy_spine_data = Load_CSV_Spine(CSV_PATHS["xoy_spine"], "xoy_spine")
         yoz_spine_data = Load_CSV_Spine(CSV_PATHS["yoz_spine"], "yoz_spine")
     
-    NUM_MODES = 3
+    NUM_MODES = REF_TABLE_NUM_MODES
     front_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     hind_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
     spine_pos_table = torch.zeros(NUM_MODES, len(HEIGHT_LIST), _TABLE_RESOLUTION, ACTUATOR_NUM, device=device)
@@ -276,11 +280,11 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         
         for mode in range(NUM_MODES):
             # ===== 1. 前肢计算 =====
-            if mode == 1:  
+            if mode == MODE_FRONT_LOW:  
                 # 前低后高: 前腿收缩不摆动 (0.005, -0.02), 后腿走摆线
                 x_leg_fl, z_leg_fl = np.full(_TABLE_RESOLUTION, 0.005), np.full(_TABLE_RESOLUTION, -0.02)
                 x_leg_fr, z_leg_fr = np.full(_TABLE_RESOLUTION, 0.005), np.full(_TABLE_RESOLUTION, -0.02)
-            elif mode == 2:  
+            elif mode == MODE_HIND_LOW:  
                 freq = cycloid_hind_low["freq"]
                 T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_hind_low["swing_ratio"]
                 t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["FL"] * T) % T
@@ -312,10 +316,10 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             front_pos_table[mode, height_idx, :, 2:4] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
 
             # ===== 2. 后肢计算 =====
-            if mode == 1:  
+            if mode == MODE_FRONT_LOW:  
                 x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
                 x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
-            elif mode == 2:  
+            elif mode == MODE_HIND_LOW:  
                 # 前高后低: 后腿收缩保持 HL_HOLD, 不摆动 (关节角 -> 足端 xy 再走 IK)
                 x_leg_hl = np.full(_TABLE_RESOLUTION, hold_x)
                 z_leg_hl = np.full(_TABLE_RESOLUTION, hold_z)
@@ -340,10 +344,10 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
             is_low_height = target_height < THRESHOLD_HEIGHT
 
-            if is_low_height or mode in [1, 2]:
-                # 低高度模式：固定脊柱姿态
-                spine_angles = np.zeros((_TABLE_RESOLUTION, 4))
-                spine_angles[:, 2] = -0.65  # 后脊柱关节固定弯曲
+            if is_low_height or mode != MODE_BOTH_HIGH:
+                # 低高度模式：固定脊柱姿态 (spine_angles 是表内 4 列局部序, H_spine1 在第 3 列)
+                spine_angles = np.zeros((_TABLE_RESOLUTION, len(_ACT_SPN_IDS)))
+                spine_angles[:, _SPN_LOCAL_H_PITCH] = SPINE_LOW_BEND
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
             elif USE_SPINE_CSV and xoy_spine_data is not None and yoz_spine_data is not None:
                 # 正常模式：使用CSV脊柱数据
@@ -404,13 +408,13 @@ def _hold_foot_xy(hold_angles: tuple[float, float]) -> tuple[float, float]:
 # 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
 def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
     values = torch.tensor(NECK_REF_POS, device=mode.device, dtype=torch.float32)
-    return values.unsqueeze(0).expand(mode.shape[0], len(NECK_IDS))
+    return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
 
 
 # 头颈参考速度: 同位置, 逐关节取 NECK_REF_VEL
 def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
     values = torch.tensor(NECK_REF_VEL, device=mode.device, dtype=torch.float32)
-    return values.unsqueeze(0).expand(mode.shape[0], len(NECK_IDS))
+    return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
 
 
 # 获取参考状态

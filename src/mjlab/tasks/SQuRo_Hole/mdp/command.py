@@ -43,6 +43,9 @@ MODE_FRONT_LOW = 1
 MODE_HIND_LOW = 2
 MODE_BOTH_LOW = 3
 
+# 参考表的模式数 (仅 0/1/2 三档; 与上面 4 个高度模式是不同的分层, 勿混用)
+REF_TABLE_NUM_MODES = 3
+
 
 # 按当前高度命令判定高度模式
 def get_height_mode(height_F: float, height_H: float) -> int:

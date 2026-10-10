@@ -15,8 +15,10 @@ USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓
 # 位置同时就是复位姿态, 使 action=0 恰好维持头部俯仰 (见 docs §9.8); 两者必须同值
 NECK_REF_POS = (0.0, -0.3)
 NECK_REF_VEL = (0.0, 0.0)
-# 前高后低 (mode 1) 的后腿收缩状态关节角 (hip, knee), 固定不摆动
+# 前高后低 (参考表 mode 2) 的后腿收缩状态关节角 (hip, knee), 固定不摆动
 HL_HOLD = (-1.50, -0.25)
+# 低高度档与单侧模式下参考表的固定后脊柱俯仰角 (第 3 列 H_spine1)
+SPINE_LOW_BEND = -0.65
 
 
 
