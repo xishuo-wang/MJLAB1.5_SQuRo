@@ -8,7 +8,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .hole import hole_geometry
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
-from .curriculums import get_curriculum_reward_weight
+from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS
 from .reference import (
     resolve_joint_ids,
@@ -28,7 +28,7 @@ _SPN_SCALE_CACHE: dict = {}
 
 # 缓存脊柱逐轴误差缩放 (顺序 = F_spine1, F_body, H_spine1, H_body)
 def _error_spn_scale(env, device, dtype) -> torch.Tensor:
-    scale = (1.5, 0.5, 0.5, 0.5)
+    scale = SPN_AXIS_SCALE
     key = (str(device), str(dtype), scale)
     s = _SPN_SCALE_CACHE.get(key)
     if s is None:
@@ -455,7 +455,7 @@ def compute_action_acc(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty * weight
 
 
-def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset = env.scene["robot"]
     device = env.device
     num_envs = env.num_envs
@@ -465,30 +465,38 @@ def compute_body_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     obs_x_min = torch.tensor([g["x_min"] for g in geo], device=device)
     obs_x_max = torch.tensor([g["x_max"] for g in geo], device=device)
     obs_z_thresh = torch.tensor([g["virtual_z_threshold"] for g in geo], device=device)
-    
+
     # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
     body_x = asset.data.body_link_pos_w[
         :, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
-    
+
     # 判断是否在障碍物X范围内 [num_envs, 2, 3]
     in_obs_matrix = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
-    
-    if not in_obs_matrix.any():
-        return torch.zeros(num_envs, device=device)
-    
-    active_z_thresh = (in_obs_matrix.float() @ obs_z_thresh)
-    in_any_obs = in_obs_matrix.any(dim=-1)
+    # 不在任何板区内的躯干无高度约束, 阈值抬到 +inf, 使其恒判为"未超出"
+    active_z_thresh = torch.where(
+        in_obs_matrix, obs_z_thresh.expand_as(in_obs_matrix),
+        torch.full_like(in_obs_matrix, float("inf"), dtype=obs_z_thresh.dtype).expand_as(in_obs_matrix)
+    ).min(dim=-1).values                                    # [num_envs, 2]
+
     # 采样点: 前段 9 点 + 后段 9 点 (索引由 indices.py 按名字解析)
     seg_site_ids = list(_MODEL_INDICES.f_body_site_ids) + list(_MODEL_INDICES.h_body_site_ids)
     all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2]
     all_sites_z = all_sites_z.view(num_envs, 2, 9)
-    diff = all_sites_z - active_z_thresh.unsqueeze(-1)
-    excess = torch.clamp(diff, min=0.0)
-    excess = excess * in_any_obs.unsqueeze(-1)
-    total_penalty = excess.sum(dim=(1, 2))  # [num_envs]
-    weight = get_curriculum_reward_weight(env, "body_contact")
+    # 每段取最高的采样点与阈值比较, 超出量 v = max(surface - z_thresh, 0)
+    v = torch.clamp(all_sites_z.max(dim=-1).values - active_z_thresh, min=0.0)
 
-    return -total_penalty * weight * 10
+    sigma = get_curriculum_reward_weight(env, "sigma_body_contact")
+    weight = get_curriculum_reward_weight(env, "body_contact")
+    # 在范围内给奖励, 超出按超出量指数衰减 (形态对齐 Slalom 走廊奖励)
+    r_f = torch.exp(-sigma * v[:, 0] ** 2)
+    r_h = torch.exp(-sigma * v[:, 1] ** 2)
+    reward = (r_f + r_h) / 2
+
+    # 记录 metrics
+    env.extras["log"]["Metrics/body_contact_excess"] = v.mean().item()
+    env.extras["log"]["Metrics/rear_surface_excess"] = v[:, 1].mean().item()
+
+    return reward * weight
 
 
 # Mode 2 前腿运动奖励（防止前腿不动）

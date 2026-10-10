@@ -77,10 +77,10 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),
         "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
         "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
+        "body_contact": RewardTermCfg(func=mdp.compute_body_contact_reward, weight=1.0),
         # 惩罚项
         # "cot": RewardTermCfg(func=mdp.compute_cot_penalty, weight=1.0),
         "smoothness": RewardTermCfg(func=mdp.compute_smoothness_penalty, weight=1.0),
-        "body_contact": RewardTermCfg(func=mdp.compute_body_contact_penalty, weight=1.0),
         "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
         "reached": RewardTermCfg(func=mdp.compute_reached_reward, weight=1.0),
     }

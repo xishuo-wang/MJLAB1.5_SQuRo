@@ -34,6 +34,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
     "body_contact":             (0.0, 0.0, 5.0, 5.0),
+    # 虚拟净空 σ: 超出量的指数衰减系数 (超出 5mm 时按 exp(-sigma*0.005^2) 计)
+    "sigma_body_contact":       (2000.0, 2000.0, 2000.0, 2000.0),
     # 位置/速度模仿的腿部 σ 与颈部权重
     "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
@@ -54,7 +56,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 
 # 脊柱误差的逐轴缩放, 顺序 = 参考表脊柱 4 列 (F_spine1, F_body, H_spine1, H_body)
-# 即 (侧摆, 扭转, 俯仰, 扭转): 放大俯仰与侧摆 (>1), 压低扭转 (<1)
+# 即 (侧摆, 扭转, 俯仰, 扭转)
 SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)
 
 
