@@ -1,3 +1,5 @@
+from .entity import HOLE_LAYOUT
+
 # 命令系统相关配置
 BASE_HEIGHT = 0.055         # 基准高度：正常行走下的躯干中心高度
 BASE_FREQ = 2.0             # 基准速度：正常行走下的步态频率
@@ -16,6 +18,14 @@ CMD_ANGLE_IDS = 5           # 期望角度命令索引
 ANGLE_VALUES = [0.0]        # 角度命令采样范围
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]       # 0-1k 高度采样范围
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]   # 1-2k 高度采样范围
+
+
+
+# 限高板板底高度随机化: 每回合在 [下界, 上界] 内采样, 下界随课程逐档下降
+OBSTACLE_Z_LOW_START = 0.07                             # 课程起始下界 (m)
+OBSTACLE_Z_HIGH = 0.09                                  # 采样上界 (m)
+OBSTACLE_Z_STEP = 0.002                                 # 每次达标的下降步长 (m)
+OBSTACLE_Z_FLOOR = min(bz for _, _, _, bz, _, _ in HOLE_LAYOUT)   # 下界地板 (m), 取几何表最低板底
 
 
 

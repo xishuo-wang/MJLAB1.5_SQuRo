@@ -1,5 +1,7 @@
 from __future__ import annotations
 import torch
+from .config import OBSTACLE_Z_HIGH, OBSTACLE_Z_LOW_START
+from .entity import HOLE_LAYOUT
 from .indices import (
     _MODEL_INDICES,
     _ACT_JOINT_IDS,
@@ -54,3 +56,20 @@ def reset_model(env, env_ids):
             joint_pos[:, idx] = joint_positions[i]
 
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+
+# 每回合重采样限高板板底高度 (三块板共用同一个采样值)。
+# sim.reset 会把 mocap_pos 打回编译期默认值, 所以本项必须挂在 mode="reset" (它在 sim.reset 之后执行)
+def reset_obstacle_height(env, env_ids):
+    n = len(env_ids)
+    if n == 0:
+        return
+
+    low, high = OBSTACLE_Z_LOW_START, OBSTACLE_Z_HIGH
+    bottom_z = torch.rand(n, device=env.device) * (high - low) + low
+
+    for name, *_ in HOLE_LAYOUT:
+        entity = env.scene.entities.get(name.lower())
+        if entity is not None:
+            entity.write_bottom_z(env, bottom_z, env_ids=env_ids)

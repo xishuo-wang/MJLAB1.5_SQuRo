@@ -1,13 +1,12 @@
 from dataclasses import dataclass, replace
 import mujoco
+import torch
 from mjlab.entity import Entity, EntityCfg
 
 
 # 三块限高板的几何: 板底 z 即板体 position.z, 板厚 2*half_thickness 向上长
-# 板底 = position.z, 板顶 = position.z + 2*half_thickness
-# 实测板底 / 板顶 (重构前口径保持一致):
-#   hole1 / hole3: 板底 0.0475, 板顶 0.0575 (position.z=0.05, 半厚 0.005)
-#   hole2:         板底 0.0725, 板顶 0.0825 (position.z=0.075, 半厚 0.005)
+# 板底 = position.z (编译期默认值, 也是每次复位的回落值), 板顶 = position.z + 2*half_thickness
+# 运行期板底 = mocap_pos.z, 由 mode="reset" 事件逐环境写入 (见 mdp/events.reset_obstacle_height)
 # 虚拟净空阈值 = 板底 − 2.5 mm (见 rewards.compute_body_contact_penalty)
 HOLE_LAYOUT = (
     ("Hole1", 0.2, 0.0, 0.0475, 0.015, 0.005),
@@ -48,7 +47,9 @@ class HoleEntity(Entity):
 
     def _build_geometry(self):
         half_t = self.cfg.size[2]
-        body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position,)
+        # 板体自身建成 mocap body: 只有这样 mujoco_warp 才会逐帧更新 geom_xpos
+        # (见 docs/SQuRo_Hole_受限空间随机化.md §2)
+        body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position, mocap=True,)
         kwargs: dict = {}
         if self.cfg.solref is not None:
             kwargs["solref"] = self.cfg.solref
@@ -65,6 +66,40 @@ class HoleEntity(Entity):
             mass=self.cfg.mass,
             **kwargs,
         )
+
+
+    # 板体全局 body 下标
+    @property
+    def board_body_id(self) -> int:
+        local, _ = self.find_bodies([self.cfg.name], preserve_order=True)
+        return int(self.indexing.body_ids[local[0]])
+
+
+    # 板体 mocap 下标 (逐环境摆位用; 取板体自身, 不是 root 的空 mocap_base)
+    @property
+    def board_mocap_id(self) -> int:
+        return int(self.data.model.body_mocapid[self.board_body_id])
+
+
+    # 逐环境写板底高度 (m); 无仿真时静默跳过 (单测替身)
+    def write_bottom_z(self, env, bottom_z, env_ids=None) -> None:
+        sim = getattr(env, "sim", None)
+        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
+        if pos is None:
+            return
+        ids = slice(None) if env_ids is None else env_ids
+        if not torch.is_tensor(bottom_z):
+            bottom_z = torch.as_tensor(bottom_z, device=pos.device, dtype=pos.dtype)
+        pos[ids, self.board_mocap_id, 2] = bottom_z
+
+
+    # 读回逐环境板底高度 (m); 无仿真时返回全 0
+    def read_bottom_z(self, env):
+        sim = getattr(env, "sim", None)
+        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
+        if pos is None:
+            return torch.zeros(1)
+        return pos[:, self.board_mocap_id, 2].clone()
 
 
     # 板底高度 (m)
