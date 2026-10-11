@@ -101,16 +101,22 @@ def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_vel_x = cmd_term.command[:, CMD_VEL_X_IDS]
+    # 有速度命令却几乎不动 -> 直接给惩罚底 (与旧版 compute_linear_velocity_reward 一致)
+    has_velocity_cmd = torch.abs(desired_vel_x) > 0.01
+    min_speed_mask = (torch.abs(actual_vel_x) < 0.01) & has_velocity_cmd
     # 计算速度误差
     vel_error = torch.abs(desired_vel_x - actual_vel_x)
     # 获取课程学习量
     sigma_vel = get_curriculum_reward_weight(env, "sigma_vel")
     weight = get_curriculum_reward_weight(env, "weight_vel")  
-    # 计算奖励
+    # 计算奖励 (惩罚底取 -1.0, 与旧版一致; 乘权重后为 -weight)
     reward = torch.exp(-sigma_vel * vel_error ** 2)
+    reward = torch.where(min_speed_mask, torch.full_like(reward, -1.0), reward)
     # 记录日志
     env.extras["log"]["Data/vel_act"] = actual_vel_x.mean().item()
     env.extras["log"]["Data/vel_cmd"] = desired_vel_x.mean().item()
+    env.extras["log"]["Data/vel_error"] = vel_error.mean().item()
+    env.extras["log"]["Data/vel_stall_frac"] = min_speed_mask.float().mean().item()
     return reward * weight
 
 
