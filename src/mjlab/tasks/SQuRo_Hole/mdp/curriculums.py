@@ -93,7 +93,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 # 脊柱误差的逐轴缩放, 顺序 = 参考表脊柱 4 列 (F_spine1, F_body, H_spine1, H_body)
 # 即 (侧摆, 扭转, 俯仰, 扭转)
-SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)
+SPN_AXIS_SCALE: tuple[float, float, float, float] = (0.5, 0.5, 1.5, 0.5)
 
 
 
