@@ -403,18 +403,22 @@ def compute_hind_hold_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
     mode2_mask = (desired_heightF >= THRESHOLD_HEIGHT) & (desired_heightH < THRESHOLD_HEIGHT)
     reward = torch.zeros(env.num_envs, device=env.device)
-    if not mode2_mask.any():
-        return reward
     # 后腿四关节相对 HL_HOLD 的误差, 按容差线性给分 (超出容差为 0)
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ids = list(_ACT_HL_LEG_IDS) + list(_ACT_HR_LEG_IDS)
     err = torch.abs(joint_pos[:, ids] - torch.tensor(
         HL_HOLD + HL_HOLD, device=env.device, dtype=joint_pos.dtype))
+    # 日志必须用 mode2 掩码后的误差, 否则会被非 mode2 环境稀释 (也无法区分
+    # "腿没动" 与 "mode2 占比变了"); 且要在早退之前记录, 否则无 mode2 批次会断点
+    n_mode2 = int(mode2_mask.sum())
+    env.extras["log"]["Data/hind_hold_err"] = (
+        float(err[mode2_mask].mean()) if n_mode2 else 0.0)
+    env.extras["log"]["Data/hind_hold_frac"] = n_mode2 / env.num_envs
+    if n_mode2 == 0:
+        return reward
     tol = torch.tensor(HL_HOLD_TOL + HL_HOLD_TOL, device=env.device, dtype=joint_pos.dtype)
     reward[mode2_mask] = torch.clamp(1.0 - err / tol, min=0.0).mean(dim=1)[mode2_mask]
     weight = get_curriculum_reward_weight(env, "weight_hind_hold")
-    # 记录日志
-    env.extras["log"]["Data/hind_hold_err"] = err.mean().item()
     return reward * weight
 
 
