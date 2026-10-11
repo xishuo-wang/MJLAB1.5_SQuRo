@@ -324,8 +324,9 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                     cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"], cycloid_front_low["x_offset_H"], 1
                 )
             elif mode == 2:  
-                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
-                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.002), np.full(_TABLE_RESOLUTION, -0.02)
+                # 前高后低: 后腿收缩保持 (hip, knee) = (0.80, -0.12), 对应足端 (0.000773, -0.018016)
+                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.00077325), np.full(_TABLE_RESOLUTION, -0.01801603)
+                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.00077325), np.full(_TABLE_RESOLUTION, -0.01801603)
             else:  
                 x_leg_hl, z_leg_hl = CSV_Leg_Trajectory(
                     phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"], CSV_PARAMS["rotate_angle_H"], 
