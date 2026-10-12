@@ -73,6 +73,32 @@ REF_TABLE_ORDER = (_ACT_F_LEG_IDS  + _ACT_H_LEG_IDS + _ACT_SPN_IDS + _ACT_NECK_I
 REF_SLOT_OF_ACT = tuple(REF_TABLE_ORDER.index(i) for i in range(len(REF_TABLE_ORDER)))
 
 
+# 从执行器分组解析参考表的连续列区间。
+def _reference_slice(actuator_ids: tuple[int, ...]) -> slice:
+    slots = tuple(REF_TABLE_ORDER.index(i) for i in actuator_ids)
+    assert slots == tuple(range(slots[0], slots[-1] + 1)), "参考表部位列必须连续"
+    return slice(slots[0], slots[-1] + 1)
+
+
+REF_FL_LEG_SLICE = _reference_slice(_ACT_FL_LEG_IDS)
+REF_FR_LEG_SLICE = _reference_slice(_ACT_FR_LEG_IDS)
+REF_HL_LEG_SLICE = _reference_slice(_ACT_HL_LEG_IDS)
+REF_HR_LEG_SLICE = _reference_slice(_ACT_HR_LEG_IDS)
+REF_F_LEG_SLICE = _reference_slice(_ACT_F_LEG_IDS)
+REF_H_LEG_SLICE = _reference_slice(_ACT_H_LEG_IDS)
+REF_SPN_SLICE = _reference_slice(_ACT_SPN_IDS)
+SPN_LOCAL_H_PITCH = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
+
+
+# 闭链被动关节按基线复位顺序解析。
+LINKAGE_JOINT_NAMES = (
+    "FL_shoulder1_joint", "FL_elbow1_joint", "FL_elbow2_joint", "FL_elbow3_joint",
+    "FR_shoulder1_joint", "FR_elbow1_joint", "FR_elbow2_joint", "FR_elbow3_joint",
+    "HL_hip1_joint", "HL_knee1_joint", "HL_knee2_joint", "HL_knee3_joint",
+    "HR_hip1_joint", "HR_knee1_joint", "HR_knee2_joint", "HR_knee3_joint",
+)
+
+
 # 执行器控制范围
 _ACT_CTRL_RANGE: dict[str, tuple[float, float]] = {
     "F_spine1_joint":    (-0.6, 0.6),
@@ -96,6 +122,8 @@ _ACT_CTRL_RANGE: dict[str, tuple[float, float]] = {
 FRONT_SEG_SITE_NAMES = tuple(f"F_body_{i}_site" for i in range(1, 10))
 REAR_SEG_SITE_NAMES  = tuple(f"H_body_{i}_site" for i in range(1, 10))
 FOOT_SITE_NAMES      = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site")
+FOOT_NAMES = tuple(name.split("_", 1)[0] for name in FOOT_SITE_NAMES)
+FOOT_GEOM_NAMES = tuple(f"{name}_foot_collision" for name in FOOT_NAMES)
 
 
 # 观测用配置
@@ -109,6 +137,7 @@ class ModelIndices:
         "foot_site_ids",
         "f_body_site_ids", "h_body_site_ids",
         "joint_ids",
+        "linkage_joint_ids",
     )
 
 
@@ -119,13 +148,15 @@ class ModelIndices:
         self.h_body_site_ids: tuple[int, ...] = ()
         self.foot_site_ids: tuple[int, ...] = ()
         self.joint_ids: tuple[int, ...] = ()
+        self.linkage_joint_ids: tuple[int, ...] = ()
 
 _MODEL_INDICES = ModelIndices()
 
 
 
 def resolve_model_indices(entity) -> None:
-    if _MODEL_INDICES.f_body_id >= 0 and len(_MODEL_INDICES.joint_ids) > 0:
+    if (_MODEL_INDICES.f_body_id >= 0 and _MODEL_INDICES.joint_ids
+            and _MODEL_INDICES.linkage_joint_ids):
         return
 
     body_ids, _ = entity.find_bodies(["F_body_Link", "H_body_Link"], preserve_order=True)
@@ -144,6 +175,9 @@ def resolve_model_indices(entity) -> None:
         f"只解析到 {len(joint_ids)}/{len(_ACT_JOINT_NAMES)} 个被控关节: "
         f"{list(joint_names)}")
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
+    linkage_ids, _ = entity.find_joints(LINKAGE_JOINT_NAMES, preserve_order=True)
+    assert len(linkage_ids) == len(LINKAGE_JOINT_NAMES), "闭链被动关节解析不完整"
+    _MODEL_INDICES.linkage_joint_ids = tuple(linkage_ids)
 
     print("\n[SQuRo Hole] 模型索引解析完成:")
     print(f"  F_body_Link -> {_MODEL_INDICES.f_body_id}, H_body_Link -> {_MODEL_INDICES.h_body_id}")
@@ -151,3 +185,14 @@ def resolve_model_indices(entity) -> None:
     print(f"  后段 site ids: {_MODEL_INDICES.h_body_site_ids}")
     print(f"  足端 site ids: {_MODEL_INDICES.foot_site_ids}")
     print(f"  actuator 顺序: {list(joint_names)}")
+
+
+# 将执行器分组映射为模型关节编号。
+def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[int, ...]:
+    resolve_model_indices(entity)
+    return tuple(_MODEL_INDICES.joint_ids[i] for i in actuator_ids)
+
+
+# 按传感器公开名称解析足端力的列顺序。
+def resolve_foot_force_ids(sensor) -> tuple[int, ...]:
+    return tuple(sensor.primary_names.index(name) for name in FOOT_GEOM_NAMES)

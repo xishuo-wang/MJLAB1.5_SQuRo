@@ -10,6 +10,10 @@ from .config import (
     BASE_HEIGHT,
     ANGLE_VALUES,
     CMD_ANGLE_IDS,
+    CMD_VEL_IDS,
+    CMD_VEL_X_IDS,
+    CMD_VEL_Y_IDS,
+    CMD_VEL_Z_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     MODE_BOTH_HIGH,
@@ -75,7 +79,7 @@ class HoleCommand(CommandTerm):
         super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
         self.command_tensor = torch.zeros(self.num_envs, 6, device=self.device)
-        self.vel_command_w = self.command_tensor[:, :3]                   # 速度命令（x, y, z）
+        self.vel_command_w = self.command_tensor[:, CMD_VEL_IDS]
         self.height_F_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]  # 前肢高度命令
         self.height_H_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]  # 后肢高度命令
         self.angle_command = self.command_tensor[:, CMD_ANGLE_IDS]        # 角度命令
@@ -194,13 +198,13 @@ class HoleCommand(CommandTerm):
                 angle[i] = self._determine_angle(height_F[i], height_H[i])
         
         # 更新命令张量
-        self.vel_command_w[env_ids, 0] = vel_x
-        self.vel_command_w[env_ids, 1] = 0
-        self.vel_command_w[env_ids, 2] = 0
+        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = vel_x
+        self.vel_command_w[env_ids, CMD_VEL_Y_IDS] = 0
+        self.vel_command_w[env_ids, CMD_VEL_Z_IDS] = 0
         self.height_F_command[env_ids] = height_F
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
-        self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
+        self.command_tensor[env_ids, CMD_VEL_IDS] = self.vel_command_w[env_ids]
         self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
         self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
         self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
@@ -279,13 +283,13 @@ class HoleCommand(CommandTerm):
             angle = torch.full_like(angle, float(self.cfg.fixed_angle))
         
         # 批量更新命令张量
-        self.vel_command_w[env_ids, 0] = vel_x
-        self.vel_command_w[env_ids, 1] = 0
-        self.vel_command_w[env_ids, 2] = 0
+        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = vel_x
+        self.vel_command_w[env_ids, CMD_VEL_Y_IDS] = 0
+        self.vel_command_w[env_ids, CMD_VEL_Z_IDS] = 0
         self.height_F_command[env_ids] = height_F
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
-        self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
+        self.command_tensor[env_ids, CMD_VEL_IDS] = self.vel_command_w[env_ids]
         self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
         self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
         self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle

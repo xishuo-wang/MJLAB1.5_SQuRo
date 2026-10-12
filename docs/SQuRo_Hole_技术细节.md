@@ -11,6 +11,9 @@
 > 停留在"基准高度 0.06、两套 stage 刻度、碰撞机制未实现"的旧口径，均已更新为实测值；
 > 仍未消除的偏差集中在本文件 §9 末尾的"已知偏差"一节。
 
+2026-10-12 索引审查及 `929a2a3` 的当前奖励口径见
+[`SQuRo_Hole_索引审查.md`](SQuRo_Hole_索引审查.md)。历史配置数值与当前基线存在差异时，以该审查记录和源码为准。
+
 备份来源：`Backup/` 下的 `mouse_env_cfg.py` + `mdp/` + `config/` + `rl/`，以及当年训练产物
 `Backup/260403_1/files/`（`model_3999.pt`、`config.yaml`、`mjlab.diff`）。
 
@@ -67,8 +70,8 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 `indices.py` 是**关节/site 索引的唯一来源**：`rewards.py` 的足端与碰撞采样点全部走
 `_MODEL_INDICES`，关节列序走 `reference.resolve_joint_ids`（原先 `[4,24]`、
 `[10,11,21,22]`、`range(9)+range(12,21)` 三处硬编码）。
-**唯一例外是 `f_body_id` / `h_body_id`**：`rewards.py` 仍有 6 处字面量 4 / 24，未走解析
-（实测值相同，见 §9.7）。
+2026-10-12 已将角度奖励中的身体编号全部替换为 `_MODEL_INDICES.f_body_id/h_body_id`，
+并将复位关节编号及参考表部位列区间统一交由 `indices.py` 解析，训练数值不变。
 
 **注意**：`[10,11,21,22]` 与 `range(12,21)` 是**错的**——`indices.py` 解析出足端应为
 `[12,13,25,26]`、后段碰撞点应为 `14..22`。修正后 `foot_clearance` 改为读真足端

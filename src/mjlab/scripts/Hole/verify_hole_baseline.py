@@ -12,6 +12,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STAGE1_END,
     STAGE2_END,
     STAGE3_END,
+    STEPS_PER_ITER,
+    CMD_VEL_X_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
     THRESHOLD_HEIGHT,
     get_current_stage,
     heights_for_stage,
@@ -25,6 +29,12 @@ from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     HEIGHT_LIST,
     _TABLE_RESOLUTION,
     Initialize_Tables,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    REF_FL_LEG_SLICE,
+    REF_HL_LEG_SLICE,
+    REF_SPN_SLICE,
+    SPN_LOCAL_H_PITCH,
 )
 
 # 模式数由 CYCLOID_PARAMS 决定 (normal / front_low / hind_low)
@@ -51,9 +61,9 @@ def check_reference() -> None:
         for h_idx, h in enumerate(HEIGHT_LIST):
             sp = tables["spine_pos"][mode, h_idx]
             print(f"{mode:>6}{h * 1000:>10.0f}"
-                  f"{float(front[mode, h_idx, :, 0].max() - front[mode, h_idx, :, 0].min()):>12.4f}"
-                  f"{float(tables['hind_pos'][mode, h_idx, :, 0].max() - tables['hind_pos'][mode, h_idx, :, 0].min()):>12.4f}"
-                  f"{float(sp[:, 2].mean()):>14.4f}")
+                  f"{float(front[mode, h_idx, :, REF_FL_LEG_SLICE.start].max() - front[mode, h_idx, :, REF_FL_LEG_SLICE.start].min()):>12.4f}"
+                  f"{float(tables['hind_pos'][mode, h_idx, :, REF_HL_LEG_SLICE.start].max() - tables['hind_pos'][mode, h_idx, :, REF_HL_LEG_SLICE.start].min()):>12.4f}"
+                  f"{float(sp[:, REF_SPN_SLICE.start + SPN_LOCAL_H_PITCH].mean()):>14.4f}")
     print(f"     高度阈值 THRESHOLD_HEIGHT = {THRESHOLD_HEIGHT} m (低于此值判为'压低'档)")
 
 
@@ -67,15 +77,15 @@ def check_command() -> None:
     print(f"\n[2] 回放位置表 ({len(STAGE3_POSITION_SCHEDULE)} 段):")
     for dist, h_f, h_h in STAGE3_POSITION_SCHEDULE:
         print(f"     位移 {dist:.2f} m → h_F {h_f * 1000:.0f} mm, h_H {h_h * 1000:.0f} mm")
-    print(f"     reset 后命令: vel_x {float(cmd[0, 0]):.3f} m/s, "
-          f"h_F {float(cmd[0, 3]) * 1000:.0f} mm, h_H {float(cmd[0, 4]) * 1000:.0f} mm (期望第一段 20/50)")
+    print(f"     reset 后命令: vel_x {float(cmd[0, CMD_VEL_X_IDS]):.3f} m/s, "
+          f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (期望第一段 20/50)")
     print(f"[3] 命令阶段边界: step 0 → stage {get_current_stage(0)}, "
           f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
           f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
           f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
     print("[3b] 四阶段定义 (边界唯一定义在 mdp/config.py):")
     print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'位置表':>8}{'要求碰撞':>10}")
-    bounds = [0, STAGE1_END // 24, STAGE2_END // 24, STAGE3_END // 24]
+    bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER, STAGE3_END // STEPS_PER_ITER]
     for s in (1, 2, 3, 4):
         lo = bounds[s - 1]
         hi = bounds[s] - 1 if s < 4 else "∞"
@@ -97,8 +107,8 @@ def check_command() -> None:
     env.sim.forward()               # 写 qpos 后必须 forward, 否则读到的是旧位置
     env.command_manager.compute(dt=env.step_dt)
     cmd2 = env.command_manager.get_command("hole_cmd")
-    print(f"     x=0.25 m 时命令: h_F {float(cmd2[0, 3]) * 1000:.0f} mm, "
-          f"h_H {float(cmd2[0, 4]) * 1000:.0f} mm (期望第二段 60/20)")
+    print(f"     x=0.25 m 时命令: h_F {float(cmd2[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, "
+          f"h_H {float(cmd2[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (期望第二段 55/20)")
     env.close()
 
 
@@ -111,7 +121,7 @@ def check_curriculum() -> None:
     for step in sorted(reward_weight_curriculum.weight_stages.keys()):
         w = reward_weight_curriculum.weight_stages[step]
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
-        print(f"{step:>12}{step // 24:>8}{row}"
+        print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
               f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_END)
     print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "

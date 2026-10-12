@@ -190,7 +190,7 @@ def main() -> None:
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(sig, f)
+        json.dump(sig, f, allow_nan=False)
     n = sum(len(v) if isinstance(v, list) else 1 for v in sig.values())
     print(f"[签名] 已写出 {out_path} ({out_path.stat().st_size} bytes, {n} 个顶层数据块)")
 

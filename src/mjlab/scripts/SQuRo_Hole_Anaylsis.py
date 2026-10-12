@@ -8,6 +8,7 @@ from matplotlib.widgets import Button
 from matplotlib.gridspec import GridSpec
 from typing import List, Tuple, Optional, Union
 from scipy.signal import welch, savgol_filter, find_peaks
+from mjlab.tasks.SQuRo_Hole.mdp.indices import _ACT_JOINT_NAMES, _ACT_NECK_IDS
 
 
 # ==================================================================================================
@@ -32,17 +33,13 @@ CONTACT_THRESHOLD = 0.00
 
 # 关节配置 — 顺序与 entity actuator（关节树深度优先）一致
 ACTION_SCALES = {
-    "F_spine1": 0.3, "F_body": 0.3,
-    "FL_shoulder": 0.3, "FL_elbow": 0.3,
-    "FR_shoulder": 0.3, "FR_elbow": 0.3,
-    "H_spine1": 0.3, "H_body": 0.3,
-    "HL_hip": 0.3, "HL_knee": 0.3,
-    "HR_hip": 0.3, "HR_knee": 0.3,
+    name.removesuffix("_joint"): 0.3
+    for i, name in enumerate(_ACT_JOINT_NAMES) if i not in _ACT_NECK_IDS
 }
 ACTUATED_JOINTS = list(ACTION_SCALES.keys())
 
 # 头颈关节
-NECK_JOINTS = ['Neck_yaw', 'Neck_pitch']
+NECK_JOINTS = [_ACT_JOINT_NAMES[i].removesuffix("_joint") for i in _ACT_NECK_IDS]
 
 # 足端配置
 FOOT_NAMES = ['FR', 'FL', 'HR', 'HL']

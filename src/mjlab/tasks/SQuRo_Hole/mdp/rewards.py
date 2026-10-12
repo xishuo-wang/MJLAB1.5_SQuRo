@@ -7,9 +7,25 @@ from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .entity import hole_geometry
-from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
+from .config import (
+    BASE_HEIGHT,
+    THRESHOLD_HEIGHT,
+    CMD_VEL_X_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_ANGLE_IDS,
+)
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
-from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS
+from .indices import (
+    _MODEL_INDICES,
+    _ACT_LEG_IDS,
+    _ACT_F_LEG_IDS,
+    _ACT_NECK_IDS,
+    _ACT_SPN_IDS,
+    FRONT_SEG_SITE_NAMES,
+    REAR_SEG_SITE_NAMES,
+    resolve_actuator_joint_ids,
+)
 from .reference import (
     resolve_joint_ids,
     get_reference_joint_state,
@@ -102,7 +118,7 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]
     # 获取期望速度
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_vel_x = cmd_term.command[:, 0]
+    desired_vel_x = cmd_term.command[:, CMD_VEL_X_IDS]
     has_velocity_cmd = torch.abs(desired_vel_x) > 0.01
     min_speed_mask = (torch.abs(actual_vel_x) < 0.01) & has_velocity_cmd
     # 计算速度误差
@@ -125,8 +141,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
     H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    z_ref_F = cmd_term.command[:, 3]                # 前肢高度命令
-    z_ref_H = cmd_term.command[:, 4]                # 后肢高度命令
+    z_ref_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    z_ref_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     height_F_error = torch.abs(z_ref_F - F_body_height)
     height_H_error = torch.abs(z_ref_H - H_body_height)
     # 记录 metrics
@@ -144,8 +160,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_height_F = cmd_term.command[:, 3]
-    desired_height_H = cmd_term.command[:, 4]
+    desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     
     # Mode 0: 前后肢高度都 >= 阈值
     mode0_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H >= THRESHOLD_HEIGHT)
@@ -232,16 +248,16 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_heightF = cmd_term.command[:, 3]  # 前肢高度命令
-    desired_heightH = cmd_term.command[:, 4]  # 后肢高度命令
-    desired_angle = cmd_term.command[:, 5]    # 侧倾角度命令
+    desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
+    desired_angle = cmd_term.command[:, CMD_ANGLE_IDS]
     roll_error = torch.zeros(env.num_envs, device=env.device)
     sigma = 50
 
     # 情况1: 前肢高度低
     low_heightF_mask = desired_heightF < THRESHOLD_HEIGHT
     if low_heightF_mask.any():
-        f_body_quat = asset.data.body_link_quat_w[low_heightF_mask, 4]
+        f_body_quat = asset.data.body_link_quat_w[low_heightF_mask, _MODEL_INDICES.f_body_id]
         f_body_roll = _quaternion_to_roll(f_body_quat) + math.pi/2  # +90度转换为弧度
         f_roll_error = torch.abs(f_body_roll - desired_angle[low_heightF_mask])
         f_roll_error = torch.min(f_roll_error, 2 * math.pi - f_roll_error)
@@ -251,7 +267,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 情况2: 后肢高度低
     low_heightH_mask = desired_heightH < THRESHOLD_HEIGHT
     if low_heightH_mask.any():
-        h_body_quat = asset.data.body_link_quat_w[low_heightH_mask, 24]
+        h_body_quat = asset.data.body_link_quat_w[low_heightH_mask, _MODEL_INDICES.h_body_id]
         h_body_roll = _quaternion_to_roll(h_body_quat) - math.pi/2  # -90度转换为弧度
         h_roll_error = torch.abs(h_body_roll - desired_angle[low_heightH_mask])
         h_roll_error = torch.min(h_roll_error, 2 * math.pi - h_roll_error)
@@ -261,9 +277,9 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 情况3: 两个高度都不低于阈值
     high_height_mask = ~(low_heightF_mask | low_heightH_mask)
     if high_height_mask.any():
-        f_body_quat = asset.data.body_link_quat_w[high_height_mask, 4]
+        f_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.f_body_id]
         f_roll_error = torch.abs(_quaternion_to_roll(f_body_quat) + math.pi/2)  
-        h_body_quat = asset.data.body_link_quat_w[high_height_mask, 24]
+        h_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.h_body_id]
         h_roll_error = torch.abs(_quaternion_to_roll(h_body_quat) - math.pi/2)  
         roll_error[high_height_mask] = (f_roll_error + h_roll_error)
         sigma = 100
@@ -280,7 +296,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         if low_F_count > 0:
             low_F_mean_error = roll_error[low_heightF_mask].mean().item()
             low_F_mean_reward = reward[low_heightF_mask].mean().item()
-            low_F_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightF_mask, 4]).mean().item()
+            low_F_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightF_mask, _MODEL_INDICES.f_body_id]).mean().item()
             print(f"Body Angle Reward (F low) - Envs: {low_F_count}, "
                   f"F Body Roll: {torch.rad2deg(torch.tensor(low_F_mean_roll + math.pi/2)).item():.1f}°, "
                   f"Cmd Angle: {torch.rad2deg(desired_angle[low_heightF_mask].mean()).item():.1f}°, "
@@ -290,7 +306,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         if low_H_count > 0:
             low_H_mean_error = roll_error[low_heightH_mask].mean().item()
             low_H_mean_reward = reward[low_heightH_mask].mean().item()
-            low_H_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightH_mask, 24]).mean().item()
+            low_H_mean_roll = _quaternion_to_roll(asset.data.body_link_quat_w[low_heightH_mask, _MODEL_INDICES.h_body_id]).mean().item()
             print(f"Body Angle Reward (H low) - Envs: {low_H_count}, "
                   f"H Body Roll: {torch.rad2deg(torch.tensor(low_H_mean_roll - math.pi/2)).item():.1f}°, "
                   f"Cmd Angle: {torch.rad2deg(desired_angle[low_heightH_mask].mean()).item():.1f}°, "
@@ -478,10 +494,11 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         torch.full_like(in_obs_matrix, float("inf"), dtype=obs_z_thresh.dtype).expand_as(in_obs_matrix)
     ).min(dim=-1).values                                    # [num_envs, 2]
 
-    # 采样点: 前段 9 点 + 后段 9 点 (索引由 indices.py 按名字解析)
+    # 按身体部位聚合采样点高度。
     seg_site_ids = list(_MODEL_INDICES.f_body_site_ids) + list(_MODEL_INDICES.h_body_site_ids)
     all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2]
-    all_sites_z = all_sites_z.view(num_envs, 2, 9)
+    assert len(FRONT_SEG_SITE_NAMES) == len(REAR_SEG_SITE_NAMES), "前后段采样点数量必须一致"
+    all_sites_z = all_sites_z.view(num_envs, 2, len(FRONT_SEG_SITE_NAMES))
     # 每段取最高的采样点与阈值比较, 超出量 v = max(surface - z_thresh, 0)
     v = torch.clamp(all_sites_z.max(dim=-1).values - active_z_thresh, min=0.0)
 
@@ -503,8 +520,8 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_heightF = cmd_term.command[:, 3]
-    desired_heightH = cmd_term.command[:, 4]
+    desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     
     # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
     mode2_mask = (desired_heightF >= THRESHOLD_HEIGHT) & (desired_heightH < THRESHOLD_HEIGHT)
@@ -513,9 +530,9 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     if not mode2_mask.any():
         return reward
     
-    # 获取前肢关节速度 (参考表列序前 4 项 = FL/FR shoulder+elbow)
+    # 按前腿执行器分组读取模型关节速度。
     joint_vel = asset.data.joint_vel
-    front_leg_vel = joint_vel[:, resolve_joint_ids(asset)[:4]]  # [num_envs, 4]
+    front_leg_vel = joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_F_LEG_IDS)]
     vel_abs = torch.abs(front_leg_vel)
     vel_deficit = torch.clamp(min_velocity - vel_abs, min=0.0)
     vel_deficit_sum = vel_deficit.sum(dim=1)

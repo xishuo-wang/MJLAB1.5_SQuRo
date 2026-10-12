@@ -18,9 +18,21 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_LIST,
     TABLE_RESOLUTION,
     THRESHOLD_HEIGHT,
+    CMD_VEL_X_IDS,
+    CMD_VEL_Y_IDS,
+    CMD_VEL_Z_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_ANGLE_IDS,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import build_hole_entities
-from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    _MODEL_INDICES,
+    FOOT_NAMES,
+    FOOT_SITE_NAMES,
+    resolve_model_indices,
+    resolve_foot_force_ids,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     Initialize_Tables,
     get_reference_joint_state,
@@ -121,8 +133,8 @@ class ReferenceTablePolicy:
         self.ctrl_limits[~model.actuator_ctrllimited[self.ctrl_ids].astype(bool)] = [-np.inf, np.inf]
 
         # 足端 site —— 与 indices.py 的 FOOT_SITE_NAMES 对应
-        self.foot_names = ["FL", "FR", "HL", "HR"]
-        self.foot_site_names = ["FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site"]
+        self.foot_names = list(FOOT_NAMES)
+        self.foot_site_names = list(FOOT_SITE_NAMES)
         self._foot_site_ids: torch.Tensor | None = None
 
         # 步态基频：参考表固定为 2.0 Hz（CYCLOID_PARAMS / BASE_FREQ）
@@ -217,12 +229,15 @@ class ReferenceTablePolicy:
 
         # ---- 足端接触力 ----
         contact_sensor = env.scene["feet_ground_contact"]
-        feet_contact = contact_sensor.data.force.flatten(start_dim=1)[0].cpu().numpy()  # (12,)
+        feet_contact = contact_sensor.data.force.reshape(
+            env.num_envs, len(contact_sensor.primary_names), -1, 3
+        ).sum(dim=2)[0].cpu().numpy()
+        force_ids = resolve_foot_force_ids(contact_sensor)
 
         # ---- 命令 ----
         cmd = env.command_manager.get_command("hole_cmd")[0].cpu().numpy()  # type: ignore
-        hF_cmd = float(cmd[3])
-        hH_cmd = float(cmd[4])
+        hF_cmd = float(cmd[CMD_HEIGHT_F_IDS])
+        hH_cmd = float(cmd[CMD_HEIGHT_H_IDS])
         hF_act = float(robot.data.body_link_pos_w[0, idx.f_body_id, 2])
         hH_act = float(robot.data.body_link_pos_w[0, idx.h_body_id, 2])
 
@@ -260,12 +275,12 @@ class ReferenceTablePolicy:
             "vx": float(base_lin_vel[0]),
 
             # ---- 命令 ----
-            "vel_command_x": float(cmd[0]),
-            "vel_command_y": float(cmd[1]),
-            "vel_command_z": float(cmd[2]),
+            "vel_command_x": float(cmd[CMD_VEL_X_IDS]),
+            "vel_command_y": float(cmd[CMD_VEL_Y_IDS]),
+            "vel_command_z": float(cmd[CMD_VEL_Z_IDS]),
             "height_F_command": hF_cmd,
             "height_H_command": hH_cmd,
-            "angle_command": float(cmd[5]),
+            "angle_command": float(cmd[CMD_ANGLE_IDS]),
             "gait_freq_command": float(self.gait_freq),
 
             # ---- 高度（命令 vs 实测，两种命名都写） ----
@@ -296,9 +311,7 @@ class ReferenceTablePolicy:
             row[f"foot_{fname}_x"] = float(foot_pos[i, 0])
             row[f"foot_{fname}_y"] = float(foot_pos[i, 1])
             row[f"foot_{fname}_z"] = float(foot_pos[i, 2])
-            fx = float(feet_contact[i * 3])
-            fy = float(feet_contact[i * 3 + 1])
-            fz = float(feet_contact[i * 3 + 2])
+            fx, fy, fz = (float(value) for value in feet_contact[force_ids[i]])
             row[f"contact_{fname}_x"] = fx
             row[f"contact_{fname}_y"] = fy
             row[f"contact_{fname}_z"] = fz
@@ -433,11 +446,11 @@ def main() -> None:
             policy = ReferenceTablePolicy(env.unwrapped)
             cmd = env.command_manager.get_command("hole_cmd")[0]  # type: ignore
             print(
-                f"[固定参考] 前高 {float(cmd[3]) * 1000:g} mm，"
-                f"后高 {float(cmd[4]) * 1000:g} mm，"
+                f"[固定参考] 前高 {float(cmd[CMD_HEIGHT_F_IDS]) * 1000:g} mm，"
+                f"后高 {float(cmd[CMD_HEIGHT_H_IDS]) * 1000:g} mm，"
                 f"限高板碰撞 {'开启' if args.enable_collision else '关闭'}"
             )
-            for label, col in [("前", 3), ("后", 4)]:
+            for label, col in [("前", CMD_HEIGHT_F_IDS), ("后", CMD_HEIGHT_H_IDS)]:
                 height = float(cmd[col])
                 nearest = min(HEIGHT_LIST, key=lambda value: abs(value - height))
                 if not math.isclose(height, nearest, abs_tol=1e-6):

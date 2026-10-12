@@ -19,6 +19,7 @@ CMD_VEL_Z_IDS = 2           # Z 方向速度命令
 CMD_HEIGHT_F_IDS = 3        # 前肢高度命令
 CMD_HEIGHT_H_IDS = 4        # 后肢高度命令
 CMD_ANGLE_IDS = 5           # 期望角度命令
+CMD_VEL_IDS = slice(CMD_VEL_X_IDS, CMD_VEL_Z_IDS + 1)
 
 
 
@@ -31,6 +32,7 @@ USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓
 # 位置同时就是复位姿态, 使 action=0 恰好维持头部俯仰 (见 docs §9.8); 两者必须同值
 NECK_REF_POS = (0.0, -0.3)
 NECK_REF_VEL = (0.0, 0.0)
+HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
 
 
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ TOL_ABS = 1e-6
 TOL_REL = 1e-6
 
 
+# 递归比较签名，并拒绝非有限数。
 def walk(a, b, path: str, diffs: list, stats: dict) -> None:
     if isinstance(a, dict) and isinstance(b, dict):
         keys = sorted(set(a) | set(b))
@@ -35,6 +37,9 @@ def walk(a, b, path: str, diffs: list, stats: dict) -> None:
             diffs.append(f"{path}: {a!r} vs {b!r}")
         return
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if not math.isfinite(a) or not math.isfinite(b):
+            diffs.append(f"{path}: 存在非有限数 {a!r} vs {b!r}")
+            return
         d = abs(float(a) - float(b))
         scale = max(abs(float(a)), abs(float(b)), 1e-12)
         rel = d / scale
@@ -49,6 +54,7 @@ def walk(a, b, path: str, diffs: list, stats: dict) -> None:
         diffs.append(f"{path}: {a!r} vs {b!r}")
 
 
+# 读取两份签名并报告比较结果。
 def main() -> None:
     base = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     cand = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))

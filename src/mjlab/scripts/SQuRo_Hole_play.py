@@ -19,6 +19,12 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STEPS_PER_ITER,
+    CMD_VEL_X_IDS,
+    CMD_VEL_Y_IDS,
+    CMD_VEL_Z_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_ANGLE_IDS,
     get_current_stage,
     stage_requires_collision,
 )
@@ -29,7 +35,14 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
-from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    _ACT_JOINT_NAMES,
+    _MODEL_INDICES,
+    FOOT_NAMES,
+    FOOT_SITE_NAMES,
+    resolve_model_indices,
+    resolve_foot_force_ids,
+)
 
 
 
@@ -121,15 +134,11 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 14 个执行器 (动作空间顺序)
-        self.joint_names = [
-            'F_spine1', 'F_body', 'Neck_yaw', 'Neck_pitch',
-            'FL_shoulder', 'FL_elbow', 'FR_shoulder', 'FR_elbow',
-            'H_spine1', 'H_body', 'HL_hip', 'HL_knee', 'HR_hip', 'HR_knee',
-        ]
+        # CSV 关节列名沿用执行器全局顺序。
+        self.joint_names = [name.removesuffix("_joint") for name in _ACT_JOINT_NAMES]
         self.action_names = self.joint_names
-        self.foot_names = ['FL', 'FR', 'HL', 'HR']
-        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
+        self.foot_names = list(FOOT_NAMES)
+        self.foot_site_names = list(FOOT_SITE_NAMES)
         self._foot_site_ids = None
         self._joint_ids_resolved = None   # ← 新增: 按名称缓存的关节 id
 
@@ -152,12 +161,15 @@ class JointDataRecorder:
 
         # 记录足端接触力以及位置
         contact_sensor = unwrapped.scene["feet_ground_contact"]
-        feet_contact = contact_sensor.data.force.flatten(start_dim=1)
+        feet_contact = contact_sensor.data.force.reshape(
+            unwrapped.num_envs, len(contact_sensor.primary_names), -1, 3
+        ).sum(dim=2)
+        force_ids = resolve_foot_force_ids(contact_sensor)
         if self._foot_site_ids is None:
             self._foot_site_ids, _ = asset.find_sites(self.foot_site_names, preserve_order=True)
         foot_pos = asset.data.site_pos_w[idx, self._foot_site_ids]
         for i, name in enumerate(self.foot_names):
-            force = feet_contact[idx, i * 3: i * 3 + 3]
+            force = feet_contact[idx, force_ids[i]]
             record[f'contact_{name}_mag'] = float(torch.norm(force).item())
             record[f'contact_{name}_x'] = float(force[0].item())
             record[f'contact_{name}_y'] = float(force[1].item())
@@ -209,11 +221,19 @@ class JointDataRecorder:
 
         # 记录命令
         command = unwrapped.command_manager.get_command("hole_cmd")[idx]
-        for i, name in enumerate(['vel_command_x', 'vel_command_y', 'vel_command_z', 'height_F_command', 'height_H_command', 'angle_command']):
+        command_columns = (
+            (CMD_VEL_X_IDS, 'vel_command_x'),
+            (CMD_VEL_Y_IDS, 'vel_command_y'),
+            (CMD_VEL_Z_IDS, 'vel_command_z'),
+            (CMD_HEIGHT_F_IDS, 'height_F_command'),
+            (CMD_HEIGHT_H_IDS, 'height_H_command'),
+            (CMD_ANGLE_IDS, 'angle_command'),
+        )
+        for i, name in command_columns:
             record[name] = float(command[i].item())
-        record['mode'] = mode_of(float(command[3]), float(command[4]))  # type: ignore
-        record['height_F_error'] = f_height - float(command[3].item())
-        record['height_H_error'] = h_height - float(command[4].item())
+        record['mode'] = mode_of(float(command[CMD_HEIGHT_F_IDS]), float(command[CMD_HEIGHT_H_IDS]))
+        record['height_F_error'] = f_height - float(command[CMD_HEIGHT_F_IDS].item())
+        record['height_H_error'] = h_height - float(command[CMD_HEIGHT_H_IDS].item())
         # 步态基频 (Hole 任务参考表固定 2.0 Hz, 与 config.BASE_FREQ 一致)
         record['gait_freq_command'] = 2.0
 

@@ -14,6 +14,7 @@ from mjlab.managers import (
 )
 from mjlab.scene import SceneCfg
 from mjlab.tasks.SQuRo_Hole import mdp
+from mjlab.tasks.SQuRo_Hole.mdp.indices import FOOT_GEOM_NAMES
 from mjlab.viewer import ViewerConfig
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
@@ -94,8 +95,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     
     # 足端碰撞体配置
-    foot_names = ("FR", "FL", "HR", "HL")
-    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+    geom_names = FOOT_GEOM_NAMES
 
     
     # 足部接触传感器
