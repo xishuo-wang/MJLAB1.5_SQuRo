@@ -35,6 +35,24 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     HOLE_LAYOUT,
     VIRTUAL_CLEARANCE_MARGIN,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
+    BODY_HEIGHT_OFFSET,
+    ENTRY_MARGIN,
+    EXIT_MARGIN,
+    LOW_TARGET_HEIGHT,
+    OBSTACLE_HEIGHT_SPLIT,
+    SEGMENT_CENTER_DISTANCE,
+    sample_body_heights,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
+    HEIGHT_MAX as PREVIEW_HEIGHT_MAX,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
+    HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
+    rule_bounds as _shared_rule_bounds,
+)
 
 MODE_LABELS = {
     MODE_BOTH_HIGH: "双高",
@@ -46,16 +64,8 @@ DEFAULT_OUTPUT_DIR = (
     Path(__file__).resolve().parents[4]
     / "logs/rsl_rl/SQuRo_Hole/schedule_visualization"
 )
-OBSTACLE_HEIGHT_SPLIT = 0.070
-ENTRY_MARGIN = 0.150
-EXIT_MARGIN = 0.100
-SEGMENT_CENTER_DISTANCE = 0.110
 LOW_BOUND_OFFSET = SEGMENT_CENTER_DISTANCE / 2
 PREVIEW_X_PADDING = 0.025
-BODY_HEIGHT_OFFSET = 0.030
-LOW_TARGET_HEIGHT = 0.020
-PREVIEW_HEIGHT_MIN = 0.048
-PREVIEW_HEIGHT_MAX = 0.090
 
 
 @dataclass(frozen=True)
@@ -134,7 +144,8 @@ def sample_schedule(positions: np.ndarray) -> dict[str, np.ndarray]:
 # 按板的世界坐标计算生效区间与板中心。
 def rule_bounds(board: tuple) -> tuple[float, float, float]:
     _, center_x, _, _, half_length, _ = board
-    return center_x - half_length - ENTRY_MARGIN, center_x, center_x + half_length + EXIT_MARGIN
+    left, middle, right, _ = _shared_rule_bounds(center_x, half_length)
+    return left, middle, right
 
 
 # 返回前段结束与后段开始边界，供各自中心的位置查表。
@@ -154,31 +165,27 @@ def sample_rule_schedule(
     positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
 ) -> dict[str, np.ndarray]:
     position = np.asarray(positions, dtype=float)
+    query_world = position.copy() + start_x
     left, _, right = rule_bounds(board)
-    left -= start_x
-    right -= start_x
     _, front_end, hind_start, _ = low_rule_bounds(board)
-    front_end -= start_x
-    hind_start -= start_x
     boundaries = np.array([left, hind_start, front_end, right])
-    tolerance = 8 * np.finfo(float).eps * max(1.0, abs(start_x), float(np.abs(boundaries).max()))
-    query = position.copy()
-    # 对齐浮点端点，避免中心偏移与坐标换算产生边界缝隙。
+    tolerance = 8 * np.finfo(float).eps * max(
+        1.0, abs(start_x), float(np.abs(boundaries).max())
+    )
     for boundary in boundaries:
-        query[np.abs(query - boundary) <= tolerance] = boundary
-    front = np.full_like(position, BASE_HEIGHT)
-    hind = np.full_like(position, BASE_HEIGHT)
-    if bottom_z >= OBSTACLE_HEIGHT_SPLIT:
-        active = (query >= left) & (query <= right)
-        front[active] = bottom_z - BODY_HEIGHT_OFFSET
-        hind[active] = bottom_z - BODY_HEIGHT_OFFSET
-    else:
-        front[(query >= left) & (query < front_end)] = LOW_TARGET_HEIGHT
-        hind[(query >= hind_start) & (query <= right)] = LOW_TARGET_HEIGHT
-    return {"position": position, "height_f": front, "height_h": hind}
+        query_world[np.abs(query_world - boundary) <= tolerance] = boundary
+    query = torch.as_tensor(query_world, dtype=torch.float64)
+    front, hind = sample_body_heights(
+        query, query, board[1], board[4], bottom_z
+    )
+    return {
+        "position": position,
+        "height_f": front.cpu().numpy(),
+        "height_h": hind.cpu().numpy(),
+    }
 
 
-# 按 110 mm 直行间距示意同一时刻的两段中心，并分别查表计算命令。
+# 按 93.5 mm 复位姿态中心距示意两段中心，并分别查表计算命令。
 def sample_body_commands(
     midpoints: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
 ) -> dict[str, np.ndarray]:
@@ -414,7 +421,7 @@ def main() -> None:
     handles, labels = overview.get_legend_handles_labels()
     fig.legend([*handles, controls[0].overlap], [*labels, "空间曲线重叠区"],
                loc="upper center", bbox_to_anchor=(0.52, 0.95), ncol=6, frameon=False, fontsize=9)
-    fig.text(0.075, 0.015, "下图按各自中心 X 查表；中点滑块使前后中心各偏 55 mm。空间曲线重叠不代表同一时刻两端都低。", fontsize=9, color="#475569")
+    fig.text(0.075, 0.015, f"下图按各自中心 X 查表；中点滑块使前后中心各偏 {LOW_BOUND_OFFSET * 1000:.2f} mm。示意中心距下，两端依次切换低姿态。", fontsize=9, color="#475569")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for suffix in ("png", "svg"):
         path = args.output_dir / f"短板长板位置表.{suffix}"

@@ -36,48 +36,51 @@ HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
 
 
 
-# 命令与课程共用的阶段边界 (iter): 唯一来源, curriculums/command 都从这里取
-# 1) 0-1k     正常高度范围内的随机采样
-# 2) 1k-2k    含低高度状态的全高度随机采样
-# 3) 2k-3k    位置表 (位移时刻表) + 虚拟碰撞软约束
-# 4) 3k 以后  位置表 + 真实碰撞
-# 注: 阶段 4 的实体碰撞由 rl/runner.py 在阶段边界重建环境实现 (contype 编译期固化)
+# 课程阶段：两段热身后直接进入单板真实碰撞高度课程。
 STAGE1_END_ITER = 1000
 STAGE2_END_ITER = 2000
-STAGE3_END_ITER = 3000
-NUM_STAGES = 4
+COURSE_START_ITER = STAGE2_END_ITER
+HEIGHT_COURSE_STAGE = 3
+# 兼容旧脚本导入；该常量指向高度课程起点，不代表阶段 3 的结束。
+STAGE3_END_ITER = COURSE_START_ITER
+NUM_STAGES = 3
 
 STEPS_PER_ITER = 48
 STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
 STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
-STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
+COURSE_START = COURSE_START_ITER * STEPS_PER_ITER
+# 兼容旧脚本导入；这不是额外阶段边界。
+STAGE3_END = COURSE_START
 
 # 各阶段的随机采样高度池 (阶段 3 起用位置表, 不再随机采样)
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
 
 # 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
-STAGE_COLLISION = (False, False, False, True)
+STAGE_COLLISION = (False, False, True)
 
 # 角度命令候选 (度)
 ANGLE_VALUES = [0.0]
 
 
 
-# 按全局步数取当前阶段 (1~4); 阶段边界是命令/课程/碰撞的唯一来源
+# 按全局步数取当前阶段 (1~3); 阶段边界是命令/课程/碰撞的唯一来源
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_END:
         return 1
     if step_counter < STAGE2_END:
         return 2
-    if step_counter < STAGE3_END:
-        return 3
-    return 4
+    return HEIGHT_COURSE_STAGE
 
 
-# 该阶段是否使用位置表 (阶段 3/4)
+# 历史位置表用于显式 legacy 回放；训练课程优先使用高度规则。
 def stage_uses_schedule(stage: int) -> bool:
-    return stage >= 3
+    return stage >= HEIGHT_COURSE_STAGE
+
+
+# 判断是否已进入真实碰撞高度课程。
+def stage_uses_height_course(stage: int) -> bool:
+    return stage >= HEIGHT_COURSE_STAGE
 
 
 # 该阶段是否要求实体碰撞
@@ -86,7 +89,7 @@ def stage_requires_collision(stage: int) -> bool:
     return STAGE_COLLISION[idx]
 
 
-# 按阶段的随机采样高度池; 阶段 3/4 返回 None (用位置表)
+# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
 def heights_for_stage(stage: int):
     if stage == 1:
         return RANDOM_HEIGHT_VALUES

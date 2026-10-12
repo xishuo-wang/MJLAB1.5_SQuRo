@@ -3,14 +3,18 @@
 # 任一项不通过即以非零码退出 (此前只打印结果, 失败也返回 0)
 
 import sys
-import numpy as np
-import torch
 from dataclasses import asdict
 
-from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
+import numpy as np
+import torch
+
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
-from mjlab.tasks.SQuRo_Hole.mdp.config import STAGE3_END, STEPS_PER_ITER, get_current_stage
+from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    STAGE3_END,
+    get_current_stage,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
     configure_hole_entities,
@@ -99,9 +103,9 @@ def check_physics() -> None:
     check("两者确实不同 (碰撞生效)", abs(z_on - z_off) > 1e-4 or abs(x_on - x_off) > 1e-4)
 
 
-# Runner 重建: 跨 3k 只重建一次, 计数器/环境数/观测保留, 不反复重建
+# Runner 重建: 跨课程起点只重建一次，计数器/环境数/观测保留。
 def check_rebuild() -> None:
-    print("\n[4] Runner 重建 (跨 3k 边界)")
+    print("\n[4] Runner 重建 (跨高度课程起点)")
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 8
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -111,7 +115,7 @@ def check_rebuild() -> None:
     env.common_step_counter = STAGE3_END - 1
     check("iter 2999 不需重建", not runner._hole_change_needed())
     env.common_step_counter = STAGE3_END
-    check("iter 3000 需重建", runner._hole_change_needed())
+    check("进入高度课程需重建", runner._hole_change_needed())
     n_before = runner.env.unwrapped.scene.num_envs
     obs = runner._apply_hole_rebuild(refresh_obs=True)
     check("重建后碰撞 = 开", hole_collision_enabled(runner.env.unwrapped))
@@ -147,7 +151,12 @@ def check_rebuild_preserves_custom() -> None:
 def check_state_roundtrip() -> None:
     print("\n[6] checkpoint hole_state 真实保存与读取")
     import os
-    from mjlab.tasks.SQuRo_Hole.rl.runner import HOLE_STATE_VERSION, read_hole_state, read_env_step
+
+    from mjlab.tasks.SQuRo_Hole.rl.runner import (
+        HOLE_STATE_VERSION,
+        read_env_step,
+        read_hole_state,
+    )
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 2
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -164,12 +173,14 @@ def check_state_roundtrip() -> None:
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_END))
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
-    check("layout 三块板", len(layout) == 3, f"{len(layout)}")
+    from mjlab.tasks.SQuRo_Hole.mdp.entity import SINGLE_HOLE_LAYOUT
+    from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_INITIAL_MIN
+    check("课程阶段 layout 仅保留单板", len(layout) == len(SINGLE_HOLE_LAYOUT), f"{len(layout)}")
+    check("最低板高课程状态已保存", bool(saved.get("height_course")))
     if layout:
         # 板底期望值取几何表单一来源, 不再写死字面量
-        from mjlab.tasks.SQuRo_Hole.mdp.entity import HOLE_LAYOUT
-        expect_bottom = float(HOLE_LAYOUT[0][3])
-        check(f"layout 记录实际板底 ({expect_bottom})",
+        expect_bottom = HEIGHT_INITIAL_MIN
+        check(f"layout 记录编译配置的板底 ({expect_bottom})",
               abs(float(layout[0]["position"][2]) - expect_bottom) < 1e-9,
               f"{layout[0]['position']}")
     check("env_state 步数可读", read_env_step(path) == STAGE3_END, f"{read_env_step(path)}")
@@ -206,6 +217,7 @@ def check_layout_roundtrip() -> None:
     print("\n[8] checkpoint 几何/接触参数 保存 → 回放复现")
     import os
     import shutil
+
     from mjlab.tasks.SQuRo_Hole.mdp.entity import apply_saved_layout
     probe_dir = "tmp_hole_geom_probe"
     os.makedirs(probe_dir, exist_ok=True)
@@ -276,7 +288,7 @@ def main() -> None:
         print(f"[结论] 失败 {len(_FAILURES)} 项: {_FAILURES}")
         sys.exit(1)
     print("[结论] 全部通过: 几何单一来源且与实际一致; 碰撞掩码按开关编译生效; "
-          "开碰撞时机器人被板挡住; Runner 在 3k 边界重建一次且保留计数器; "
+          "开碰撞时机器人被板挡住; Runner 在课程起点重建一次且保留计数器; "
           "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现; "
           "可见性开关只改外观不改碰撞")
 

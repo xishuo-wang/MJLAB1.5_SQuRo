@@ -1,6 +1,9 @@
 # uv run train Mjlab-SQuRo-Hole
 # uv run play Mjlab-SQuRo-Hole-Play --checkpoint_file
 
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
+from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
     ActionTermCfg,
     CommandTermCfg,
@@ -11,14 +14,10 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.viewer import ViewerConfig
-from mjlab.tasks.SQuRo_Hole import mdp
-from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
-from mjlab.envs.mdp.actions import JointPositionActionCfg
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
-
+from mjlab.sim import MujocoCfg, SimulationCfg
+from mjlab.tasks.SQuRo_Hole import mdp
+from mjlab.viewer import ViewerConfig
 
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
@@ -89,6 +88,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
+        "hole_passage_monitor": TerminationTermCfg(func=mdp.monitor_hole_passage, time_out=False),
     }
 
     
@@ -110,6 +110,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
                 debug_vis=True, 
+                enable_height_course=False,
+                enable_course_progress=False,
                 viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
             )
         }
@@ -118,6 +120,8 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "hole_cmd": mdp.HoleCommandCfg(
                 asset_name="robot",
                 debug_vis=False, 
+                enable_height_course=True,
+                enable_course_progress=True,
             )
         }
 
@@ -159,5 +163,5 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=5,
-        episode_length_s=20.0,
+        episode_length_s=12.0,
     )

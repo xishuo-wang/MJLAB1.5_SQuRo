@@ -1,33 +1,37 @@
 from __future__ import annotations
-import re
+
 import math
-import torch
-from mjlab.entity import Entity
+import re
 from typing import TYPE_CHECKING
+
+import torch
+
+from mjlab.entity import Entity
+
 from .config import (
     BASE_HEIGHT,
-    CMD_VEL_X_IDS,
     CMD_ANGLE_IDS,
-    THRESHOLD_HEIGHT,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
+    CMD_VEL_X_IDS,
+    THRESHOLD_HEIGHT,
 )
+from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
+from .entity import VIRTUAL_CLEARANCE_MARGIN, hole_geometry, read_bottom_z
 from .indices import (
-    _ACT_LEG_IDS,
-    _ACT_SPN_IDS,
-    _ACT_NECK_IDS,
     _ACT_F_LEG_IDS,
+    _ACT_LEG_IDS,
+    _ACT_NECK_IDS,
+    _ACT_SPN_IDS,
     _MODEL_INDICES,
-    REAR_SEG_SITE_NAMES,
     FRONT_SEG_SITE_NAMES,
+    REAR_SEG_SITE_NAMES,
     resolve_actuator_joint_ids,
 )
 from .reference import (
-    resolve_joint_ids,
     get_reference_joint_state,
+    resolve_joint_ids,
 )
-from .entity import hole_geometry
-from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -407,7 +411,12 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     geo = hole_geometry(env)
     obs_x_min = torch.tensor([g["x_min"] for g in geo], device=device)
     obs_x_max = torch.tensor([g["x_max"] for g in geo], device=device)
-    obs_z_thresh = torch.tensor([g["virtual_z_threshold"] for g in geo], device=device)
+    scene = env.scene
+    obs_z_thresh = torch.stack(
+        [read_bottom_z(scene.entities[g["name"].lower()]) - VIRTUAL_CLEARANCE_MARGIN
+         for g in geo],
+        dim=1,
+    )
 
     # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
     body_x = asset.data.body_link_pos_w[:, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
@@ -416,8 +425,8 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     in_obs_matrix = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
     # 不在任何板区内的躯干无高度约束, 阈值抬到 +inf, 使其恒判为"未超出"
     active_z_thresh = torch.where(
-        in_obs_matrix, obs_z_thresh.expand_as(in_obs_matrix),
-        torch.full_like(in_obs_matrix, float("inf"), dtype=obs_z_thresh.dtype).expand_as(in_obs_matrix)
+        in_obs_matrix, obs_z_thresh[:, None, :].expand_as(in_obs_matrix),
+        torch.full_like(in_obs_matrix, float("inf"), dtype=obs_z_thresh.dtype)
     ).min(dim=-1).values                                    # [num_envs, 2]
 
     # 按身体部位聚合采样点高度。

@@ -9,13 +9,19 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Hole.mdp import events
 from mjlab.tasks.SQuRo_Hole.mdp.command import STAGE3_POSITION_SCHEDULE
-from mjlab.tasks.SQuRo_Hole.mdp.config import CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS, STAGE2_END
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    STAGE2_END,
+)
 
 
 # 构造只保留超时终止的真实 CPU 环境。
 def make_env(reset_func=events.reset_model) -> ManagerBasedRlEnv:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 4
+    cfg.commands["hole_cmd"].enable_height_course = False
+    cfg.commands["hole_cmd"].enable_height_course = False
     cfg.terminations = {"timeout": cfg.terminations["timeout"]}
     cfg.events["reset_all"].func = reset_func
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")

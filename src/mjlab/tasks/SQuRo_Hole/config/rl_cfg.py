@@ -1,10 +1,9 @@
 from mjlab.rl import (
   RslRlModelCfg,
-  RslRlPpoAlgorithmCfg,
   RslRlOnPolicyRunnerCfg,
+  RslRlPpoAlgorithmCfg,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.config import STEPS_PER_ITER
-
 
 
 def SQuRo_Hole_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
@@ -41,7 +40,7 @@ def SQuRo_Hole_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="SQuRo_Hole",
     save_interval=100,
     num_steps_per_env=STEPS_PER_ITER,
-    max_iterations=4_000,
+    max_iterations=6_000,
     clip_actions=None,
     seed=42,
   )

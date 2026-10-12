@@ -1,41 +1,49 @@
 from __future__ import annotations
-import torch
-from mjlab.entity import Entity
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+import torch
+
+from mjlab.entity import Entity
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
-from typing import TYPE_CHECKING, Optional, Tuple, List
 from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
+
 from .config import (
-    BASE_SPEED,
-    BASE_HEIGHT,
     ANGLE_VALUES,
+    BASE_HEIGHT,
+    BASE_SPEED,
     CMD_ANGLE_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
     CMD_VEL_IDS,
     CMD_VEL_X_IDS,
     CMD_VEL_Y_IDS,
     CMD_VEL_Z_IDS,
-    CMD_HEIGHT_F_IDS,
-    CMD_HEIGHT_H_IDS,
+    FULL_HEIGHT_VALUES,
     MODE_BOTH_HIGH,
     MODE_BOTH_LOW,
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
-    FULL_HEIGHT_VALUES,
     get_current_stage,
     heights_for_stage,
+    stage_uses_height_course,
     stage_uses_schedule,
 )
+from .entity import read_bottom_z, write_hole_bottom_z
+from .height_curriculum import HeightCurriculumState
+from .height_schedule import HEIGHT_MIN_SAMPLE_PROBABILITY, sample_body_heights
 from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
-    from mjlab.viewer.debug_visualizer import DebugVisualizer
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
 
-# 第三阶段固定位置表（基于移动距离, 任务专属: 位移 → 前肢高度, 后肢高度）
+# 历史位置表（仅供 legacy 回放与对照可视化）。
 STAGE3_POSITION_SCHEDULE = [
     (0.0, 0.02, 0.05),
     (0.2, 0.055, 0.02),
@@ -88,6 +96,19 @@ class HoleCommand(CommandTerm):
         self.height_schedule = cfg.height_schedule or [] 
         self.use_position_schedule = cfg.use_position_schedule
         self.position_schedule = cfg.position_schedule or []
+        self.enable_height_course = cfg.enable_height_course
+        self.enable_course_progress = cfg.enable_course_progress
+        self.height_curriculum_state = HeightCurriculumState()
+        if cfg.height_curriculum_state:
+            self.height_curriculum_state.load_state_dict(cfg.height_curriculum_state)
+        self.obstacle_entity = env.scene.entities.get("hole1")
+        self.obstacle_bottom_z = torch.full(
+            (self.num_envs,), self.height_curriculum_state.z_min, device=self.device
+        )
+        self.obstacle_height_sampled = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._allow_obstacle_resample = True
         self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -95,6 +116,7 @@ class HoleCommand(CommandTerm):
         self._update_start_positions(env_ids)
         resampling_time_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (resampling_time_range[1] - resampling_time_range[0]) + resampling_time_range[0]
+        self._allow_obstacle_resample = False
 
 
     @property
@@ -109,7 +131,7 @@ class HoleCommand(CommandTerm):
         self.start_positions[env_ids] = self.robot.data.data.qpos[env_ids][:, root_pose_ids[:3]]
 
 
-    # 根据阶段获取可用的高度值列表 (阶段 1 正常档 / 阶段 2 含低高度全档 / 阶段 3+ 位置表)
+    # 根据阶段获取热身随机高度池。
     def _get_available_heights(self, stage: int) -> Optional[list]:
         return heights_for_stage(stage)
 
@@ -120,6 +142,9 @@ class HoleCommand(CommandTerm):
         
         if self.use_height_schedule and self.height_schedule:
             return True
+
+        if self.enable_height_course and stage_uses_height_course(stage):
+            return False
         
         if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
             return True
@@ -136,7 +161,7 @@ class HoleCommand(CommandTerm):
         if self.use_height_schedule and self.height_schedule:
             return self.height_schedule
         
-        # 阶段 3/4：使用默认位置表
+        # 历史阶段位置表，仅用于显式 legacy 配置。
         if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
             return STAGE3_POSITION_SCHEDULE
         
@@ -153,14 +178,24 @@ class HoleCommand(CommandTerm):
         schedule = self._get_schedule(stage) if use_schedule else []
         
         if use_schedule and schedule:
-            # 使用时间表更新命令
-            self._update_command_from_schedule(env_ids, schedule)
+            if self._allow_obstacle_resample:
+                self._set_neutral_command(env_ids)
+                self._update_start_positions(env_ids)
+            else:
+                self._update_command_from_schedule(env_ids, schedule)
+            return
+
+        if self.enable_height_course and stage_uses_height_course(stage):
+            if self._allow_obstacle_resample:
+                self._sample_obstacle_height(env_ids)
+                self._set_neutral_command(env_ids)
+                self._update_start_positions(env_ids)
             return
         
         # 使用随机采样
         available_heights = self._get_available_heights(stage)
         if available_heights is None:
-            # 阶段 3/4 走位置表, 不该到这里; 兜底用全高度档
+            # 非课程配置的历史回放兜底。
             available_heights = FULL_HEIGHT_VALUES
         
         # 初始化命令张量
@@ -211,6 +246,69 @@ class HoleCommand(CommandTerm):
         
         # 重置起始位置
         self._update_start_positions(env_ids)
+
+
+    # 仅在回合重置时采样一次板底高度。
+    def _sample_obstacle_height(self, env_ids: torch.Tensor) -> None:
+        if self.obstacle_entity is None:
+            raise RuntimeError("高度课程需要 Hole1 单板实体")
+        lower = self.height_curriculum_state.z_min
+        upper = self.height_curriculum_state.z_max
+        uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
+        at_minimum = torch.rand(len(env_ids), device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
+        heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
+        self.obstacle_bottom_z[env_ids] = heights
+        self.obstacle_height_sampled[env_ids] = True
+        write_hole_bottom_z(self.obstacle_entity, heights, env_ids)
+
+
+    # 写入新回合的中性命令，等待 forward 后按躯干位置更新。
+    def _set_neutral_command(self, env_ids: torch.Tensor) -> None:
+        heights = torch.full((len(env_ids),), BASE_HEIGHT, device=self.device)
+        velocity = compute_command_velocity(heights, heights)
+        angle = torch.full_like(heights, float(self.cfg.fixed_angle or 0.0))
+        if self.cfg.fixed_velocity is not None:
+            velocity.fill_(float(self.cfg.fixed_velocity))
+        self.command_tensor[env_ids, CMD_VEL_IDS] = 0.0
+        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = velocity
+        self.height_F_command[env_ids] = heights
+        self.height_H_command[env_ids] = heights
+        self.angle_command[env_ids] = angle
+        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = heights
+        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = heights
+        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
+
+
+    # 使用实际世界坐标的前后躯干中心查单板高度表。
+    def _update_command_from_height_rule(self) -> None:
+        if self.obstacle_entity is None:
+            raise RuntimeError("高度课程需要 Hole1 单板实体")
+        board_cfg = self.obstacle_entity.cfg
+        resolve_model_indices(self.robot)
+        body_x = self.robot.data.body_link_pos_w[
+            :, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0
+        ]
+        bottom_z = read_bottom_z(self.obstacle_entity)
+        front, hind = sample_body_heights(
+            body_x[:, 0], body_x[:, 1],
+            float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,
+        )
+        velocity = compute_command_velocity(front, hind)
+        angle = torch.zeros_like(front)
+        if self.cfg.fixed_velocity is not None:
+            velocity.fill_(float(self.cfg.fixed_velocity))
+        if self.cfg.fixed_angle is not None:
+            angle.fill_(float(self.cfg.fixed_angle))
+        self.vel_command_w[:, CMD_VEL_X_IDS] = velocity
+        self.vel_command_w[:, CMD_VEL_Y_IDS] = 0.0
+        self.vel_command_w[:, CMD_VEL_Z_IDS] = 0.0
+        self.command_tensor[:, CMD_VEL_IDS] = self.vel_command_w
+        self.height_F_command[:] = front
+        self.height_H_command[:] = hind
+        self.command_tensor[:, CMD_HEIGHT_F_IDS] = front
+        self.command_tensor[:, CMD_HEIGHT_H_IDS] = hind
+        self.angle_command[:] = angle
+        self.command_tensor[:, CMD_ANGLE_IDS] = angle
 
 
     # 采样前后肢高度组合: 两侧独立采样, 四种模式 (双高/前低/后低/双低) 全部覆盖
@@ -276,7 +374,6 @@ class HoleCommand(CommandTerm):
             vel_x = torch.full_like(vel_x, float(self.cfg.fixed_velocity))
         
         # 批量计算角度
-        both_high = (height_F >= THRESHOLD_HEIGHT) & (height_H >= THRESHOLD_HEIGHT)
         angle = torch.zeros(n_envs, device=device)
         if self.cfg.fixed_angle is not None:
             angle = torch.full_like(angle, float(self.cfg.fixed_angle))
@@ -307,6 +404,8 @@ class HoleCommand(CommandTerm):
         if use_schedule and schedule:
             env_ids = torch.arange(self.num_envs, device=self.device)
             self._update_command_from_schedule(env_ids, schedule)
+        elif self.enable_height_course and stage_uses_height_course(stage):
+            self._update_command_from_height_rule()
         self._log_diagnostics()
 
 
@@ -352,7 +451,12 @@ class HoleCommand(CommandTerm):
 
     # 回合重置: 重新锚定位移起点
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:  # type: ignore[override]
+        self._allow_obstacle_resample = True
         extras = super().reset(env_ids)
+        self._allow_obstacle_resample = False
+        monitor = getattr(self._env, "_hole_passage_monitor", None)
+        if monitor is not None:
+            monitor.reset(env_ids)
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._update_start_positions(env_ids)
         return extras
@@ -403,7 +507,10 @@ class HoleCommandCfg(CommandTermCfg):
     height_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(开始时间, 前肢高度, 后肢高度), ...]
     use_position_schedule: bool = False  # 是否使用位置表
     position_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(距离阈值, 前肢高度, 后肢高度), ...]
-    stage_schedule_fallback: bool = True        # 阶段 3 是否兜底使用内置位置表; 回放侧选择 fixed/random 时置 False, 保证 play 优先
+    stage_schedule_fallback: bool = True        # 课程关闭时是否启用 legacy 表；fixed/random 回放可关闭
+    enable_height_course: bool = False
+    enable_course_progress: bool = True
+    height_curriculum_state: dict = field(default_factory=dict)
     
     @dataclass
     class VizCfg:
