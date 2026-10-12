@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import builtins
 import subprocess
 import sys
@@ -87,6 +88,34 @@ def check_tables(old_reference: ModuleType, old_curriculums: ModuleType) -> None
             assert (old_curriculums.get_curriculum_reward_weight(env, key)
                     == curriculums.get_curriculum_reward_weight(env, key)), f"课程参数 {key} 不同"
     print(f"[通过] 完整参考表 {count} 个标量及四阶段课程参数逐位一致")
+
+
+# 检查所有奖励查询键，并模拟脊柱参数被删或拼错。
+def check_curriculum_keys() -> None:
+    tree = ast.parse(Path(rewards.__file__).read_text(encoding="utf-8"))
+    keys = {
+        node.args[1].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "get_curriculum_reward_weight"
+        and len(node.args) > 1 and isinstance(node.args[1], ast.Constant)
+    }
+    assert keys <= curriculums._CURVES.keys(), f"奖励缺少课程定义：{keys - curriculums._CURVES.keys()}"
+    env = SimpleNamespace(common_step_counter=0)
+    original = curriculums._CURVES.copy()
+    for key in ("sigma_spn_pos_typo", "sigma_spn_pos", "sigma_spn_vel"):
+        try:
+            curriculums._CURVES.pop(key, None)
+            try:
+                curriculums.get_curriculum_reward_weight(env, key)
+            except KeyError as error:
+                assert key in str(error), "缺键错误没有指出参数名称"
+            else:
+                raise AssertionError(f"缺少 {key} 时仍静默返回数值")
+        finally:
+            curriculums._CURVES.clear()
+            curriculums._CURVES.update(original)
+    print(f"[通过] 全部 {len(keys)} 个奖励查询键有定义；脊柱 σ 缺失或拼错时明确报错")
 
 
 # 比较真实模型上的复位写入和足端力名称映射。
@@ -207,6 +236,7 @@ def main() -> None:
     old_events = modules["events"]
     old_rewards = modules["rewards"]
     check_tables(old_reference, old_curriculums)
+    check_curriculum_keys()
     cfg = load_env_cfg(_TASK)
     cfg.scene.num_envs = len(FULL_HEIGHT_VALUES) ** 2
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")

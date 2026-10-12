@@ -34,6 +34,13 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.5, 1.0),
     "body_contact":             (0.0, 0.0, 5.0, 5.0),
+    # 未注册奖励显式保留基线的默认权重。
+    "energy":                   (1.0, 1.0, 1.0, 1.0),
+    "cot":                      (1.0, 1.0, 1.0, 1.0),
+    "joint_acc":                (1.0, 1.0, 1.0, 1.0),
+    "y_offset":                 (1.0, 1.0, 1.0, 1.0),
+    "joint_limits":             (1.0, 1.0, 1.0, 1.0),
+    "action_acc":               (1.0, 1.0, 1.0, 1.0),
     # 虚拟净空 σ: 超出量的指数衰减系数 (超出 5mm 时按 exp(-sigma*0.005^2) 计)
     "sigma_body_contact":       (2000.0, 2000.0, 2000.0, 2000.0),
     # 位置/速度模仿的腿部 σ 与颈部权重
@@ -110,6 +117,10 @@ reward_weight_curriculum = RewardWeightCurriculum()
 
 
 
-# 获取课程奖励权重
+# 获取课程参数，缺失定义时明确报错。
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
-    return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
+    weights = reward_weight_curriculum.get_reward_weights(env.common_step_counter)
+    try:
+        return weights[reward_name]
+    except KeyError:
+        raise KeyError(f"课程参数 {reward_name!r} 未在 _CURVES 定义") from None
