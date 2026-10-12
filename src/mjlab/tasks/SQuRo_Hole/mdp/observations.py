@@ -9,8 +9,6 @@ from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES, resolve_model_indices
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
-
-
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
@@ -39,8 +37,6 @@ def projected_gravity(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg = _DEF
 # 执行器关节位置（相对默认值）
 def actuator_pos(env: "ManagerBasedRlEnv", asset_cfg: SceneEntityCfg = ACTUATED_JOINT_CFG) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
-    # 观测维度在 ObservationManager 构造期就要读出来, 那时奖励/事件还没跑过,
-    # 索引可能仍未解析 —— 必须在这里自己保证, 否则该列会退化成 0 维
     resolve_model_indices(asset)
     default_joint_pos = asset.data.default_joint_pos
     assert default_joint_pos is not None
