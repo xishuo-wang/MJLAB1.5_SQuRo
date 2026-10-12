@@ -291,7 +291,7 @@ class HoleCommand(CommandTerm):
         bottom_z = read_bottom_z(self.obstacle_entity)
         front, hind = sample_body_heights(
             body_x[:, 0], body_x[:, 1],
-            float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,
+            float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,  # type: ignore
         )
         velocity = compute_command_velocity(front, hind)
         angle = torch.zeros_like(front)

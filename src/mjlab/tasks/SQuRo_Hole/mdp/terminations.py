@@ -65,7 +65,7 @@ class HolePassageMonitor:
             stage_uses_height_course(get_current_stage(env.common_step_counter))
             and hole_collision_enabled(env)
             and command is not None
-            and command.enable_height_course
+            and command.enable_height_course  # type: ignore
         )
         if not valid_course:
             return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -78,10 +78,10 @@ class HolePassageMonitor:
         if board is None:
             return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-        x1 = float(board.cfg.position[0]) - float(board.cfg.size[0])
-        x2 = float(board.cfg.position[0]) + float(board.cfg.size[0])
-        y0 = float(board.cfg.position[1])
-        half_width = float(board.cfg.size[1])
+        x1 = float(board.cfg.position[0]) - float(board.cfg.size[0])  # type: ignore
+        x2 = float(board.cfg.position[0]) + float(board.cfg.size[0])  # type: ignore
+        y0 = float(board.cfg.position[1])  # type: ignore
+        half_width = float(board.cfg.size[1])  # type: ignore
         bottom = read_bottom_z(board)
         front_min = front[..., 0].min(dim=1).values
         front_max = front[..., 0].max(dim=1).values
@@ -146,11 +146,11 @@ class HolePassageMonitor:
             self.seq[env_id] += 1
             valid = bool(
                 valid_course
-                and command.obstacle_height_sampled[env_id]
+                and command.obstacle_height_sampled[env_id]  # type: ignore
             )
             course_result = {"advanced": False}
-            if command is not None and command.enable_course_progress:
-                course_result = command.height_curriculum_state.record_episode(
+            if command is not None and command.enable_course_progress:  # type: ignore
+                course_result = command.height_curriculum_state.record_episode(  # type: ignore
                     float(bottom[env_id]),
                     success,
                     int(env.common_step_counter // STEPS_PER_ITER),
@@ -189,5 +189,5 @@ def monitor_hole_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
     if monitor is None:
         with torch.inference_mode(False):
             monitor = HolePassageMonitor(env)
-        env._hole_passage_monitor = monitor
+        env._hole_passage_monitor = monitor  # type: ignore
     return monitor.compute()

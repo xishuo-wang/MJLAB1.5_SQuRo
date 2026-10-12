@@ -59,12 +59,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         # 限高板碰撞在编译期固化 (见 mdp/hole.py), 进入高度课程时重建环境。
         # 留一份本次启动的 env_cfg 副本作重建模板, 否则命令行覆盖会退回注册值。
         self._hole_device = device
-        self._hole_env_cfg = copy.deepcopy(env.unwrapped.cfg)
-        self._hole_num_envs = int(env.unwrapped.scene.num_envs)
+        self._hole_env_cfg = copy.deepcopy(env.unwrapped.cfg)  # type: ignore
+        self._hole_num_envs = int(env.unwrapped.scene.num_envs)  # type: ignore
         self._hole_clip_actions = getattr(env, "clip_actions", None)
-        self._hole_render_mode = getattr(env.unwrapped, "render_mode", None)
-        self._hole_has_gates = "hole1" in env.unwrapped.scene.entities
-        self._hole_command = env.unwrapped.command_manager._terms.get("hole_cmd")
+        self._hole_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
+        self._hole_has_gates = "hole1" in env.unwrapped.scene.entities  # type: ignore
+        self._hole_command = env.unwrapped.command_manager._terms.get("hole_cmd")  # type: ignore
         self._hole_height_course_enabled = bool(
             self._hole_command is not None
             and self._hole_command.enable_height_course
@@ -127,7 +127,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         if stage_uses_height_course(stage) and self._hole_height_course_enabled:
             configure_single_hole_entities(env_cfg, enable_collision=collision)
             env_cfg.commands["hole_cmd"].height_curriculum_state = (
-                self._height_curriculum_state.state_dict()
+                self._height_curriculum_state.state_dict()  # type: ignore
             )
         else:
             configure_hole_entities(env_cfg, enable_collision=collision)
@@ -139,7 +139,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         self.env.unwrapped.common_step_counter = step_counter
         self._hole_command = new_env.command_manager._terms.get("hole_cmd")
         self._height_curriculum_state = (
-            self._hole_command.height_curriculum_state
+            self._hole_command.height_curriculum_state  # type: ignore
             if self._hole_command is not None else None
         )
         self._clear_logger_episode_state()
@@ -210,14 +210,14 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 loss_dict=loss_dict,
                 learning_rate=self.alg.learning_rate,
                 action_std=self.alg.get_policy().output_std,
-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
+                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
             )
 
             if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
-                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))
+                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
 
         if self.logger.writer is not None:
-            self.save(os.path.join(self.logger.log_dir,
+            self.save(os.path.join(self.logger.log_dir,  # type: ignore
                                    f"model_{self.current_learning_iteration}.pt"))
             self.logger.stop_logging_writer()
 
@@ -268,7 +268,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         return infos
 
     # 记录**实际场景里**的板几何与碰撞开关 (不是全局默认表), 供续训/回放复现
-    def _hole_scene_state(self) -> dict:
+    def _hole_scene_state(self) -> list[dict]:
         scene = self.env.unwrapped.scene
         layout = []
         for key in ("hole1", "hole2", "hole3"):
@@ -276,14 +276,14 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             if ent is None:
                 continue
             layout.append({
-                "name": ent.cfg.name,
-                "position": list(ent.cfg.position),
-                "size": list(ent.cfg.size),
-                "contype": int(ent.cfg.contype),
-                "conaffinity": int(ent.cfg.conaffinity),
-                "solref": (list(ent.cfg.solref) if getattr(ent.cfg, "solref", None) is not None
+                "name": ent.cfg.name,  # type: ignore
+                "position": list(ent.cfg.position),  # type: ignore
+                "size": list(ent.cfg.size),  # type: ignore
+                "contype": int(ent.cfg.contype),  # type: ignore
+                "conaffinity": int(ent.cfg.conaffinity),  # type: ignore
+                "solref": (list(ent.cfg.solref) if getattr(ent.cfg, "solref", None) is not None  # type: ignore
                            else None),
-                "solimp": (list(ent.cfg.solimp) if getattr(ent.cfg, "solimp", None) is not None
+                "solimp": (list(ent.cfg.solimp) if getattr(ent.cfg, "solimp", None) is not None  # type: ignore
                            else None),
             })
         return layout
@@ -322,12 +322,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         command = env.command_manager._terms.get("hole_cmd")
         if (
             command is None
-            or not command.enable_height_course
+            or not command.enable_height_course  # type: ignore
             or get_current_stage(env.common_step_counter) < 3
         ):
             return
         del results
-        stats = command.height_curriculum_state.metrics()
+        stats = command.height_curriculum_state.metrics()  # type: ignore
         log["Metrics/高度课程/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
         log["Metrics/高度课程/当前档成功率"] = torch.tensor(stats["level_success_rate"], device=env.device)
         log["Metrics/高度课程/当前档样本数"] = torch.tensor(stats["level_episode_count"], device=env.device)
@@ -335,7 +335,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         log["Metrics/高度课程/连续达标批数"] = torch.tensor(stats["consecutive_success_batches"], device=env.device)
         log["Metrics/高度课程/全高度通过率"] = torch.tensor(stats["all_height_success_rate"], device=env.device)
         log["Metrics/高度课程/全高度样本数"] = torch.tensor(stats["all_height_episode_count"], device=env.device)
-        log["Metrics/高度课程/实际板底最小值"] = command.obstacle_bottom_z.min().detach()
-        log["Metrics/高度课程/实际板底最大值"] = command.obstacle_bottom_z.max().detach()
+        log["Metrics/高度课程/实际板底最小值"] = command.obstacle_bottom_z.min().detach()  # type: ignore
+        log["Metrics/高度课程/实际板底最大值"] = command.obstacle_bottom_z.max().detach()  # type: ignore
         for name, count in stats["failure_counts"].items():
             log[f"Metrics/高度课程/{name}失败数"] = torch.tensor(count, device=env.device)

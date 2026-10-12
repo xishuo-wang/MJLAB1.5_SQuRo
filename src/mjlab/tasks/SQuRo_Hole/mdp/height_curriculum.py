@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .config import COURSE_START_ITER, HEIGHT_COURSE_STAGE
 from .height_schedule import (
     HEIGHT_INITIAL_MIN,
@@ -164,7 +166,7 @@ class HeightCurriculumState:
         self.failure_counts = dict(state.get("failure_counts", self.failure_counts))
 
     # 汇总当前档和全高度的通过率。
-    def metrics(self) -> dict[str, float | int]:
+    def metrics(self) -> dict[str, Any]:
         return {
             "z_min": self.z_min,
             "z_max": self.z_max,
