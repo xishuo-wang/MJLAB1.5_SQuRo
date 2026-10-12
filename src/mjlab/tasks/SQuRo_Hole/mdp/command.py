@@ -30,8 +30,8 @@ from .config import (
 )
 
 if TYPE_CHECKING:
-    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
+    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
@@ -47,8 +47,6 @@ STAGE3_POSITION_SCHEDULE = [
     (1.32, 0.055, 0.055),
 ]
 
-
-# 命令层的四种高度模式定义在 config.py (与阶段常量同处), 此处只做导入
 
 
 # 按当前高度命令判定高度模式
@@ -92,13 +90,9 @@ class HoleCommand(CommandTerm):
         self.position_schedule = cfg.position_schedule or []
         self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
-        
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
-        
-        # 记录起始位置
         self._update_start_positions(env_ids)
-        
         resampling_time_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (resampling_time_range[1] - resampling_time_range[0]) + resampling_time_range[0]
 
@@ -395,6 +389,7 @@ class HoleCommand(CommandTerm):
 
     def _update_metrics(self) -> None:
         pass
+
 
 
 @dataclass(kw_only=True)  
