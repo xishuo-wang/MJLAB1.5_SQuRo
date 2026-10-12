@@ -166,8 +166,11 @@ def check_state_roundtrip() -> None:
     layout = saved.get("layout") or []
     check("layout 三块板", len(layout) == 3, f"{len(layout)}")
     if layout:
-        check("layout 记录实际板底 (0.0475)",
-              abs(float(layout[0]["position"][2]) - 0.0475) < 1e-9,
+        # 板底期望值取几何表单一来源, 不再写死字面量
+        from mjlab.tasks.SQuRo_Hole.mdp.entity import HOLE_LAYOUT
+        expect_bottom = float(HOLE_LAYOUT[0][3])
+        check(f"layout 记录实际板底 ({expect_bottom})",
+              abs(float(layout[0]["position"][2]) - expect_bottom) < 1e-9,
               f"{layout[0]['position']}")
     check("env_state 步数可读", read_env_step(path) == STAGE3_END, f"{read_env_step(path)}")
     try:

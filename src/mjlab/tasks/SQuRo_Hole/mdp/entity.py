@@ -5,10 +5,10 @@ from mjlab.entity import Entity, EntityCfg
 
 # 三块限高板的几何: 板底 z 即板体 position.z, 板厚 2*half_thickness 向上长
 # 板底 = position.z, 板顶 = position.z + 2*half_thickness
-# 实测板底 / 板顶 (重构前口径保持一致):
-#   hole1 / hole3: 板底 0.0475, 板顶 0.0575 (position.z=0.05, 半厚 0.005)
-#   hole2:         板底 0.0725, 板顶 0.0825 (position.z=0.075, 半厚 0.005)
-# 虚拟净空阈值 = 板底 − 2.5 mm (见 rewards.compute_body_contact_penalty)
+# 当前板底 / 板顶:
+#   hole1 / hole3: 板底 0.0500, 板顶 0.0600 (position.z=0.05, 半厚 0.005)
+#   hole2:         板底 0.0700, 板顶 0.0800 (position.z=0.07, 半厚 0.005)
+# 虚拟净空阈值 = 板底 − 2.5 mm (见 rewards.compute_body_contact_reward)
 HOLE_LAYOUT = (
     ("Hole1", 0.2, 0.0, 0.05, 0.015, 0.005),
     ("Hole2", 0.6, 0.0, 0.07, 0.100, 0.005),
