@@ -4,9 +4,8 @@ from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
-from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from typing import TYPE_CHECKING, Optional, Tuple, List
-from .indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from .config import (
     BASE_SPEED,
     BASE_HEIGHT,
@@ -28,6 +27,7 @@ from .config import (
     heights_for_stage,
     stage_uses_schedule,
 )
+from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -337,8 +337,7 @@ class HoleCommand(CommandTerm):
         masks = torch.stack([mask for _, mask in groups]).to(values.dtype)
         counts = masks.sum(dim=1)
         means = (masks @ values) / counts.clamp_min(1).unsqueeze(1)
-        fields = ("相对X均值", "前向速度均值", "侧向速度均值", "侧向速度绝对值均值",
-                  "前躯干方向误差均值_度", "后躯干方向误差均值_度")
+        fields = ("相对X均值", "前向速度均值", "侧向速度均值", "侧向速度绝对值均值", "前躯干方向误差均值_度", "后躯干方向误差均值_度")
         log = self._env.extras["log"]
         log["Metrics/位移/起点X均值"] = self.start_positions[:, 0].mean().detach()
         log["Metrics/位移/相对X均值"] = relative_x.mean().detach()
@@ -382,7 +381,6 @@ class HoleCommand(CommandTerm):
         cmd_start = base_pos + [0, 0, z_offset]
         cmd_end = cmd_start + cmd_vel * scale
         visualizer.add_arrow(cmd_start, cmd_end, color=(0.2, 0.2, 0.8, 0.8), width=arrow_width)
-        
         actual_end = cmd_start + actual_vel * scale
         visualizer.add_arrow(cmd_start, actual_end, color=(0.2, 0.8, 0.2, 0.8), width=arrow_width)
 
@@ -405,8 +403,7 @@ class HoleCommandCfg(CommandTermCfg):
     height_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(开始时间, 前肢高度, 后肢高度), ...]
     use_position_schedule: bool = False  # 是否使用位置表
     position_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(距离阈值, 前肢高度, 后肢高度), ...]
-    # 阶段 3 是否兜底使用内置位置表; 回放侧选择 fixed/random 时置 False, 保证 play 优先
-    stage_schedule_fallback: bool = True
+    stage_schedule_fallback: bool = True        # 阶段 3 是否兜底使用内置位置表; 回放侧选择 fixed/random 时置 False, 保证 play 优先
     
     @dataclass
     class VizCfg:
