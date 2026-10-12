@@ -14,6 +14,9 @@
 2026-10-12 索引审查及 `929a2a3` 的当前奖励口径见
 [`SQuRo_Hole_索引审查.md`](SQuRo_Hole_索引审查.md)。历史配置数值与当前基线存在差异时，以该审查记录和源码为准。
 
+2026-10-12 后续位置表复位起点修复见
+[`SQuRo_Hole_课程复位.md`](SQuRo_Hole_课程复位.md)，该修复会改变旧版错误的课程轨迹。
+
 备份来源：`Backup/` 下的 `mouse_env_cfg.py` + `mdp/` + `config/` + `rl/`，以及当年训练产物
 `Backup/260403_1/files/`（`model_3999.pt`、`config.yaml`、`mjlab.diff`）。
 

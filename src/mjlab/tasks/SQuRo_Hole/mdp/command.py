@@ -106,8 +106,11 @@ class HoleCommand(CommandTerm):
         return self.command_tensor
 
 
+    # 从已写入的根位姿记录起点，避开复位前的缓存位置；见 docs/SQuRo_Hole_课程复位.md。
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
-        self.start_positions[env_ids] = self.robot.data.root_link_pos_w[env_ids]
+        root_pose_ids = self.robot.indexing.free_joint_q_adr
+        assert root_pose_ids is not None, "位置表要求机器人带浮动根关节"
+        self.start_positions[env_ids] = self.robot.data.data.qpos[env_ids][:, root_pose_ids[:3]]
 
 
     # 根据阶段获取可用的高度值列表 (阶段 1 正常档 / 阶段 2 含低高度全档 / 阶段 3+ 位置表)
