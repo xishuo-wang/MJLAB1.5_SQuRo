@@ -255,23 +255,49 @@ def verify_dynamic_sources(env: ManagerBasedRlEnv) -> None:
     check("虚拟净空奖励阈值跟随实际板底", high_reward > low_reward)
 
 
-# 验收真实 mocap、逐环境复位、动态奖励阈值和编译碰撞。
+# 从独立的碰撞几何与编译尺寸读取实际板底。
+def read_geom_bottom_z(env: ManagerBasedRlEnv) -> torch.Tensor:
+    board = env.scene.entities["hole1"]
+    local_ids, _ = board.find_geoms([f"{board.cfg.name}_geom"], preserve_order=True)
+    geom_id = local_ids[0]
+    global_id = int(board.indexing.geom_ids[geom_id])
+    half_thickness = float(env.sim.mj_model.geom_size[global_id, 2])
+    env.sim.forward()
+    env.scene.update(0.0)
+    return board.data.geom_pos_w[:, geom_id, 2] - half_thickness
+
+
+# 验收真实碰撞几何、逐环境复位和动态奖励阈值。
 def verify_real_env() -> None:
     env = make_env()
     board = env.scene.entities["hole1"]
     check("训练环境只保留单板且碰撞已编译", list(name for name in env.scene.entities if name.startswith("hole")) == ["hole1"] and hole_collision_enabled(env))
     write_hole_bottom_z(board, torch.tensor([0.048, 0.052, 0.070, 0.090]), torch.arange(4, device=env.device))
     written = read_bottom_z(board).clone()
-    check("公开 mocap API 逐环境写入与即时读取", torch.allclose(written, torch.tensor([0.048, 0.052, 0.070, 0.090])))
+    check("板体 mocap 逐环境写入与即时读取", torch.allclose(written, torch.tensor([0.048, 0.052, 0.070, 0.090])))
+    check("独立碰撞几何的板底随四个采样高度移动", torch.allclose(
+        read_geom_bottom_z(env), torch.tensor([0.048, 0.052, 0.070, 0.090]), atol=1e-6,
+    ))
     keep = written[[1, 3]].clone()
     write_hole_bottom_z(board, 0.051, torch.tensor([0, 2], device=env.device))
     check("部分写入不污染其他环境", torch.equal(read_bottom_z(board)[[1, 3]], keep))
+    check("部分写入只移动指定环境的实际碰撞板", torch.allclose(
+        read_geom_bottom_z(env), torch.tensor([0.051, 0.052, 0.051, 0.090]), atol=1e-6,
+    ))
+    write_hole_bottom_z(board, torch.tensor([0.054, 0.056]), slice(1, 4, 2))
+    check("切片写入正确移动实际碰撞板", torch.allclose(
+        read_geom_bottom_z(env), torch.tensor([0.051, 0.054, 0.051, 0.056]), atol=1e-6,
+    ))
+    keep = read_geom_bottom_z(env)[[1, 3]].clone()
     with torch.inference_mode():
         monitor_hole_passage(env)
     monitor = env._hole_passage_monitor
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
     after_reset = read_bottom_z(board).clone()
     check("部分 reset 重采样且保留其他环境板高", torch.equal(after_reset[[1, 3]], keep) and torch.all(after_reset[[0, 2]] >= HEIGHT_INITIAL_MIN))
+    actual = read_geom_bottom_z(env)
+    check("部分 reset 后碰撞几何与采样高度一致", torch.allclose(actual, after_reset, atol=1e-6)
+          and torch.equal(actual[[1, 3]], keep))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
