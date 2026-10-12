@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 
 import mujoco
+import torch
 
 from mjlab.entity import Entity, EntityCfg
 
@@ -211,14 +212,23 @@ def hole_collision_enabled(env) -> bool:
     return bool(entity is not None and int(entity.cfg.contype) > 0)
 
 
-# 将板底高度写入 mocap，支持全量或部分环境更新。
-def write_hole_bottom_z(entity, bottom_z, env_ids=None) -> None:
-    import torch
+# 板体自身的 mocap 下标; entity.indexing.mocap_id 指向 root 的空 mocap_base, 不能用于板
+def hole_mocap_id(entity) -> int:
+    local, _ = entity.find_bodies([entity.cfg.name], preserve_order=True)
+    if not local:
+        raise ValueError(f"{entity.cfg.name} 实体里找不到同名 body")
+    body_id = int(entity.indexing.body_ids[local[0]])
+    mocap_id = int(entity.data.model.body_mocapid[body_id])
+    if mocap_id < 0:
+        raise ValueError(f"{entity.cfg.name} 板体不是 mocap 体")
+    return mocap_id
 
-    if entity.indexing.mocap_id is None:
-        raise ValueError(f"{entity.cfg.name} 不是 mocap 实体")
-    mocap_id = entity.indexing.mocap_id
-    mocap_poses = entity.data.data.mocap_pos[:, mocap_id, :]
+
+# 将板底高度写入板体 mocap，支持全量或部分环境更新。
+def write_hole_bottom_z(entity, bottom_z, env_ids=None) -> None:
+    mocap_pos = entity.data.data.mocap_pos
+    mocap_id = hole_mocap_id(entity)
+    mocap_poses = mocap_pos[:, mocap_id, :]
     all_env_ids = torch.arange(mocap_poses.shape[0], device=mocap_poses.device)
     if env_ids is None:
         target_ids = all_env_ids
@@ -226,27 +236,19 @@ def write_hole_bottom_z(entity, bottom_z, env_ids=None) -> None:
         target_ids = all_env_ids[env_ids]
     else:
         target_ids = env_ids.to(device=mocap_poses.device, dtype=torch.long).flatten()
-    positions = mocap_poses[target_ids].clone()
-    heights = torch.as_tensor(bottom_z, device=positions.device, dtype=positions.dtype)
+    heights = torch.as_tensor(bottom_z, device=mocap_pos.device, dtype=mocap_pos.dtype)
     if heights.ndim == 0:
-        heights = heights.expand(positions.shape[0])
-    if heights.shape[0] != positions.shape[0]:
+        heights = heights.expand(target_ids.shape[0])
+    if heights.shape[0] != target_ids.shape[0]:
         raise ValueError("板底高度数量必须与目标环境数量一致")
-    pose = torch.zeros((positions.shape[0], 7), device=positions.device, dtype=positions.dtype)
-    pose[:, :3] = positions
-    pose[:, 0] = float(entity.cfg.position[0])
-    pose[:, 1] = float(entity.cfg.position[1])
-    pose[:, 2] = heights
-    pose[:, 3] = 1.0
-    entity.write_mocap_pose_to_sim(pose, env_ids=target_ids)
+    mocap_pos[target_ids, mocap_id, 0] = float(entity.cfg.position[0])
+    mocap_pos[target_ids, mocap_id, 1] = float(entity.cfg.position[1])
+    mocap_pos[target_ids, mocap_id, 2] = heights
 
 
-# 读取板当前实际 mocap 板底高度。
+# 读取板体当前实际 mocap 板底高度。
 def read_bottom_z(entity):
-    mocap_id = entity.indexing.mocap_id
-    if mocap_id is None:
-        raise ValueError(f"{entity.cfg.name} 不是 mocap 实体")
-    return entity.data.data.mocap_pos[:, mocap_id, 2]
+    return entity.data.data.mocap_pos[:, hole_mocap_id(entity), 2]
 
 
 
@@ -281,6 +283,21 @@ def hole_geometry(env=None) -> list[dict]:
             return out
     return [_entity_geometry(HoleEntityCfg(name=n, position=(x, y, bz), size=(hl, 0.1, ht))) for n, x, y, bz, hl, ht in HOLE_LAYOUT]
 
+
+
+# 统一设置障碍物板底高度: 只改 position.z, 不影响 x/尺寸/碰撞
+def set_obstacle_bottom_z(env_cfg, bottom_z: float) -> int:
+    entities = dict(env_cfg.scene.entities)
+    n = 0
+    for key, ent in entities.items():
+        if isinstance(ent, HoleEntityCfg):
+            entities[key] = replace(
+                ent,
+                position=(float(ent.position[0]), float(ent.position[1]), float(bottom_z)),
+            )
+            n += 1
+    env_cfg.scene.entities = entities
+    return n
 
 
 # 统一设置三块板的可见性: 仅改 rgba, 不影响碰撞 (碰撞只由 contype/conaffinity 决定)
@@ -326,8 +343,8 @@ def apply_saved_layout(env_cfg, layout: list) -> int:
                 continue
             existing = HoleEntityCfg(
                 name=str(d.get("name", key)),
-                position=tuple(float(v) for v in position),
-                size=tuple(float(v) for v in size),
+                position=(float(position[0]), float(position[1]), float(position[2])),
+                size=(float(size[0]), float(size[1]), float(size[2])),
                 contype=(int(collision_template.contype) if collision_template else 1),
                 conaffinity=(int(collision_template.conaffinity) if collision_template else 1),
             )
