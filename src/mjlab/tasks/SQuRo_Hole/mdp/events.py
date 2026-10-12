@@ -1,14 +1,13 @@
 from __future__ import annotations
 import torch
-
 from .config import NECK_REF_POS
 from .indices import (
     _ACT_LEG_IDS,
     _ACT_SPN_IDS,
     _ACT_NECK_IDS,
     _MODEL_INDICES,
-    resolve_actuator_joint_ids,
     resolve_model_indices,
+    resolve_actuator_joint_ids,
 )
 
 
@@ -19,6 +18,8 @@ _UNACT_JOINT_POS = (
     0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905,
 )
 _NECK_JOINT_POS = (NECK_REF_POS[0], NECK_REF_POS[1])
+
+
 
 # 重置模型
 def reset_model(env, env_ids):
