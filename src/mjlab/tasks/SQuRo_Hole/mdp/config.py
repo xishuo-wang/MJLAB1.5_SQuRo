@@ -4,6 +4,22 @@ BASE_FREQ = 2.0             # 基准速度：正常行走下的步态频率
 BASE_SPEED = 0.2            # 基准速度：基准步频和基准高度下的期望速度
 THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度 (取 0.0395 而非 0.04, 避免 float32(0.04) 与阈值等值时判定歧义)
 
+# 命令层四种高度模式: 按前后肢各自是否低于阈值切分, 覆盖全部组合
+# 注: 参考表的 mode 只有 3 个 (它的 0 同时覆盖"双高"与"双低", 见 reference.py),
+# 两者是不同的分层, 不要互相替换
+MODE_BOTH_HIGH = 0          # 前后肢均高
+MODE_FRONT_LOW = 1          # 前肢低后肢高
+MODE_HIND_LOW = 2           # 前肢高后肢低
+MODE_BOTH_LOW = 3           # 前后肢均低
+
+# 6 维命令张量的槽位: 顺序与 observations/command 观测列一致
+CMD_VEL_X_IDS = 0           # X 方向速度命令
+CMD_VEL_Y_IDS = 1           # Y 方向速度命令
+CMD_VEL_Z_IDS = 2           # Z 方向速度命令
+CMD_HEIGHT_F_IDS = 3        # 前肢高度命令
+CMD_HEIGHT_H_IDS = 4        # 后肢高度命令
+CMD_ANGLE_IDS = 5           # 期望角度命令
+
 
 
 

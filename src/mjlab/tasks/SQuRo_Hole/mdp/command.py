@@ -9,6 +9,13 @@ from .config import (
     BASE_SPEED,
     BASE_HEIGHT,
     ANGLE_VALUES,
+    CMD_ANGLE_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    MODE_BOTH_HIGH,
+    MODE_BOTH_LOW,
+    MODE_FRONT_LOW,
+    MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
     FULL_HEIGHT_VALUES,
     get_current_stage,
@@ -35,13 +42,7 @@ STAGE3_POSITION_SCHEDULE = [
 ]
 
 
-# 命令层的四种高度模式: 按前后肢各自是否低于阈值切分, 覆盖全部组合
-# 注: 参考表的 mode 只有 3 个 (它的 0 同时覆盖"双高"与"双低", 见 reference.py),
-# 两者是不同的分层, 不要互相替换
-MODE_BOTH_HIGH = 0
-MODE_FRONT_LOW = 1
-MODE_HIND_LOW = 2
-MODE_BOTH_LOW = 3
+# 命令层的四种高度模式定义在 config.py (与阶段常量同处), 此处只做导入
 
 
 # 按当前高度命令判定高度模式
@@ -74,10 +75,10 @@ class HoleCommand(CommandTerm):
         super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
         self.command_tensor = torch.zeros(self.num_envs, 6, device=self.device)
-        self.vel_command_w = self.command_tensor[:, :3]         # 速度命令（x, y, z）
-        self.height_F_command = self.command_tensor[:, 3]       # 前肢高度命令
-        self.height_H_command = self.command_tensor[:, 4]       # 后肢高度命令
-        self.angle_command = self.command_tensor[:, 5]          # 角度命令
+        self.vel_command_w = self.command_tensor[:, :3]                   # 速度命令（x, y, z）
+        self.height_F_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]  # 前肢高度命令
+        self.height_H_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]  # 后肢高度命令
+        self.angle_command = self.command_tensor[:, CMD_ANGLE_IDS]        # 角度命令
         self.has_printed_current_cmd = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.use_height_schedule = cfg.use_height_schedule
         self.height_schedule = cfg.height_schedule or [] 
@@ -200,9 +201,9 @@ class HoleCommand(CommandTerm):
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
         self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
-        self.command_tensor[env_ids, 3] = height_F
-        self.command_tensor[env_ids, 4] = height_H
-        self.command_tensor[env_ids, 5] = angle
+        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
+        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
+        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
         self.has_printed_current_cmd[env_ids] = False
         
         # 重置起始位置
@@ -285,9 +286,9 @@ class HoleCommand(CommandTerm):
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
         self.command_tensor[env_ids, :3] = self.vel_command_w[env_ids]
-        self.command_tensor[env_ids, 3] = height_F
-        self.command_tensor[env_ids, 4] = height_H
-        self.command_tensor[env_ids, 5] = angle
+        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
+        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
+        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
         self.has_printed_current_cmd[env_ids] = False
 
 

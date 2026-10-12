@@ -6,7 +6,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-from .hole import hole_geometry
+from .entity import hole_geometry
 from .config import BASE_HEIGHT, THRESHOLD_HEIGHT
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_SPN_IDS

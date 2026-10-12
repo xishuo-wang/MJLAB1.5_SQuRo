@@ -25,7 +25,7 @@ src/mjlab/tasks/SQuRo_Hole/
 │   ├── command.py     # HoleCommand: 6D 命令 + 阶段 1/2 随机采样 + 阶段 3 位移位置表
 │   ├── curriculums.py # 4 段奖励权重曲线 _CURVES + 障碍物开关 enable_holes
 │   ├── events.py      # reset_model: 固定起点 (0,0,0.06) + 头颈 0.0/-0.3
-│   ├── hole.py        # HoleEntity: 限高板 box
+│   ├── entity.py      # HoleEntity: 限高板 box
 │   ├── observations.py# 自定义观测 (base_pos / base_lin_vel_w / joint_acc / actuator_force / heading)
 │   ├── reference.py   # [模式3][高度档4][相位500][14] ×3 参考表 + 速度表 (头颈两列恒为 (0.0, -0.3))
 │   ├── rewards.py     # 奖励项 (含 body_contact 虚拟碰撞)
@@ -197,7 +197,7 @@ x=1.2、`reached` 奖励的目标在 x=1.5）。表里的位移是"相对 `start
 
 ## 5. 三块限高板、虚拟净空与真实碰撞
 
-### 几何（`mdp/hole.py` 单一来源）
+### 几何（`mdp/entity.py` 单一来源）
 
 `HOLE_LAYOUT` 定义三块板，**`position.z` 就是板底**，板体中心由 `板底 + 半厚` 计算
 （此前是 `position.z + 局部偏移 size[2]/2`，两套口径混用）。实测保留原有几何：

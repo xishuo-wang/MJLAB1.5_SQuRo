@@ -22,7 +22,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.hole import (
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_visibility,
     configure_hole_entities,

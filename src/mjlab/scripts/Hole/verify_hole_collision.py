@@ -11,7 +11,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Hole.mdp.config import STAGE3_END, STEPS_PER_ITER, get_current_stage
-from mjlab.tasks.SQuRo_Hole.mdp.hole import (
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
     configure_hole_entities,
     hole_collision_enabled,
@@ -203,7 +203,7 @@ def check_layout_roundtrip() -> None:
     print("\n[8] checkpoint 几何/接触参数 保存 → 回放复现")
     import os
     import shutil
-    from mjlab.tasks.SQuRo_Hole.mdp.hole import apply_saved_layout
+    from mjlab.tasks.SQuRo_Hole.mdp.entity import apply_saved_layout
     probe_dir = "tmp_hole_geom_probe"
     os.makedirs(probe_dir, exist_ok=True)
     cfg = load_env_cfg(TASK)
@@ -240,7 +240,7 @@ def check_layout_roundtrip() -> None:
 # 障碍物可见性: 只改 rgba 外观, 不改碰撞
 def check_visibility() -> None:
     print("\n[9] 限高板可见性开关 (仅外观)")
-    from mjlab.tasks.SQuRo_Hole.mdp.hole import set_obstacle_visibility
+    from mjlab.tasks.SQuRo_Hole.mdp.entity import set_obstacle_visibility
     for visible in (True, False):
         cfg = load_env_cfg(TASK)
         cfg.scene.num_envs = 1

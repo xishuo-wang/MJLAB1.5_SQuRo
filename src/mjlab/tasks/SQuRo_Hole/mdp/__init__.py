@@ -4,7 +4,7 @@ from .command import *
 from .config import *
 from .curriculums import *
 from .events import *  
-from .hole import *
+from .entity import *
 from .observations import *
 from .reference import * 
 from .rewards import *  

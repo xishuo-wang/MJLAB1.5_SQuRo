@@ -9,8 +9,7 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Hole.mdp.config import STEPS_PER_ITER, get_current_stage, stage_requires_collision
-from mjlab.tasks.SQuRo_Hole.mdp.hole import (
-    HOLE_LAYOUT,
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_hole_entities,
     hole_collision_enabled,
 )
