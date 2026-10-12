@@ -310,7 +310,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             front_pos_table[mode, height_idx, :, 2:4] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
 
             # ===== 2. 后肢计算 =====
-            if mode == 1:  
+            if mode == 1:
+                # 前低后高: 后腿摆线轨迹
                 freq = cycloid_front_low["freq"]
                 T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_front_low["swing_ratio"]
                 t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["HL"] * T) % T
@@ -323,26 +324,35 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                     t_mods_hr, T_sw, T - T_sw, cycloid_front_low["stride_H"], cycloid_front_low["height_H"],
                     cycloid_front_low["body_height_H"], cycloid_front_low["rotate_angle_H"], cycloid_front_low["x_offset_H"], 1
                 )
-            elif mode == 2:  
-                # 前高后低: 后腿收缩保持 (hip, knee) = (0.80, -0.12), 对应足端 (0.000773, -0.018016)
-                x_leg_hl, z_leg_hl = np.full(_TABLE_RESOLUTION, 0.00077325), np.full(_TABLE_RESOLUTION, -0.01801603)
-                x_leg_hr, z_leg_hr = np.full(_TABLE_RESOLUTION, 0.00077325), np.full(_TABLE_RESOLUTION, -0.01801603)
-            else:  
+                x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
+                z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
+                hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
+                hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+                hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+
+            elif mode == 2:
+                # 前高后低: 后腿固定收缩姿态, 直接给关节角 (hip, knee) = (0.80, -0.15)
+                # 不走 IK; 位置沿相位恒定, 速度表将自然为 0 (见下方显式清零)
+                hind_pos_table[mode, height_idx, :, 4] = 0.80     # HL_hip
+                hind_pos_table[mode, height_idx, :, 5] = -0.15    # HL_knee
+                hind_pos_table[mode, height_idx, :, 6] = 0.80     # HR_hip
+                hind_pos_table[mode, height_idx, :, 7] = -0.15    # HR_knee
+
+            else:
+                # 正常: 后腿 CSV 轨迹
                 x_leg_hl, z_leg_hl = CSV_Leg_Trajectory(
-                    phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"], CSV_PARAMS["rotate_angle_H"], 
+                    phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"], CSV_PARAMS["rotate_angle_H"],
                     height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], target_height, False
                 )
                 x_leg_hr, z_leg_hr = CSV_Leg_Trajectory(
-                    phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HR"], CSV_PARAMS["rotate_angle_H"], 
+                    phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HR"], CSV_PARAMS["rotate_angle_H"],
                     height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], target_height, False
                 )
-            
-            x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
-            z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
-            hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
-            
-            hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
-            hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+                x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
+                z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
+                hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
+                hind_pos_table[mode, height_idx, :, 4:6] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+                hind_pos_table[mode, height_idx, :, 6:8] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
             is_low_height = target_height < THRESHOLD_HEIGHT
 
@@ -378,6 +388,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     hind_vel_table = torch.zeros_like(hind_pos_table)
     hind_vel_table[:, :, :-1, :] = (hind_pos_table[:, :, 1:, :] - hind_pos_table[:, :, :-1, :]) / dt
     hind_vel_table[:, :, -1:, :] = (hind_pos_table[:, :, 0:1, :] - hind_pos_table[:, :, -1:, :]) / dt  
+    hind_vel_table[2, :, :, 4:8] = 0.0
 
     spine_vel_table = torch.zeros_like(spine_pos_table)
 
