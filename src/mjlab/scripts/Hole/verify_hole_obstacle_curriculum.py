@@ -4,14 +4,21 @@ import torch
 
 import mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.scripts.Hole.visualize_hole_schedule import sample_rule_schedule
+from mjlab.scripts.Hole.visualize_hole_schedule import (
+    sample_base_commands,
+    sample_rule_schedule,
+)
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_VEL_X_IDS,
     COURSE_START,
     COURSE_START_ITER,
     HEIGHT_COURSE_STAGE,
     STAGE2_END_ITER,
     STEPS_PER_ITER,
+    THRESHOLD_HEIGHT,
     get_current_stage,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -29,11 +36,14 @@ from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
-    SEGMENT_CENTER_DISTANCE,
     rule_bounds,
-    sample_body_heights,
+    sample_base_heights,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    _ACT_SPN_IDS,
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_body_contact_reward
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
@@ -65,46 +75,42 @@ def make_env() -> ManagerBasedRlEnv:
     return env
 
 
-# 验证单板规则与可视化共用同一边界和真实前后段中心。
+# 验证基座查表的边界、低板互斥和可视化一致性。
 def verify_shared_rule() -> None:
     check(
         "两段热身后在 2000 iter 进入第三阶段课程",
         get_current_stage(STAGE2_END_ITER * STEPS_PER_ITER - 1) == 2
         and get_current_stage(COURSE_START) == HEIGHT_COURSE_STAGE == 3,
     )
-    left, middle, right, front_end = rule_bounds(0.2, 0.015)
-    hind_start = middle - SEGMENT_CENTER_DISTANCE / 2
-    fx = torch.tensor([left, front_end, front_end + 1e-6, 0.2])
-    hx = torch.tensor([hind_start, hind_start - 1e-6, right + 1e-6, 0.2])
-    z = torch.tensor([0.070, 0.070, 0.069, 0.090])
-    front, hind = sample_body_heights(fx, hx, 0.2, 0.015, z)
-    expected_front = torch.tensor([0.040, 0.040, 0.055, 0.060])
-    expected_hind = torch.tensor([0.040, 0.040, 0.055, 0.060])
-    check("70 mm 分界、前端 exclusive、后端 inclusive 与双中心输入", torch.allclose(front, expected_front) and torch.allclose(hind, expected_hind))
-    check("实际中心距规则为 93.5 mm", SEGMENT_CENTER_DISTANCE == 0.0935)
-    midpoints = torch.tensor([0.199, 0.2, 0.201], dtype=torch.float64)
-    front_x = midpoints + SEGMENT_CENTER_DISTANCE / 2
-    hind_x = midpoints - SEGMENT_CENTER_DISTANCE / 2
-    example_front, example_hind = sample_body_heights(
-        front_x, hind_x, 0.2, 0.015, 0.068
-    )
-    check(
-        "93.5 mm 示意中心距在三个 midpoint 上命中前后低板边界",
-        torch.allclose(
-            example_front,
-            torch.tensor([0.020, 0.055, 0.055], dtype=torch.float64),
-        )
-        and torch.allclose(
-            example_hind,
-            torch.tensor([0.055, 0.020, 0.020], dtype=torch.float64),
-        ),
-    )
-    preview = sample_rule_schedule(torch.tensor([left, front_end, hind_start]).numpy(), ("Hole1", 0.2, 0.0, 0.07, 0.015, 0.005), 0.07)
-    check("位置表可视化与生产规则边界一致", torch.allclose(
-        torch.tensor(preview["height_f"]), torch.full((3,), 0.04, dtype=torch.float64), atol=1e-7, rtol=0
-    ) and torch.allclose(
-        torch.tensor(preview["height_h"]), torch.full((3,), 0.04, dtype=torch.float64), atol=1e-7, rtol=0
-    ))
+    for center, half_length in ((0.2, 0.015), (0.6, 0.100)):
+        left, middle, right = rule_bounds(center, half_length)
+        board = ("Hole", center, 0.0, 0.07, half_length, 0.005)
+        for dtype in (torch.float32, torch.float64):
+            positions = torch.tensor([
+                left - 1e-6, left, middle - 1e-6, middle,
+                middle + 1e-6, right, right + 1e-6,
+            ], dtype=dtype)
+            for height in (0.048, 0.064, 0.069999, 0.070, 0.090):
+                front, hind = sample_base_heights(positions, center, half_length, height)
+                if height < 0.070:
+                    expected_f = positions.new_tensor([0.055, 0.020, 0.020, 0.055, 0.055, 0.055, 0.055])
+                    expected_h = positions.new_tensor([0.055, 0.055, 0.055, 0.020, 0.020, 0.020, 0.055])
+                else:
+                    expected_f = positions.new_tensor([0.055, *([height - 0.030] * 5), 0.055])
+                    expected_h = expected_f
+                check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
+                      torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
+        query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
+        for height in (0.048, 0.064, 0.068, 0.070, 0.090):
+            front, hind = sample_base_heights(query, center, half_length, height)
+            check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
+                  not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
+            preview = sample_rule_schedule(query.numpy() - 0.1, board, height, start_x=0.1)
+            current = sample_base_commands(query.numpy() - 0.1, board, height, start_x=0.1)
+            check("非零起点下生产、曲线及游标读数一致且速度为正",
+                  torch.allclose(torch.as_tensor(preview["height_f"]), front)
+                  and torch.allclose(torch.as_tensor(current["height_h"]), hind)
+                  and bool((torch.as_tensor(current["velocity_x"]) > 0).all()))
 
 
 # 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
@@ -267,6 +273,41 @@ def read_geom_bottom_z(env: ManagerBasedRlEnv) -> torch.Tensor:
     return board.data.geom_pos_w[:, geom_id, 2] - half_thickness
 
 
+# 改变脊柱姿态后，命令仍只跟随 base_Link 的世界 X。
+def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
+    env.reset()
+    robot = env.scene["robot"]
+    board = env.scene.entities["hole1"]
+    command = env.command_manager.get_term("hole_cmd")
+    resolve_model_indices(robot)
+    pose = robot.data.root_link_pose_w.clone()
+    pose[:, 0] = pose.new_tensor([0.034, 0.199, 0.200, 0.316])
+    robot.write_root_link_pose_to_sim(pose)
+    joint_pos = robot.data.joint_pos.clone()
+    spine_ids = [_MODEL_INDICES.joint_ids[i] for i in _ACT_SPN_IDS]
+    joint_pos[:, spine_ids] = joint_pos.new_tensor([
+        [0.4, 0.0, 0.3, 0.0], [-0.4, 0.0, -0.3, 0.0],
+        [0.3, 0.0, -0.2, 0.0], [-0.3, 0.0, 0.2, 0.0],
+    ])
+    robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos))
+    write_hole_bottom_z(board, 0.064)
+    read_geom_bottom_z(env)
+    command._update_command_from_height_rule()
+    values = command.command
+    check("脊柱侧摆和俯仰变化时，低板仍按基座 X 在中点互斥切换",
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.020, 0.055]))
+          and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
+    write_hole_bottom_z(board, 0.090)
+    read_geom_bottom_z(env)
+    command._update_command_from_height_rule()
+    expected = values.new_tensor([0.055, 0.060, 0.060, 0.055])
+    check("高板前后端同步进入和离开基座区间",
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], expected))
+    env.reset()
+
+
 # 验收真实碰撞几何、逐环境复位和动态奖励阈值。
 def verify_real_env() -> None:
     env = make_env()
@@ -299,6 +340,7 @@ def verify_real_env() -> None:
     check("部分 reset 后碰撞几何与采样高度一致", torch.allclose(actual, after_reset, atol=1e-6)
           and torch.equal(actual[[1, 3]], keep))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
+    verify_base_height_commands(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
     env.close()

@@ -34,7 +34,7 @@ from .config import (
 )
 from .entity import read_bottom_z, write_hole_bottom_z
 from .height_curriculum import HeightCurriculumState
-from .height_schedule import HEIGHT_MIN_SAMPLE_PROBABILITY, sample_body_heights
+from .height_schedule import HEIGHT_MIN_SAMPLE_PROBABILITY, sample_base_heights
 from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
@@ -279,18 +279,15 @@ class HoleCommand(CommandTerm):
         self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
 
 
-    # 使用实际世界坐标的前后躯干中心查单板高度表。
+    # 使用 base_Link 的世界 X 统一查单板高度表。
     def _update_command_from_height_rule(self) -> None:
         if self.obstacle_entity is None:
             raise RuntimeError("高度课程需要 Hole1 单板实体")
         board_cfg = self.obstacle_entity.cfg
-        resolve_model_indices(self.robot)
-        body_x = self.robot.data.body_link_pos_w[
-            :, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0
-        ]
+        base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_bottom_z(self.obstacle_entity)
-        front, hind = sample_body_heights(
-            body_x[:, 0], body_x[:, 1],
+        front, hind = sample_base_heights(
+            base_x,
             float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,  # type: ignore
         )
         velocity = compute_command_velocity(front, hind)

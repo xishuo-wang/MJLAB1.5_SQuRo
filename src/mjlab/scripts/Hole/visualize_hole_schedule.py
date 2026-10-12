@@ -41,8 +41,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     EXIT_MARGIN,
     LOW_TARGET_HEIGHT,
     OBSTACLE_HEIGHT_SPLIT,
-    SEGMENT_CENTER_DISTANCE,
-    sample_body_heights,
+    sample_base_heights,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_MAX as PREVIEW_HEIGHT_MAX,
@@ -64,7 +63,6 @@ DEFAULT_OUTPUT_DIR = (
     Path(__file__).resolve().parents[4]
     / "logs/rsl_rl/SQuRo_Hole/schedule_visualization"
 )
-LOW_BOUND_OFFSET = SEGMENT_CENTER_DISTANCE / 2
 PREVIEW_X_PADDING = 0.025
 
 
@@ -76,7 +74,7 @@ class ScheduleCase:
     x_max: float
 
 
-# 选取现有短板和长板，并为两段中心游标保留完整的展示范围。
+# 选取现有短板和长板，并保留完整的 base_Link 查表范围。
 def build_cases(start_x: float) -> list[ScheduleCase]:
     boards = sorted(HOLE_LAYOUT, key=lambda board: board[1])
     short = min(boards, key=lambda board: board[4])
@@ -97,7 +95,7 @@ def build_cases(start_x: float) -> list[ScheduleCase]:
             else board[1] + board[4] - start_x + 0.2
         )
         rule_left, _, rule_right = rule_bounds(board)
-        padding = SEGMENT_CENTER_DISTANCE + PREVIEW_X_PADDING
+        padding = PREVIEW_X_PADDING
         left = min(left, rule_left - start_x - padding)
         right = max(right, rule_right - start_x + padding)
         cases.append(ScheduleCase(label, board, left, right))
@@ -144,23 +142,21 @@ def sample_schedule(positions: np.ndarray) -> dict[str, np.ndarray]:
 # 按板的世界坐标计算生效区间与板中心。
 def rule_bounds(board: tuple) -> tuple[float, float, float]:
     _, center_x, _, _, half_length, _ = board
-    left, middle, right, _ = _shared_rule_bounds(center_x, half_length)
-    return left, middle, right
+    return _shared_rule_bounds(center_x, half_length)
 
 
-# 返回前段结束与后段开始边界，供各自中心的位置查表。
+# 返回前后端共用的中点切换边界。
 def low_rule_bounds(board: tuple) -> tuple[float, float, float, float]:
     left, middle, right = rule_bounds(board)
-    return left, middle + LOW_BOUND_OFFSET, middle - LOW_BOUND_OFFSET, right
+    return left, middle, middle, right
 
 
-# 收集空间曲线的全部切换节点。
+# 收集 base_Link 高度表的全部切换节点。
 def rule_knots(board: tuple, start_x: float = 0.0) -> np.ndarray:
-    front_start, front_end, hind_start, hind_end = low_rule_bounds(board)
-    return np.array([front_start, hind_start, front_end, hind_end]) - start_x
+    return np.array(rule_bounds(board)) - start_x
 
 
-# 绘制各段中心 X 对应的空间高度曲线，不把同一 X 的两值当作同一时刻命令。
+# 按 base_Link 的世界 X 查询同一时刻的前后目标高度。
 def sample_rule_schedule(
     positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
 ) -> dict[str, np.ndarray]:
@@ -175,9 +171,7 @@ def sample_rule_schedule(
     for boundary in boundaries:
         query_world[np.abs(query_world - boundary) <= tolerance] = boundary
     query = torch.as_tensor(query_world, dtype=torch.float64)
-    front, hind = sample_body_heights(
-        query, query, board[1], board[4], bottom_z
-    )
+    front, hind = sample_base_heights(query, board[1], board[4], bottom_z)
     return {
         "position": position,
         "height_f": front.cpu().numpy(),
@@ -185,22 +179,20 @@ def sample_rule_schedule(
     }
 
 
-# 按 93.5 mm 复位姿态中心距示意两段中心，并分别查表计算命令。
-def sample_body_commands(
-    midpoints: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
+# 按同一个 base_Link 位置计算高度、速度和参考档位。
+def sample_base_commands(
+    positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
 ) -> dict[str, np.ndarray]:
-    midpoint = np.asarray(midpoints, dtype=float)
-    front_position = midpoint + SEGMENT_CENTER_DISTANCE / 2
-    hind_position = midpoint - SEGMENT_CENTER_DISTANCE / 2
-    front = sample_rule_schedule(front_position, board, bottom_z, start_x)["height_f"]
-    hind = sample_rule_schedule(hind_position, board, bottom_z, start_x)["height_h"]
+    position = np.asarray(positions, dtype=float)
+    values = sample_rule_schedule(position, board, bottom_z, start_x)
+    front = values["height_f"]
+    hind = values["height_h"]
     front_tensor = torch.as_tensor(front, dtype=torch.float32)
     hind_tensor = torch.as_tensor(hind, dtype=torch.float32)
     heights = torch.tensor(HEIGHT_LIST)
     return {
-        "position": midpoint,
-        "front_position": front_position,
-        "hind_position": hind_position,
+        "position": position,
+        "base_position_world": position + start_x,
         "height_f": front,
         "height_h": hind,
         "velocity_x": compute_command_velocity(front_tensor, hind_tensor).numpy(),
@@ -270,15 +262,13 @@ def draw_panel(
                            virtual_lines=virtual_lines, markers=markers)
 
 
-# 同步板高、机体中点位置、两段中心游标与同一时刻的命令读数。
+# 同步板高、base_Link 游标与同一时刻的前后命令读数。
 def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
                       column: int, initial_height: float):
     from matplotlib.widgets import Slider
 
-    front_cursor = ax.axvline(case.board[1] - start_x + SEGMENT_CENTER_DISTANCE / 2,
-                             color="#2563eb", linestyle=":", linewidth=1.5)
-    hind_cursor = ax.axvline(case.board[1] - start_x - SEGMENT_CENTER_DISTANCE / 2,
-                            color="#ea580c", linestyle=":", linewidth=1.5)
+    base_cursor = ax.axvline(case.board[1] - start_x,
+                            color="#475569", linestyle=":", linewidth=1.5)
     front_point, = ax.plot([], [], "o", color="#2563eb", markersize=6)
     hind_point, = ax.plot([], [], "o", color="#ea580c", markersize=6)
     info = fig.text(0.075 + column * 0.48, 0.265, "", va="top", fontsize=9, color="#334155")
@@ -286,13 +276,10 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
                            "板底（mm）", PREVIEW_HEIGHT_MIN * 1000, PREVIEW_HEIGHT_MAX * 1000,
                            valinit=initial_height * 1000, valfmt="%.1f", valstep=0.1, color="#94a3b8")
     position_slider = Slider(fig.add_axes([0.15 + column * 0.47, 0.065, 0.30, 0.025]),
-                             "中点 X（m）", case.x_min + SEGMENT_CENTER_DISTANCE / 2,
-                             case.x_max - SEGMENT_CENTER_DISTANCE / 2,
+                             "基座 X（m）", case.x_min, case.x_max,
                              valinit=case.board[1] - start_x, valfmt="%.3f", color="#64748b")
     left, _, right = rule_bounds(case.board)
     _, front_end, hind_start, _ = low_rule_bounds(case.board)
-    overlap = ax.axvspan(hind_start - start_x, front_end - start_x,
-                        color="#fbbf24", alpha=0.15, zorder=0, label="空间曲线重叠区")
     knots = rule_knots(case.board, start_x)
     grid = make_grid(case.x_min, case.x_max, knots)
 
@@ -308,42 +295,39 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
         board_right = case.board[1] + case.board[4] - start_x
         threshold = (bottom - VIRTUAL_CLEARANCE_MARGIN) * 1000
         artists.virtual_lines[0].set_segments([[(board_left, threshold), (board_right, threshold)]])
-        overlap.set_visible(bottom < OBSTACLE_HEIGHT_SPLIT)
         for marker in artists.markers:
             marker_x = float(marker.get_xdata()[0])
             is_outer = any(abs(marker_x - bound) < 1e-9 for bound in (left - start_x, right - start_x))
             marker.set_visible(is_outer or bottom < OBSTACLE_HEIGHT_SPLIT)
-        current = sample_body_commands(np.array([position]), case.board, bottom, start_x)
+        current = sample_base_commands(np.array([position]), case.board, bottom, start_x)
         front, hind = float(current["height_f"][0]), float(current["height_h"][0])
-        front_x, hind_x = float(current["front_position"][0]), float(current["hind_position"][0])
         mode = MODE_LABELS[get_height_mode(front, hind)]
-        rule = "高板：各自中心进入区间后取 h−30 mm" if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：分别按各自中心 X 查表"
+        rule = "高板：基座进入区间后前后同取 h−30 mm" if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：按基座 X 在板中点切换前低／后低"
         interval = (
-            f"各段区间：[{left - start_x:.3f}, {right - start_x:.3f}] m"
+            f"基座区间：[{left - start_x:.3f}, {right - start_x:.3f}] m"
             if bottom >= OBSTACLE_HEIGHT_SPLIT
             else f"前低：[{left - start_x:.3f}, {front_end - start_x:.3f})；后低：[{hind_start - start_x:.3f}, {right - start_x:.3f}] m"
         )
         info.set_text(
             f"{rule}\n"
             f"{interval}\n"
-            f"当前前／后中心 X：{front_x:.3f}／{hind_x:.3f} m\n"
+            f"当前基座世界 X：{current['base_position_world'][0]:.3f} m\n"
             f"同时刻目标前／后：{front * 1000:.1f}／{hind * 1000:.1f} mm　{mode}\n"
             f"参考档前／后：{current['reference_height_f'][0] * 1000:.1f}／"
             f"{current['reference_height_h'][0] * 1000:.1f} mm；速度：{current['velocity_x'][0]:.4f} m/s"
         )
         ax.set_title(f"{case.label}新规则：板底={bottom * 1000:.1f} mm，长度={2 * case.board[4] * 1000:.0f} mm")
-        front_cursor.set_xdata([front_x, front_x])
-        hind_cursor.set_xdata([hind_x, hind_x])
-        front_point.set_data([front_x], [front * 1000])
-        hind_point.set_data([hind_x], [hind * 1000])
+        base_cursor.set_xdata([position, position])
+        front_point.set_data([position], [front * 1000])
+        hind_point.set_data([position], [hind * 1000])
         fig.canvas.draw_idle()
 
     height_slider.on_changed(update)
     position_slider.on_changed(update)
     update(float(position_slider.val))
     return SimpleNamespace(height_slider=height_slider, position_slider=position_slider,
-                           info=info, front_cursor=front_cursor, hind_cursor=hind_cursor,
-                           front_point=front_point, hind_point=hind_point, overlap=overlap)
+                           info=info, base_cursor=base_cursor,
+                           front_point=front_point, hind_point=hind_point)
 
 
 # 导出当前源码中的位置表、布局和两种情况，便于复核图片来源。
@@ -359,12 +343,10 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
             "obstacle_height_split": OBSTACLE_HEIGHT_SPLIT,
             "entry_margin": ENTRY_MARGIN,
             "exit_margin": EXIT_MARGIN,
-            "segment_center_distance": SEGMENT_CENTER_DISTANCE,
-            "low_bound_offset": LOW_BOUND_OFFSET,
             "body_height_offset": BODY_HEIGHT_OFFSET,
             "low_target_height": LOW_TARGET_HEIGHT,
             "default_height": BASE_HEIGHT,
-            "position_source": "each_segment_center",
+            "position_source": "base_Link_world_x",
             "front_low_end_inclusive": False,
             "hind_low_start_inclusive": True,
             "right_endpoint_inclusive": True,
@@ -407,7 +389,7 @@ def main() -> None:
     overview = fig.add_subplot(grid[0, :])
     x_min = min(0.0, min(board[1] - board[4] for board in HOLE_LAYOUT) - args.start_x)
     x_max = max(STAGE3_POSITION_SCHEDULE[-1][0], max(board[1] + board[4] for board in HOLE_LAYOUT) - args.start_x) + 0.1
-    draw_panel(overview, x_min, x_max, list(HOLE_LAYOUT), args.start_x, "原始训练位置表（参照，保持不变）")
+    draw_panel(overview, x_min, x_max, list(HOLE_LAYOUT), args.start_x, "历史三板位置表（参照）")
     controls = []
     for column, (case, height) in enumerate(zip(cases, initial_heights, strict=True)):
         ax = fig.add_subplot(grid[1, column])
@@ -415,13 +397,13 @@ def main() -> None:
         values = sample_rule_schedule(make_grid(case.x_min, case.x_max, knots), case.board, height, args.start_x)
         artists = draw_panel(ax, case.x_min, case.x_max, [case.board], args.start_x,
                              case.label, values, knots,
-                             xlabel="各段中心相对起点的 X 坐标（m）")
+                             xlabel="base_Link 相对起点的 X 坐标（m）")
         controls.append(add_rule_controls(fig, ax, case, artists, args.start_x, column, height))
     fig.suptitle("障碍物板高与高度—位置表联动预览", fontsize=17, y=0.985)
     handles, labels = overview.get_legend_handles_labels()
-    fig.legend([*handles, controls[0].overlap], [*labels, "空间曲线重叠区"],
-               loc="upper center", bbox_to_anchor=(0.52, 0.95), ncol=6, frameon=False, fontsize=9)
-    fig.text(0.075, 0.015, f"下图按各自中心 X 查表；中点滑块使前后中心各偏 {LOW_BOUND_OFFSET * 1000:.2f} mm。示意中心距下，两端依次切换低姿态。", fontsize=9, color="#475569")
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.52, 0.95),
+               ncol=5, frameon=False, fontsize=9)
+    fig.text(0.075, 0.015, "前后目标共用 base_Link 的世界 X；低板在板中心立即切换为前高后低，两个低姿态区间互斥。", fontsize=9, color="#475569")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for suffix in ("png", "svg"):
         path = args.output_dir / f"短板长板位置表.{suffix}"
