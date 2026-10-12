@@ -4,7 +4,9 @@ from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
+from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from typing import TYPE_CHECKING, Optional, Tuple, List
+from .indices import _MODEL_INDICES, resolve_model_indices
 from .config import (
     BASE_SPEED,
     BASE_HEIGHT,
@@ -311,8 +313,48 @@ class HoleCommand(CommandTerm):
         if use_schedule and schedule:
             env_ids = torch.arange(self.num_envs, device=self.device)
             self._update_command_from_schedule(env_ids, schedule)
-        else:
-            pass
+        self._log_diagnostics()
+
+
+    # 按更新后的命令记录模式覆盖与物理方向；口径见 docs/SQuRo_Hole_课程复位.md。
+    def _log_diagnostics(self) -> None:
+        resolve_model_indices(self.robot)
+        front_low = self.height_F_command < THRESHOLD_HEIGHT
+        hind_low = self.height_H_command < THRESHOLD_HEIGHT
+        groups = (
+            ("双高", ~front_low & ~hind_low),
+            ("前低后高", front_low & ~hind_low),
+            ("前高后低", ~front_low & hind_low),
+            ("双低", front_low & hind_low),
+        )
+        positions = self.robot.data.root_link_pos_w
+        relative_x = positions[:, 0] - self.start_positions[:, 0]
+        velocity = self.robot.data.root_link_lin_vel_w
+        body_ids = [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id]
+        quaternions = self.robot.data.body_link_quat_w[:, body_ids]
+        _, _, yaw = euler_xyz_from_quat(quaternions.reshape(-1, 4))
+        yaw = yaw.reshape(self.num_envs, len(body_ids))
+        offsets = yaw.new_tensor([-torch.pi / 2, torch.pi / 2])
+        heading_error = torch.rad2deg(wrap_to_pi(yaw + offsets)).abs()
+        values = torch.stack(
+            (relative_x, velocity[:, 0], velocity[:, 1], velocity[:, 1].abs(),
+             heading_error[:, 0], heading_error[:, 1]), dim=1,
+        )
+        masks = torch.stack([mask for _, mask in groups]).to(values.dtype)
+        counts = masks.sum(dim=1)
+        means = (masks @ values) / counts.clamp_min(1).unsqueeze(1)
+        fields = ("相对X均值", "前向速度均值", "侧向速度均值", "侧向速度绝对值均值",
+                  "前躯干方向误差均值_度", "后躯干方向误差均值_度")
+        log = self._env.extras["log"]
+        log["Metrics/位移/起点X均值"] = self.start_positions[:, 0].mean().detach()
+        log["Metrics/位移/相对X均值"] = relative_x.mean().detach()
+        log["Metrics/位移/相对X最大值"] = relative_x.max().detach()
+        for i, (name, _) in enumerate(groups):
+            prefix = f"Metrics/{name}"
+            log[f"{prefix}/样本数"] = counts[i].detach()
+            log[f"{prefix}/占比"] = (counts[i] / self.num_envs).detach()
+            for j, field_name in enumerate(fields):
+                log[f"{prefix}/{field_name}"] = means[i, j].detach()
 
 
     # 回合重置: 重新锚定位移起点
