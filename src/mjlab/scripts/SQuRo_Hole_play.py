@@ -27,12 +27,17 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_ANGLE_IDS,
     get_current_stage,
     stage_requires_collision,
+    stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
+    set_obstacle_bottom_z,
     set_obstacle_visibility,
     configure_hole_entities,
+    configure_single_hole_entities,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
+from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_INITIAL_MIN
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
@@ -63,12 +68,13 @@ class PlayConfig:
     video_height: int | None = 1080
     video_width: int | None = 1920
     record_data: bool = True
-    command_source: Literal["schedule", "fixed", "random"] = "fixed"
+    command_source: Literal["schedule", "fixed", "random"] = "schedule"
     fixed_velocity: float | None = None     # 期望速度
     fixed_height_F: float | None = 0.055    # 期望前肢高度
     fixed_height_H: float | None = 0.020    # 期望后肢高度
     collision: bool | None = None           # 障碍物碰撞
     obstacles_viz: bool = True              # 可视化障碍物
+    obstacle_height: float | None = None    # 障碍物板底高度 (m); None = 用检查点记录的课程档
 
 
 
@@ -231,7 +237,7 @@ class JointDataRecorder:
         )
         for i, name in command_columns:
             record[name] = float(command[i].item())
-        record['mode'] = mode_of(float(command[CMD_HEIGHT_F_IDS]), float(command[CMD_HEIGHT_H_IDS]))
+        record['mode'] = mode_of(float(command[CMD_HEIGHT_F_IDS]), float(command[CMD_HEIGHT_H_IDS])) # type: ignore
         record['height_F_error'] = f_height - float(command[CMD_HEIGHT_F_IDS].item())
         record['height_H_error'] = h_height - float(command[CMD_HEIGHT_H_IDS].item())
         # 步态基频 (Hole 任务参考表固定 2.0 Hz, 与 config.BASE_FREQ 一致)
@@ -357,14 +363,16 @@ def run_play(cfg: PlayConfig):
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
         if cfg.command_source == "schedule":
-            # 强制开启位置表 + stage>=3 兜底
-            cmd_cfg.use_position_schedule = True     # type: ignore[attr-defined]
+            # 与训练同源: 关闭 legacy 位移表, 交给高度课程 (stage3) 与随机高度池 (stage1/2)
+            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
             cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.stage_schedule_fallback = True   # type: ignore[attr-defined]
+            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            cmd_cfg.enable_height_course = True      # type: ignore[attr-defined]
+            cmd_cfg.enable_course_progress = False   # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
-            print("[INFO] 命令来源 = schedule (8 段位移位置表, 忽略所有 fixed_* 字段)")
+            print("[INFO] 命令来源 = schedule (跟随训练: stage1/2 随机高度池, stage3 高度规则)")
 
         elif cfg.command_source == "fixed":
             # 关闭位置表与时间表
@@ -373,6 +381,7 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
             cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
             fixed_hF = 0.055 if cfg.fixed_height_F is None else cfg.fixed_height_F
             fixed_hH = 0.055 if cfg.fixed_height_H is None else cfg.fixed_height_H
             cmd_cfg.fixed_height_F = fixed_hF        # type: ignore[attr-defined]
@@ -388,6 +397,7 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
             cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
@@ -412,11 +422,46 @@ def run_play(cfg: PlayConfig):
         collision, coll_src = bool(saved_hole["collision"]), "检查点 hole_state"
     else:
         collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
-    configure_hole_entities(env_cfg, enable_collision=collision)
+    # 与训练同源: 课程阶段用单块可动板 + 高度课程, 其余阶段保留三板
+    course_state = dict(saved_hole.get("height_course") or HeightCurriculumState().state_dict())
+    if cfg.obstacle_height is not None:
+        course_state["z_min"] = float(cfg.obstacle_height)
+        course_state["z_max"] = float(cfg.obstacle_height)
+    use_course = (
+        cfg.command_source == "schedule"
+        and cmd_cfg is not None
+        and stage_uses_height_course(final_stage)
+    )
+    if use_course:
+        configure_single_hole_entities(env_cfg, enable_collision=collision)
+        cmd_cfg.enable_height_course = True          # type: ignore[attr-defined]
+        cmd_cfg.height_curriculum_state = course_state  # type: ignore[attr-defined]
+    else:
+        configure_hole_entities(env_cfg, enable_collision=collision)
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
-    applied = apply_saved_layout(env_cfg, saved_hole.get("layout") or [])
+    # 课程阶段只保留 hole1, 否则检查点里的三板布局会把 hole2/hole3 重新加回来
+    saved_layout = saved_hole.get("layout") or []
+    if use_course:
+        saved_layout = [d for d in saved_layout
+                        if str(d.get("name", "")).lower() == "hole1"]
+    applied = apply_saved_layout(env_cfg, saved_layout)
+    # 板高优先级: 命令行显式 > 课程当前档 (仅课程阶段); 其余沿用检查点布局/配置默认
+    board_z: float | None = None
+    board_src = ""
+    if cfg.obstacle_height is not None:
+        board_z, board_src = float(cfg.obstacle_height), "命令行显式指定"
+    elif use_course:
+        board_z = float(course_state.get("z_min", HEIGHT_INITIAL_MIN))
+        board_src = "检查点 height_course.z_min"
+    n_board = set_obstacle_bottom_z(env_cfg, board_z) if board_z is not None else 0
     # 障碍物可见性: 仅改 rgba, 不改碰撞; 放在几何应用之后以免被覆盖
     n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.obstacles_viz)
+    if board_z is not None and n_board:
+        print(f"[INFO] 障碍物板底 = {board_z:.4f} m (来源: {board_src}; 共 {n_board} 块)")
+    elif board_z is not None:
+        print(f"[WARN] 场景里没有障碍物实体, 障碍物高度 {board_z:.4f} 未生效 (来源: {board_src})")
+    else:
+        print("[INFO] 障碍物板底 = 检查点布局/配置默认值 (检查点未记录课程档)")
     print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
     print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
           + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
@@ -488,8 +533,9 @@ def run_play(cfg: PlayConfig):
         policy = runner.get_inference_policy(device=device)
         env = runner.env
 
-    # 阶段对齐
+    # 阶段对齐: 必须先把步数写回再 reset, 否则命令与板高仍按 stage1 采样
     env.unwrapped.common_step_counter = final_step
+    env.reset()
     print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)} (按检查点记录)")
 
     try:
