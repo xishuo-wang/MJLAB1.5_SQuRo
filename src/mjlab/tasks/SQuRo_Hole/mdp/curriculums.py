@@ -1,32 +1,29 @@
 from __future__ import annotations
-
-from typing import Any
-
 import torch
-
+from typing import Any
 from .config import (
-    BASE_HEIGHT,
-    HEIGHT_COURSE_STAGE,
-    BODY_HEIGHT_OFFSET,
-    ENTRY_MARGIN,
-    EXIT_MARGIN,
-    OBSTACLE_HEIGHT_SPLIT,
-    LOW_TARGET_HEIGHT,
-    HEIGHT_INITIAL_MIN,
     HEIGHT_MAX,
     HEIGHT_MIN,
-    HEIGHT_MIN_DWELL_ITERATIONS,
-    HEIGHT_MIN_SAMPLE_PROBABILITY,
-    HEIGHT_MIN_SUCCESS_BATCH,
-    HEIGHT_MIN_SUCCESS_RATE,
-    HEIGHT_REQUIRED_BATCHES,
     HEIGHT_STEP,
-    COURSE_START_ITER,
+    BASE_HEIGHT,
+    EXIT_MARGIN,
+    ENTRY_MARGIN,
+    STEPS_PER_ITER,
     STAGE1_END_ITER,
     STAGE2_END_ITER,
-    STEPS_PER_ITER,
+    COURSE_START_ITER,
     get_current_stage,
+    LOW_TARGET_HEIGHT,
+    HEIGHT_INITIAL_MIN,
+    BODY_HEIGHT_OFFSET,
+    HEIGHT_COURSE_STAGE,
+    OBSTACLE_HEIGHT_SPLIT,
+    HEIGHT_MIN_SUCCESS_RATE,
+    HEIGHT_REQUIRED_BATCHES,
     stage_requires_collision,
+    HEIGHT_MIN_SUCCESS_BATCH,
+    HEIGHT_MIN_DWELL_ITERATIONS,
+    HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 
 # 奖励曲线直接共用配置中的阶段边界。
@@ -150,7 +147,6 @@ def sample_base_heights(
 # 逐环境回合结果聚合为最低板高课程状态。
 class HeightCurriculumState:
     VERSION = 1
-
     def __init__(self, start_iteration: int = COURSE_START_ITER):
         self.z_min = HEIGHT_INITIAL_MIN
         self.z_max = HEIGHT_MAX
@@ -164,6 +160,7 @@ class HeightCurriculumState:
         self.all_height_success_count = 0
         self.failure_counts = {"未过板": 0, "侧绕": 0, "高度超限": 0, "跌倒": 0, "超时": 0}
         self.history: list[dict] = []
+
 
     # 记录一条真实碰撞回合并判断是否应降档。
     def record_episode(
@@ -232,6 +229,7 @@ class HeightCurriculumState:
             self._set_advance_result(result)
         return result
 
+
     # 为所有降档路径填充统一日志数据。
     def _set_advance_result(self, result: dict) -> None:
         previous_z_min = self.history[-1]["z_min"]
@@ -243,6 +241,7 @@ class HeightCurriculumState:
             "success_rate": previous_batch["success_rate"],
             "sample_count": previous_batch["count"],
         })
+
 
     # 在成功批数与驻留时间都达标时降低未来采样下界。
     def _advance_if_ready(self, iteration: int) -> bool:
@@ -261,6 +260,7 @@ class HeightCurriculumState:
         self.level_episode_count = 0
         self.level_success_count = 0
         return True
+
 
     # 生成可保存到 checkpoint 的课程状态。
     def state_dict(self) -> dict:
@@ -281,6 +281,7 @@ class HeightCurriculumState:
             "history": list(self.history),
         }
 
+
     # 从 checkpoint 状态恢复课程统计。
     def load_state_dict(self, state: dict) -> None:
         if int(state.get("version", 0)) != self.VERSION:
@@ -295,6 +296,7 @@ class HeightCurriculumState:
                 setattr(self, name, state[name])
         self.history = list(state.get("history", []))
         self.failure_counts = dict(state.get("failure_counts", self.failure_counts))
+
 
     # 汇总当前档和全高度的通过率。
     def metrics(self) -> dict[str, Any]:
