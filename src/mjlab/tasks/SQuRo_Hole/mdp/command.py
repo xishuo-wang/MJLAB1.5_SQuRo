@@ -3,16 +3,16 @@ import torch
 from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
-from mjlab.managers.command_manager import CommandTerm
 from typing import TYPE_CHECKING, Optional, Tuple
+from mjlab.managers.command_manager import CommandTerm
 from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from .config import (
-    ANGLE_VALUES,
-    BASE_CURVATURE,
     BASE_FREQ,
     BASE_HEIGHT,
     BASE_SPEED,
     COMMAND_DIM,
+    ANGLE_VALUES,
+    BASE_CURVATURE,
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
     CMD_HEIGHT_F_IDS,
@@ -90,12 +90,8 @@ class HoleCommand(CommandTerm):
         if cfg.height_curriculum_state:
             self.height_curriculum_state.load_state_dict(cfg.height_curriculum_state)
         self.obstacle_entity = env.scene.entities.get("hole1")
-        self.obstacle_bottom_z = torch.full(
-            (self.num_envs,), self.height_curriculum_state.z_min, device=self.device
-        )
-        self.obstacle_height_sampled = torch.zeros(
-            self.num_envs, dtype=torch.bool, device=self.device
-        )
+        self.obstacle_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
+        self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
         self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -237,10 +233,7 @@ class HoleCommand(CommandTerm):
         board_cfg = self.obstacle_entity.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_bottom_z(self.obstacle_entity)
-        front, hind = sample_base_heights(
-            base_x,
-            float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,  # type: ignore
-        )
+        front, hind = sample_base_heights(base_x, float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,) # type: ignore
         velocity = compute_command_velocity(front, hind)
         angle = torch.zeros_like(front)
         if self.cfg.fixed_velocity is not None:
