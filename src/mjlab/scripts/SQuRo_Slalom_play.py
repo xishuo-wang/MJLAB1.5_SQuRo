@@ -2,6 +2,7 @@ import re
 import tyro
 import torch
 import pandas as pd
+import yaml
 from pathlib import Path
 from typing import Literal
 from mjlab.envs import ManagerBasedRlEnv
@@ -56,6 +57,16 @@ class PlayConfig:
     fixed_curvature: float | None = -25
     fixed_pole_spacing: float | None = 0.15
     enable_collision: bool = False
+    phase0_only: bool | None = None
+
+
+# 安全读取保存的配置字段，不构造 YAML 中的 Python 对象。
+def read_saved_config(checkpoint: Path, name: str) -> dict:
+    path = checkpoint.parent / "params" / f"{name}.yaml"
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as stream:
+        return yaml.load(stream, Loader=yaml.BaseLoader) or {}
 
 
 # 从 checkpoint 文件名提取训练轮次
@@ -325,13 +336,28 @@ def run_play(cfg: PlayConfig):
     # 自动识别训练阶段，注意：train_iter 仅用于提取，实际阶段判断用 align_iter（与 env 内部一致）
     train_iter = 0
     align_iter = 0
+    cmd_cfg = env_cfg.commands["slalom_cmd"]
+    saved_env = read_saved_config(resume_path, "env") if resume_path is not None else {}
+    saved_agent = read_saved_config(resume_path, "agent") if resume_path is not None else {}
+    saved_command = saved_env.get("commands", {}).get("slalom_cmd", {})
+    cmd_cfg.phase0_only = (  # type: ignore[attr-defined]
+        cfg.phase0_only if cfg.phase0_only is not None
+        else str(saved_command.get("phase0_only", "false")).lower() == "true"
+    )
+    if saved_agent:
+        saved_clip = saved_agent.get("clip_actions", "null")
+        agent_cfg.clip_actions = None if saved_clip.lower() in ("null", "none", "") else float(saved_clip)
+    if saved_env:
+        env_cfg.decimation = int(saved_env.get("decimation", env_cfg.decimation))
+        saved_mujoco = saved_env.get("sim", {}).get("mujoco", {})
+        env_cfg.sim.mujoco.timestep = float(saved_mujoco.get("timestep", env_cfg.sim.mujoco.timestep))
     if TRAINED_MODE and resume_path is not None:
         train_iter = extract_iter_from_checkpoint(resume_path)
         align_iter = max(0, train_iter - 10)  # -10 避免边界效应，与 env 内部对齐
 
     # 用 align_iter 判断阶段，保证与 env.common_step_counter 一致
     align_step = align_iter * _STEPS_PER_ITER
-    is_slalom_phase = get_training_phase(align_step) == 1
+    is_slalom_phase = get_training_phase(align_step, cmd_cfg.phase0_only) == 1  # type: ignore[attr-defined]
 
     # 命令固定值覆盖 — 按阶段互斥: Phase 0 用 curvature, Phase 1 用 pole_spacing
     cmd_cfg = env_cfg.commands.get("slalom_cmd")
@@ -382,10 +408,12 @@ def run_play(cfg: PlayConfig):
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
+    # 检查点轮次统一换算为当前课程口径。
+    curriculum_step = align_iter * _STEPS_PER_ITER
 
     # 对齐 curriculum 阶段（使用与阶段判断一致的 align_iter）
     if TRAINED_MODE and resume_path is not None and train_iter > 0:
-        env.common_step_counter = align_step
+        env.common_step_counter = curriculum_step
         phase_name = "绕杆阶段" if is_slalom_phase else "基元阶段"
         print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{phase_name}]")
 
@@ -449,6 +477,7 @@ def run_play(cfg: PlayConfig):
             strict=True,
             map_location=device
         )
+        env.unwrapped.common_step_counter = curriculum_step
         policy = runner.get_inference_policy(device=device)
 
     # 运行查看器

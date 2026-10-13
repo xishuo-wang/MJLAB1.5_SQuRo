@@ -4,7 +4,7 @@ from typing import Any
 import torch
 
 
-_STEPS_PER_ITER = 24                # 强化学习算法相关
+_STEPS_PER_ITER = 48                # 与 Hole 的每轮策略步数一致
 
 PHASE1_MID_ITER = 2000              # iter 0-2000: 转弯曲率增大
 PHASE1_END_ITER = 4000              # iter 2000-4000: 转弯基元
@@ -58,18 +58,21 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_track_vel":          (50,),
     "sigma_track_vyz":          (50,),
     "sigma_track_omg":          (20,),
-    "sigma_corridor":           (10, 20, 20, 50),
+    "sigma_corridor":           (400.0, 2500.0, 2500.0, 2500.0),
+    "corridor_inner_multiplier": (2.0,),
     "sigma_track_head":         (20,),
 }
 
 
 # 获取训练阶段
-def get_training_phase(step_counter: int) -> int:
-    return 0 if step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
+def get_training_phase(step_counter: int, phase0_only: bool = False) -> int:
+    return 0 if phase0_only or step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
 # 批量获取训练阶段 (逐环境, 用于按回合起点锁定的阶段判定)
-def get_training_phase_batch(step_counter: torch.Tensor) -> torch.Tensor:
+def get_training_phase_batch(step_counter: torch.Tensor, phase0_only: bool = False) -> torch.Tensor:
+    if phase0_only:
+        return torch.zeros_like(step_counter, dtype=torch.bool)
     return (step_counter // _STEPS_PER_ITER) >= PHASE1_END_ITER
 
 
@@ -100,8 +103,10 @@ def get_curriculum_pole_spacing(step_counter: int) -> float:
 
 # 奖励权重课程
 class RewardWeightCurriculum:
-    def get_reward_weights(self, current_step: int) -> dict[str, float]:
+    def get_reward_weights(self, current_step: int, phase0_only: bool = False) -> dict[str, float]:
         current_iter = current_step // _STEPS_PER_ITER
+        if phase0_only:
+            current_iter = min(current_iter, PHASE1_END_ITER - 1)
         result: dict[str, float] = {}
         for name, values in _CURVES.items():
             idx = 0
@@ -110,19 +115,23 @@ class RewardWeightCurriculum:
                     idx = i
             safe_idx = idx if idx < len(values) else len(values) - 1
             result[name] = values[safe_idx]
+            if name == "sigma_corridor":
+                progress = min(max(current_iter / PHASE1_MID_ITER, 0.0), 1.0)
+                result[name] = values[0] + progress * (values[1] - values[0])
         return result
 
-    def get_current_stage_info(self, current_step: int) -> dict[str, Any]:
+    def get_current_stage_info(self, current_step: int, phase0_only: bool = False) -> dict[str, Any]:
         current_iter = current_step // _STEPS_PER_ITER
+        stage_iter = min(current_iter, PHASE1_END_ITER - 1) if phase0_only else current_iter
         stage = 0
         for t in _STAGES:
-            if current_iter >= t:
+            if stage_iter >= t:
                 stage = t
         return {
             "current_stage": stage,
             "current_iter": current_iter,
             "current_step": current_step,
-            "reward_weights": self.get_reward_weights(current_step),
+            "reward_weights": self.get_reward_weights(current_step, phase0_only),
         }
 
 
@@ -131,4 +140,7 @@ reward_weight_curriculum = RewardWeightCurriculum()
 
 # 获取课程奖励权重
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
-    return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
+    command = env.command_manager._terms["slalom_cmd"]
+    return reward_weight_curriculum.get_reward_weights(
+        env.common_step_counter, command.cfg.phase0_only
+    )[reward_name]

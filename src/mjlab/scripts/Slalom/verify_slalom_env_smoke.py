@@ -11,6 +11,9 @@ from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER, PHASE1_END_ITER
 from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_path_ref, get_approach_start
+from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
+from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
 
 TASK_NAME = "Mjlab-SQuRo-Slalom"
 PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER
@@ -155,15 +158,42 @@ def check_mixed_phase(u, act) -> None:
             fail("混合窗口中两个环境的命令完全相同, 逐环境阶段可能未生效")
 
 
+# 一阶段训练跨过旧边界后保持锁定，并验证大曲率和记录器。
+def check_phase0_training(u, act) -> None:
+    print("\n[5] 一阶段锁定与大曲率")
+    cmd = u.command_manager._terms["slalom_cmd"]
+    cmd.cfg.phase0_only = True
+    u.common_step_counter = 8000 * _STEPS_PER_ITER
+    if abs(float(u.step_dt) - 0.01) > 1e-8:
+        fail("策略周期未对齐 Hole 的 0.01 秒")
+    for curvature in (15.0, -15.0, 20.0, -20.0, 25.0, -25.0):
+        cmd.fixed_curvature = curvature
+        u.reset()
+        if cmd.slalom_mode_active or bool(cmd.phase1_mask.any()):
+            fail("一阶段锁定后仍进入绕杆阶段")
+        if get_curriculum_reward_weight(u, "sigma_spn_pos") != 10.0:
+            fail("一阶段锁定后脊柱奖励进入二阶段")
+        for _ in range(5):
+            step_and_check(u, act, f"固定曲率 {curvature}")
+        if abs(float(u._path_kappa[0]) - curvature) > 1e-5:
+            fail(f"固定曲率 {curvature} 未保持")
+    recorder = JointDataRecorder(None, "自检")
+    recorder.record_step_data(u)
+    if len(recorder.joint_names) != len(_ACT_JOINT_NAMES):
+        fail("回放记录器关节列未同步")
+    print("    ±15、±20、±25 运行有限；超过 8000 轮仍使用一阶段；记录器可用")
+
+
 def main() -> int:
     print("绕杆端到端自检")
     env, u = build_env()
-    act = torch.zeros(u.num_envs, 14, device=u.device)
+    act = torch.zeros(u.num_envs, u.action_space.shape[-1], device=u.device)
     try:
         check_phase0(u, act)
         check_phase1(u, act)
         check_reset_boundary(u, act)
         check_mixed_phase(u, act)
+        check_phase0_training(u, act)
     finally:
         env.close()
 

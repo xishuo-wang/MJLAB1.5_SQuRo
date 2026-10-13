@@ -99,6 +99,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     commands: dict[str, CommandTermCfg] = {
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
+            phase0_only=not play,
             resampling_time_range=(20.0, 30.0),
             debug_vis=play,
             viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
@@ -142,11 +143,11 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             nconmax=100,
             njmax=300,
             mujoco=MujocoCfg(
-                timestep=0.005,
+                timestep=0.002,
                 iterations=10,
                 ls_iterations=20,
             ),
         ),
-        decimation=4,
+        decimation=5,
         episode_length_s=20.0,
     )

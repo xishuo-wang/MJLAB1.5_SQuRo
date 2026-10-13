@@ -11,9 +11,11 @@ from .path import (
     H_BODY_HALF_LENGTH,
     H_BODY_HALF_WIDTH,
     compute_corridor_excess,
+    compute_corridor_side_excess,
     compute_path_ref,
     get_f_body_physical_heading,
     get_h_body_physical_heading,
+    get_path_curvature,
 )
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
@@ -252,16 +254,27 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
     v_f = torch.clamp(e_f - CORRIDOR_HALF_WIDTH, min=0.0)
     v_h = torch.clamp(e_h - CORRIDOR_HALF_WIDTH, min=0.0)
+    curvature = get_path_curvature(env)
+    inner_f, outer_f = compute_corridor_side_excess(
+        f_xy, f_heading, ref_f, path_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH, curvature
+    )
+    inner_h, outer_h = compute_corridor_side_excess(
+        h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH, curvature
+    )
     # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")
+    inner_multiplier = get_curriculum_reward_weight(env, "corridor_inner_multiplier")
     # 计算奖励
-    r_f = torch.exp(-sigma * v_f ** 2)
-    r_h = torch.exp(-sigma * v_h ** 2)
+    r_f = torch.exp(-sigma * (outer_f ** 2 + inner_multiplier * inner_f ** 2))
+    r_h = torch.exp(-sigma * (outer_h ** 2 + inner_multiplier * inner_h ** 2))
     reward = (r_f + r_h) / 2
     # 记录日志
     env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
     env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
     env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
+    env.extras["log"]["Data/走廊内侧越界"] = ((inner_f + inner_h) / 2).mean().item()
+    env.extras["log"]["Data/走廊外侧越界"] = ((outer_f + outer_h) / 2).mean().item()
+    env.extras["log"]["Data/走廊误差尺度"] = sigma ** -0.5
     return reward * weight
 

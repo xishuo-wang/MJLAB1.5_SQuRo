@@ -29,6 +29,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.path import (
     get_effective_pole_spacing,
 )
 
+# 几何黄金数据仍采用历史时间步，真实频率由端到端自检检查。
 STEP_DT = 0.02
 # Phase 1 期间的 common_step_counter (绕杆模式生效)
 PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER

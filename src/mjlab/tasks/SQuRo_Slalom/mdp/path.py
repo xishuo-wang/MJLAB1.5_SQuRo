@@ -487,14 +487,14 @@ def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
 
 
 # 走廊超额计算
-def compute_corridor_excess(
+def _compute_corridor_projection(
     body_pos_xy: torch.Tensor,     # [N, 2] 身体中心在投影平面上的位置
     body_heading: torch.Tensor,    # [N]    身体物理前向朝向
     ref_pos_xy: torch.Tensor,      # [N, 2] 参考点位置
     path_heading: torch.Tensor,    # [N]    路径切线方向
     half_length: float,            # 身体半长
     half_width: float,             # 身体半宽
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     # 路径法向量（指向路径左侧）
     n_x = -torch.sin(path_heading)
     n_y = torch.cos(path_heading)
@@ -508,4 +508,40 @@ def compute_corridor_excess(
     delta_theta = body_heading - path_heading
     eff_hw = torch.abs(half_length * torch.sin(delta_theta)) + torch.abs(half_width * torch.cos(delta_theta))
 
-    return torch.abs(d_lat) + eff_hw  # [N]
+    return d_lat, eff_hw
+
+
+# 返回沿路径法向的最大身体包络距离，保留原有诊断口径。
+def compute_corridor_excess(
+    body_pos_xy: torch.Tensor,
+    body_heading: torch.Tensor,
+    ref_pos_xy: torch.Tensor,
+    path_heading: torch.Tensor,
+    half_length: float,
+    half_width: float,
+) -> torch.Tensor:
+    d_lat, eff_hw = _compute_corridor_projection(
+        body_pos_xy, body_heading, ref_pos_xy, path_heading, half_length, half_width
+    )
+    return d_lat.abs() + eff_hw
+
+
+# 正曲率以内侧左法向计量，负曲率相反；直行使用对称走廊。
+def compute_corridor_side_excess(
+    body_pos_xy: torch.Tensor,
+    body_heading: torch.Tensor,
+    ref_pos_xy: torch.Tensor,
+    path_heading: torch.Tensor,
+    half_length: float,
+    half_width: float,
+    curvature: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    d_lat, eff_hw = _compute_corridor_projection(
+        body_pos_xy, body_heading, ref_pos_xy, path_heading, half_length, half_width
+    )
+    signed_lat = curvature.sign() * d_lat
+    turning = curvature.abs() > 1e-6
+    inner = torch.clamp(signed_lat + eff_hw - CORRIDOR_HALF_WIDTH, min=0.0)
+    outer = torch.clamp(-signed_lat + eff_hw - CORRIDOR_HALF_WIDTH, min=0.0)
+    straight = torch.clamp(d_lat.abs() + eff_hw - CORRIDOR_HALF_WIDTH, min=0.0)
+    return torch.where(turning, inner, 0.0), torch.where(turning, outer, straight)

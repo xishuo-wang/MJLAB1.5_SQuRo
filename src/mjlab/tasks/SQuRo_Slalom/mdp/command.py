@@ -105,14 +105,14 @@ class SlalomCommand(CommandTerm):
     # 绕杆模式 (由 curriculums.get_training_phase 自动控制; 全局口径, 用于可视化与课程间距)
     @property
     def slalom_mode_active(self) -> bool:
-        return get_training_phase(self._env.common_step_counter) == 1
+        return get_training_phase(self._env.common_step_counter, self.cfg.phase0_only) == 1
 
 
     # 逐环境阶段 (按本回合起始时刻锁定): 回合内不随全局计数器翻转, 避免回合跨阶段
     @property
     def phase1_mask(self) -> torch.Tensor:
         episode_start = self._env.common_step_counter - self._env.episode_length_buf
-        return get_training_phase_batch(episode_start)
+        return get_training_phase_batch(episode_start, self.cfg.phase0_only)
 
 
     # 当前杆间距 (cfg.fixed_pole_spacing 优先, 否则从课程自动读取; 覆盖值同样过有效间距转换)
@@ -164,7 +164,7 @@ class SlalomCommand(CommandTerm):
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
         current_step = self._env.common_step_counter
-        phase = get_training_phase(current_step)
+        phase = get_training_phase(current_step, self.cfg.phase0_only)
 
         # 根据阶段自动切换杆可见性 (Phase 0 透明, Phase 1 正常)
         update_pole_visibility(self._env, phase)
@@ -342,6 +342,7 @@ class SlalomCommand(CommandTerm):
 @dataclass(kw_only=True)
 class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
+    phase0_only: bool = False
     resampling_time_range: Tuple[float, float] = (20.0, 30.0)
     debug_vis: bool = False
     fixed_velocity: Optional[float] = None

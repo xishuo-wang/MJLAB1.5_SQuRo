@@ -7,7 +7,7 @@
 | 子任务 | 任务 ID | 状态 | 文档位置 |
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
-| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 已实现；Phase 0 已验收，Phase 1 参考层已修复待训练验证 | 本文档 |
+| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 当前默认固定 Phase 0；100 Hz 与 Hole 对齐，曲率上限 25，待新训练验证 | [一阶段训练](docs/SQuRo_Slalom_一阶段训练.md) |
 | **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
 | **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-04 备份（mjlab 0.1.0）在 1.5 上恢复，只做接口适配；旧检查点可直接回放 | `docs/SQuRo_Hole_技术细节.md` |
 
@@ -138,9 +138,13 @@ src/mjlab/tasks/SQuRo_Slalom/
 │   └── terminations.py        # 终止条件
 ```
 
-脚本：`scripts/SQuRo_play.py` — 策略回放，自动 Phase 0/1 识别。
+脚本：`scripts/SQuRo_Slalom_play.py` — 策略回放，读取保存的频率和阶段配置，可强制 Phase 0。
 
 ## 课程学习 (mdp/curriculums.py)
+
+当前训练默认 `phase0_only=True`：0 至 2000 轮曲率上限从 0.5 增长到 25，之后在完整范围训练至 8000 轮。
+路径、复位、杆可见性和奖励课程同时锁定一阶段。策略频率 100 Hz、48 步/轮，与当前 Hole 一致。
+以下两阶段课程仅在显式关闭该开关后启用；详细参数及训练入口见 [一阶段训练说明](docs/SQuRo_Slalom_一阶段训练.md)。
 
 整体分为两阶段：Phase 0 转向基元训练 + Phase 1 绕杆场景训练。每个 Phase 又分若干小阶段，
 用于关键变量（转向曲率、杆间距）的课程学习以及奖励权重课程。所有阶段边界统一在 `curriculums.py` 定义，
@@ -149,7 +153,7 @@ src/mjlab/tasks/SQuRo_Slalom/
 ```
 iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         PHASE1_MID  PHASE1_END  PHASE2_MID  PHASE2_END
-        κ 0.5→20    基元→绕杆   (预留)     (预留)
+        κ 0.5→25    基元→绕杆   (预留)     (预留)
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
@@ -289,12 +293,15 @@ Phase 0: κ=静态命令值; Phase 1: κ=`get_path_curvature()` 动态读取 LUT
 ### 走廊一致性奖励
 
 ```
-e_i = |d_lat| + |L·sin(Δθ)| + |W·cos(Δθ)|
-v_i = max(0, e_i - C)
-r = exp(-σ·v²)
+有效半宽 = |L·sin(Δθ)| + |W·cos(Δθ)|
+内侧越界 = max(0, sign(κ)·d_lat + 有效半宽 - C)
+外侧越界 = max(0, -sign(κ)·d_lat + 有效半宽 - C)
+r = exp(-σ·(外侧越界² + 2·内侧越界²))
 ```
 
-同时惩罚位置和朝向偏差，死区 C 内不扣分。相比传统 track_path 自带朝向耦合。
+前后身体奖励取平均，直行采用对称走廊。内侧平方误差系数为外侧的 2 倍。
+σ 在前 2000 轮从 400 平滑增至 2500，名义误差尺度由 50 mm 收紧到 20 mm。
+这是局部包络约束，仍需真实碰撞验证杆体净空。
 
 ## 杆模块 (mdp/pole.py)
 
@@ -308,7 +315,8 @@ MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0531**（平滑路径�
 提取 `train_iter` → `align_iter = max(0, train_iter-10)`
 
 - 避免运行 3999 轮的策略时误加载到 Phase1(4000)
-- 自动识别 Phase：`align_iter < 4000 → Phase 0`，否则 Phase 1
+- 读取保存的 `phase0_only`；锁定时所有轮次均为 Phase 0，否则按 `align_iter < 4000` 识别
+- `--phase0-only True` 强制验证一阶段；旧训练按保存的物理步长、decimation 和动作裁剪回放
 - Phase 0：设 `fixed_curvature`；Phase 1：设 `fixed_pole_spacing` 并清除 `fixed_curvature`
 - Phase 1 用正确间距重建杆实体，可视化需要与期望路径一致
 
@@ -320,17 +328,18 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 曲率 κ = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行。
 每次 episode reset 时采样一次，episode 内保持不变——让 agent 针对固定转弯半径学习稳态步态。
 
-脊柱参考角: F_spine1 = clamp(-GAIN × ω_cmd, ±0.6), GAIN = L/v = 2.0。
+脊柱参考角: F_spine1 = clamp(-0.65 × κ/25, ±0.6)。
 符号: 实测 F_body_heading = base_heading - F_spine1，左转需 F_spine1<0 → 取负号。
-（注：`reference.py` 实际按 `-0.65×κ/κ_max` 生成且未做 clamp，与本节的 ±0.6 不一致，见预计算表一节。）
+参考表列索引、关节复位及足端力记录按名称管理，见 `mdp/indices.py`。
 
 ## 常用入口
 
 ```powershell
-uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard          # 训练 (预算 = PHASE2_END_ITER)
+uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger tensorboard --env.commands.slalom-cmd.phase0-only True
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (19 项, 桩环境不建 env)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_env_smoke         # 端到端自检 (真实 env, 含重置边界)
-uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint_file <ckpt>   # 回放
+uv run python -B -m mjlab.scripts.Slalom.verify_slalom_training_setup    # 索引、课程、PPO 与内侧约束 (11 项)
+uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint-file <ckpt> --phase0-only True
 uv run python -B -m mjlab.scripts.Backup.dump_training_scalars <run_dir> --list  # 读训练日志标量 (通用)
 ```
 
