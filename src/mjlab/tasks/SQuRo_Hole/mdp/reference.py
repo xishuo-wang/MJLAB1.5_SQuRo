@@ -11,7 +11,6 @@ from .config import (
     CMD_GAIT_FREQ_IDS,
     HEIGHT_LIST,
     NECK_REF_POS,
-    NECK_REF_VEL,
     HIND_HOLD_POS,
     MODE_HIND_LOW,
     MODE_BOTH_LOW,
@@ -24,18 +23,16 @@ from .config import (
     TABLE_RESOLUTION,
 )
 from .indices import (
-    _ACT_SPN_IDS,
-    REF_SPN_SLICE,
+    _ACT_F_LEG_IDS,
+    _ACT_FL_LEG_IDS,
+    _ACT_FR_LEG_IDS,
+    _ACT_H_LEG_IDS,
+    _ACT_HL_LEG_IDS,
+    _ACT_HR_LEG_IDS,
+    _ACT_JOINT_NAMES,
     _ACT_NECK_IDS,
-    REF_SLOT_OF_ACT,
-    REF_TABLE_ORDER,
-    REF_F_LEG_SLICE,
-    REF_H_LEG_SLICE,
-    REF_FL_LEG_SLICE,
-    REF_FR_LEG_SLICE,
-    REF_HL_LEG_SLICE,
-    REF_HR_LEG_SLICE,
-    SPN_LOCAL_H_PITCH,
+    _ACT_SPN_IDS,
+    SPN_H_PITCH_SLOT,
 )
 
 
@@ -76,8 +73,8 @@ CYCLOID_PARAMS = {
     }
 }
 
-# 参考表包含前腿、后腿、脊柱和头颈，出口按执行器顺序置换。
-ACTUATOR_NUM = len(REF_TABLE_ORDER)                         # 被控关节数 (14)
+# 参考表按执行器序存储, 14 列与被控关节一一对应。
+ACTUATOR_NUM = len(_ACT_JOINT_NAMES)                        # 被控关节数 (14)
 
 
 _LEG_CSV_CACHE: Dict[str, Optional[Dict[str, Any]]] = {"front": None, "hind": None}
@@ -309,8 +306,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
             z_tensor_F = torch.tensor(np.stack([z_leg_fl, z_leg_fr], axis=-1), device=device, dtype=torch.float32)
             shoulder_angles, elbow_angles = Inverse_Kinematics(x_tensor_F, z_tensor_F, is_front=True)
             
-            front_pos_table[mode, height_idx, :, REF_FL_LEG_SLICE] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
-            front_pos_table[mode, height_idx, :, REF_FR_LEG_SLICE] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
+            front_pos_table[mode, height_idx, :, _ACT_FL_LEG_IDS] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
+            front_pos_table[mode, height_idx, :, _ACT_FR_LEG_IDS] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
 
             # 后肢参考轨迹
             if mode == MODE_FRONT_LOW:
@@ -330,14 +327,14 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
                 z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
                 hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
-                hind_pos_table[mode, height_idx, :, REF_HL_LEG_SLICE] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
-                hind_pos_table[mode, height_idx, :, REF_HR_LEG_SLICE] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+                hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+                hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
             elif mode == MODE_HIND_LOW:
                 # 后腿直接保持当前基线关节角。
                 hold = torch.tensor(HIND_HOLD_POS, device=device, dtype=hind_pos_table.dtype)
-                hind_pos_table[mode, height_idx, :, REF_HL_LEG_SLICE] = hold
-                hind_pos_table[mode, height_idx, :, REF_HR_LEG_SLICE] = hold
+                hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = hold
+                hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = hold
 
             else:
                 # 正常: 后腿 CSV 轨迹
@@ -352,15 +349,15 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
                 z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)
                 hip_angles, knee_angles = Inverse_Kinematics(x_tensor_H, z_tensor_H, is_front=False)
-                hind_pos_table[mode, height_idx, :, REF_HL_LEG_SLICE] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
-                hind_pos_table[mode, height_idx, :, REF_HR_LEG_SLICE] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
+                hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
+                hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
             is_low_height = target_height < THRESHOLD_HEIGHT
 
             if is_low_height or mode != MODE_BOTH_HIGH:
                 # 低高度模式：固定脊柱姿态
                 spine_angles = np.zeros((TABLE_RESOLUTION, len(_ACT_SPN_IDS)))
-                spine_angles[:, SPN_LOCAL_H_PITCH] = -0.65
+                spine_angles[:, SPN_H_PITCH_SLOT] = -0.65
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
             elif USE_SPINE_CSV and xoy_spine_data is not None and yoz_spine_data is not None:
                 # 正常模式：使用CSV脊柱数据
@@ -374,8 +371,8 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 spine_angles = np.zeros((TABLE_RESOLUTION, len(_ACT_SPN_IDS)))
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
                 
-            # 脊柱写入参考表部位列，头颈在查询时拼接。
-            spine_pos_table[mode, height_idx, :, REF_SPN_SLICE] = spine_tensor
+            # 脊柱写入自己的执行器列，头颈在查询时拼接。
+            spine_pos_table[mode, height_idx, :, _ACT_SPN_IDS] = spine_tensor
         
                 
     # 根据位置表差分计算速度表。
@@ -389,7 +386,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
     hind_vel_table = torch.zeros_like(hind_pos_table)
     hind_vel_table[:, :, :-1, :] = (hind_pos_table[:, :, 1:, :] - hind_pos_table[:, :, :-1, :]) / dt
     hind_vel_table[:, :, -1:, :] = (hind_pos_table[:, :, 0:1, :] - hind_pos_table[:, :, -1:, :]) / dt  
-    hind_vel_table[MODE_HIND_LOW, :, :, REF_H_LEG_SLICE] = 0.0
+    hind_vel_table[MODE_HIND_LOW, :, :, _ACT_H_LEG_IDS] = 0.0
 
     spine_vel_table = torch.zeros_like(spine_pos_table)
 
@@ -408,13 +405,6 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 # 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
 def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
     values = torch.tensor(NECK_REF_POS, device=mode.device, dtype=torch.float32)
-    return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
-
-
-
-# 头颈参考速度: 同位置, 逐关节取 NECK_REF_VEL
-def _neck_ref_vel(mode: torch.Tensor) -> torch.Tensor:
-    values = torch.tensor(NECK_REF_VEL, device=mode.device, dtype=torch.float32)
     return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
 
 
@@ -462,20 +452,21 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     height_diffs_min = torch.abs(min_height.unsqueeze(1) - height_list.unsqueeze(0))
     height_indices_min = torch.argmin(height_diffs_min, dim=1)
 
-    # 4. 取参考位置
-    front_pos = tables["front_pos"][mode, height_indices_F, phase_indices, REF_F_LEG_SLICE]
-    hind_pos = tables["hind_pos"][mode, height_indices_H, phase_indices, REF_H_LEG_SLICE]
-    spine_pos = tables["spine_pos"][mode, height_indices_min, phase_indices, REF_SPN_SLICE]
+    # 4. 取参考位置 (表已按执行器序存储, 直接按执行器下标取)
+    joint_pos = torch.zeros(
+        (mode.shape[0], ACTUATOR_NUM), device=device, dtype=tables["front_pos"].dtype)
+    joint_vel = torch.zeros_like(joint_pos)
+    joint_pos[:, _ACT_F_LEG_IDS] = tables["front_pos"][mode, height_indices_F, phase_indices][:, _ACT_F_LEG_IDS]
+    joint_pos[:, _ACT_H_LEG_IDS] = tables["hind_pos"][mode, height_indices_H, phase_indices][:, _ACT_H_LEG_IDS]
+    joint_pos[:, _ACT_SPN_IDS] = tables["spine_pos"][mode, height_indices_min, phase_indices][:, _ACT_SPN_IDS]
+    joint_pos[:, _ACT_NECK_IDS] = _neck_ref_pos(mode)
 
-    # 5. 取参考速度
-    front_vel = tables["front_vel"][mode, height_indices_F, phase_indices, REF_F_LEG_SLICE]
-    hind_vel = tables["hind_vel"][mode, height_indices_H, phase_indices, REF_H_LEG_SLICE]
-    spine_vel = tables["spine_vel"][mode, height_indices_min, phase_indices, REF_SPN_SLICE]
+    joint_vel[:, _ACT_F_LEG_IDS] = tables["front_vel"][mode, height_indices_F, phase_indices][:, _ACT_F_LEG_IDS]
+    joint_vel[:, _ACT_H_LEG_IDS] = tables["hind_vel"][mode, height_indices_H, phase_indices][:, _ACT_H_LEG_IDS]
+    joint_vel[:, _ACT_SPN_IDS] = tables["spine_vel"][mode, height_indices_min, phase_indices][:, _ACT_SPN_IDS]
 
-    # 6. 拼接头颈，头颈位置/速度恒定
-    joint_pos = torch.cat([front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)],dim=1)
-    joint_vel = torch.cat([front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)],dim=1)
+    # 5. 参考速度按当前步频相对基准步频缩放 (头颈速度为 0, 缩放后仍为 0)
     joint_vel = joint_vel * (frequency / BASE_FREQ).unsqueeze(1)
 
-    # 7. 表列序同步为执行器列序, 与 _MODEL_INDICES.joint_ids / 动作空间对齐 (见 indices.REF_SLOT_OF_ACT)
-    return joint_pos[:, REF_SLOT_OF_ACT], joint_vel[:, REF_SLOT_OF_ACT]
+    # 列序即执行器序, 与 _MODEL_INDICES.joint_ids / 动作空间一致, 无需再置换
+    return joint_pos, joint_vel

@@ -64,29 +64,9 @@ _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: 
 _ACT_NECK_IDS = (_ACT_NECK_YAW_ID, _ACT_NECK_PITCH_ID)          # 头颈两列: (2, 3)
 
 
-# 参考表顺序
-REF_TABLE_ORDER = (_ACT_F_LEG_IDS  + _ACT_H_LEG_IDS + _ACT_SPN_IDS + _ACT_NECK_IDS)   # 完整参考表序: (4, 5, 6, 7, 10, 11, 12, 13, 0, 1, 8, 9, 2, 3)
-
-
-# 参考表列序 → 执行器列序的逆置换: 执行器 i 的参考值位于表第 REF_SLOT_OF_ACT[i] 列
-REF_SLOT_OF_ACT = tuple(REF_TABLE_ORDER.index(i) for i in range(len(REF_TABLE_ORDER)))
-
-
-# 从执行器分组解析参考表的连续列区间。
-def _reference_slice(actuator_ids: tuple[int, ...]) -> slice:
-    slots = tuple(REF_TABLE_ORDER.index(i) for i in actuator_ids)
-    assert slots == tuple(range(slots[0], slots[-1] + 1)), "参考表部位列必须连续"
-    return slice(slots[0], slots[-1] + 1)
-
-
-REF_FL_LEG_SLICE = _reference_slice(_ACT_FL_LEG_IDS)
-REF_FR_LEG_SLICE = _reference_slice(_ACT_FR_LEG_IDS)
-REF_HL_LEG_SLICE = _reference_slice(_ACT_HL_LEG_IDS)
-REF_HR_LEG_SLICE = _reference_slice(_ACT_HR_LEG_IDS)
-REF_F_LEG_SLICE = _reference_slice(_ACT_F_LEG_IDS)
-REF_H_LEG_SLICE = _reference_slice(_ACT_H_LEG_IDS)
-REF_SPN_SLICE = _reference_slice(_ACT_SPN_IDS)
-SPN_LOCAL_H_PITCH = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
+# 参考表按执行器序存储, 各部位直接用自己的执行器下标读写 (见 reference.py)
+# 脊柱局部张量按 _ACT_SPN_IDS 排列时 H_spine1 落在第几列
+SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
 
 
 # 闭链被动关节按基线复位顺序解析。

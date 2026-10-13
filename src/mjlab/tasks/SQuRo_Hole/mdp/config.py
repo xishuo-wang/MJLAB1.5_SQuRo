@@ -32,7 +32,6 @@ HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]     # 预计算表的高度档 (m): 参�
 TABLE_RESOLUTION = 500                      # 相位分辨率: 参考表第三维的采样点数
 USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
 NECK_REF_POS = (0.0, -0.3)
-NECK_REF_VEL = (0.0, 0.0)
 HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
 
 

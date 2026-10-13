@@ -27,10 +27,9 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState, reward_weight_curriculum, rule_bounds
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
-    REF_FL_LEG_SLICE,
-    REF_HL_LEG_SLICE,
-    REF_SPN_SLICE,
-    SPN_LOCAL_H_PITCH,
+    _ACT_FL_LEG_IDS,
+    _ACT_HL_LEG_IDS,
+    _ACT_SPN_H_PITCH_ID,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     ACTUATOR_NUM,
@@ -52,16 +51,19 @@ def check_reference() -> None:
     front = tables["front_pos"]
     num_modes = front.shape[0]
     print(f"[1] 参考表 front_pos {tuple(front.shape)} "
-          f"(模式 {num_modes} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × 4 关节) "
+          f"(模式 {num_modes} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × {ACTUATOR_NUM} 关节) "
           f"被控关节数 {ACTUATOR_NUM}")
     print(f"{'模式':>6}{'高度(mm)':>10}{'FL肩幅度':>12}{'HL髋幅度':>12}{'脊柱H_spine1':>14}")
     for mode in range(num_modes):
         for h_idx, h in enumerate(HEIGHT_LIST):
-            sp = tables["spine_pos"][mode, h_idx]
+            # 表按执行器序存储, 列下标 = 执行器下标
+            fl_shoulder = front[mode, h_idx, :, _ACT_FL_LEG_IDS[0]]
+            hl_hip = tables["hind_pos"][mode, h_idx, :, _ACT_HL_LEG_IDS[0]]
+            h_spine1 = tables["spine_pos"][mode, h_idx, :, _ACT_SPN_H_PITCH_ID]
             print(f"{mode:>6}{h * 1000:>10.0f}"
-                  f"{float(front[mode, h_idx, :, REF_FL_LEG_SLICE.start].max() - front[mode, h_idx, :, REF_FL_LEG_SLICE.start].min()):>12.4f}"
-                  f"{float(tables['hind_pos'][mode, h_idx, :, REF_HL_LEG_SLICE.start].max() - tables['hind_pos'][mode, h_idx, :, REF_HL_LEG_SLICE.start].min()):>12.4f}"
-                  f"{float(sp[:, REF_SPN_SLICE.start + SPN_LOCAL_H_PITCH].mean()):>14.4f}")
+                  f"{float(fl_shoulder.max() - fl_shoulder.min()):>12.4f}"
+                  f"{float(hl_hip.max() - hl_hip.min()):>12.4f}"
+                  f"{float(h_spine1.mean()):>14.4f}")
     print(f"     高度阈值 THRESHOLD_HEIGHT = {THRESHOLD_HEIGHT} m (低于此值判为'压低'档)")
 
 
