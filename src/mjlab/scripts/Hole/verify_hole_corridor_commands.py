@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -14,6 +16,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_OBSTACLE_HEIGHT_IDS,
+    COMMAND_DIM,
     WARMUP_OBSTACLE_HEIGHT,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
@@ -28,7 +31,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_body_contact_reward, compute_corridor_reward
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_body_contact_reward, compute_corridor_reward
 
 
 # 验证三个边界两侧的阶段、奖励权重和课程门控。
@@ -167,10 +170,48 @@ def verify_obstacle_prior() -> None:
         env.close()
 
 
+# 验证角度奖励不受其他环境的模式、数量和排列影响。
+def verify_angle_independence() -> None:
+    command = torch.zeros(4, COMMAND_DIM)
+    command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] = torch.tensor([
+        [0.020, 0.055], [0.055, 0.020], [0.055, 0.055], [0.020, 0.020],
+    ])
+    roll = torch.tensor([[0.2, 0.3], [0.2, 0.3], [0.08, 0.12], [0.2, 0.3]])
+    roll += torch.tensor([-math.pi / 2, math.pi / 2])
+    quat = torch.zeros(4, 2, 4)
+    quat[:, :, 0] = torch.cos(roll / 2)
+    quat[:, :, 1] = torch.sin(roll / 2)
+    expected = torch.exp(-torch.tensor([50.0, 50.0, 100.0, 50.0])
+                         * torch.tensor([0.2, 0.3, 0.2, 0.3]).square())
+
+    # 仅用进程内状态验证奖励，不修改真实模型索引。
+    def evaluate(ids: torch.Tensor, step: int) -> torch.Tensor:
+        asset = SimpleNamespace(data=SimpleNamespace(body_link_quat_w=quat[ids]))
+        env = SimpleNamespace(
+            scene={"robot": asset}, device="cpu", num_envs=len(ids), common_step_counter=step,
+            command_manager=SimpleNamespace(_terms={"hole_cmd": SimpleNamespace(command=command[ids])}),
+        )
+        return compute_angle_reward(env)
+
+    with patch("mjlab.tasks.SQuRo_Hole.mdp.rewards._MODEL_INDICES",
+               SimpleNamespace(f_body_id=0, h_body_id=1)):
+        for iteration in (0, 1000, 2000, 3000):
+            step = iteration * STEPS_PER_ITER
+            mixed = evaluate(torch.arange(4), step)
+            weight = reward_weight_curriculum.get_reward_weights(step)["angle"]
+            torch.testing.assert_close(mixed, expected * weight, atol=1e-7, rtol=1e-5)
+            separate = torch.cat([evaluate(torch.tensor([i]), step) for i in range(4)])
+            torch.testing.assert_close(mixed, separate)
+            for ids in (torch.tensor([0, 1, 3]), torch.tensor([2, 0, 3, 1]), torch.arange(4).repeat(2)):
+                torch.testing.assert_close(evaluate(ids, step), mixed[ids])
+    print("[通过] 四种高度模式角度奖励逐环境选择σ，拆分、删除、重排和重复环境均不影响数值")
+
+
 # 执行走廊热身与命令接口验收。
 def main() -> None:
     torch.set_num_threads(1)
     verify_stages()
+    verify_angle_independence()
     verify_warmup_without_boards()
     verify_corridor()
     verify_obstacle_prior()

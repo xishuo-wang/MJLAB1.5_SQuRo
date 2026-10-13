@@ -89,6 +89,9 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "smoothness":               (0.1, 0.2, 0.2, 1.0),
     "body_contact":             (0.0, 0.0, 0.0, 5.0),
     "corridor":                 (0.0, 0.0, 5.0, 5.0),
+    # 角度 σ 按各环境高度模式选择。
+    "sigma_angle_low":          (50.0, 50.0, 50.0, 50.0),
+    "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     # 虚拟净空 σ: 超出量的指数衰减系数 (超出 5mm 时按 exp(-sigma*0.005^2) 计)
     "sigma_body_contact":       (2000.0, 2000.0, 2000.0, 2000.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),

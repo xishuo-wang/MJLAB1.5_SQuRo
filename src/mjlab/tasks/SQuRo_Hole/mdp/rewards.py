@@ -226,7 +226,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     roll_error = torch.zeros(env.num_envs, device=env.device)
-    sigma = 50
+    sigma = torch.full_like(roll_error, get_curriculum_reward_weight(env, "sigma_angle_low"))
 
     # 情况1: 前肢高度低
     low_heightF_mask = desired_heightF < THRESHOLD_HEIGHT
@@ -236,7 +236,6 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         f_roll_error = torch.abs(f_body_roll)
         f_roll_error = torch.min(f_roll_error, 2 * math.pi - f_roll_error)
         roll_error[low_heightF_mask] = f_roll_error
-        sigma = 50
     
     # 情况2: 后肢高度低
     low_heightH_mask = desired_heightH < THRESHOLD_HEIGHT
@@ -246,7 +245,6 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         h_roll_error = torch.abs(h_body_roll)
         h_roll_error = torch.min(h_roll_error, 2 * math.pi - h_roll_error)
         roll_error[low_heightH_mask] = h_roll_error
-        sigma = 50
     
     # 情况3: 两个高度都不低于阈值
     high_height_mask = ~(low_heightF_mask | low_heightH_mask)
@@ -256,7 +254,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         h_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.h_body_id]
         h_roll_error = torch.abs(_quaternion_to_roll(h_body_quat) - math.pi/2)  
         roll_error[high_height_mask] = (f_roll_error + h_roll_error)
-        sigma = 100
+        sigma[high_height_mask] = get_curriculum_reward_weight(env, "sigma_angle_high")
     
     reward = torch.exp(-sigma * roll_error ** 2)
     weight = get_curriculum_reward_weight(env, "angle")
