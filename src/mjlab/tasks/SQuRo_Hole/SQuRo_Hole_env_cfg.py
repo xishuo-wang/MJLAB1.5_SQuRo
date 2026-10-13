@@ -1,23 +1,24 @@
 # uv run train Mjlab-SQuRo-Hole
 # uv run play Mjlab-SQuRo-Hole-Play --checkpoint_file
 
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
-from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
-    ActionTermCfg,
-    CommandTermCfg,
     EventTermCfg,
-    ObservationGroupCfg,
-    ObservationTermCfg,
+    ActionTermCfg,
     RewardTermCfg,
+    CommandTermCfg,
+    ObservationTermCfg,
     TerminationTermCfg,
+    ObservationGroupCfg,
 )
 from mjlab.scene import SceneCfg
-from mjlab.sensor import ContactMatch, ContactSensorCfg
-from mjlab.sim import MujocoCfg, SimulationCfg
-from mjlab.tasks.SQuRo_Hole import mdp
 from mjlab.viewer import ViewerConfig
+from mjlab.tasks.SQuRo_Hole import mdp
+from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.sim import MujocoCfg, SimulationCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
+from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
+
 
 
 def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:   
