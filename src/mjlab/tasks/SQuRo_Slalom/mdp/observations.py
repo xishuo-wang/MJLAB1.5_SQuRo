@@ -31,7 +31,7 @@ def projected_gravity(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAU
     return asset.data.projected_gravity_b
 
 
-# 执行器关节位置（相对默认值，仅12个主动关节）
+# 执行器关节位置（相对默认值，14 个主动关节）
 def actuator_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = ACTUATED_JOINT_CFG) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
     default_joint_pos = asset.data.default_joint_pos

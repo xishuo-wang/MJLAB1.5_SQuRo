@@ -25,7 +25,10 @@ from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
 from mjlab.tasks.SQuRo_Slalom.mdp.path import get_effective_pole_spacing
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Slalom.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
+    _ACT_JOINT_NAMES, _MODEL_INDICES, FOOT_NAMES, FOOT_SITE_NAMES,
+    resolve_model_indices, resolve_foot_force_ids,
+)
 
 
 # 任务配置
@@ -92,20 +95,13 @@ class JointDataRecorder:
         self.step_count = 0
 
         # 14 个驱动关节 — 顺序必须与 entity actuator 顺序一致
-        self.joint_names = [
-            'F_spine1', 'F_body',
-            'Neck_yaw', 'Neck_pitch',
-            'FL_shoulder', 'FL_elbow',
-            'FR_shoulder', 'FR_elbow',
-            'H_spine1', 'H_body',
-            'HL_hip', 'HL_knee',
-            'HR_hip', 'HR_knee',
-        ]
+        self.joint_names = [name.removesuffix("_joint") for name in _ACT_JOINT_NAMES]
         self._joint_ids_resolved = False
         self.action_names = self.joint_names  # 与 joint_names 同序
-        self.foot_names = ['FL', 'FR', 'HL', 'HR']
-        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
+        self.foot_names = FOOT_NAMES
+        self.foot_site_names = FOOT_SITE_NAMES
         self._foot_site_ids = None
+        self._foot_force_ids = None
 
     def record_step_data(self, env, actions=None, rewards=None, dones=None):
         record = {'step': float(self.step_count)}
@@ -125,12 +121,14 @@ class JointDataRecorder:
 
         # 足部接触力
         contact_sensor = unwrapped.scene["feet_ground_contact"]
-        feet_contact = contact_sensor.data.force.flatten(start_dim=1)
+        if self._foot_force_ids is None:
+            self._foot_force_ids = resolve_foot_force_ids(contact_sensor)
+        feet_contact = contact_sensor.data.force[env_idx, self._foot_force_ids].reshape(len(FOOT_NAMES), -1, 3).sum(dim=1)
         for i, name in enumerate(self.foot_names):
-            record[f'contact_{name}_x'] = float(feet_contact[env_idx, i * 3].item())
-            record[f'contact_{name}_y'] = float(feet_contact[env_idx, i * 3 + 1].item())
-            record[f'contact_{name}_z'] = float(feet_contact[env_idx, i * 3 + 2].item())
-            force_mag = torch.norm(feet_contact[env_idx, i * 3: i * 3 + 3]).item()
+            record[f'contact_{name}_x'] = float(feet_contact[i, 0].item())
+            record[f'contact_{name}_y'] = float(feet_contact[i, 1].item())
+            record[f'contact_{name}_z'] = float(feet_contact[i, 2].item())
+            force_mag = torch.norm(feet_contact[i]).item()
             record[f'contact_{name}_mag'] = force_mag
 
         # 足端位置
@@ -168,10 +166,8 @@ class JointDataRecorder:
         # F_body / H_body 偏航角
         import math as _math
         if not hasattr(self, '_f_body_id') or not hasattr(self, '_h_body_id'):
-            f_ids, _ = asset.find_bodies("F_body_Link", preserve_order=True)
-            h_ids, _ = asset.find_bodies("H_body_Link", preserve_order=True)
-            self._f_body_id = f_ids[0] if f_ids else None  # type: ignore[union-attr]
-            self._h_body_id = h_ids[0] if h_ids else None  # type: ignore[union-attr]
+            self._f_body_id = _MODEL_INDICES.f_body_id
+            self._h_body_id = _MODEL_INDICES.h_body_id
 
         f_body_raw, h_body_raw = 0.0, 0.0
         if self._f_body_id is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math as _m
 import torch
+from .indices import _MODEL_INDICES, resolve_model_indices
 from .path import _INIT_DIST, get_approach_start
 from .curriculums import get_training_phase
 
@@ -13,6 +14,7 @@ def reset_model(env, env_ids):
     
     # 获取机器人实体
     robot_entity = env.scene.entities["robot"]
+    resolve_model_indices(robot_entity)
     
     # 重置基座状态: Phase 1 用接近段圆弧起点, Phase 0 用直行起点 (与期望轨迹一致)
     root_state = torch.zeros(n, 13, device=env.device)
@@ -41,11 +43,12 @@ def reset_model(env, env_ids):
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
 
-    joint_indices = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23] + [
-        7, 9, 10, 11, 13, 15, 16, 17, 25, 27, 28, 29, 31, 33, 34, 35
-    ]
+    joint_indices = _MODEL_INDICES.joint_ids + _MODEL_INDICES.linkage_joint_ids
     
-    joint_positions = [0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3, 0, 0, 0, 0] + [
+    joint_positions = [
+        0.0, 0.0, 0.0, -0.3, 0.1, -0.3, 0.1, -0.3,
+        0.0, 0.0, -0.1, 0.3, -0.1, 0.3,
+    ] + [
         -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
         0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905
     ]

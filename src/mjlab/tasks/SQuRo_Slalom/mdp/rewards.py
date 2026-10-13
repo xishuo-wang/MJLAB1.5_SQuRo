@@ -2,7 +2,7 @@ from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
-from .indices import _MODEL_INDICES
+from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_SPN_IDS, _ACT_NECK_IDS
 from .path import (
     BODY_REF_OFFSET,
     CORRIDOR_HALF_WIDTH,
@@ -30,9 +30,9 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
     error = joint_pos - ref_pos
-    error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
-    error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
-    error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
+    error_leg = error[:, _ACT_LEG_IDS]
+    error_spn = error[:, _ACT_SPN_IDS]
+    error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
@@ -57,9 +57,9 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
     error = joint_vel - ref_vel
-    error_leg = error[:, _MODEL_INDICES.actuator_leg_ids]
-    error_spn = error[:, _MODEL_INDICES.actuator_spn_ids]
-    error_neck = error[:, _MODEL_INDICES.actuator_neck_ids]
+    error_leg = error[:, _ACT_LEG_IDS]
+    error_spn = error[:, _ACT_SPN_IDS]
+    error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
@@ -186,9 +186,9 @@ def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     abs_diff = torch.abs(current_action - prev_action)
-    leg_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
-    spn_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
-    error_cost = torch.sum(abs_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
+    leg_cost = torch.sum(abs_diff[:, _ACT_LEG_IDS], dim=1)
+    spn_cost = torch.sum(abs_diff[:, _ACT_SPN_IDS], dim=1)
+    error_cost = torch.sum(abs_diff[:, _ACT_NECK_IDS], dim=1)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L1_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L1_spn")
@@ -205,9 +205,9 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
     sq_diff = torch.square(current_action - prev_action)
-    leg_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_leg_ids], dim=1)
-    spn_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_spn_ids], dim=1)
-    error_cost = torch.sum(sq_diff[:, _MODEL_INDICES.actuator_neck_ids], dim=1)
+    leg_cost = torch.sum(sq_diff[:, _ACT_LEG_IDS], dim=1)
+    spn_cost = torch.sum(sq_diff[:, _ACT_SPN_IDS], dim=1)
+    error_cost = torch.sum(sq_diff[:, _ACT_NECK_IDS], dim=1)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L2_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L2_spn")

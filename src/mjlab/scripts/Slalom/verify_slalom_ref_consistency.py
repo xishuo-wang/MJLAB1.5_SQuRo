@@ -2,6 +2,7 @@
 # 覆盖: 局部重置隔离、参考推进与自身步频一致、gait=1 几何不变、命令计时器、
 #       固定间距的单一真源、默认训练预算覆盖课程终点、腿部参考过零连续。
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace as NS
 
 import torch
@@ -18,6 +19,10 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     VEL_MIN,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.events import reset_model
+from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
+    _ACT_LEG_IDS, _ACT_FL_LEG_IDS, _ACT_FR_LEG_IDS, _ACT_HL_LEG_IDS, _ACT_HR_LEG_IDS,
+    _ACT_F_SPINE1_ID, _ACT_H_SPINE1_ID, _ACT_NECK_YAW_ID,
+)
 from mjlab.tasks.SQuRo_Slalom.mdp.path import (
     compute_slalom_path_ref,
     get_approach_start,
@@ -28,9 +33,9 @@ STEP_DT = 0.02
 # Phase 1 期间的 common_step_counter (绕杆模式生效)
 PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER
 # 腿部关节列 (FL/FR/HL/HR) 与内侧腿列
-_LEG_COLS = [4, 5, 6, 7, 10, 11, 12, 13]
-_LEFT_COLS = [4, 5, 10, 11]
-_RIGHT_COLS = [6, 7, 12, 13]
+_LEG_COLS = _ACT_LEG_IDS
+_LEFT_COLS = _ACT_FL_LEG_IDS + _ACT_HL_LEG_IDS
+_RIGHT_COLS = _ACT_FR_LEG_IDS + _ACT_HR_LEG_IDS
 _TABLE_RES = 50
 
 # 重构前 (旧实现) 在 gait=1、间距 0.20 下的绕杆参考, 用于证明几何语义未变
@@ -268,7 +273,8 @@ class TestSlalomRefConsistency(unittest.TestCase):
         env.scene = NS(entities={"robot": robot})
         env.command_manager = NS(_terms={"slalom_cmd": cmd})
 
-        reset_model(env, torch.tensor([0, 1]))
+        with patch("mjlab.tasks.SQuRo_Slalom.mdp.events.resolve_model_indices"):
+            reset_model(env, torch.tensor([0, 1]))
 
         expected_x = get_approach_start(spacing=cmd.active_pole_spacing)[0]
         for i in (0, 1):
@@ -327,9 +333,9 @@ class TestSlalomRefConsistency(unittest.TestCase):
         kappas = [(-25 + 2.5 * i) for i in range(21)]
         env = make_ref_state_env(kappas, phases=[0.3] * len(kappas), gait=0.0)
         pos, _ = ref_mod.get_reference_joint_state(env)
-        max_f = float(pos[:, 0].abs().max())
-        max_h = float(pos[:, 8].abs().max())
-        max_yaw = float(pos[:, 2].abs().max())
+        max_f = float(pos[:, _ACT_F_SPINE1_ID].abs().max())
+        max_h = float(pos[:, _ACT_H_SPINE1_ID].abs().max())
+        max_yaw = float(pos[:, _ACT_NECK_YAW_ID].abs().max())
         self.assertLessEqual(max_f, 0.6 + 1e-5, msg=f"F_spine1 参考超出限位: {max_f:.4f}")
         self.assertLessEqual(max_h, 0.6 + 1e-5, msg=f"H_spine1 参考超出限位: {max_h:.4f}")
         self.assertLessEqual(max_yaw, 0.8 + 1e-5, msg=f"Neck_yaw 参考超出限位: {max_yaw:.4f}")
@@ -352,7 +358,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertLess(float(diff), 1e-3,
                         msg=f"速度参考与位置参考差分不符, 最大差 {float(diff):.4f} rad/s")
         # 脊柱确实在动 (排除"两边都是 0"的假通过)
-        self.assertGreater(float(vel_b[:, 0].abs().max()), 1e-3)
+        self.assertGreater(float(vel_b[:, _ACT_F_SPINE1_ID].abs().max()), 1e-3)
         # 被限位截住时导数必须为 0 (与位置恒定一致)
         env_hi = make_ref_state_env([-24.0], phases=[0.3], gait=0.0)
         pos_c, _ = ref_mod.get_reference_joint_state(env_hi)
@@ -360,7 +366,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         env_hi.common_step_counter = 1
         env_hi.episode_length_buf = torch.tensor([6])
         pos_d, vel_d = ref_mod.get_reference_joint_state(env_hi)
-        self.assertLess(float((vel_d[:, 0] - (pos_d[:, 0] - pos_c[:, 0]) / STEP_DT).abs().max()),
+        self.assertLess(float((vel_d[:, _ACT_F_SPINE1_ID] - (pos_d[:, _ACT_F_SPINE1_ID] - pos_c[:, _ACT_F_SPINE1_ID]) / STEP_DT).abs().max()),
                         1e-3, msg="限位区内速度参考与位置不一致")
 
     # 回合首步不得因重置前的 κ 产生假的速度尖峰

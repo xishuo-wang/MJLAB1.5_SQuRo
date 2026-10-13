@@ -25,8 +25,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
     # 足端碰撞体名称
-    foot_names = ("FL", "FR", "HL", "HR")
-    geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
+    geom_names = mdp.FOOT_GEOM_NAMES
 
     # 观测空间
     policy_terms = {

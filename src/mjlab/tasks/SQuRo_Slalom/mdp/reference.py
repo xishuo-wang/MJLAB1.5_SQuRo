@@ -6,14 +6,30 @@ import pandas as pd
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .path import compute_path_ref, get_path_curvature
-from .indices import resolve_model_indices
+from .indices import (
+    resolve_model_indices,
+    _ACT_JOINT_NAMES,
+    _ACT_F_SPINE1_ID,
+    _ACT_F_BODY_ID,
+    _ACT_NECK_YAW_ID,
+    _ACT_NECK_PITCH_ID,
+    _ACT_FL_SHOULDER_ID,
+    _ACT_FL_ELBOW_ID,
+    _ACT_FR_SHOULDER_ID,
+    _ACT_FR_ELBOW_ID,
+    _ACT_H_SPINE1_ID,
+    _ACT_H_BODY_ID,
+    _ACT_HL_HIP_ID,
+    _ACT_HL_KNEE_ID,
+    _ACT_HR_HIP_ID,
+    _ACT_HR_KNEE_ID,
+)
 from .curriculums import CURVATURE_TARGET_MAX
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
-# =========================================================================================
 # 步态配置
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
 PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
@@ -46,7 +62,6 @@ _vel_table: torch.Tensor | None = None     # 同上
 
 
 
-# =========================================================================================
 # 逆运动学
 def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True):
     L1, L2 = (0.040, 0.040) if is_front else (0.040, 0.036)
@@ -78,7 +93,6 @@ def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True)
 
 
 
-# =========================================================================================
 # 加载 CSV + IK 预计算（腿部随曲率差速，脊柱全零直行参考）
 def _init_tables(device: torch.device | str) -> None:
     global _tables_initialized, _pos_table, _vel_table, _k_bins, _table_device
@@ -113,7 +127,7 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 预分配四维表 [内侧, 曲率, 相位, 关节]: 0=左腿为内侧(左转), 1=右腿为内侧(右转)
     # 两张表各自只缩放"内侧腿"的 Y_mean, 每侧腿部相位不随曲率符号改变
-    pos = torch.zeros(2, _NUM_CURV, _TABLE_RESOLUTION, 14, device=dev)
+    pos = torch.zeros(2, _NUM_CURV, _TABLE_RESOLUTION, len(_ACT_JOINT_NAMES), device=dev)
 
     # 对每个离散曲率生成左内/右内两张参考表
     for i, abs_k in enumerate(_CURVATURE_BINS):
@@ -131,35 +145,35 @@ def _init_tables(device: torch.device | str) -> None:
             shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
             sh, el = _inverse_kinematics(torch.roll(y_f_t * scale_fL, shifts=shift),
                                          torch.roll(z_f_t, shifts=shift), True)
-            pos[side, i, :, 4] = sh
-            pos[side, i, :, 5] = el
+            pos[side, i, :, _ACT_FL_SHOULDER_ID] = sh
+            pos[side, i, :, _ACT_FL_ELBOW_ID] = el
 
             # FR
             shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
             sh, el = _inverse_kinematics(torch.roll(y_f_t * scale_fR, shifts=shift),
                                          torch.roll(z_f_t, shifts=shift), True)
-            pos[side, i, :, 6] = sh
-            pos[side, i, :, 7] = el
+            pos[side, i, :, _ACT_FR_SHOULDER_ID] = sh
+            pos[side, i, :, _ACT_FR_ELBOW_ID] = el
 
             # HL
             shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
             hp, kn = _inverse_kinematics(torch.roll(y_h_t * scale_hL, shifts=shift),
                                          torch.roll(z_h_t, shifts=shift), False)
-            pos[side, i, :, 10] = hp
-            pos[side, i, :, 11] = kn
+            pos[side, i, :, _ACT_HL_HIP_ID] = hp
+            pos[side, i, :, _ACT_HL_KNEE_ID] = kn
 
             # HR
             shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
             hp, kn = _inverse_kinematics(torch.roll(y_h_t * scale_hR, shifts=shift),
                                          torch.roll(z_h_t, shifts=shift), False)
-            pos[side, i, :, 12] = hp
-            pos[side, i, :, 13] = kn
+            pos[side, i, :, _ACT_HR_HIP_ID] = hp
+            pos[side, i, :, _ACT_HR_KNEE_ID] = kn
 
             # 脊柱四列保持零位（由 κ 解析驱动, 见 get_reference_joint_state）
-            pos[side, i, :, 0] = 0.0   # F_spine1
-            pos[side, i, :, 1] = 0.0   # F_body
-            pos[side, i, :, 8] = 0.0   # H_spine1
-            pos[side, i, :, 9] = 0.0   # H_body
+            pos[side, i, :, _ACT_F_SPINE1_ID] = 0.0   # F_spine1
+            pos[side, i, :, _ACT_F_BODY_ID] = 0.0   # F_body
+            pos[side, i, :, _ACT_H_SPINE1_ID] = 0.0   # H_spine1
+            pos[side, i, :, _ACT_H_BODY_ID] = 0.0   # H_body
 
     # 中心差分计算速度表（沿相位维度）
     vel = torch.zeros_like(pos)
@@ -178,7 +192,6 @@ def _init_tables(device: torch.device | str) -> None:
 
 
 
-# =========================================================================================
 # 重置代次 +1: 使同一控制步内已缓存的参考失效 (框架在同一步内先算奖励、再重置、再算观测)
 def invalidate_reference_cache(env: ManagerBasedRlEnv) -> None:
     env._ref_epoch = getattr(env, "_ref_epoch", 0) + 1  # type: ignore[attr-defined]
@@ -266,26 +279,26 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     f_spine1_raw = -0.65 * k_norm
     h_spine1_raw = -0.65 * abs_k_norm
     neck_yaw_raw = 0.8 * k_norm
-    ref_pos[:, 0] = torch.clamp(f_spine1_raw, -F_SPINE1_LIMIT, F_SPINE1_LIMIT)
-    ref_pos[:, 1] = -0.9 * k_norm           # f_body
-    ref_pos[:, 2] = torch.clamp(neck_yaw_raw, -NECK_YAW_LIMIT, NECK_YAW_LIMIT)
-    ref_pos[:, 3] = -0.3                    # neck_pitch
-    ref_pos[:, 8] = torch.clamp(h_spine1_raw, -H_SPINE1_LIMIT, H_SPINE1_LIMIT)
-    ref_pos[:, 9] = -0.7 * k_norm           # h_body
+    ref_pos[:, _ACT_F_SPINE1_ID] = torch.clamp(f_spine1_raw, -F_SPINE1_LIMIT, F_SPINE1_LIMIT)
+    ref_pos[:, _ACT_F_BODY_ID] = -0.9 * k_norm           # f_body
+    ref_pos[:, _ACT_NECK_YAW_ID] = torch.clamp(neck_yaw_raw, -NECK_YAW_LIMIT, NECK_YAW_LIMIT)
+    ref_pos[:, _ACT_NECK_PITCH_ID] = -0.3                    # neck_pitch
+    ref_pos[:, _ACT_H_SPINE1_ID] = torch.clamp(h_spine1_raw, -H_SPINE1_LIMIT, H_SPINE1_LIMIT)
+    ref_pos[:, _ACT_H_BODY_ID] = -0.7 * k_norm           # h_body
 
     # 脊柱/颈速度参考 = 位置参考的解析时间导数 (被限位截住处导数为 0)
     zero_dot = torch.zeros_like(kappa_dot)
     unclamped_f = f_spine1_raw.abs() < F_SPINE1_LIMIT
     unclamped_h = h_spine1_raw.abs() < H_SPINE1_LIMIT
     unclamped_yaw = neck_yaw_raw.abs() < NECK_YAW_LIMIT
-    ref_vel[:, 0] = torch.where(unclamped_f, -0.65 * kappa_dot / kappa_norm, zero_dot)
-    ref_vel[:, 1] = -0.9 * kappa_dot / kappa_norm
-    ref_vel[:, 2] = torch.where(unclamped_yaw, 0.8 * kappa_dot / kappa_norm, zero_dot)
-    ref_vel[:, 3] = 0.0
-    ref_vel[:, 8] = torch.where(unclamped_h,
+    ref_vel[:, _ACT_F_SPINE1_ID] = torch.where(unclamped_f, -0.65 * kappa_dot / kappa_norm, zero_dot)
+    ref_vel[:, _ACT_F_BODY_ID] = -0.9 * kappa_dot / kappa_norm
+    ref_vel[:, _ACT_NECK_YAW_ID] = torch.where(unclamped_yaw, 0.8 * kappa_dot / kappa_norm, zero_dot)
+    ref_vel[:, _ACT_NECK_PITCH_ID] = 0.0
+    ref_vel[:, _ACT_H_SPINE1_ID] = torch.where(unclamped_h,
                                 -0.65 * torch.sign(curvature_cmd) * kappa_dot / kappa_norm,
                                 zero_dot)
-    ref_vel[:, 9] = -0.7 * kappa_dot / kappa_norm
+    ref_vel[:, _ACT_H_BODY_ID] = -0.7 * kappa_dot / kappa_norm
     # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
     if getattr(env, "_ref_phase_step", None) != current_step:
         env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]
