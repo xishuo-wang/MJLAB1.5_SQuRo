@@ -14,7 +14,6 @@ MODE_BOTH_LOW = 3           # 前后肢均低
 
 
 # 命令相关索引
-COMMAND_SCHEMA_VERSION = 2
 COMMAND_FIELDS = ("velocity_x", "height_f", "height_h", "gait_frequency", "curvature", "obstacle_height")
 COMMAND_DIM = len(COMMAND_FIELDS)
 CMD_VEL_X_IDS = COMMAND_FIELDS.index("velocity_x")

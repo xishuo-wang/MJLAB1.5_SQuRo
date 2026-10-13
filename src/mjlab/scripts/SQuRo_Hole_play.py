@@ -43,7 +43,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
 
 TASK_NAME = "Mjlab-SQuRo-Hole"
 
@@ -375,8 +375,6 @@ def run_play(cfg: PlayConfig):
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
-    if resume_path is not None:
-        validate_hole_command_schema(saved_hole)
     if resume_path is not None:
         recorded = read_env_step(resume_path)
         if recorded is not None:

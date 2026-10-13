@@ -14,8 +14,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_OBSTACLE_HEIGHT_IDS,
-    COMMAND_FIELDS,
-    COMMAND_SCHEMA_VERSION,
     COURSE_START,
     STAGE2_END,
     STEPS_PER_ITER,
@@ -29,7 +27,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_body_contact_reward, compute_corridor_reward
-from mjlab.tasks.SQuRo_Hole.rl.runner import validate_hole_command_schema
 
 
 # 验证三个边界两侧的阶段、奖励权重和课程门控。
@@ -168,24 +165,6 @@ def verify_obstacle_prior() -> None:
         env.close()
 
 
-# 同维度旧检查点必须拒绝，新格式字段必须完全一致。
-def verify_schema() -> None:
-    validate_hole_command_schema({
-        "command_schema_version": COMMAND_SCHEMA_VERSION,
-        "command_fields": list(COMMAND_FIELDS),
-    })
-    for state in ({}, {"version": 2}, {
-        "command_schema_version": COMMAND_SCHEMA_VERSION,
-        "command_fields": list(reversed(COMMAND_FIELDS)),
-    }):
-        try:
-            validate_hole_command_schema(state)
-        except ValueError:
-            continue
-        raise AssertionError("错误命令格式未被拒绝")
-    print("[通过] 新旧命令格式隔离，不会因观测同为113维而静默误用")
-
-
 # 执行走廊热身与命令接口验收。
 def main() -> None:
     torch.set_num_threads(1)
@@ -193,7 +172,6 @@ def main() -> None:
     verify_warmup_without_boards()
     verify_corridor()
     verify_obstacle_prior()
-    verify_schema()
     print("[结论] 走廊热身与六维命令验收全部通过")
 
 
