@@ -25,7 +25,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 持久化单回合穿板状态，并为 runner 提供无覆盖的完成快照。
+# 受限空间穿越状态检测器
 class HolePassageMonitor:
     def __init__(self, env: ManagerBasedRlEnv):
         self.env = env
@@ -44,7 +44,7 @@ class HolePassageMonitor:
         self.last_done_step = torch.full((n,), -1, dtype=torch.long, device=env.device)
         self.completed: list[dict] = []
 
-    # 清空指定环境的回合跟踪状态。
+
     def reset(self, env_ids: torch.Tensor | slice | None) -> None:
         if env_ids is None:
             env_ids = slice(None)
@@ -55,7 +55,7 @@ class HolePassageMonitor:
             getattr(self, name)[env_ids] = False
         self.last_done_step[env_ids] = -1
 
-    # 更新穿板判据；此 term 永远返回 False，不影响原终止语义。
+
     def compute(self) -> torch.Tensor:
         env = self.env
         command = env.command_manager._terms.get("hole_cmd")
@@ -142,10 +142,7 @@ class HolePassageMonitor:
             else:
                 failure_code = 0
             self.seq[env_id] += 1
-            valid = bool(
-                valid_course
-                and command.obstacle_height_sampled[env_id]  # type: ignore
-            )
+            valid = bool(valid_course and command.obstacle_height_sampled[env_id]) # type: ignore
             course_result = {"advanced": False}
             if command is not None and command.enable_course_progress:  # type: ignore
                 course_result = command.height_curriculum_state.record_episode(  # type: ignore
@@ -174,11 +171,12 @@ class HolePassageMonitor:
             })
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    # 读取本步新完成的回合快照。
+
     def consume(self) -> list[dict]:
         completed = self.completed
         self.completed = []
         return completed
+
 
 
 # 执行永不触发的穿板监测项。
