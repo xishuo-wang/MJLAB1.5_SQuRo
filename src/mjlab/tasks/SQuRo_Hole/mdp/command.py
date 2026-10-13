@@ -176,7 +176,6 @@ class HoleCommand(CommandTerm):
             if self.cfg.fixed_velocity is None:
                 vel_x[i] = self._determine_velocity(height_F[i], height_H[i])
 
-        
         # 更新命令张量
         self.vel_command[env_ids] = vel_x
         self.height_f_command[env_ids] = height_F
@@ -190,7 +189,7 @@ class HoleCommand(CommandTerm):
     # 仅在回合重置时采样一次板底高度。
     def _sample_obstacle_height(self, env_ids: torch.Tensor) -> None:
         if self.obstacle_entity is None:
-            raise RuntimeError("高度课程需要 Hole1 单板实体")
+            raise RuntimeError("高度课程需要受限空间实体")
         lower = self.height_curriculum_state.z_min
         upper = self.height_curriculum_state.z_max
         uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
@@ -217,7 +216,7 @@ class HoleCommand(CommandTerm):
     # 使用 base_Link 的世界 X 统一查单板高度表。
     def _update_command_from_height_rule(self) -> None:
         if self.obstacle_entity is None:
-            raise RuntimeError("高度课程需要 Hole1 单板实体")
+            raise RuntimeError("高度课程需要受限空间实体")
         board_cfg = self.obstacle_entity.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_bottom_z(self.obstacle_entity)
@@ -231,7 +230,7 @@ class HoleCommand(CommandTerm):
         self.obstacle_height_command[:] = bottom_z
 
 
-    # 采样前后肢高度组合: 两侧独立采样, 四种模式 (双高/前低/后低/双低) 全部覆盖
+    # 采样前后肢高度组合: 两侧独立采样
     def _sample_heights(self, available_heights: list) -> tuple:
         values = torch.tensor(available_heights, device=self.device)
         idx_F = torch.randint(0, len(available_heights), (1,), device=self.device)
@@ -348,7 +347,7 @@ class HoleCommand(CommandTerm):
 @dataclass(kw_only=True)  
 class HoleCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
-    resampling_time_range: Tuple[float, float] = (3.0, 4.0)  # 默认值
+    resampling_time_range: Tuple[float, float] = (3.0, 4.0)
     debug_vis: bool = False
     fixed_velocity: Optional[float] = None
     fixed_height_F: Optional[float] = None
