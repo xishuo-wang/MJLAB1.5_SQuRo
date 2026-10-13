@@ -4,7 +4,8 @@ BASE_FREQ = 2.0             # 基准速度：正常行走下的步态频率
 BASE_SPEED = 0.2            # 基准速度：基准步频和基准高度下的期望速度
 BASE_CURVATURE = 0.0        # 基准曲率
 THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度
-
+RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]       # 0-1k 轮采样的高度值
+FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]   # 1-2k 轮采样的高度值
 
 # 四种高度模式
 MODE_BOTH_HIGH = 0          # 前后肢均高
@@ -32,8 +33,8 @@ NECK_REF_POS = (0.0, -0.3)                  # 头颈相关参考姿态
 HIND_HOLD_POS = (0.80, -0.15)               # 当前基线的后腿收缩参考角
 
 
-# 高度课程规则参数；可视化与训练共用此处定义。
-WARMUP_OBSTACLE_HEIGHT = 0.100      # 无实体时的100毫米板高占位
+# 高度课程相关配置
+WARMUP_OBSTACLE_HEIGHT = 0.100                  # 无实体时的100毫米板高占位
 OBSTACLE_HEIGHT_SPLIT = 0.070
 ENTRY_MARGIN = 0.150
 EXIT_MARGIN = 0.100
@@ -48,11 +49,8 @@ HEIGHT_MIN_SUCCESS_BATCH = 256
 HEIGHT_MIN_SUCCESS_RATE = 0.60
 HEIGHT_REQUIRED_BATCHES = 2
 HEIGHT_MIN_DWELL_ITERATIONS = 100
-HOLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)    # 真实课程的初始板底位置
+HOLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)   # 真实课程的初始板底位置
 HOLE_SIZE = (0.015, 0.1, 0.005)                  # 单板半长、半宽、半厚
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                # 板底净空余量
 
 
-# 前三阶段使用随机高度池，第四阶段按板高与基座位置查表。
-RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
-FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
