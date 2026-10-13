@@ -1,5 +1,5 @@
 # uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
-# Hole 兼容性验证: 参考表 / 历史位置表 / 三阶段课程 / 实体碰撞 / 观测维度
+# Hole 验证：参考表、历史位置表、四阶段课程、实体碰撞与观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
 import torch
@@ -85,9 +85,9 @@ def check_command() -> None:
           f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
           f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
           f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
-    print("[3b] 三阶段定义 (边界唯一定义在 mdp/config.py):")
+    print("[3b] 四阶段定义 (边界唯一定义在 mdp/config.py):")
     print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'位置表':>8}{'要求碰撞':>10}")
-    bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER]
+    bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER, STAGE3_END // STEPS_PER_ITER]
     for s in range(1, NUM_STAGES + 1):
         lo = bounds[s - 1]
         hi = bounds[s] - 1 if s < NUM_STAGES else "∞"
@@ -96,8 +96,8 @@ def check_command() -> None:
         print(f"     {s:>4}{f'{lo}-{hi}':>16}{src:>26}"
               f"{str(stage_uses_schedule(s)):>8}{str(stage_requires_collision(s)):>10}")
 
-    # 位移推进查表: 位置表只在 stage 3 生效, 先把计数器推到该阶段
-    env.common_step_counter = STAGE2_END
+    # 历史位移表从课程阶段生效，先把计数器推到该阶段。
+    env.common_step_counter = STAGE3_END
     robot = env.scene["robot"]
     state = torch.zeros(env.num_envs, 13, device=env.device)
     state[:, 2] = 0.06

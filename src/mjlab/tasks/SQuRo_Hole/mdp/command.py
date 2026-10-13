@@ -12,15 +12,17 @@ from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 
 from .config import (
     ANGLE_VALUES,
+    BASE_CURVATURE,
+    BASE_FREQ,
     BASE_HEIGHT,
     BASE_SPEED,
-    CMD_ANGLE_IDS,
+    COMMAND_DIM,
+    CMD_CURVATURE_IDS,
+    CMD_GAIT_FREQ_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    CMD_VEL_IDS,
+    CMD_OBSTACLE_HEIGHT_IDS,
     CMD_VEL_X_IDS,
-    CMD_VEL_Y_IDS,
-    CMD_VEL_Z_IDS,
     FULL_HEIGHT_VALUES,
     MODE_BOTH_HIGH,
     MODE_BOTH_LOW,
@@ -86,11 +88,18 @@ class HoleCommand(CommandTerm):
     def __init__(self, cfg: HoleCommandCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
-        self.command_tensor = torch.zeros(self.num_envs, 6, device=self.device)
-        self.vel_command_w = self.command_tensor[:, CMD_VEL_IDS]
-        self.height_F_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]  # 前肢高度命令
-        self.height_H_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]  # 后肢高度命令
-        self.angle_command = self.command_tensor[:, CMD_ANGLE_IDS]        # 角度命令
+        self.command_tensor = torch.zeros(self.num_envs, COMMAND_DIM, device=self.device)
+        self.vel_command = self.command_tensor[:, CMD_VEL_X_IDS]
+        self.height_f_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]
+        self.height_h_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]
+        self.gait_freq_command = self.command_tensor[:, CMD_GAIT_FREQ_IDS]
+        self.curvature_command = self.command_tensor[:, CMD_CURVATURE_IDS]
+        self.obstacle_height_command = self.command_tensor[:, CMD_OBSTACLE_HEIGHT_IDS]
+        self.height_F_command = self.height_f_command
+        self.height_H_command = self.height_h_command
+        self.angle_command = torch.zeros(self.num_envs, device=self.device)
+        self.gait_freq_command.fill_(BASE_FREQ)
+        self.curvature_command.fill_(BASE_CURVATURE)
         self.has_printed_current_cmd = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.use_height_schedule = cfg.use_height_schedule
         self.height_schedule = cfg.height_schedule or [] 
@@ -122,6 +131,21 @@ class HoleCommand(CommandTerm):
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
+
+
+    # 可视化使用三维速度箭头，策略命令只保留前向速度。
+    @property
+    def vel_command_w(self) -> torch.Tensor:
+        zeros = torch.zeros_like(self.vel_command)
+        return torch.stack((self.vel_command, zeros, zeros), dim=-1)
+
+
+    # 板高先验始终读取实际板体，无板场景使用零占位。
+    def _update_obstacle_height_command(self) -> None:
+        if self.obstacle_entity is None:
+            self.obstacle_height_command.zero_()
+        else:
+            self.obstacle_height_command[:] = read_bottom_z(self.obstacle_entity)
 
 
     # 从已写入的根位姿记录起点，避开复位前的缓存位置；见 docs/SQuRo_Hole_课程复位.md。
@@ -232,16 +256,11 @@ class HoleCommand(CommandTerm):
                 angle[i] = self._determine_angle(height_F[i], height_H[i])
         
         # 更新命令张量
-        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = vel_x
-        self.vel_command_w[env_ids, CMD_VEL_Y_IDS] = 0
-        self.vel_command_w[env_ids, CMD_VEL_Z_IDS] = 0
+        self.vel_command[env_ids] = vel_x
         self.height_F_command[env_ids] = height_F
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
-        self.command_tensor[env_ids, CMD_VEL_IDS] = self.vel_command_w[env_ids]
-        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
-        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
-        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
+        self._update_obstacle_height_command()
         self.has_printed_current_cmd[env_ids] = False
         
         # 重置起始位置
@@ -260,6 +279,7 @@ class HoleCommand(CommandTerm):
         self.obstacle_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
         write_hole_bottom_z(self.obstacle_entity, heights, env_ids)
+        self._update_obstacle_height_command()
 
 
     # 写入新回合的中性命令，等待 forward 后按躯干位置更新。
@@ -269,14 +289,11 @@ class HoleCommand(CommandTerm):
         angle = torch.full_like(heights, float(self.cfg.fixed_angle or 0.0))
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
-        self.command_tensor[env_ids, CMD_VEL_IDS] = 0.0
-        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = velocity
+        self.vel_command[env_ids] = velocity
         self.height_F_command[env_ids] = heights
         self.height_H_command[env_ids] = heights
         self.angle_command[env_ids] = angle
-        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = heights
-        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = heights
-        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
+        self._update_obstacle_height_command()
 
 
     # 使用 base_Link 的世界 X 统一查单板高度表。
@@ -296,16 +313,11 @@ class HoleCommand(CommandTerm):
             velocity.fill_(float(self.cfg.fixed_velocity))
         if self.cfg.fixed_angle is not None:
             angle.fill_(float(self.cfg.fixed_angle))
-        self.vel_command_w[:, CMD_VEL_X_IDS] = velocity
-        self.vel_command_w[:, CMD_VEL_Y_IDS] = 0.0
-        self.vel_command_w[:, CMD_VEL_Z_IDS] = 0.0
-        self.command_tensor[:, CMD_VEL_IDS] = self.vel_command_w
+        self.vel_command[:] = velocity
         self.height_F_command[:] = front
         self.height_H_command[:] = hind
-        self.command_tensor[:, CMD_HEIGHT_F_IDS] = front
-        self.command_tensor[:, CMD_HEIGHT_H_IDS] = hind
         self.angle_command[:] = angle
-        self.command_tensor[:, CMD_ANGLE_IDS] = angle
+        self.obstacle_height_command[:] = bottom_z
 
 
     # 采样前后肢高度组合: 两侧独立采样, 四种模式 (双高/前低/后低/双低) 全部覆盖
@@ -376,16 +388,11 @@ class HoleCommand(CommandTerm):
             angle = torch.full_like(angle, float(self.cfg.fixed_angle))
         
         # 批量更新命令张量
-        self.vel_command_w[env_ids, CMD_VEL_X_IDS] = vel_x
-        self.vel_command_w[env_ids, CMD_VEL_Y_IDS] = 0
-        self.vel_command_w[env_ids, CMD_VEL_Z_IDS] = 0
+        self.vel_command[env_ids] = vel_x
         self.height_F_command[env_ids] = height_F
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
-        self.command_tensor[env_ids, CMD_VEL_IDS] = self.vel_command_w[env_ids]
-        self.command_tensor[env_ids, CMD_HEIGHT_F_IDS] = height_F
-        self.command_tensor[env_ids, CMD_HEIGHT_H_IDS] = height_H
-        self.command_tensor[env_ids, CMD_ANGLE_IDS] = angle
+        self._update_obstacle_height_command()
         self.has_printed_current_cmd[env_ids] = False
 
 
@@ -403,6 +410,7 @@ class HoleCommand(CommandTerm):
             self._update_command_from_schedule(env_ids, schedule)
         elif self.enable_height_course and stage_uses_height_course(stage):
             self._update_command_from_height_rule()
+        self._update_obstacle_height_command()
         self._log_diagnostics()
 
 
@@ -426,6 +434,16 @@ class HoleCommand(CommandTerm):
         yaw = yaw.reshape(self.num_envs, len(body_ids))
         offsets = yaw.new_tensor([-torch.pi / 2, torch.pi / 2])
         heading_error = torch.rad2deg(wrap_to_pi(yaw + offsets)).abs()
+        log = self._env.extras["log"]
+        if not self.cfg.log_detailed_metrics:
+            log["Metrics/课程/阶段"] = positions.new_tensor(get_current_stage(self._env.common_step_counter))
+            log["Metrics/运动/侧向速度绝对值均值"] = velocity[:, 1].abs().mean().detach()
+            for name, mask in groups:
+                log[f"Metrics/{name}/占比"] = mask.float().mean().detach()
+                if name in ("前低后高", "前高后低"):
+                    mean_heading = (heading_error[:, 0] * mask).sum() / mask.sum().clamp_min(1)
+                    log[f"Metrics/{name}/前躯干方向误差均值_度"] = mean_heading.detach()
+            return
         values = torch.stack(
             (relative_x, velocity[:, 0], velocity[:, 1], velocity[:, 1].abs(),
              heading_error[:, 0], heading_error[:, 1]), dim=1,
@@ -434,7 +452,6 @@ class HoleCommand(CommandTerm):
         counts = masks.sum(dim=1)
         means = (masks @ values) / counts.clamp_min(1).unsqueeze(1)
         fields = ("相对X均值", "前向速度均值", "侧向速度均值", "侧向速度绝对值均值", "前躯干方向误差均值_度", "后躯干方向误差均值_度")
-        log = self._env.extras["log"]
         log["Metrics/位移/起点X均值"] = self.start_positions[:, 0].mean().detach()
         log["Metrics/位移/相对X均值"] = relative_x.mean().detach()
         log["Metrics/位移/相对X最大值"] = relative_x.max().detach()
@@ -507,6 +524,7 @@ class HoleCommandCfg(CommandTermCfg):
     stage_schedule_fallback: bool = True        # 课程关闭时是否启用 legacy 表；fixed/random 回放可关闭
     enable_height_course: bool = False
     enable_course_progress: bool = True
+    log_detailed_metrics: bool = False
     height_curriculum_state: dict = field(default_factory=dict)
     
     @dataclass

@@ -18,7 +18,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_MAX, HEIGHT_MIN
-from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 from mjlab.viewer import NativeMujocoViewer
 
 TASK = "Mjlab-SQuRo-Hole"
@@ -50,6 +50,7 @@ def main() -> None:
         raise ValueError("--random-height 与 --obstacle-height 不能同时使用")
 
     saved = read_hole_state(checkpoint)
+    validate_hole_command_schema(saved)
     course_state = saved.get("height_course") or HeightCurriculumState().state_dict()
     z_min = float(course_state["z_min"])
     z_max = float(course_state["z_max"])

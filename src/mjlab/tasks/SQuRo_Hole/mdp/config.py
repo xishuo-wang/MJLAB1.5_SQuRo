@@ -12,14 +12,17 @@ MODE_FRONT_LOW = 1          # 前肢低后肢高
 MODE_HIND_LOW = 2           # 前肢高后肢低
 MODE_BOTH_LOW = 3           # 前后肢均低
 
-# 6 维命令张量的槽位: 顺序与 observations/command 观测列一致
-CMD_VEL_X_IDS = 0           # X 方向速度命令
-CMD_VEL_Y_IDS = 1           # Y 方向速度命令
-CMD_VEL_Z_IDS = 2           # Z 方向速度命令
-CMD_HEIGHT_F_IDS = 3        # 前肢高度命令
-CMD_HEIGHT_H_IDS = 4        # 后肢高度命令
-CMD_ANGLE_IDS = 5           # 期望角度命令
-CMD_VEL_IDS = slice(CMD_VEL_X_IDS, CMD_VEL_Z_IDS + 1)
+# 命令前五列对齐 Backup，第六列记录真实板底；见高度课程设计文档。
+COMMAND_SCHEMA_VERSION = 2
+COMMAND_FIELDS = ("velocity_x", "height_f", "height_h", "gait_frequency", "curvature", "obstacle_height")
+COMMAND_DIM = len(COMMAND_FIELDS)
+CMD_VEL_X_IDS = COMMAND_FIELDS.index("velocity_x")
+CMD_HEIGHT_F_IDS = COMMAND_FIELDS.index("height_f")
+CMD_HEIGHT_H_IDS = COMMAND_FIELDS.index("height_h")
+CMD_GAIT_FREQ_IDS = COMMAND_FIELDS.index("gait_frequency")
+CMD_CURVATURE_IDS = COMMAND_FIELDS.index("curvature")
+CMD_OBSTACLE_HEIGHT_IDS = COMMAND_FIELDS.index("obstacle_height")
+BASE_CURVATURE = 0.0
 
 
 
@@ -36,40 +39,40 @@ HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
 
 
 
-# 课程阶段：两段热身后直接进入单板真实碰撞高度课程。
+# 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
 STAGE1_END_ITER = 1000
 STAGE2_END_ITER = 2000
-COURSE_START_ITER = STAGE2_END_ITER
-HEIGHT_COURSE_STAGE = 3
-# 兼容旧脚本导入；该常量指向高度课程起点，不代表阶段 3 的结束。
-STAGE3_END_ITER = COURSE_START_ITER
-NUM_STAGES = 3
+STAGE3_END_ITER = 3000
+COURSE_START_ITER = STAGE3_END_ITER
+HEIGHT_COURSE_STAGE = 4
+NUM_STAGES = 4
 
 STEPS_PER_ITER = 48
 STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
 STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
 COURSE_START = COURSE_START_ITER * STEPS_PER_ITER
-# 兼容旧脚本导入；这不是额外阶段边界。
-STAGE3_END = COURSE_START
+STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
 
-# 各阶段的随机采样高度池 (阶段 3 起用位置表, 不再随机采样)
+# 前三阶段使用随机高度池，第四阶段按板高与基座位置查表。
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
 
 # 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
-STAGE_COLLISION = (False, False, True)
+STAGE_COLLISION = (False, False, False, True)
 
 # 角度命令候选 (度)
 ANGLE_VALUES = [0.0]
 
 
 
-# 按全局步数取当前阶段 (1~3); 阶段边界是命令/课程/碰撞的唯一来源
+# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_END:
         return 1
     if step_counter < STAGE2_END:
         return 2
+    if step_counter < STAGE3_END:
+        return 3
     return HEIGHT_COURSE_STAGE
 
 
@@ -93,6 +96,6 @@ def stage_requires_collision(stage: int) -> bool:
 def heights_for_stage(stage: int):
     if stage == 1:
         return RANDOM_HEIGHT_VALUES
-    if stage == 2:
+    if stage in (2, 3):
         return FULL_HEIGHT_VALUES
     return None

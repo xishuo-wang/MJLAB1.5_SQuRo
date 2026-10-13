@@ -89,6 +89,13 @@ def main() -> None:
     torch.set_num_threads(1)
     env = make_env()
     try:
+        command = env.command_manager.get_term("hole_cmd")
+        env.extras["log"].clear()
+        command._log_diagnostics()
+        compact_keys = {key for key in env.extras["log"] if key.startswith("Metrics/")}
+        assert len(compact_keys) == 8, f"默认命令日志未精简：{compact_keys}"
+        assert "Metrics/位移/起点X均值" not in compact_keys, "默认日志仍包含复位调试项"
+        command.cfg.log_detailed_metrics = True
         check_modes_and_directions(env)
         check_empty_modes(env)
         check_schedule_logging(env)

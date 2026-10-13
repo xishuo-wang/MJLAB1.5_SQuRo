@@ -78,9 +78,11 @@ def make_env() -> ManagerBasedRlEnv:
 # 验证基座查表的边界、低板互斥和可视化一致性。
 def verify_shared_rule() -> None:
     check(
-        "两段热身后在 2000 iter 进入第三阶段课程",
+        "三段热身后在 3000 iter 进入第四阶段课程",
         get_current_stage(STAGE2_END_ITER * STEPS_PER_ITER - 1) == 2
-        and get_current_stage(COURSE_START) == HEIGHT_COURSE_STAGE == 3,
+        and get_current_stage(STAGE2_END_ITER * STEPS_PER_ITER) == 3
+        and get_current_stage(COURSE_START - 1) == 3
+        and get_current_stage(COURSE_START) == HEIGHT_COURSE_STAGE == 4,
     )
     for center, half_length in ((0.2, 0.015), (0.6, 0.100)):
         left, middle, right = rule_bounds(center, half_length)

@@ -12,7 +12,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.command import STAGE3_POSITION_SCHEDULE
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    STAGE2_END,
+    COURSE_START,
 )
 
 
@@ -25,7 +25,7 @@ def make_env(reset_func=events.reset_model) -> ManagerBasedRlEnv:
     cfg.terminations = {"timeout": cfg.terminations["timeout"]}
     cfg.events["reset_all"].func = reset_func
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
-    env.common_step_counter = STAGE2_END
+    env.common_step_counter = COURSE_START
     env.reset(seed=42)
     return env
 

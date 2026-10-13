@@ -152,6 +152,8 @@ def check_state_roundtrip() -> None:
     print("\n[6] checkpoint hole_state 真实保存与读取")
     import os
 
+    from mjlab.tasks.SQuRo_Hole.mdp.config import COMMAND_FIELDS, COMMAND_SCHEMA_VERSION
+
     from mjlab.tasks.SQuRo_Hole.rl.runner import (
         HOLE_STATE_VERSION,
         read_env_step,
@@ -170,6 +172,8 @@ def check_state_roundtrip() -> None:
     saved = read_hole_state(path)
     check("hole_state 已写入", bool(saved), f"version={saved.get('version')}")
     check("版本号正确", saved.get("version") == HOLE_STATE_VERSION)
+    check("命令语义版本正确", saved.get("command_schema_version") == COMMAND_SCHEMA_VERSION)
+    check("命令列名与顺序已保存", tuple(saved.get("command_fields", [])) == COMMAND_FIELDS)
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_END))
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []

@@ -19,11 +19,11 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     TABLE_RESOLUTION,
     THRESHOLD_HEIGHT,
     CMD_VEL_X_IDS,
-    CMD_VEL_Y_IDS,
-    CMD_VEL_Z_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    CMD_ANGLE_IDS,
+    CMD_GAIT_FREQ_IDS,
+    CMD_CURVATURE_IDS,
+    CMD_OBSTACLE_HEIGHT_IDS,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import build_hole_entities
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
@@ -276,12 +276,11 @@ class ReferenceTablePolicy:
 
             # ---- 命令 ----
             "vel_command_x": float(cmd[CMD_VEL_X_IDS]),
-            "vel_command_y": float(cmd[CMD_VEL_Y_IDS]),
-            "vel_command_z": float(cmd[CMD_VEL_Z_IDS]),
             "height_F_command": hF_cmd,
             "height_H_command": hH_cmd,
-            "angle_command": float(cmd[CMD_ANGLE_IDS]),
-            "gait_freq_command": float(self.gait_freq),
+            "gait_freq_command": float(cmd[CMD_GAIT_FREQ_IDS]),
+            "curvature_command": float(cmd[CMD_CURVATURE_IDS]),
+            "obstacle_height_command": float(cmd[CMD_OBSTACLE_HEIGHT_IDS]),
 
             # ---- 高度（命令 vs 实测，两种命名都写） ----
             "height_F_actual": hF_act,

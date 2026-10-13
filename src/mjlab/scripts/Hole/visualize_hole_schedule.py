@@ -19,10 +19,11 @@ from mjlab.tasks.SQuRo_Hole.mdp.command import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     BASE_HEIGHT,
-    CMD_ANGLE_IDS,
+    BASE_FREQ,
+    COMMAND_DIM,
+    CMD_GAIT_FREQ_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    CMD_VEL_IDS,
     CMD_VEL_X_IDS,
     HEIGHT_LIST,
     MODE_BOTH_HIGH,
@@ -106,7 +107,8 @@ def build_cases(start_x: float) -> list[ScheduleCase]:
 def sample_schedule(positions: np.ndarray) -> dict[str, np.ndarray]:
     position = torch.as_tensor(positions, dtype=torch.float32)
     count = len(position)
-    command = torch.zeros(count, CMD_ANGLE_IDS + 1)
+    command = torch.zeros(count, COMMAND_DIM)
+    command[:, CMD_GAIT_FREQ_IDS] = BASE_FREQ
     probe = SimpleNamespace(
         device="cpu",
         cfg=HoleCommandCfg(),
@@ -117,10 +119,11 @@ def sample_schedule(positions: np.ndarray) -> dict[str, np.ndarray]:
         ),
         start_positions=torch.zeros(count, 3),
         command_tensor=command,
-        vel_command_w=command[:, CMD_VEL_IDS],
+        vel_command=command[:, CMD_VEL_X_IDS],
         height_F_command=command[:, CMD_HEIGHT_F_IDS],
         height_H_command=command[:, CMD_HEIGHT_H_IDS],
-        angle_command=command[:, CMD_ANGLE_IDS],
+        angle_command=torch.zeros(count),
+        _update_obstacle_height_command=lambda: None,
         has_printed_current_cmd=torch.zeros(count, dtype=torch.bool),
     )
     HoleCommand._update_command_from_schedule(

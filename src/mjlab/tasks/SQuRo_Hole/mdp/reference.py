@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from .config import (
     BASE_HEIGHT,
+    BASE_FREQ,
+    CMD_GAIT_FREQ_IDS,
     HEIGHT_LIST,
     NECK_REF_POS,
     NECK_REF_VEL,
@@ -67,21 +69,21 @@ CSV_PARAMS = {
 
 
 
-# ==================== 摆线轨迹参数配置 ====================
+# 摆线轨迹参数配置
 CYCLOID_PARAMS = {
     "normal": {
-        "freq": 2.0, "stride_F": 0.05, "stride_H": 0.05, "height_F": 0.01, "height_H": 0.015,
+        "freq": BASE_FREQ, "stride_F": 0.05, "stride_H": 0.05, "height_F": 0.01, "height_H": 0.015,
         "body_height_F": 0.06, "body_height_H": 0.057, "swing_ratio": 0.4, 
         "rotate_angle_F": 0.0, "rotate_angle_H": 0.0, "x_offset_F": -0.01, "x_offset_H": -0.03,
         "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
     },
     "front_low": {
-        "freq": 2.0, "stride_H": 0.04, "height_H": 0.005, "body_height_H": 0.05,
+        "freq": BASE_FREQ, "stride_H": 0.04, "height_H": 0.005, "body_height_H": 0.05,
         "swing_ratio": 0.4, "rotate_angle_H": 0.3, "x_offset_H": -0.03,
         "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
     },
     "hind_low": {
-        "freq": 2.0, "stride_F": 0.04, "height_F": 0.005, "body_height_F": 0.05,
+        "freq": BASE_FREQ, "stride_F": 0.04, "height_F": 0.005, "body_height_F": 0.05,
         "swing_ratio": 0.4, "rotate_angle_F": -0.4, "x_offset_F": -0.02,
         "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
     }
@@ -405,7 +407,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         
                 
     # 根据位置表差分计算速度表。
-    mode_periods = torch.tensor([0.5, 0.5, 0.5], device=device)
+    mode_periods = torch.full((NUM_MODES,), 1.0 / BASE_FREQ, device=device)
     dt = (mode_periods / TABLE_RESOLUTION).view(NUM_MODES, 1, 1, 1)
 
     front_vel_table = torch.zeros_like(front_pos_table)
@@ -467,9 +469,9 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     mode[(front_low) & (~hind_low)] = MODE_FRONT_LOW
     mode[(~front_low) & (hind_low)] = MODE_HIND_LOW
 
-    # 2. 根据 mode 获取周期并计算相位
-    mode_periods = tables["mode_periods"]  # [3]
-    period = mode_periods[mode]
+    # 2. 按命令步频计算相位，当前固定为基准步频。
+    frequency = cmd_term.command[:, CMD_GAIT_FREQ_IDS]
+    period = frequency.reciprocal()
 
     phase = (current_time % period) / period
     phase_scaled = phase * (TABLE_RESOLUTION - 1)
@@ -501,6 +503,7 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     # 6. 拼接头颈，头颈位置/速度恒定
     joint_pos = torch.cat([front_pos, hind_pos, spine_pos, _neck_ref_pos(mode)],dim=1)
     joint_vel = torch.cat([front_vel, hind_vel, spine_vel, _neck_ref_vel(mode)],dim=1)
+    joint_vel = joint_vel * (frequency / BASE_FREQ).unsqueeze(1)
 
     # 7. 表列序同步为执行器列序, 与 _MODEL_INDICES.joint_ids / 动作空间对齐 (见 indices.REF_SLOT_OF_ACT)
     return joint_pos[:, REF_SLOT_OF_ACT], joint_vel[:, REF_SLOT_OF_ACT]

@@ -14,8 +14,8 @@ from .config import (
 # 阶段边界 (iter): 与 command.py 共用 config 里的同一来源。
 STAGE1_1_ITER = STAGE1_END_ITER      # 0-1k:  正常高度随机采样 (纯模仿)
 STAGE1_2_ITER = STAGE2_END_ITER      # 1k-2k: 含低高度全档随机采样 (高度课程收紧)
-STAGE1_3_ITER = COURSE_START_ITER    # 2k 以后: 单板 + 真实碰撞高度课程
-_STAGES = (0, STAGE1_1_ITER, STAGE1_3_ITER)
+STAGE1_3_ITER = COURSE_START_ITER   # 2k-3k: 全位置走廊热身
+_STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER, STAGE1_3_ITER)
 
 
 
@@ -23,40 +23,42 @@ _STAGES = (0, STAGE1_1_ITER, STAGE1_3_ITER)
 # 奖励权重课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "mimic_pos":                (10.0, 10.0, 10.0),
-    "mimic_vel":                (5.0, 5.0, 5.0),
-    "vel":                      (5.0, 5.0, 10.0),
-    "height":                   (2.5, 2.5, 5.0),
-    "foot_clearance":           (1.0, 1.0, 1.0),
-    "reached":                  (1.0, 1.0, 1.0),
-    "orientation":              (2.0, 2.0, 4.0),
-    "angle":                    (1.0, 1.0, 1.0),
-    "smoothness":               (0.1, 0.2, 1.0),
-    "body_contact":             (0.0, 0.0, 5.0),
+    "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
+    "mimic_vel":                (5.0, 5.0, 5.0, 5.0),
+    "vel":                      (5.0, 5.0, 5.0, 10.0),
+    "height":                   (2.5, 2.5, 2.5, 5.0),
+    "foot_clearance":           (1.0, 1.0, 1.0, 1.0),
+    "reached":                  (1.0, 1.0, 1.0, 1.0),
+    "orientation":              (2.0, 2.0, 2.0, 4.0),
+    "angle":                    (1.0, 1.0, 1.0, 1.0),
+    "smoothness":               (0.1, 0.2, 0.2, 1.0),
+    "body_contact":             (0.0, 0.0, 0.0, 5.0),
+    "corridor":                 (0.0, 0.0, 5.0, 5.0),
     # 未注册奖励显式保留基线的默认权重。
-    "energy":                   (1.0, 1.0, 1.0),
-    "cot":                      (1.0, 1.0, 1.0),
-    "joint_acc":                (1.0, 1.0, 1.0),
-    "y_offset":                 (1.0, 1.0, 1.0),
-    "joint_limits":             (1.0, 1.0, 1.0),
-    "action_acc":               (1.0, 1.0, 1.0),
+    "energy":                   (1.0, 1.0, 1.0, 1.0),
+    "cot":                      (1.0, 1.0, 1.0, 1.0),
+    "joint_acc":                (1.0, 1.0, 1.0, 1.0),
+    "y_offset":                 (1.0, 1.0, 1.0, 1.0),
+    "joint_limits":             (1.0, 1.0, 1.0, 1.0),
+    "action_acc":               (1.0, 1.0, 1.0, 1.0),
     # 虚拟净空 σ: 超出量的指数衰减系数 (超出 5mm 时按 exp(-sigma*0.005^2) 计)
-    "sigma_body_contact":       (2000.0, 2000.0, 2000.0),
+    "sigma_body_contact":       (2000.0, 2000.0, 2000.0, 2000.0),
+    "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
     # 位置/速度模仿的腿部 σ 与颈部权重
-    "sigma_leg_pos":            (5.0, 10.0, 5.0),
-    "sigma_leg_vel":            (0.1, 0.1, 0.1),
-    "alpha_neck_pos":           (0.30, 0.30, 0.30),
-    "alpha_neck_vel":           (0.30, 0.30, 0.30),
+    "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
+    "alpha_neck_pos":           (0.30, 0.30, 0.30, 0.30),
+    "alpha_neck_vel":           (0.30, 0.30, 0.30, 0.30),
     # 位置/速度模仿的脊柱 σ 与脊柱项权重
-    "sigma_spn_pos":            (5.0, 10.0, 5.0),
-    "sigma_spn_vel":            (0.1, 0.1, 0.1),
-    "alpha_spn_pos":            (1.0, 1.0, 1.0),
-    "alpha_spn_vel":            (1.0, 1.0, 1.0),
+    "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_spn_vel":            (0.1, 0.1, 0.1, 0.1),
+    "alpha_spn_pos":            (1.0, 1.0, 1.0, 1.0),
+    "alpha_spn_vel":            (1.0, 1.0, 1.0, 1.0),
     # 头颈 σ: 曲线与脊柱一致, 保证替换模仿奖励前后行为不变
-    "sigma_neck_pos":           (5.0, 10.0, 5.0),
-    "sigma_neck_vel":           (0.1, 0.1, 0.1),
+    "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
+    "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
     # 高度 σ
-    "height_sigma":             (500.0, 1000.0, 1000.0),
+    "height_sigma":             (500.0, 1000.0, 1000.0, 1000.0),
 }
 
 

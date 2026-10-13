@@ -11,6 +11,8 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    COMMAND_FIELDS,
+    COMMAND_SCHEMA_VERSION,
     STEPS_PER_ITER,
     get_current_stage,
     stage_requires_collision,
@@ -23,7 +25,19 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 )
 
 # 几何/状态格式版本: 换代时旧 checkpoint 需要显式迁移
-HOLE_STATE_VERSION = 2
+HOLE_STATE_VERSION = 3
+
+
+# 维度相同也不能将旧命令语义直接用于新策略。
+def validate_hole_command_schema(state: dict) -> None:
+    if (
+        state.get("command_schema_version") != COMMAND_SCHEMA_VERSION
+        or tuple(state.get("command_fields") or ()) != COMMAND_FIELDS
+    ):
+        raise ValueError(
+            "检查点命令格式与当前版本不兼容：当前命令为速度、前高、后高、步频、曲率、板底。"
+            "新版本须从头训练；旧检查点请使用其训练时版本回放。"
+        )
 
 
 # 读取 checkpoint 里记录的 hole_state / env_state (回放侧在建环境前要用)
@@ -224,6 +238,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 续训: 恢复环境状态, 首次采样前把碰撞开关对齐到课程目标
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
              map_location: str | None = None) -> dict:
+        validate_hole_command_schema(read_hole_state(path))
         infos = super().load(path, load_cfg, strict, map_location)
         if not self._hole_has_gates:
             return infos
@@ -293,6 +308,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         step = int(self.env.unwrapped.common_step_counter)
         extra = {
             "version": HOLE_STATE_VERSION,
+            "command_schema_version": COMMAND_SCHEMA_VERSION,
+            "command_fields": list(COMMAND_FIELDS),
             "stage": get_current_stage(step),
             "collision": self._hole_compiled_collision(),
             "layout": self._hole_scene_state(),
@@ -323,7 +340,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         if (
             command is None
             or not command.enable_height_course  # type: ignore
-            or get_current_stage(env.common_step_counter) < 3
+            or not stage_uses_height_course(get_current_stage(env.common_step_counter))
         ):
             return
         del results
@@ -331,11 +348,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         log["Metrics/高度课程/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
         log["Metrics/高度课程/当前档成功率"] = torch.tensor(stats["level_success_rate"], device=env.device)
         log["Metrics/高度课程/当前档样本数"] = torch.tensor(stats["level_episode_count"], device=env.device)
-        log["Metrics/高度课程/当前批样本数"] = torch.tensor(stats["batch_count"], device=env.device)
-        log["Metrics/高度课程/连续达标批数"] = torch.tensor(stats["consecutive_success_batches"], device=env.device)
         log["Metrics/高度课程/全高度通过率"] = torch.tensor(stats["all_height_success_rate"], device=env.device)
         log["Metrics/高度课程/全高度样本数"] = torch.tensor(stats["all_height_episode_count"], device=env.device)
-        log["Metrics/高度课程/实际板底最小值"] = command.obstacle_bottom_z.min().detach()  # type: ignore
-        log["Metrics/高度课程/实际板底最大值"] = command.obstacle_bottom_z.max().detach()  # type: ignore
         for name, count in stats["failure_counts"].items():
             log[f"Metrics/高度课程/{name}失败数"] = torch.tensor(count, device=env.device)

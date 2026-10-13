@@ -10,7 +10,6 @@ from mjlab.entity import Entity
 
 from .config import (
     BASE_HEIGHT,
-    CMD_ANGLE_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
@@ -18,6 +17,7 @@ from .config import (
 )
 from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
 from .entity import VIRTUAL_CLEARANCE_MARGIN, hole_geometry, read_bottom_z
+from .height_schedule import BODY_HEIGHT_OFFSET
 from .indices import (
     _ACT_F_LEG_IDS,
     _ACT_LEG_IDS,
@@ -224,7 +224,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    desired_angle = cmd_term.command[:, CMD_ANGLE_IDS]
+    desired_angle = cmd_term.angle_command
     roll_error = torch.zeros(env.num_envs, device=env.device)
     sigma = 50
 
@@ -446,9 +446,33 @@ def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
     # 记录 metrics
     env.extras["log"]["Metrics/body_contact_excess"] = v.mean().item()
-    env.extras["log"]["Metrics/rear_surface_excess"] = v[:, 1].mean().item()
 
     return reward * weight
+
+
+
+# 全位置走廊只惩罚两段最高采样点超出各自目标上限。
+def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    weight = get_curriculum_reward_weight(env, "corridor")
+    log = env.extras["log"]
+    if weight == 0.0:
+        zero = torch.zeros(env.num_envs, device=env.device)
+        log["Metrics/走廊/前段超限均值"] = zero.mean().detach()
+        log["Metrics/走廊/后段超限均值"] = zero.mean().detach()
+        return zero
+
+    asset: Entity = env.scene["robot"]
+    command = env.command_manager.get_command("hole_cmd")
+    surface_z = torch.stack((
+        asset.data.site_pos_w[:, _MODEL_INDICES.f_body_site_ids, 2].max(dim=1).values,
+        asset.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids, 2].max(dim=1).values,
+    ), dim=1)
+    ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + BODY_HEIGHT_OFFSET
+    excess = (surface_z - ceiling).clamp_min(0.0)
+    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
+    log["Metrics/走廊/前段超限均值"] = excess[:, 0].mean().detach()
+    log["Metrics/走廊/后段超限均值"] = excess[:, 1].mean().detach()
+    return -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
 
 
 

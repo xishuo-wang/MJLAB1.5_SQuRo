@@ -20,11 +20,11 @@ from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STEPS_PER_ITER,
     CMD_VEL_X_IDS,
-    CMD_VEL_Y_IDS,
-    CMD_VEL_Z_IDS,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    CMD_ANGLE_IDS,
+    CMD_GAIT_FREQ_IDS,
+    CMD_CURVATURE_IDS,
+    CMD_OBSTACLE_HEIGHT_IDS,
     get_current_stage,
     stage_requires_collision,
     stage_uses_height_course,
@@ -39,7 +39,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_INITIAL_MIN
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_JOINT_NAMES,
     _MODEL_INDICES,
@@ -229,11 +229,11 @@ class JointDataRecorder:
         command = unwrapped.command_manager.get_command("hole_cmd")[idx]
         command_columns = (
             (CMD_VEL_X_IDS, 'vel_command_x'),
-            (CMD_VEL_Y_IDS, 'vel_command_y'),
-            (CMD_VEL_Z_IDS, 'vel_command_z'),
             (CMD_HEIGHT_F_IDS, 'height_F_command'),
             (CMD_HEIGHT_H_IDS, 'height_H_command'),
-            (CMD_ANGLE_IDS, 'angle_command'),
+            (CMD_GAIT_FREQ_IDS, 'gait_freq_command'),
+            (CMD_CURVATURE_IDS, 'curvature_command'),
+            (CMD_OBSTACLE_HEIGHT_IDS, 'obstacle_height_command'),
         )
         for i, name in command_columns:
             record[name] = float(command[i].item())
@@ -363,7 +363,7 @@ def run_play(cfg: PlayConfig):
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
         if cfg.command_source == "schedule":
-            # 与训练同源: 关闭 legacy 位移表, 交给高度课程 (stage3) 与随机高度池 (stage1/2)
+            # 与训练同源：前三阶段随机高度池，第四阶段单板高度规则。
             cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
             cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
             cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
@@ -372,7 +372,7 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
-            print("[INFO] 命令来源 = schedule (跟随训练: stage1/2 随机高度池, stage3 高度规则)")
+            print("[INFO] 命令来源 = schedule（跟随训练：前三阶段随机高度池，第四阶段单板高度规则）")
 
         elif cfg.command_source == "fixed":
             # 关闭位置表与时间表
@@ -404,6 +404,8 @@ def run_play(cfg: PlayConfig):
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
     saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
+    if resume_path is not None:
+        validate_hole_command_schema(saved_hole)
     if resume_path is not None:
         recorded = read_env_step(resume_path)
         if recorded is not None:
@@ -453,7 +455,7 @@ def run_play(cfg: PlayConfig):
     board_src = ""
     if cfg.obstacle_height is not None:
         board_z, board_src = float(cfg.obstacle_height), "命令行显式指定"
-    elif saved_hole.get("height_course") or use_course:
+    elif (saved_hole.get("height_course") and stage_uses_height_course(final_stage)) or use_course:
         board_z = float(course_state.get("z_min", HEIGHT_INITIAL_MIN))
         board_src = "检查点 height_course.z_min"
     n_board = set_obstacle_bottom_z(env_cfg, board_z) if board_z is not None else 0
@@ -464,7 +466,7 @@ def run_play(cfg: PlayConfig):
     elif board_z is not None:
         print(f"[WARN] 场景里没有障碍物实体, 障碍物高度 {board_z:.4f} 未生效 (来源: {board_src})")
     else:
-        print("[INFO] 障碍物板底 = 检查点布局/配置默认值 (检查点未记录课程档)")
+        print("[INFO] 障碍物板底 = 检查点布局/配置默认值（当前阶段未启用高度课程或未记录课程档）")
     print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
     print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
           + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
