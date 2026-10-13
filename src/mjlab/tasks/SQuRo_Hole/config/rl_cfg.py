@@ -1,9 +1,10 @@
 from mjlab.rl import (
   RslRlModelCfg,
-  RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
+  RslRlOnPolicyRunnerCfg,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.config import STEPS_PER_ITER
+
 
 
 def SQuRo_Hole_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
