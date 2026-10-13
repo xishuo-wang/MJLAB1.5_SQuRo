@@ -1,12 +1,9 @@
 from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import torch
-
-from .config import STEPS_PER_ITER, get_current_stage, stage_uses_height_course
+from typing import TYPE_CHECKING
 from .entity import hole_collision_enabled, read_bottom_z
 from .indices import _MODEL_INDICES, resolve_model_indices
+from .config import STEPS_PER_ITER, get_current_stage, stage_uses_height_course
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
@@ -25,6 +22,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 跌倒判定
     fallen = uprightness < 0.2
     return fallen
+
 
 
 # 持久化单回合穿板状态，并为 runner 提供无覆盖的完成快照。
