@@ -19,15 +19,16 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     COURSE_START,
     STAGE2_END,
     STEPS_PER_ITER,
+    WARMUP_OBSTACLE_HEIGHT,
     get_current_stage,
     heights_for_stage,
     stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import reward_weight_curriculum
-from mjlab.tasks.SQuRo_Hole.mdp.entity import write_hole_bottom_z
+from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_corridor_reward
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_body_contact_reward, compute_corridor_reward
 from mjlab.tasks.SQuRo_Hole.rl.runner import validate_hole_command_schema
 
 
@@ -48,6 +49,41 @@ def verify_stages() -> None:
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
 
+# 验证完整0～3000轮均无板，固定先验不改变随机高度池。
+def verify_warmup_without_boards() -> None:
+    cfg = load_env_cfg("Mjlab-SQuRo-Hole")
+    cfg.scene.num_envs = 4
+    env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+    try:
+        command = env.command_manager.get_term("hole_cmd")
+        for iteration in (0, 999, 1000, 1999, 2000, 2999):
+            env.common_step_counter = iteration * STEPS_PER_ITER
+            obs, _ = env.reset(seed=19)
+            assert list(env.scene.entities) == ["robot"] and not hole_geometry(env)
+            torch.testing.assert_close(command.command[:, CMD_OBSTACLE_HEIGHT_IDS], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
+            torch.testing.assert_close(obs["actor"][:, -1], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
+            pool = torch.tensor(heights_for_stage(get_current_stage(env.common_step_counter)))
+            assert torch.isin(command.command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]], pool).all()
+            assert not command.obstacle_height_sampled.any()
+            assert not compute_body_contact_reward(env).any()
+        keep = command.command[[1, 3]].clone()
+        env.reset(env_ids=torch.tensor([0, 2]))
+        torch.testing.assert_close(command.command[[1, 3]], keep)
+        obs, reward, _, _, _ = env.step(torch.zeros(4, 14))
+        assert torch.isfinite(obs["actor"]).all() and torch.isfinite(reward).all()
+        env.common_step_counter = COURSE_START - 1
+        env.episode_length_buf[:] = env.max_episode_length - 1
+        obs, reward, _, timeouts, _ = env.step(torch.zeros(4, 14))
+        assert timeouts.all() and env.common_step_counter == COURSE_START
+        assert list(env.scene.entities) == ["robot"] and not command.obstacle_height_sampled.any()
+        torch.testing.assert_close(obs["actor"][:, -1], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
+        assert torch.isfinite(reward).all()
+        print("[通过] 完整0～3000轮无板、先验固定100毫米、随机高度池与部分复位正确")
+        print("[通过] 3000轮边界末步的自动复位在Runner建板前保持热身命令")
+    finally:
+        env.close()
+
+
 # 使用真实场景与独立最高点状态验证单侧走廊约束。
 def verify_corridor() -> None:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
@@ -61,7 +97,8 @@ def verify_corridor() -> None:
         obs = env.observation_manager.compute()["actor"]
         assert obs.shape == (4, 113) and env.action_space.shape[-1] == 14
         torch.testing.assert_close(command.command[:, CMD_GAIT_FREQ_IDS], torch.full((4,), BASE_FREQ))
-        torch.testing.assert_close(command.command[:, CMD_OBSTACLE_HEIGHT_IDS], torch.full((4,), 0.050))
+        assert list(env.scene.entities) == ["robot"], "前三阶段不应创建实体障碍物"
+        torch.testing.assert_close(command.command[:, CMD_OBSTACLE_HEIGHT_IDS], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
         torch.testing.assert_close(obs[:, -6:], command.command)
 
         command.command[:, CMD_HEIGHT_F_IDS] = torch.tensor([0.020, 0.020, 0.055, 0.055])
@@ -153,6 +190,7 @@ def verify_schema() -> None:
 def main() -> None:
     torch.set_num_threads(1)
     verify_stages()
+    verify_warmup_without_boards()
     verify_corridor()
     verify_obstacle_prior()
     verify_schema()

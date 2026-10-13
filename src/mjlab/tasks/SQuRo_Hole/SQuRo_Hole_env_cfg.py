@@ -135,7 +135,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             extent=1.0,
             entities={
                 "robot": SQURO_ROBOT_CFG,
-                **mdp.build_hole_entities(enable_collision=False)
             },
             sensors=(feet_ground_cfg,),
         ),

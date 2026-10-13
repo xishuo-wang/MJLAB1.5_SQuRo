@@ -19,7 +19,7 @@ DURATION = 10.0
 uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay
 ```
 
-默认单环境、10 秒、限高板无碰撞。地面、机器人接触与模型动力学保留。设置 `ENABLE_COLLISION=True` 开启限高板碰撞；固定高度不会随位置切换，因此该配置不是完整钻洞课程验收。
+默认单环境、10秒，不创建限高板，障碍物先验为100 mm占位。地面、机器人接触与模型动力学保留。设置 `ENABLE_COLLISION=True` 创建真实单板并开启碰撞；固定高度不会随位置切换，因此该配置不是完整钻洞课程验收。
 
 通过 `OUTPUT_DIR` 修改输出根目录，默认 `logs/rsl_rl/SQuRo_Hole/reference_replay/`，每次生成带时间、前后高度与碰撞状态的子目录。
 

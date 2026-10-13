@@ -17,6 +17,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
+    build_single_hole_entities,
     configure_hole_entities,
     hole_collision_enabled,
     hole_geometry,
@@ -36,6 +37,7 @@ def build(collision: bool, n: int = 1, play: bool = False,
           disable_terminations: bool = False) -> ManagerBasedRlEnv:
     cfg = load_env_cfg(TASK, play=play)
     cfg.scene.num_envs = n
+    cfg.scene.entities.update(build_single_hole_entities(enable_collision=collision))
     configure_hole_entities(cfg, enable_collision=collision)
     if disable_terminations:
         # 物理开关测试要观察未被重置的轨迹; fallen 会触发 auto_reset 把机器人拉回原点
@@ -45,7 +47,7 @@ def build(collision: bool, n: int = 1, play: bool = False,
     return env
 
 
-# 几何: 实体 bottom_z/top_z 与统一查询一致, 虚拟阈值 = 板底 - 余量
+# 几何：用独立碰撞geom核对板底、板顶与查询接口。
 def check_geometry() -> None:
     print("[1] 几何一致性 (板底 = position.z, 中心 = 板底 + 半厚)")
     env = build(True)
@@ -56,8 +58,11 @@ def check_geometry() -> None:
         rng = f"[{g['x_min']:.3f},{g['x_max']:.3f}]"
         print(f"     {g['name']:<7}{rng:>18}{g['bottom_z']:>9.4f}{g['top_z']:>9.4f}"
               f"{g['virtual_z_threshold']:>10.4f}{dz * 1000:>7.1f}m")
-        check(f"{g['name']} 实体与查询接口一致", abs(e.bottom_z - g["bottom_z"]) < 1e-12
-              and abs(e.top_z - g["top_z"]) < 1e-12)
+        geom_id = int(e.indexing.geom_ids[0])
+        center_z = float(e.data.data.geom_xpos[0, geom_id, 2])
+        half_thickness = float(env.sim.mj_model.geom_size[geom_id, 2])
+        check(f"{g['name']} 碰撞几何与查询接口一致", abs(center_z - half_thickness - g["bottom_z"]) < 1e-6
+              and abs(center_z + half_thickness - g["top_z"]) < 1e-6)
         check(f"{g['name']} 虚拟余量 = {VIRTUAL_CLEARANCE_MARGIN}", abs(dz - VIRTUAL_CLEARANCE_MARGIN) < 1e-12)
     env.close()
 
@@ -71,8 +76,8 @@ def check_mask() -> None:
         vals = [(int(m.geom_contype[i]), int(m.geom_conaffinity[i]))
                 for i in range(m.ngeom) if "Hole" in (m.geom(i).name or "")]
         want = 1 if collision else 0
-        check(f"碰撞={'开' if collision else '关'} 三块板掩码 = {vals}",
-              len(vals) == 3 and all(v == (want, want) for v in vals))
+        check(f"碰撞={'开' if collision else '关'} 单板掩码 = {vals}",
+              len(vals) == 1 and all(v == (want, want) for v in vals))
         env.close()
 
 
@@ -136,6 +141,7 @@ def check_rebuild_preserves_custom() -> None:
     print("\n[5] 重建保留自定义板位与接触参数")
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 1
+    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
     ent = cfg.scene.entities["hole1"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
@@ -177,9 +183,8 @@ def check_state_roundtrip() -> None:
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_END))
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
-    from mjlab.tasks.SQuRo_Hole.mdp.entity import SINGLE_HOLE_LAYOUT
     from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN
-    check("课程阶段 layout 仅保留单板", len(layout) == len(SINGLE_HOLE_LAYOUT), f"{len(layout)}")
+    check("课程阶段 layout 仅保留单板", len(layout) == 1 and layout[0]["name"].lower() == "hole1", f"{len(layout)}")
     check("最低板高课程状态已保存", bool(saved.get("height_course")))
     if layout:
         # 板底期望值取几何表单一来源, 不再写死字面量
@@ -202,6 +207,7 @@ def check_reward_geometry() -> None:
     print("\n[7] 虚拟约束读实际场景几何 (自定义板位)")
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 1
+    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
     ent = cfg.scene.entities["hole1"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
@@ -227,6 +233,7 @@ def check_layout_roundtrip() -> None:
     os.makedirs(probe_dir, exist_ok=True)
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 2
+    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
     ent = cfg.scene.entities["hole1"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
@@ -248,7 +255,13 @@ def check_layout_roundtrip() -> None:
     check("回放复现位置", tuple(e2.position) == (0.35, 0.0, 0.0675), f"{tuple(e2.position)}")
     check("回放复现 solref", e2.solref is not None and tuple(e2.solref) == (0.03, 1.0),
           f"{e2.solref}")
-    check("三块板都被应用", n == 3, f"{n}")
+    check("单板几何被应用", n == 1, f"{n}")
+    legacy_layout = list(saved.get("layout") or []) + [
+        {"name": "Hole2", "position": [0.6, 0.0, 0.07], "size": [0.1, 0.1, 0.005]},
+        {"name": "Hole3", "position": [1.2, 0.0, 0.05], "size": [0.015, 0.1, 0.005]},
+    ]
+    applied = apply_saved_layout(cfg2, legacy_layout)
+    check("旧三板检查点不会恢复额外板体", applied == 1 and list(cfg2.scene.entities) == ["robot", "hole1"])
     try:
         runner.env.close()
     except Exception:
@@ -263,6 +276,7 @@ def check_visibility() -> None:
     for visible in (True, False):
         cfg = load_env_cfg(TASK)
         cfg.scene.num_envs = 1
+        cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
         configure_hole_entities(cfg, enable_collision=True)
         n = set_obstacle_visibility(cfg, visible=visible)
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -271,7 +285,7 @@ def check_visibility() -> None:
                 for i in range(m.ngeom) if "Hole" in (m.geom(i).name or "")]
         want_rgba = [0.5, 0.5, 0.5, 0.5] if visible else [0.0, 0.0, 0.0, 0.0]
         check(f"可见={visible} rgba={want_rgba} ({n} 块)",
-              len(rows) == 3 and all(r[0] == want_rgba for r in rows))
+              len(rows) == 1 and all(r[0] == want_rgba for r in rows))
         check(f"可见={visible} 碰撞掩码不受影响 (仍为 1)",
               all(r[1] == 1 for r in rows))
         env.close()

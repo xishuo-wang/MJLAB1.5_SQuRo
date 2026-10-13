@@ -22,6 +22,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
+    HOLE_POSITION,
+    HOLE_SIZE,
+    HEIGHT_INITIAL_MIN,
+    VIRTUAL_CLEARANCE_MARGIN,
     BODY_HEIGHT_OFFSET,
     ENTRY_MARGIN,
     EXIT_MARGIN,
@@ -33,10 +37,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     sample_base_heights,
     rule_bounds as _shared_rule_bounds,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.entity import (
-    HOLE_LAYOUT,
-    VIRTUAL_CLEARANCE_MARGIN,
 )
 
 MODE_LABELS = {
@@ -60,9 +60,12 @@ class ScheduleCase:
     x_max: float
 
 
-# 选取现有短板和长板，并保留完整的 base_Link 查表范围。
+# 预览真实短板和独立长板示例，长板不进入训练场景。
 def build_cases(start_x: float) -> list[ScheduleCase]:
-    boards = sorted(HOLE_LAYOUT, key=lambda board: board[1])
+    boards = [
+        ("Hole1", *HOLE_POSITION, HOLE_SIZE[0], HOLE_SIZE[2]),
+        ("LongPreview", 0.6, HOLE_POSITION[1], HEIGHT_INITIAL_MIN, 0.100, HOLE_SIZE[2]),
+    ]
     short = min(boards, key=lambda board: board[4])
     long = max(boards, key=lambda board: board[4])
     if short[4] == long[4]:
@@ -196,7 +199,7 @@ def draw_panel(
     for position in knots:
         if x_min < position < x_max:
             markers.append(ax.axvline(position, color="#cbd5e1", linewidth=0.8))
-    upper = max(PREVIEW_HEIGHT_MAX + max(2 * board[5] for board in HOLE_LAYOUT), max(HEIGHT_LIST)) * 1000
+    upper = max(PREVIEW_HEIGHT_MAX + 2 * HOLE_SIZE[2], max(HEIGHT_LIST)) * 1000
     ax.set(xlim=(x_min, x_max), ylim=(0, upper + 12), title=title,
            xlabel=xlabel, ylabel="高度（mm）")
     ax.grid(axis="y", alpha=0.2)
@@ -278,7 +281,6 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
                      initial_heights: list[float]) -> None:
     data = {
         "start_x": start_x,
-        "hole_layout": HOLE_LAYOUT,
         "reference_height_list": HEIGHT_LIST,
         "virtual_clearance_margin": VIRTUAL_CLEARANCE_MARGIN,
         "rule": {

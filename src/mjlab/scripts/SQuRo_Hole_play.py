@@ -30,7 +30,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_bottom_z,
     set_obstacle_visibility,
-    configure_hole_entities,
     configure_single_hole_entities,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
@@ -396,7 +395,7 @@ def run_play(cfg: PlayConfig):
         collision, coll_src = bool(saved_hole["collision"]), "检查点 hole_state"
     else:
         collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
-    # 与训练同源: 课程阶段用单块可动板 + 高度课程, 其余阶段保留三板
+    # 与训练同源：热身无板，课程使用单板；显式碰撞允许提前诊断。
     course_state = dict(saved_hole.get("height_course") or HeightCurriculumState().state_dict())
     if cfg.obstacle_height is not None:
         course_state["z_min"] = float(cfg.obstacle_height)
@@ -406,19 +405,17 @@ def run_play(cfg: PlayConfig):
         and cmd_cfg is not None
         and stage_uses_height_course(final_stage)
     )
+    show_board = stage_uses_height_course(final_stage) or cfg.collision is True
+    if show_board:
+        configure_single_hole_entities(env_cfg, enable_collision=collision)
     if use_course:
         # 未显式指定板高时，固定在检查点当前最低档。
         if cfg.obstacle_height is None:
             course_state["z_max"] = course_state["z_min"]
-        configure_single_hole_entities(env_cfg, enable_collision=collision)
         cmd_cfg.enable_height_course = True          # type: ignore[attr-defined]
         cmd_cfg.height_curriculum_state = course_state  # type: ignore[attr-defined]
-    else:
-        configure_hole_entities(env_cfg, enable_collision=collision)
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
-    saved_layout = saved_hole.get("layout") or []
-    if use_course:
-        saved_layout = [d for d in saved_layout if str(d.get("name", "")).lower() == "hole1"]
+    saved_layout = (saved_hole.get("layout") or []) if show_board else []
     applied = apply_saved_layout(env_cfg, saved_layout)
     # 板高优先级：显式值 > 检查点最低档 > 布局或配置默认。
     board_z: float | None = None

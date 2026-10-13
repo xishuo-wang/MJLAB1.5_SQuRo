@@ -2,32 +2,16 @@ import torch
 import mujoco
 from mjlab.entity import Entity, EntityCfg
 from dataclasses import dataclass, replace
-from .config import HEIGHT_INITIAL_MIN
+from .config import HEIGHT_INITIAL_MIN, HOLE_POSITION, HOLE_SIZE, VIRTUAL_CLEARANCE_MARGIN
 
-# 三块限高板的几何: 板底 z 即板体 position.z, 板厚 2*half_thickness 向上长
-# 板底 = position.z, 板顶 = position.z + 2*half_thickness
-# 当前板底 / 板顶:
-#   hole1 / hole3: 板底 0.0500, 板顶 0.0600 (position.z=0.05, 半厚 0.005)
-#   hole2:         板底 0.0700, 板顶 0.0800 (position.z=0.07, 半厚 0.005)
-# 虚拟净空阈值 = 板底 − 2.5 mm (见 rewards.compute_body_contact_reward)
-HOLE_LAYOUT = (
-    ("Hole1", 0.2, 0.0, 0.05, 0.015, 0.005),
-    ("Hole2", 0.6, 0.0, 0.07, 0.100, 0.005),
-    ("Hole3", 1.2, 0.0, 0.05, 0.015, 0.005),
-)
 
-# 新课程训练使用的单板几何；三板表保留给旧配置和预览。
-SINGLE_HOLE_LAYOUT = HOLE_LAYOUT[:1]
-
-# 虚拟净空阈值相对板底的余量 (板底 − 该值 = 虚拟阈值)
-VIRTUAL_CLEARANCE_MARGIN = 0.0025
 
 
 @dataclass
 class HoleEntityCfg(EntityCfg):
-    name: str = "hole"
-    position: tuple[float, float, float] = (0.0, 0.0, 0.0)   # 板底中心 (x, y, 板底 z)
-    size: tuple[float, float, float] = (0.01, 0.1, 0.005)     # 半长, 半宽, 半厚
+    name: str = "Hole1"
+    position: tuple[float, float, float] = HOLE_POSITION   # 板底中心 (x, y, 板底 z)
+    size: tuple[float, float, float] = HOLE_SIZE     # 半长, 半宽, 半厚
     rgba: tuple[float, float, float, float] = (0.5, 0.5, 0.5, 0.5)
     mass: float = 1.0
     contype: int = 1
@@ -41,10 +25,10 @@ class HoleEntityCfg(EntityCfg):
 
 
 class HoleEntity(Entity):
+    cfg: HoleEntityCfg
+
     def __init__(self, cfg: HoleEntityCfg):
         super().__init__(cfg)
-        self.cfg = cfg
-        self._geom = None
         self._build_geometry()
 
 
@@ -60,7 +44,7 @@ class HoleEntity(Entity):
             kwargs["solref"] = self.cfg.solref
         if self.cfg.solimp is not None:
             kwargs["solimp"] = self.cfg.solimp
-        self._geom = body.add_geom(
+        body.add_geom(
             name=f"{self.cfg.name}_geom",
             pos=(0, 0, half_t),
             size=self.cfg.size,
@@ -73,91 +57,29 @@ class HoleEntity(Entity):
         )
 
 
-    # 板底高度 (m): 板体配置的 z 即板底
-    @property
-    def bottom_z(self) -> float:
-        return float(self.cfg.position[2])
-
-
-    # 板顶高度 (m)
-    @property
-    def top_z(self) -> float:
-        return self.bottom_z + 2.0 * float(self.cfg.size[2])
-
-
-    # 虚拟净空阈值 (m): 板底减去余量
-    @property
-    def virtual_z_threshold(self) -> float:
-        return self.bottom_z - VIRTUAL_CLEARANCE_MARGIN
-
-
-    # 板体在 x 方向的覆盖区间 (m)
-    @property
-    def x_range(self) -> tuple[float, float]:
-        hx = float(self.cfg.size[0])
-        return (float(self.cfg.position[0]) - hx, float(self.cfg.position[0]) + hx)
-
-
-    # 碰撞是否开启 (编译期决定, 运行期不可改)
-    @property
-    def collision_enabled(self) -> bool:
-        return int(self.cfg.contype) > 0
-
-
-    @property
-    def spec(self) -> mujoco.MjSpec:
-        return self._spec
-
-
-
-# 按几何表构建三块板 (碰撞在编译期固化, 换开关必须重建环境)
-def build_hole_entities(enable_collision: bool, solref: tuple[float, ...] | None = None,solimp: tuple[float, ...] | None = None) -> dict:
-    mask = 1 if enable_collision else 0
-    entities: dict = {}
-    for name, x, y, bottom_z, half_len, half_t in HOLE_LAYOUT:
-        kwargs: dict = {}
-        if solref is not None:
-            kwargs["solref"] = solref
-        if solimp is not None:
-            kwargs["solimp"] = solimp
-        entities[name.lower()] = HoleEntityCfg(
-            name=name,
-            position=(x, y, bottom_z),
-            size=(half_len, 0.1, half_t),
-            contype=mask,
-            conaffinity=mask,
-            **kwargs,
-        )
-    return entities
-
-
-
-# 构建单板课程实体。
+# 构建真实碰撞课程使用的单板实体。
 def build_single_hole_entities(enable_collision: bool,
                                bottom_z: float = HEIGHT_INITIAL_MIN,
                                solref: tuple[float, ...] | None = None,
                                solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
-    name, x, y, _, half_len, half_t = SINGLE_HOLE_LAYOUT[0]
     kwargs: dict = {}
     if solref is not None:
         kwargs["solref"] = solref
     if solimp is not None:
         kwargs["solimp"] = solimp
-    return {
-        name.lower(): HoleEntityCfg(
-            name=name,
-            position=(x, y, float(bottom_z)),
-            size=(half_len, 0.1, half_t),
-            contype=mask,
-            conaffinity=mask,
-            **kwargs,
-        )
-    }
+    entity = HoleEntityCfg(
+        position=(HOLE_POSITION[0], HOLE_POSITION[1], float(bottom_z)),
+        contype=mask,
+        conaffinity=mask,
+        **kwargs,
+    )
+    return {entity.name.lower(): entity}
 
 
 
-# 改写场景里的三块板: 保留已有实体的位置/尺寸/接触参数, 只替换碰撞掩码
+
+# 保留实际板体的位置、尺寸和接触参数，只替换碰撞掩码。
 def configure_hole_entities(env_cfg, enable_collision: bool, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
     entities = dict(env_cfg.scene.entities)
@@ -178,9 +100,8 @@ def configure_hole_entities(env_cfg, enable_collision: bool, solref: tuple[float
 # 将训练配置切换为单板几何并保留显式碰撞开关。
 def configure_single_hole_entities(env_cfg, enable_collision: bool, bottom_z: float = HEIGHT_INITIAL_MIN) -> dict:
     entities = dict(env_cfg.scene.entities)
-    key = SINGLE_HOLE_LAYOUT[0][0].lower()
+    key, fresh = next(iter(build_single_hole_entities(enable_collision, bottom_z).items()))
     existing = entities.get(key)
-    fresh = build_single_hole_entities(enable_collision, bottom_z)[key]
     if isinstance(existing, HoleEntityCfg):
         fresh = replace(
             existing,
@@ -263,19 +184,14 @@ def _entity_geometry(cfg) -> dict:
 
 
 
-# 统一几何查询: 返回三块板的 x 区间 / 板底 / 虚拟阈值
+# 查询实际场景板几何，无环境参数时返回默认单板配置。
 def hole_geometry(env=None) -> list[dict]:
-    if env is not None:
-        scene = getattr(env, "scene", env)
-        entities = getattr(scene, "entities", None) or {}
-        out = []
-        for name, *_ in HOLE_LAYOUT:
-            ent = entities.get(name.lower())
-            if ent is not None and isinstance(getattr(ent, "cfg", None), HoleEntityCfg):
-                out.append(_entity_geometry(ent.cfg))
-        if out:
-            return out
-    return [_entity_geometry(HoleEntityCfg(name=n, position=(x, y, bz), size=(hl, 0.1, ht))) for n, x, y, bz, hl, ht in HOLE_LAYOUT]
+    if env is None:
+        return [_entity_geometry(HoleEntityCfg())]
+    scene = getattr(env, "scene", env)
+    entities = getattr(scene, "entities", None) or {}
+    return [_entity_geometry(ent.cfg) for ent in entities.values() if isinstance(getattr(ent, "cfg", None), HoleEntityCfg)]
+
 
 
 
@@ -292,14 +208,12 @@ def set_obstacle_bottom_z(env_cfg, bottom_z: float) -> int:
 
 
 
-# 统一设置三块板的可见性: 仅改 rgba, 不影响碰撞 (碰撞只由 contype/conaffinity 决定)
+# 设置实际板体的可见性，仅改外观。
 def set_obstacle_visibility(env_cfg, visible: bool, hidden_rgba: tuple = (0.0, 0.0, 0.0, 0.0), shown_rgba: tuple = (0.5, 0.5, 0.5, 0.5)) -> int:
     entities = dict(env_cfg.scene.entities)
     rgba = tuple(shown_rgba) if visible else tuple(hidden_rgba)
     n = 0
-    for name, *_ in HOLE_LAYOUT:
-        key = name.lower()
-        ent = entities.get(key)
+    for key, ent in tuple(entities.items()):
         if isinstance(ent, HoleEntityCfg):
             entities[key] = replace(ent, rgba=rgba)
             n += 1
@@ -310,6 +224,8 @@ def set_obstacle_visibility(env_cfg, visible: bool, hidden_rgba: tuple = (0.0, 0
 
 # 把 checkpoint 里记录的板几何/接触参数应用到 env_cfg
 def apply_saved_layout(env_cfg, layout: list) -> int:
+    primary_name = HoleEntityCfg().name.lower()
+    layout = [item for item in layout if str(item.get("name", "")).lower() == primary_name]
     if not layout:
         return 0
     entities = dict(env_cfg.scene.entities)

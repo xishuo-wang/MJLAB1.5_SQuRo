@@ -147,14 +147,11 @@ def check_env() -> None:
         tag = "回放" if play else "训练"
         if not play:
             print(f"\n[5] 场景实体: {list(entities.keys())}")
-            for key in ("hole1", "hole2", "hole3"):
-                e = entities[key]
-                print(f"     {key}: pos={e.position}, size={e.size}, contype={e.contype}, "
-                      f"conaffinity={e.conaffinity}")
+            assert list(entities) == ["robot"], "热身场景不应创建障碍物"
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
         obs = env.reset()
         obs_dict = obs[0] if isinstance(obs, tuple) else obs
-        print(f"     [{tag}] 初始限高板碰撞={hole_collision_enabled(env)} (前两阶段关 / 课程阶段重建开), "
+        print(f"     [{tag}] 初始限高板碰撞={hole_collision_enabled(env)} (前三阶段无板 / 课程阶段重建开), "
               f"actor {tuple(obs_dict['actor'].shape)}, "
               f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {ACTUATOR_NUM}")
         if not play:

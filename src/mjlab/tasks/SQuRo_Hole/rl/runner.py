@@ -70,14 +70,13 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
     def __init__(self, env, train_cfg, log_dir=None, device="cpu") -> None:
         super().__init__(env, train_cfg, log_dir, device)
-        # 限高板碰撞在编译期固化 (见 mdp/hole.py), 进入高度课程时重建环境。
+        # 进入高度课程时重建环境并创建单板。
         # 留一份本次启动的 env_cfg 副本作重建模板, 否则命令行覆盖会退回注册值。
         self._hole_device = device
         self._hole_env_cfg = copy.deepcopy(env.unwrapped.cfg)  # type: ignore
         self._hole_num_envs = int(env.unwrapped.scene.num_envs)  # type: ignore
         self._hole_clip_actions = getattr(env, "clip_actions", None)
         self._hole_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
-        self._hole_has_gates = "hole1" in env.unwrapped.scene.entities  # type: ignore
         self._hole_command = env.unwrapped.command_manager._terms.get("hole_cmd")  # type: ignore
         self._hole_height_course_enabled = bool(
             self._hole_command is not None
@@ -89,9 +88,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         )
 
     # 当前实际编译进仿真的碰撞开关 (唯一来源是场景里的实体本身)
-    def _hole_compiled_collision(self):
-        if not self._hole_has_gates:
-            return None
+    def _hole_compiled_collision(self) -> bool:
         return hole_collision_enabled(self.env.unwrapped)
 
     # 课程在当前位置要求的碰撞开关
@@ -102,8 +99,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 是否需要重建: 目标与**实际编译值**不一致
     def _hole_change_needed(self) -> bool:
         compiled = self._hole_compiled_collision()
-        if compiled is None:
-            return False
         if self._hole_target_collision() != compiled:
             return True
         if (
@@ -138,11 +133,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         env_cfg = copy.deepcopy(self._hole_env_cfg)
         env_cfg.scene.num_envs = self._hole_num_envs
         stage = get_current_stage(step_counter)
-        if stage_uses_height_course(stage) and self._hole_height_course_enabled:
+        if stage_uses_height_course(stage):
             configure_single_hole_entities(env_cfg, enable_collision=collision)
-            env_cfg.commands["hole_cmd"].height_curriculum_state = (
-                self._height_curriculum_state.state_dict()  # type: ignore
-            )
+            if self._hole_height_course_enabled:
+                env_cfg.commands["hole_cmd"].height_curriculum_state = (
+                    self._height_curriculum_state.state_dict()  # type: ignore
+                )
         else:
             configure_hole_entities(env_cfg, enable_collision=collision)
         new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._hole_device,
@@ -240,7 +236,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
              map_location: str | None = None) -> dict:
         validate_hole_command_schema(read_hole_state(path))
         infos = super().load(path, load_cfg, strict, map_location)
-        if not self._hole_has_gates:
+        if self._hole_command is None:
             return infos
         if (load_cfg or {}).get("actor"):
             print("[INFO] 回放加载 (load_cfg.actor=True): 保留入口已编译好的配置, 不重建环境")

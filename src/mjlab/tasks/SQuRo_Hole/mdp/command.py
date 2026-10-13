@@ -25,6 +25,7 @@ from .config import (
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
+    WARMUP_OBSTACLE_HEIGHT,
     get_current_stage,
     heights_for_stage,
     stage_uses_height_course,
@@ -115,10 +116,10 @@ class HoleCommand(CommandTerm):
         return torch.stack((self.vel_command, zeros, zeros), dim=-1)
 
 
-    # 板高先验始终读取实际板体，无板场景使用零占位。
+    # 有板时读取真实板底，无板热身使用100毫米占位。
     def _update_obstacle_height_command(self) -> None:
         if self.obstacle_entity is None:
-            self.obstacle_height_command.zero_()
+            self.obstacle_height_command.fill_(WARMUP_OBSTACLE_HEIGHT)
         else:
             self.obstacle_height_command[:] = read_bottom_z(self.obstacle_entity)
 
@@ -140,7 +141,7 @@ class HoleCommand(CommandTerm):
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        if self.enable_height_course and stage_uses_height_course(stage):
+        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle_entity is not None:
             if self._allow_obstacle_resample:
                 self._sample_obstacle_height(env_ids)
                 self._set_neutral_command(env_ids)
@@ -273,7 +274,7 @@ class HoleCommand(CommandTerm):
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        if self.enable_height_course and stage_uses_height_course(stage):
+        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle_entity is not None:
             self._update_command_from_height_rule()
         self._update_obstacle_height_command()
         self._log_diagnostics()
