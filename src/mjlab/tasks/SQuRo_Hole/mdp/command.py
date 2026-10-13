@@ -1,15 +1,11 @@
 from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Tuple
-
 import torch
-
 from mjlab.entity import Entity
+from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
+from typing import TYPE_CHECKING, List, Optional, Tuple
 from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
-
 from .config import (
     ANGLE_VALUES,
     BASE_CURVATURE,
@@ -40,8 +36,8 @@ from .height_schedule import HEIGHT_MIN_SAMPLE_PROBABILITY, sample_base_heights
 from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
-    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
+    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
