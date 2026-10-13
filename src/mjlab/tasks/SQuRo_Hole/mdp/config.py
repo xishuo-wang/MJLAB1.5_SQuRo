@@ -24,16 +24,12 @@ CMD_CURVATURE_IDS = COMMAND_FIELDS.index("curvature")
 CMD_OBSTACLE_HEIGHT_IDS = COMMAND_FIELDS.index("obstacle_height")
 
 
-
-
-
 # 预计算表相关配置
 HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]     # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
 TABLE_RESOLUTION = 500                      # 相位分辨率: 参考表第三维的采样点数
 USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
-NECK_REF_POS = (0.0, -0.3)
-HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
-
+NECK_REF_POS = (0.0, -0.3)                  # 头颈相关参考姿态
+HIND_HOLD_POS = (0.80, -0.15)               # 当前基线的后腿收缩参考角
 
 
 # 高度课程规则参数；可视化与训练共用此处定义。
@@ -55,7 +51,6 @@ HEIGHT_MIN_DWELL_ITERATIONS = 100
 HOLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)    # 真实课程的初始板底位置
 HOLE_SIZE = (0.015, 0.1, 0.005)                  # 单板半长、半宽、半厚
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                # 板底净空余量
-
 
 
 # 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
