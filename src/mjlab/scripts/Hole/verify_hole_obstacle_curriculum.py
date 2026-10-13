@@ -92,7 +92,7 @@ def verify_shared_rule() -> None:
                 left - 1e-6, left, middle - 1e-6, middle,
                 middle + 1e-6, right, right + 1e-6,
             ], dtype=dtype)
-            for height in (0.048, 0.064, 0.069999, 0.070, 0.090):
+            for height in (HEIGHT_MIN, 0.048, 0.064, 0.069999, 0.070, 0.090):
                 front, hind = sample_base_heights(positions, center, half_length, height)
                 if height < 0.070:
                     expected_f = positions.new_tensor([0.055, 0.020, 0.020, 0.055, 0.055, 0.055, 0.055])
@@ -103,7 +103,7 @@ def verify_shared_rule() -> None:
                 check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
-        for height in (0.048, 0.064, 0.068, 0.070, 0.090):
+        for height in (HEIGHT_MIN, 0.048, 0.064, 0.068, 0.070, 0.090):
             front, hind = sample_base_heights(query, center, half_length, height)
             check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
                   not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
@@ -155,6 +155,48 @@ def verify_curriculum_state() -> None:
             "previous_z_min", "z_min", "success_rate", "sample_count"
         )),
     )
+
+
+# 验证50毫米边界的细步长、46毫米下限和旧检查点续训。
+def verify_fine_height_steps() -> None:
+    expected_mm = (70, 68, 66, 64, 62, 60, 58, 56, 54, 52, 50, 49, 48, 47, 46)
+    state = HeightCurriculumState()
+    for index, height_mm in enumerate(expected_mm[1:], start=1):
+        previous_height = state.z_min
+        iteration = COURSE_START_ITER + index * HEIGHT_MIN_DWELL_ITERATIONS
+        for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
+            state.record_episode(previous_height, True, iteration, HEIGHT_COURSE_STAGE, True)
+        check(f"课程由 {previous_height * 1000:g} 降到 {height_mm} mm",
+              state.z_min == height_mm / 1000 and state.consecutive_success_batches == 0)
+    check("46毫米下限与完整降档序列一致", HEIGHT_MIN == expected_mm[-1] / 1000)
+    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
+        state.record_episode(state.z_min, True, iteration + HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+    check("46毫米达标后保持下限", state.z_min == HEIGHT_MIN)
+
+    fine = HeightCurriculumState(start_iteration=0)
+    fine.z_min = 0.050
+    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
+        fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS - 1, HEIGHT_COURSE_STAGE, True)
+    check("50毫米档成功达标后仍须满足驻留时间", fine.z_min == 0.050)
+    fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+    check("50毫米驻留达标后只降低1毫米", fine.z_min == 0.049)
+
+    failed = HeightCurriculumState(start_iteration=0)
+    failed.z_min = 0.050
+    for passed in (True, False):
+        for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
+            failed.record_episode(failed.z_min, passed, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+    check("细步长阶段失败批仍清零且不降档",
+          failed.z_min == 0.050 and failed.consecutive_success_batches == 0)
+
+    old = HeightCurriculumState(start_iteration=0)
+    old.z_min = 0.048
+    restored = HeightCurriculumState()
+    restored.load_state_dict(old.state_dict())
+    check("旧48毫米检查点加载时保留原课程状态", restored.state_dict() == old.state_dict())
+    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
+        restored.record_episode(0.048, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+    check("旧48毫米检查点达标后按新规则降至47毫米", restored.z_min == 0.047)
 
 
 # 把九个采样点放在指定位置，驱动监测器的成功与失败路径。
@@ -315,11 +357,12 @@ def verify_real_env() -> None:
     env = make_env()
     board = env.scene.entities["hole1"]
     check("训练环境只保留单板且碰撞已编译", list(name for name in env.scene.entities if name.startswith("hole")) == ["hole1"] and hole_collision_enabled(env))
-    write_hole_bottom_z(board, torch.tensor([0.048, 0.052, 0.070, 0.090]), torch.arange(4, device=env.device))
+    targets = torch.tensor([HEIGHT_MIN, 0.052, 0.070, 0.090], device=env.device)
+    write_hole_bottom_z(board, targets, torch.arange(4, device=env.device))
     written = read_bottom_z(board).clone()
-    check("板体 mocap 逐环境写入与即时读取", torch.allclose(written, torch.tensor([0.048, 0.052, 0.070, 0.090])))
+    check("板体 mocap 逐环境写入与即时读取", torch.allclose(written, targets))
     check("独立碰撞几何的板底随四个采样高度移动", torch.allclose(
-        read_geom_bottom_z(env), torch.tensor([0.048, 0.052, 0.070, 0.090]), atol=1e-6,
+        read_geom_bottom_z(env), targets, atol=1e-6,
     ))
     keep = written[[1, 3]].clone()
     write_hole_bottom_z(board, 0.051, torch.tensor([0, 2], device=env.device))
@@ -345,6 +388,14 @@ def verify_real_env() -> None:
     verify_base_height_commands(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
+    command = env.command_manager.get_term("hole_cmd")
+    command.height_curriculum_state.z_min = HEIGHT_MIN
+    command.height_curriculum_state.z_max = HEIGHT_MIN
+    env.reset()
+    check("46毫米复位采样、实际碰撞几何和命令先验一致",
+          torch.allclose(read_bottom_z(board), torch.full_like(targets, HEIGHT_MIN))
+          and torch.allclose(read_geom_bottom_z(env), torch.full_like(targets, HEIGHT_MIN), atol=1e-6)
+          and torch.allclose(command.obstacle_height_command, torch.full_like(targets, HEIGHT_MIN)))
     env.close()
 
 
@@ -353,6 +404,7 @@ def main() -> None:
     print("单板受限空间高度课程验收")
     verify_shared_rule()
     verify_curriculum_state()
+    verify_fine_height_steps()
     verify_real_env()
     if FAILURES:
         raise SystemExit(f"失败项: {FAILURES}")

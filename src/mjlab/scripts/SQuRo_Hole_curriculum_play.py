@@ -59,7 +59,7 @@ def main() -> None:
         raise ValueError("checkpoint 高度范围必须位于课程上下界内")
     if args.obstacle_height is not None:
         if not HEIGHT_MIN <= args.obstacle_height <= HEIGHT_MAX:
-            raise ValueError("板底高度必须在 0.048～0.090 m 范围内")
+            raise ValueError(f"板底高度必须在 {HEIGHT_MIN:.3f}～{HEIGHT_MAX:.3f} m 范围内")
         course_state["z_min"] = args.obstacle_height
         course_state["z_max"] = args.obstacle_height
     elif not args.random_height:

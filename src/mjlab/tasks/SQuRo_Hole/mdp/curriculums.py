@@ -5,6 +5,8 @@ from .config import (
     HEIGHT_MAX,
     HEIGHT_MIN,
     HEIGHT_STEP,
+    HEIGHT_FINE_STEP_THRESHOLD,
+    HEIGHT_FINE_STEP,
     BASE_HEIGHT,
     EXIT_MARGIN,
     ENTRY_MARGIN,
@@ -291,7 +293,8 @@ class HeightCurriculumState:
             or self.z_min <= HEIGHT_MIN
         ):
             return False
-        self.z_min = max(HEIGHT_MIN, round(self.z_min - HEIGHT_STEP, 6))
+        step = HEIGHT_FINE_STEP if self.z_min <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
+        self.z_min = max(HEIGHT_MIN, round(self.z_min - step, 6))
         self.level_start_iteration = int(iteration)
         self.batch_count = 0
         self.batch_success_count = 0
