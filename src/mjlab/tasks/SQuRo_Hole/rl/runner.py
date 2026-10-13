@@ -10,7 +10,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 from mjlab.rl.runner import MjlabOnPolicyRunner
-from mjlab.tasks.SQuRo_Hole.mdp.config import (
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     get_current_stage,
     stage_requires_collision,

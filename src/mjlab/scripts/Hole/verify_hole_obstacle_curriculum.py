@@ -13,13 +13,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
-    COURSE_START,
-    COURSE_START_ITER,
-    HEIGHT_COURSE_STAGE,
-    STAGE2_END_ITER,
-    STEPS_PER_ITER,
     THRESHOLD_HEIGHT,
-    get_current_stage,
     HEIGHT_INITIAL_MIN,
     HEIGHT_MAX,
     HEIGHT_MIN,
@@ -29,7 +23,13 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    COURSE_START,
+    COURSE_START_ITER,
+    HEIGHT_COURSE_STAGE,
+    STAGE2_END_ITER,
+    STEPS_PER_ITER,
     HeightCurriculumState,
+    get_current_stage,
     rule_bounds,
     sample_base_heights,
 )

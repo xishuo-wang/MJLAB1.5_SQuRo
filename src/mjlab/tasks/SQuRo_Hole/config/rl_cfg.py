@@ -3,7 +3,7 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
   RslRlOnPolicyRunnerCfg,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.config import STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import STEPS_PER_ITER
 
 
 

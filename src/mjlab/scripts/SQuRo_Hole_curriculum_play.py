@@ -12,11 +12,10 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
-    COURSE_START,
     HEIGHT_MAX,
     HEIGHT_MIN,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import COURSE_START, HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     configure_single_hole_entities,

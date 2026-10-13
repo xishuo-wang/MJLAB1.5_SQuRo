@@ -8,27 +8,70 @@ from .config import (
     BASE_HEIGHT,
     EXIT_MARGIN,
     ENTRY_MARGIN,
-    STEPS_PER_ITER,
-    STAGE1_END_ITER,
-    STAGE2_END_ITER,
-    COURSE_START_ITER,
-    get_current_stage,
     LOW_TARGET_HEIGHT,
     HEIGHT_INITIAL_MIN,
     BODY_HEIGHT_OFFSET,
-    HEIGHT_COURSE_STAGE,
     OBSTACLE_HEIGHT_SPLIT,
+    RANDOM_HEIGHT_VALUES,
+    FULL_HEIGHT_VALUES,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
-    stage_requires_collision,
     HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_MIN_DWELL_ITERATIONS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 
-# 奖励曲线直接共用配置中的阶段边界。
+# 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
+# 阶段边界与阶段判定集中在本文件, config.py 只保留可调参数。
+STAGE1_END_ITER = 1000
+STAGE2_END_ITER = 2000
+STAGE3_END_ITER = 3000
+COURSE_START_ITER = STAGE3_END_ITER
+HEIGHT_COURSE_STAGE = 4
+NUM_STAGES = 4
+
+STEPS_PER_ITER = 48
+STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
+STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
+STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
+COURSE_START = COURSE_START_ITER * STEPS_PER_ITER
+
+# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
+STAGE_COLLISION = (False, False, False, True)
+
+# 奖励曲线直接共用阶段边界。
 _STAGES = (0, STAGE1_END_ITER, STAGE2_END_ITER, COURSE_START_ITER)
 
+
+# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
+def get_current_stage(step_counter: int) -> int:
+    if step_counter < STAGE1_END:
+        return 1
+    if step_counter < STAGE2_END:
+        return 2
+    if step_counter < STAGE3_END:
+        return 3
+    return HEIGHT_COURSE_STAGE
+
+
+# 判断是否已进入真实碰撞高度课程。
+def stage_uses_height_course(stage: int) -> bool:
+    return stage >= HEIGHT_COURSE_STAGE
+
+
+# 该阶段是否要求实体碰撞
+def stage_requires_collision(stage: int) -> bool:
+    idx = min(max(int(stage), 1), NUM_STAGES) - 1
+    return STAGE_COLLISION[idx]
+
+
+# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
+def heights_for_stage(stage: int):
+    if stage == 1:
+        return RANDOM_HEIGHT_VALUES
+    if stage in (2, 3):
+        return FULL_HEIGHT_VALUES
+    return None
 
 
 
@@ -88,13 +131,6 @@ class RewardWeightCurriculum:
     # 关卡是否要求开启限高板碰撞 (只读视图, 供基线脚本展示课程意图)
     def should_enable_holes(self, current_step: int) -> bool:
         return stage_requires_collision(get_current_stage(current_step))
-
-
-    # 兼容旧接口: 按阶段阈值 (步数) 展开的权重表视图
-    @property
-    def weight_stages(self) -> dict[int, dict[str, float]]:
-        return {t * STEPS_PER_ITER: self.get_reward_weights(t * STEPS_PER_ITER)
-                for t in _STAGES}
 
 
 reward_weight_curriculum = RewardWeightCurriculum()

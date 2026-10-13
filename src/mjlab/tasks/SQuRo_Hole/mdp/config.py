@@ -53,58 +53,6 @@ HOLE_SIZE = (0.015, 0.1, 0.005)                  # 单板半长、半宽、半�
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                # 板底净空余量
 
 
-# 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
-STAGE1_END_ITER = 1000
-STAGE2_END_ITER = 2000
-STAGE3_END_ITER = 3000
-COURSE_START_ITER = STAGE3_END_ITER
-HEIGHT_COURSE_STAGE = 4
-NUM_STAGES = 4
-
-STEPS_PER_ITER = 48
-STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
-STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
-COURSE_START = COURSE_START_ITER * STEPS_PER_ITER
-STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
-
 # 前三阶段使用随机高度池，第四阶段按板高与基座位置查表。
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
-
-# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
-STAGE_COLLISION = (False, False, False, True)
-
-
-
-# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
-def get_current_stage(step_counter: int) -> int:
-    if step_counter < STAGE1_END:
-        return 1
-    if step_counter < STAGE2_END:
-        return 2
-    if step_counter < STAGE3_END:
-        return 3
-    return HEIGHT_COURSE_STAGE
-
-
-
-# 判断是否已进入真实碰撞高度课程。
-def stage_uses_height_course(stage: int) -> bool:
-    return stage >= HEIGHT_COURSE_STAGE
-
-
-
-# 该阶段是否要求实体碰撞
-def stage_requires_collision(stage: int) -> bool:
-    idx = min(max(int(stage), 1), NUM_STAGES) - 1
-    return STAGE_COLLISION[idx]
-
-
-
-# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
-def heights_for_stage(stage: int):
-    if stage == 1:
-        return RANDOM_HEIGHT_VALUES
-    if stage in (2, 3):
-        return FULL_HEIGHT_VALUES
-    return None

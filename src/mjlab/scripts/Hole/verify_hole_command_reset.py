@@ -11,9 +11,12 @@ from mjlab.tasks.SQuRo_Hole.mdp import events
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    COURSE_START,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState, rule_bounds
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    COURSE_START,
+    HeightCurriculumState,
+    rule_bounds,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities
 
 

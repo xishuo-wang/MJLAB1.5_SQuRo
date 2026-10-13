@@ -33,7 +33,7 @@ src/mjlab/tasks/SQuRo_Hole/
 ├── SQuRo_Hole_env_cfg.py   # 观测/动作/奖励/终止/场景/实体; 机器人用共享 14 执行器配置
 ├── config/{__init__.py, rl_cfg.py}   # 注册 Mjlab-SQuRo-Hole + PPO (512-256-128, 4000 iter)
 ├── mdp/
-│   ├── config.py      # 任务级全局常量 (基准高度/速度/阈值/高度档/阶段边界), 见 §3
+│   ├── config.py      # 任务级可调参数 (基准高度/速度/阈值/高度档/课程参数), 见 §2b、§3
 │   ├── command.py     # HoleCommand: 6D 命令 + 阶段 1/2 随机采样 + 阶段 3 位移位置表
 │   ├── curriculums.py # 4 段奖励权重曲线 _CURVES + 障碍物开关 enable_holes
 │   ├── events.py      # reset_model: 固定起点 (0,0,0.06) + 头颈 0.0/-0.3
@@ -53,6 +53,7 @@ src/mjlab/scripts/Hole/verify_hole_baseline.py   # 基线验证
 ## 2b. 全局常量（mdp/config.py）
 
 多文件共用的基准值集中在 `mdp/config.py`（形态参考 `SQuRo_Backup/mdp/config.py`），
+该文件只保留变量定义；阶段边界、阶段判定函数与奖励曲线在 `mdp/curriculums.py`。
 其余模块一律 `from .config import ...`，不再各自定义。当前值：
 
 | 常量 | 值 | 含义 |
@@ -157,8 +158,8 @@ ref_joint_vel 14 + command 6`。注意 `joint_pos/vel/acc` 是**全部 36 个非
 
 ## 4. 命令与四阶段课程
 
-**阶段边界唯一定义在 `mdp/config.py`**（`curriculums.py` 与 `command.py` 都从这里取，
-此前两处各有一套 `STAGE*` 常量、含义不同且都叫同名，极易混淆）：
+**阶段边界与阶段判定唯一定义在 `mdp/curriculums.py`**（`command.py`、`rl/runner.py`、
+`terminations.py` 都从这里取；`config.py` 只保留可调参数，不再放阶段边界与函数）：
 
 | 阶段 | iter 区间 | 命令来源 | 位置表 | 要求实体碰撞 |
 | --- | --- | --- | --- | --- |
@@ -360,15 +361,16 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 
 `mdp/curriculums.py` 不再是"每阶段一个整字典"，改为 Backup 任务的曲线形态：
 
-- `_STEPS_PER_ITER = 24`（与 `rl_cfg.num_steps_per_env` 同源，配置里当前为 48）；
-- `_STAGES = (0, 1000, 2000, 3000)`：阶段边界用 **iter** 表示（`STAGE1_1_ITER` /
-  `STAGE1_2_ITER` / `STAGE1_3_ITER`），这三个常量**直接从 `config.py` 导入**，与
-  `command.py` 的阶段判定是同一来源；
-- `_CURVES`：每个奖励项 / σ 一条曲线，权重不变的阶段重复同一个值（如 `mimic_pos` 四档都是 14.0）；
-- `should_enable_holes(step)` 用 `ENABLE_HOLES_ITER = STAGE3_END_ITER = 3000` 判定；
+- `STEPS_PER_ITER = 48`（与 `rl_cfg.num_steps_per_env` 同源）；
+- `_STAGES = (0, STAGE1_END_ITER, STAGE2_END_ITER, COURSE_START_ITER)`：阶段边界用 **iter**
+  表示；`STAGE{1,2,3}_END_ITER`、`COURSE_START_ITER` 与折算后的
+  `STAGE{1,2,3}_END`、`COURSE_START`（步数）都定义在 `curriculums.py`；
+- `_CURVES`：每个奖励项 / σ 一条曲线，权重不变的阶段重复同一个值；
+- `should_enable_holes(step)` 走 `stage_requires_collision(get_current_stage(step))`；
   原先的 `update_holes()`（对已编译 spec 调 `enable_collision()`）**已删除**，实际切换由
   `rl/runner.py` 重建环境完成（见 §5）；
-- 保留 `weight_stages` 属性作为**兼容视图**（按 iter×24 生成阈值 → 权重），旧脚本与诊断不用改。
+- 兼容视图 `weight_stages`（按 iter×步数展开的字典）**已删除**：它与
+  `get_reward_weights(step)` 完全等价，调用方向已改为后者。
 
 ## 7. 本次适配项（相对 Backup 原码）
 

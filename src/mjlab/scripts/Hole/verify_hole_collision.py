@@ -11,7 +11,7 @@ import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.SQuRo_Hole.mdp.config import (
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_END,
     get_current_stage,
 )

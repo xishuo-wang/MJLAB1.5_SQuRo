@@ -15,14 +15,16 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_VEL_X_IDS,
-    STEPS_PER_ITER,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_GAIT_FREQ_IDS,
     CMD_CURVATURE_IDS,
-    get_current_stage,
     HEIGHT_INITIAL_MIN,
     CMD_OBSTACLE_HEIGHT_IDS,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    STEPS_PER_ITER,
+    get_current_stage,
     stage_requires_collision,
     stage_uses_height_course,
 )

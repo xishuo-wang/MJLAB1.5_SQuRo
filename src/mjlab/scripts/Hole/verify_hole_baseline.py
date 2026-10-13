@@ -7,24 +7,28 @@ import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 
-# 阶段边界与高度阈值的唯一来源都是 config (command 只是转出)
+# 阶段边界与高度阈值的唯一来源: 参数在 config, 阶段边界与判定在 curriculums
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
+    TABLE_RESOLUTION,
+    THRESHOLD_HEIGHT,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     NUM_STAGES,
     STAGE1_END,
     STAGE2_END,
     STAGE3_END,
     STEPS_PER_ITER,
-    TABLE_RESOLUTION,
-    THRESHOLD_HEIGHT,
+    HeightCurriculumState,
     get_current_stage,
     heights_for_stage,
+    reward_weight_curriculum,
+    rule_bounds,
     stage_requires_collision,
     stage_uses_height_course,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState, reward_weight_curriculum, rule_bounds
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_FL_LEG_IDS,
@@ -88,7 +92,7 @@ def check_command() -> None:
           f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
           f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
           f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
-    print("[3b] 四阶段定义 (边界唯一定义在 mdp/config.py):")
+    print("[3b] 四阶段定义 (边界唯一定义在 mdp/curriculums.py):")
     print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'高度课程':>8}{'要求碰撞':>10}")
     bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER, STAGE3_END // STEPS_PER_ITER]
     for s in range(1, NUM_STAGES + 1):
@@ -125,12 +129,14 @@ def check_command() -> None:
 
 # 课程权重: 阶段阈值与生效段
 def check_curriculum() -> None:
-    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(reward_weight_curriculum.weight_stages)} 段):")
+    # 阶段阈值 = iter 边界 × 每 iter 步数
+    thresholds = [0, STAGE1_END, STAGE2_END, STAGE3_END]
+    print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
     keys = ["body_contact", "height", "mimic_pos", "height_sigma"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
-    for step in sorted(reward_weight_curriculum.weight_stages.keys()):
-        w = reward_weight_curriculum.weight_stages[step]
+    for step in thresholds:
+        w = reward_weight_curriculum.get_reward_weights(step)
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
               f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")

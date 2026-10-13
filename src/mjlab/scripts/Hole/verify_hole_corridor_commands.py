@@ -14,15 +14,17 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_OBSTACLE_HEIGHT_IDS,
+    WARMUP_OBSTACLE_HEIGHT,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     COURSE_START,
     STAGE2_END,
     STEPS_PER_ITER,
-    WARMUP_OBSTACLE_HEIGHT,
     get_current_stage,
     heights_for_stage,
+    reward_weight_curriculum,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import reward_weight_curriculum
 from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state

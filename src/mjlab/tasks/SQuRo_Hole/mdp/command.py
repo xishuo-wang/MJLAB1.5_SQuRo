@@ -22,17 +22,17 @@ from .config import (
     THRESHOLD_HEIGHT,
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
-    get_current_stage,
-    heights_for_stage,
     FULL_HEIGHT_VALUES,
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
-    stage_uses_height_course,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 from .curriculums import (
     sample_base_heights,
     HeightCurriculumState,
+    get_current_stage,
+    heights_for_stage,
+    stage_uses_height_course,
 )
 from .entity import read_bottom_z, write_hole_bottom_z
 from .indices import _MODEL_INDICES, resolve_model_indices
