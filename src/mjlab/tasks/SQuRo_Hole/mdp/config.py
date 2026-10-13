@@ -2,17 +2,18 @@
 BASE_HEIGHT = 0.055         # 基准高度：正常行走下的躯干中心高度
 BASE_FREQ = 2.0             # 基准速度：正常行走下的步态频率
 BASE_SPEED = 0.2            # 基准速度：基准步频和基准高度下的期望速度
-THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度 (取 0.0395 而非 0.04, 避免 float32(0.04) 与阈值等值时判定歧义)
+BASE_CURVATURE = 0.0        # 基准曲率
+THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度
 
-# 命令层四种高度模式: 按前后肢各自是否低于阈值切分, 覆盖全部组合
-# 注: 参考表的 mode 只有 3 个 (它的 0 同时覆盖"双高"与"双低", 见 reference.py),
-# 两者是不同的分层, 不要互相替换
+
+# 四种高度模式
 MODE_BOTH_HIGH = 0          # 前后肢均高
 MODE_FRONT_LOW = 1          # 前肢低后肢高
 MODE_HIND_LOW = 2           # 前肢高后肢低
 MODE_BOTH_LOW = 3           # 前后肢均低
 
-# 命令前五列对齐 Backup，第六列记录真实板底；见高度课程设计文档。
+
+# 命令相关索引
 COMMAND_SCHEMA_VERSION = 2
 COMMAND_FIELDS = ("velocity_x", "height_f", "height_h", "gait_frequency", "curvature", "obstacle_height")
 COMMAND_DIM = len(COMMAND_FIELDS)
@@ -22,7 +23,7 @@ CMD_HEIGHT_H_IDS = COMMAND_FIELDS.index("height_h")
 CMD_GAIT_FREQ_IDS = COMMAND_FIELDS.index("gait_frequency")
 CMD_CURVATURE_IDS = COMMAND_FIELDS.index("curvature")
 CMD_OBSTACLE_HEIGHT_IDS = COMMAND_FIELDS.index("obstacle_height")
-BASE_CURVATURE = 0.0
+
 
 
 
@@ -31,8 +32,6 @@ BASE_CURVATURE = 0.0
 HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]     # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
 TABLE_RESOLUTION = 500                      # 相位分辨率: 参考表第三维的采样点数
 USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
-# 头颈期望位置与速度 (顺序: Neck_yaw, Neck_pitch)
-# 位置同时就是复位姿态, 使 action=0 恰好维持头部俯仰 (见 docs §9.8); 两者必须同值
 NECK_REF_POS = (0.0, -0.3)
 NECK_REF_VEL = (0.0, 0.0)
 HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
@@ -96,16 +95,17 @@ def get_current_stage(step_counter: int) -> int:
 
 
 
-
 # 判断是否已进入真实碰撞高度课程。
 def stage_uses_height_course(stage: int) -> bool:
     return stage >= HEIGHT_COURSE_STAGE
+
 
 
 # 该阶段是否要求实体碰撞
 def stage_requires_collision(stage: int) -> bool:
     idx = min(max(int(stage), 1), NUM_STAGES) - 1
     return STAGE_COLLISION[idx]
+
 
 
 # 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
