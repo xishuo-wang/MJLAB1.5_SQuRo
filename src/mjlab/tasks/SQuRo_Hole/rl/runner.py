@@ -324,10 +324,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             return
         del results
         stats = command.height_curriculum_state.metrics()  # type: ignore
-        log["Metrics/高度课程/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
-        log["Metrics/高度课程/当前档成功率"] = torch.tensor(stats["level_success_rate"], device=env.device)
-        log["Metrics/高度课程/当前档样本数"] = torch.tensor(stats["level_episode_count"], device=env.device)
-        log["Metrics/高度课程/全高度通过率"] = torch.tensor(stats["all_height_success_rate"], device=env.device)
-        log["Metrics/高度课程/全高度样本数"] = torch.tensor(stats["all_height_episode_count"], device=env.device)
-        for name, count in stats["failure_counts"].items():
-            log[f"Metrics/高度课程/{name}失败数"] = torch.tensor(count, device=env.device)
+        log["Metrics/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
+        log["Metrics/success_rate"] = torch.tensor(stats["success_rate"], device=env.device)
+        log["Metrics/failure_rate"] = torch.tensor(stats["failure_rate"], device=env.device)
+        log["Metrics/level_progress"] = torch.tensor(stats["level_progress"], device=env.device)

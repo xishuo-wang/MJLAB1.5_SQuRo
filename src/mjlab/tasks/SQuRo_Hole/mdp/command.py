@@ -265,7 +265,6 @@ class HoleCommand(CommandTerm):
             ("双低", front_low & hind_low),
         )
         positions = self.robot.data.root_link_pos_w
-        relative_x = positions[:, 0] - self.start_positions[:, 0]
         velocity = self.robot.data.root_link_lin_vel_w
         body_ids = [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id]
         quaternions = self.robot.data.body_link_quat_w[:, body_ids]
@@ -274,32 +273,13 @@ class HoleCommand(CommandTerm):
         offsets = yaw.new_tensor([-torch.pi / 2, torch.pi / 2])
         heading_error = torch.rad2deg(wrap_to_pi(yaw + offsets)).abs()
         log = self._env.extras["log"]
-        if not self.cfg.log_detailed_metrics:
-            log["Metrics/课程/阶段"] = positions.new_tensor(get_current_stage(self._env.common_step_counter))
-            log["Metrics/运动/侧向速度绝对值均值"] = velocity[:, 1].abs().mean().detach()
-            for name, mask in groups:
-                log[f"Metrics/{name}/占比"] = mask.float().mean().detach()
-                if name in ("前低后高", "前高后低"):
-                    mean_heading = (heading_error[:, 0] * mask).sum() / mask.sum().clamp_min(1)
-                    log[f"Metrics/{name}/前躯干方向误差均值_度"] = mean_heading.detach()
-            return
-        values = torch.stack(
-            (relative_x, velocity[:, 0], velocity[:, 1], velocity[:, 1].abs(),
-             heading_error[:, 0], heading_error[:, 1]), dim=1,
-        )
-        masks = torch.stack([mask for _, mask in groups]).to(values.dtype)
-        counts = masks.sum(dim=1)
-        means = (masks @ values) / counts.clamp_min(1).unsqueeze(1)
-        fields = ("相对X均值", "前向速度均值", "侧向速度均值", "侧向速度绝对值均值", "前躯干方向误差均值_度", "后躯干方向误差均值_度")
-        log["Metrics/位移/起点X均值"] = self.start_positions[:, 0].mean().detach()
-        log["Metrics/位移/相对X均值"] = relative_x.mean().detach()
-        log["Metrics/位移/相对X最大值"] = relative_x.max().detach()
-        for i, (name, _) in enumerate(groups):
-            prefix = f"Metrics/{name}"
-            log[f"{prefix}/样本数"] = counts[i].detach()
-            log[f"{prefix}/占比"] = (counts[i] / self.num_envs).detach()
-            for j, field_name in enumerate(fields):
-                log[f"{prefix}/{field_name}"] = means[i, j].detach()
+        log["Metrics/课程/阶段"] = positions.new_tensor(get_current_stage(self._env.common_step_counter))
+        log["Metrics/运动/侧向速度绝对值均值"] = velocity[:, 1].abs().mean().detach()
+        for name, mask in groups:
+            log[f"Metrics/{name}/占比"] = mask.float().mean().detach()
+            if name in ("前低后高", "前高后低"):
+                mean_heading = (heading_error[:, 0] * mask).sum() / mask.sum().clamp_min(1)
+                log[f"Metrics/{name}/前躯干方向误差均值_度"] = mean_heading.detach()
 
 
     # 回合重置: 重新锚定位移起点
@@ -354,7 +334,6 @@ class HoleCommandCfg(CommandTermCfg):
     fixed_height_H: Optional[float] = None
     enable_height_course: bool = False
     enable_course_progress: bool = True
-    log_detailed_metrics: bool = False
     height_curriculum_state: dict = field(default_factory=dict)
     
     @dataclass

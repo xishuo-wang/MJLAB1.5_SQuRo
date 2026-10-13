@@ -298,16 +298,12 @@ class HeightCurriculumState:
         self.failure_counts = dict(state.get("failure_counts", self.failure_counts))
 
 
-    # 汇总当前档和全高度的通过率。
+    # 汇总当前档日志: 最低档成功率/失败率与挡位推进进度。
     def metrics(self) -> dict[str, Any]:
+        success_rate = self.level_success_count / max(1, self.level_episode_count)
         return {
             "z_min": self.z_min,
-            "z_max": self.z_max,
-            "level_success_rate": self.level_success_count / max(1, self.level_episode_count),
-            "level_episode_count": self.level_episode_count,
-            "batch_count": self.batch_count,
-            "consecutive_success_batches": self.consecutive_success_batches,
-            "all_height_success_rate": self.all_height_success_count / max(1, self.all_height_episode_count),
-            "all_height_episode_count": self.all_height_episode_count,
-            "failure_counts": dict(self.failure_counts),
+            "success_rate": success_rate,
+            "failure_rate": 1.0 - success_rate,
+            "level_progress": self.consecutive_success_batches / max(1, HEIGHT_REQUIRED_BATCHES),
         }
