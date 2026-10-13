@@ -39,6 +39,24 @@ HIND_HOLD_POS = (0.80, -0.15)  # 当前基线的后腿收缩参考角
 
 
 
+# 高度课程规则参数；可视化与训练共用此处定义。
+OBSTACLE_HEIGHT_SPLIT = 0.070
+ENTRY_MARGIN = 0.150
+EXIT_MARGIN = 0.100
+BODY_HEIGHT_OFFSET = 0.030
+LOW_TARGET_HEIGHT = 0.020
+HEIGHT_MIN = 0.048
+HEIGHT_MAX = 0.090
+HEIGHT_INITIAL_MIN = 0.070
+HEIGHT_STEP = 0.002
+HEIGHT_MIN_SAMPLE_PROBABILITY = 0.30
+HEIGHT_MIN_SUCCESS_BATCH = 256
+HEIGHT_MIN_SUCCESS_RATE = 0.60
+HEIGHT_REQUIRED_BATCHES = 2
+HEIGHT_MIN_DWELL_ITERATIONS = 100
+
+
+
 # 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
 STAGE1_END_ITER = 1000
 STAGE2_END_ITER = 2000
@@ -76,9 +94,6 @@ def get_current_stage(step_counter: int) -> int:
     return HEIGHT_COURSE_STAGE
 
 
-# 历史位置表用于显式 legacy 回放；训练课程优先使用高度规则。
-def stage_uses_schedule(stage: int) -> bool:
-    return stage >= HEIGHT_COURSE_STAGE
 
 
 # 判断是否已进入真实碰撞高度课程。

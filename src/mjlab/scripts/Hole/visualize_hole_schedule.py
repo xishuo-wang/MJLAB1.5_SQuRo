@@ -11,47 +11,32 @@ import numpy as np
 import torch
 
 from mjlab.tasks.SQuRo_Hole.mdp.command import (
-    STAGE3_POSITION_SCHEDULE,
-    HoleCommand,
-    HoleCommandCfg,
     compute_command_velocity,
     get_height_mode,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
     BASE_HEIGHT,
-    BASE_FREQ,
-    COMMAND_DIM,
-    CMD_GAIT_FREQ_IDS,
-    CMD_HEIGHT_F_IDS,
-    CMD_HEIGHT_H_IDS,
-    CMD_VEL_X_IDS,
     HEIGHT_LIST,
     MODE_BOTH_HIGH,
     MODE_BOTH_LOW,
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.entity import (
-    HOLE_LAYOUT,
-    VIRTUAL_CLEARANCE_MARGIN,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     BODY_HEIGHT_OFFSET,
     ENTRY_MARGIN,
     EXIT_MARGIN,
     LOW_TARGET_HEIGHT,
     OBSTACLE_HEIGHT_SPLIT,
-    sample_base_heights,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_MAX as PREVIEW_HEIGHT_MAX,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    sample_base_heights,
     rule_bounds as _shared_rule_bounds,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
+    HOLE_LAYOUT,
+    VIRTUAL_CLEARANCE_MARGIN,
 )
 
 MODE_LABELS = {
@@ -101,45 +86,6 @@ def build_cases(start_x: float) -> list[ScheduleCase]:
         right = max(right, rule_right - start_x + padding)
         cases.append(ScheduleCase(label, board, left, right))
     return cases
-
-
-# 用轻量状态调用生产查表函数，无需创建仿真环境；见 docs/SQuRo_Hole_位置表可视化.md。
-def sample_schedule(positions: np.ndarray) -> dict[str, np.ndarray]:
-    position = torch.as_tensor(positions, dtype=torch.float32)
-    count = len(position)
-    command = torch.zeros(count, COMMAND_DIM)
-    command[:, CMD_GAIT_FREQ_IDS] = BASE_FREQ
-    probe = SimpleNamespace(
-        device="cpu",
-        cfg=HoleCommandCfg(),
-        robot=SimpleNamespace(
-            data=SimpleNamespace(
-                root_link_pos_w=torch.stack((position, torch.zeros_like(position), torch.zeros_like(position)), dim=1)
-            )
-        ),
-        start_positions=torch.zeros(count, 3),
-        command_tensor=command,
-        vel_command=command[:, CMD_VEL_X_IDS],
-        height_F_command=command[:, CMD_HEIGHT_F_IDS],
-        height_H_command=command[:, CMD_HEIGHT_H_IDS],
-        angle_command=torch.zeros(count),
-        _update_obstacle_height_command=lambda: None,
-        has_printed_current_cmd=torch.zeros(count, dtype=torch.bool),
-    )
-    HoleCommand._update_command_from_schedule(
-        probe, torch.arange(count), STAGE3_POSITION_SCHEDULE
-    )
-    heights = torch.tensor(HEIGHT_LIST)
-    front = command[:, CMD_HEIGHT_F_IDS]
-    hind = command[:, CMD_HEIGHT_H_IDS]
-    return {
-        "position": position.numpy(),
-        "height_f": front.numpy(),
-        "height_h": hind.numpy(),
-        "velocity_x": command[:, CMD_VEL_X_IDS].numpy(),
-        "reference_height_f": heights[(front[:, None] - heights).abs().argmin(dim=1)].numpy(),
-        "reference_height_h": heights[(hind[:, None] - heights).abs().argmin(dim=1)].numpy(),
-    }
 
 
 # 按板的世界坐标计算生效区间与板中心。
@@ -205,9 +151,7 @@ def sample_base_commands(
 
 
 # 加入切换节点及其右侧点，保留阶跃和右端点包含的口径。
-def make_grid(x_min: float, x_max: float, knots: np.ndarray | None = None) -> np.ndarray:
-    if knots is None:
-        knots = np.array([row[0] for row in STAGE3_POSITION_SCHEDULE])
+def make_grid(x_min: float, x_max: float, knots: np.ndarray) -> np.ndarray:
     right_probe = knots + 32 * np.finfo(float).eps * np.maximum(1.0, np.abs(knots))
     knots = np.concatenate((knots, right_probe))
     return np.unique(np.concatenate((np.linspace(x_min, x_max, 800), knots[(knots >= x_min) & (knots <= x_max)])))
@@ -226,13 +170,11 @@ def configure_fonts() -> None:
 # 绘制高度命令和对应板实体，保持中心高度与表面净空的含义分开。
 def draw_panel(
     ax, x_min: float, x_max: float, boards: list, start_x: float, title: str,
-    values: dict[str, np.ndarray] | None = None, knots: np.ndarray | None = None,
+    values: dict[str, np.ndarray], knots: np.ndarray,
     xlabel: str = "机体相对复位起点的 X 位移（m）",
 ):
     from matplotlib.patches import Rectangle
 
-    if values is None:
-        values = sample_schedule(make_grid(x_min, x_max))
     front_line, = ax.step(values["position"], values["height_f"] * 1000, where="post", color="#2563eb", linewidth=2.3, label="前躯干目标高度")
     hind_line, = ax.step(values["position"], values["height_h"] * 1000, where="post", color="#ea580c", linestyle="--", linewidth=2.3, label="后躯干目标高度")
     rectangles, virtual_lines = [], []
@@ -250,8 +192,6 @@ def draw_panel(
             label="虚拟净空阈值" if index == 0 else None,
         ))
     ax.axhline(THRESHOLD_HEIGHT * 1000, color="#64748b", linestyle=":", linewidth=1, label="高低模式分界")
-    if knots is None:
-        knots = np.array([row[0] for row in STAGE3_POSITION_SCHEDULE])
     markers = []
     for position in knots:
         if x_min < position < x_max:
@@ -333,12 +273,11 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
                            front_point=front_point, hind_point=hind_point)
 
 
-# 导出当前源码中的位置表、布局和两种情况，便于复核图片来源。
+# 导出当前高度规则、布局和两种板型，便于复核图片来源。
 def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float,
                      initial_heights: list[float]) -> None:
     data = {
         "start_x": start_x,
-        "position_schedule": STAGE3_POSITION_SCHEDULE,
         "hole_layout": HOLE_LAYOUT,
         "reference_height_list": HEIGHT_LIST,
         "virtual_clearance_margin": VIRTUAL_CLEARANCE_MARGIN,
@@ -364,7 +303,7 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
     (output_dir / "位置表数据.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# 对照原始位置表，预览短板与长板随板高变化的新规则。
+# 预览短板与长板随板高变化的当前规则。
 def main() -> None:
     parser = argparse.ArgumentParser(description="预览以 70 mm 为分界的障碍物高度—位置表联动规则")
     parser.add_argument("--no-show", action="store_true", help="仅导出图片，不打开交互窗口")
@@ -386,16 +325,12 @@ def main() -> None:
     if any(not np.isfinite(height) or not PREVIEW_HEIGHT_MIN <= height <= PREVIEW_HEIGHT_MAX
            for height in initial_heights):
         parser.error(f"预览板底高度须在 [{PREVIEW_HEIGHT_MIN}, {PREVIEW_HEIGHT_MAX}] m 内")
-    fig = plt.figure(figsize=(15, 10), facecolor="white")
-    grid = fig.add_gridspec(2, 2, height_ratios=(0.9, 1), left=0.075, right=0.97,
-                           top=0.86, bottom=0.36, hspace=0.52, wspace=0.2)
-    overview = fig.add_subplot(grid[0, :])
-    x_min = min(0.0, min(board[1] - board[4] for board in HOLE_LAYOUT) - args.start_x)
-    x_max = max(STAGE3_POSITION_SCHEDULE[-1][0], max(board[1] + board[4] for board in HOLE_LAYOUT) - args.start_x) + 0.1
-    draw_panel(overview, x_min, x_max, list(HOLE_LAYOUT), args.start_x, "历史三板位置表（参照）")
+    fig = plt.figure(figsize=(15, 7), facecolor="white")
+    grid = fig.add_gridspec(1, 2, left=0.075, right=0.97,
+                           top=0.80, bottom=0.36, wspace=0.2)
     controls = []
     for column, (case, height) in enumerate(zip(cases, initial_heights, strict=True)):
-        ax = fig.add_subplot(grid[1, column])
+        ax = fig.add_subplot(grid[0, column])
         knots = rule_knots(case.board, args.start_x)
         values = sample_rule_schedule(make_grid(case.x_min, case.x_max, knots), case.board, height, args.start_x)
         artists = draw_panel(ax, case.x_min, case.x_max, [case.board], args.start_x,
@@ -403,7 +338,7 @@ def main() -> None:
                              xlabel="base_Link 相对起点的 X 坐标（m）")
         controls.append(add_rule_controls(fig, ax, case, artists, args.start_x, column, height))
     fig.suptitle("障碍物板高与高度—位置表联动预览", fontsize=17, y=0.985)
-    handles, labels = overview.get_legend_handles_labels()
+    handles, labels = fig.axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.52, 0.95),
                ncol=5, frameon=False, fontsize=9)
     fig.text(0.075, 0.015, "前后目标共用 base_Link 的世界 X；低板在板中心立即切换为前高后低，两个低姿态区间互斥。", fontsize=9, color="#475569")

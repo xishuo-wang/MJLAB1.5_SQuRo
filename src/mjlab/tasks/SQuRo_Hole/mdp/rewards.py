@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import TYPE_CHECKING
 
 import torch
@@ -14,10 +13,13 @@ from .config import (
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
     THRESHOLD_HEIGHT,
+    BODY_HEIGHT_OFFSET,
 )
-from .curriculums import SPN_AXIS_SCALE, get_curriculum_reward_weight
+from .curriculums import (
+    SPN_AXIS_SCALE,
+    get_curriculum_reward_weight,
+)
 from .entity import VIRTUAL_CLEARANCE_MARGIN, hole_geometry, read_bottom_z
-from .height_schedule import BODY_HEIGHT_OFFSET
 from .indices import (
     _ACT_F_LEG_IDS,
     _ACT_LEG_IDS,
@@ -30,7 +32,6 @@ from .indices import (
 )
 from .reference import (
     get_reference_joint_state,
-    resolve_joint_ids,
 )
 
 if TYPE_CHECKING:
@@ -266,40 +267,6 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 能量消耗惩罚函数
-def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    actuator_vel = asset.data.joint_vel[:, resolve_joint_ids(asset)]
-    actuator_torque = asset.data.actuator_force
-    power = actuator_vel * actuator_torque
-    total_power = torch.sum(torch.abs(power), dim=1)
-    penalty = -0.05 * total_power
-    weight = get_curriculum_reward_weight(env, "energy")
-    
-    return penalty * weight
-
-    
-
-# 计算COT惩罚函数
-def compute_cot_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    total_mass = 2.4525
-    actuator_vel = asset.data.joint_vel[:, resolve_joint_ids(asset)]
-    actuator_torque = asset.data.actuator_force
-    power = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
-    base_lin_vel_w = asset.data.root_link_lin_vel_w
-    forward_vel = base_lin_vel_w[:, 0]
-    epsilon = 1e-9
-    speed = torch.abs(forward_vel) + epsilon
-    cot = power / (total_mass * speed + epsilon)
-    penalty = -0.1 * cot  
-    weight = get_curriculum_reward_weight(env, "cot")
-    
-    
-    return penalty * weight
-
-
-    
 # 动作平滑性惩罚
 def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:    
     current_action = env.action_manager.action
@@ -310,95 +277,6 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
     return penalty * weight
 
-
-
-# 关节加速度惩罚函数
-def compute_joint_acc_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    joint_acc = asset.data.joint_acc
-    actuator_acc = joint_acc[:, resolve_joint_ids(asset)]
-    penalty = -torch.mean(0.005 * torch.abs(actuator_acc), dim=1)
-    weight = get_curriculum_reward_weight(env, "joint_acc")
-    
-    return penalty * weight
-
-
-
-# Y轴基座偏移惩罚函数
-def compute_base_y_offset_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    y_offset = asset.data.root_link_pos_w[:, 1]
-    penalty = -torch.abs(y_offset) * 100
-    weight = get_curriculum_reward_weight(env, "y_offset")
-    
-    return penalty * weight
-
-
-
-# 腿部关节限位惩罚
-def compute_limits_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    joint_pos = env.scene.entities["robot"].data.joint_pos
-    joint_names = env.scene.entities["robot"].joint_names
-    
-    penalty = torch.zeros(env.num_envs, device=env.device)
-    
-    joint_limits = {}
-    shoulder_pattern = re.compile(r".*_(shoulder_joint)")
-    elbow_pattern = re.compile(r".*_(elbow_joint)")
-    hip_pattern = re.compile(r".*_(hip_joint)")
-    knee_pattern = re.compile(r".*_(knee_joint)")
-    
-    for i, joint_name in enumerate(joint_names):
-        if shoulder_pattern.match(joint_name):
-            joint_limits[i] = (-0.5, 1.2)
-        elif elbow_pattern.match(joint_name):
-            joint_limits[i] = (-0.8, 0.3)
-        elif hip_pattern.match(joint_name):
-            joint_limits[i] = (-0.9, 0.8)
-        elif knee_pattern.match(joint_name):
-            joint_limits[i] = (-0.2, 0.8)
-        else:
-            joint_limits[i] = (-2, 2)
-    
-    for joint_idx, (lower, upper) in joint_limits.items():
-        joint_angles = joint_pos[:, joint_idx]
-        lower_violation = torch.clamp(lower - joint_angles, min=0.0)
-        upper_violation = torch.clamp(joint_angles - upper, min=0.0)
-        joint_penalty = lower_violation + upper_violation
-        penalty += joint_penalty
-    
-    weight = -get_curriculum_reward_weight(env, "joint_limits")
-    return penalty * weight
-
-
-
-# 动作加速度惩罚
-def compute_action_acc(env: ManagerBasedRlEnv) -> torch.Tensor:
-    policy_obs = env.observation_manager.compute_group("actor", update_history=False)
-    if isinstance(policy_obs, dict):
-        if "actions" in policy_obs:
-            action_history = policy_obs["actions"]
-        else:
-            return torch.zeros(env.num_envs, device=env.device)
-    elif isinstance(policy_obs, torch.Tensor):
-        action_dim = 36 
-        if policy_obs.shape[1] < action_dim:
-            return torch.zeros(env.num_envs, device=env.device)
-        action_history = policy_obs[:, :action_dim] 
-    else:
-        return torch.zeros(env.num_envs, device=env.device)
-    if action_history.dim() != 2 or action_history.shape[1] != 36:
-        return torch.zeros(env.num_envs, device=env.device)  
-    action_history_3d = action_history.reshape(env.num_envs, 3, 12)
-    prev_prev_action = action_history_3d[:, 0, :]  # t-2 (最旧)
-    prev_action = action_history_3d[:, 1, :]       # t-1
-    current_action = action_history_3d[:, 2, :]    # t (最新)
-    action_acceleration = current_action - 2 * prev_action + prev_prev_action
-    
-    penalty = -torch.sum(torch.abs(action_acceleration), dim=1)
-    weight = get_curriculum_reward_weight(env, "action_acc")
-    
-    return penalty * weight
 
 
 

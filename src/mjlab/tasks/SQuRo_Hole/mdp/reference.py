@@ -27,7 +27,6 @@ from .indices import (
     _ACT_SPN_IDS,
     REF_SPN_SLICE,
     _ACT_NECK_IDS,
-    _MODEL_INDICES,
     REF_SLOT_OF_ACT,
     REF_TABLE_ORDER,
     REF_F_LEG_SLICE,
@@ -37,7 +36,6 @@ from .indices import (
     REF_HL_LEG_SLICE,
     REF_HR_LEG_SLICE,
     SPN_LOCAL_H_PITCH,
-    resolve_model_indices,
 )
 
 
@@ -61,51 +59,25 @@ CSV_PARAMS = {
     "z_offset_H": 0.00,
     "rotate_angle_F": -0.1,
     "rotate_angle_H": -0.0,               
-    "xoy_angle_scale": 1.0,
-    "yoz_angle_scale": -1.0,
-    "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0},  
-    "height_scale_method": "z_offset"
+    "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0},
 }
 
 
 
 # 摆线轨迹参数配置
 CYCLOID_PARAMS = {
-    "normal": {
-        "freq": BASE_FREQ, "stride_F": 0.05, "stride_H": 0.05, "height_F": 0.01, "height_H": 0.015,
-        "body_height_F": 0.06, "body_height_H": 0.057, "swing_ratio": 0.4, 
-        "rotate_angle_F": 0.0, "rotate_angle_H": 0.0, "x_offset_F": -0.01, "x_offset_H": -0.03,
-        "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
-    },
     "front_low": {
         "freq": BASE_FREQ, "stride_H": 0.04, "height_H": 0.005, "body_height_H": 0.05,
         "swing_ratio": 0.4, "rotate_angle_H": 0.3, "x_offset_H": -0.03,
-        "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
     },
     "hind_low": {
         "freq": BASE_FREQ, "stride_F": 0.04, "height_F": 0.005, "body_height_F": 0.05,
         "swing_ratio": 0.4, "rotate_angle_F": -0.4, "x_offset_F": -0.02,
-        "phase_lag": {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}
     }
 }
 
-# 参考表列序: REF_TABLE_ORDER 里的数字是**执行器序**的下标, 不是模型关节索引,
-# 必须先用 indices.py 解析出模型关节索引再按该顺序排列 (顺序: 前腿4 + 后腿4 + 脊柱4 + 头颈2)
-MODEL_JOINT_IDS: list = []
-NECK_IDS: list[int] = []                                    # 模型关节编号由 resolve_joint_ids 解析
+# 参考表包含前腿、后腿、脊柱和头颈，出口按执行器顺序置换。
 ACTUATOR_NUM = len(REF_TABLE_ORDER)                         # 被控关节数 (14)
-
-
-# 解析参考表列序对应的模型关节索引 (幂等)
-def resolve_joint_ids(entity) -> list:
-    global MODEL_JOINT_IDS, NECK_IDS
-    if MODEL_JOINT_IDS:
-        return MODEL_JOINT_IDS
-    resolve_model_indices(entity)
-    act = _MODEL_INDICES.joint_ids
-    MODEL_JOINT_IDS = [act[i] for i in REF_TABLE_ORDER]
-    NECK_IDS = [act[i] for i in _ACT_NECK_IDS]
-    return MODEL_JOINT_IDS
 
 
 _LEG_CSV_CACHE: Dict[str, Optional[Dict[str, Any]]] = {"front": None, "hind": None}

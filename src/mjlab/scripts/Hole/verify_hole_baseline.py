@@ -1,12 +1,11 @@
 # uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
-# Hole 验证：参考表、历史位置表、四阶段课程、实体碰撞与观测维度
+# Hole 验证：参考表、单板高度规则、四阶段课程、实体碰撞与观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
 import torch
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.SQuRo_Hole.mdp.command import STAGE3_POSITION_SCHEDULE
 
 # 阶段边界与高度阈值的唯一来源都是 config (command 只是转出)
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
@@ -23,9 +22,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     heights_for_stage,
     stage_requires_collision,
-    stage_uses_schedule,
+    stage_uses_height_course,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import reward_weight_curriculum
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState, reward_weight_curriculum, rule_bounds
+from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     REF_FL_LEG_SLICE,
     REF_HL_LEG_SLICE,
@@ -34,14 +34,9 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     ACTUATOR_NUM,
-    CYCLOID_PARAMS,
     HEIGHT_LIST,
     Initialize_Tables,
 )
-
-# 模式数由 CYCLOID_PARAMS 决定 (normal / front_low / hind_low)
-NUM_MODES = len(CYCLOID_PARAMS)
-
 
 # 从实体本身读限高板碰撞开关, 不缓存"以为改成了什么"
 def hole_collision_enabled(env) -> bool:
@@ -55,11 +50,12 @@ def hole_collision_enabled(env) -> bool:
 def check_reference() -> None:
     tables = Initialize_Tables("cpu")
     front = tables["front_pos"]
+    num_modes = front.shape[0]
     print(f"[1] 参考表 front_pos {tuple(front.shape)} "
-          f"(模式 {NUM_MODES} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × 4 关节) "
+          f"(模式 {num_modes} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × 4 关节) "
           f"被控关节数 {ACTUATOR_NUM}")
     print(f"{'模式':>6}{'高度(mm)':>10}{'FL肩幅度':>12}{'HL髋幅度':>12}{'脊柱H_spine1':>14}")
-    for mode in range(NUM_MODES):
+    for mode in range(num_modes):
         for h_idx, h in enumerate(HEIGHT_LIST):
             sp = tables["spine_pos"][mode, h_idx]
             print(f"{mode:>6}{h * 1000:>10.0f}"
@@ -69,24 +65,29 @@ def check_reference() -> None:
     print(f"     高度阈值 THRESHOLD_HEIGHT = {THRESHOLD_HEIGHT} m (低于此值判为'压低'档)")
 
 
-# 命令: 回放位置表与阶段边界
+# 命令: 单板高度规则与阶段边界
 def check_command() -> None:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole", play=True)
     cfg.scene.num_envs = 8
+    configure_single_hole_entities(cfg, enable_collision=False)
+    state = HeightCurriculumState()
+    state.z_min = state.z_max = 0.070
+    cfg.commands["hole_cmd"].enable_height_course = True
+    cfg.commands["hole_cmd"].height_curriculum_state = state.state_dict()
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     env.reset()
     cmd = env.command_manager.get_command("hole_cmd")
-    print(f"\n[2] 回放位置表 ({len(STAGE3_POSITION_SCHEDULE)} 段):")
-    for dist, h_f, h_h in STAGE3_POSITION_SCHEDULE:
-        print(f"     位移 {dist:.2f} m → h_F {h_f * 1000:.0f} mm, h_H {h_h * 1000:.0f} mm")
+    board = env.scene["hole1"].cfg
+    left, middle, right = rule_bounds(board.position[0], board.size[0])
+    print(f"\n[2] 单板高度规则: 进入 {left:.3f} m，中点 {middle:.3f} m，离开 {right:.3f} m")
     print(f"     reset 后命令: vel_x {float(cmd[0, CMD_VEL_X_IDS]):.3f} m/s, "
-          f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (期望第一段 20/50)")
+          f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (热身随机高度池)")
     print(f"[3] 命令阶段边界: step 0 → stage {get_current_stage(0)}, "
           f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
           f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
           f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
     print("[3b] 四阶段定义 (边界唯一定义在 mdp/config.py):")
-    print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'位置表':>8}{'要求碰撞':>10}")
+    print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'高度课程':>8}{'要求碰撞':>10}")
     bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER, STAGE3_END // STEPS_PER_ITER]
     for s in range(1, NUM_STAGES + 1):
         lo = bounds[s - 1]
@@ -94,23 +95,29 @@ def check_command() -> None:
         pool = heights_for_stage(s)
         src = "单板高度课程" if pool is None else f"随机 {len(pool)} 档"
         print(f"     {s:>4}{f'{lo}-{hi}':>16}{src:>26}"
-              f"{str(stage_uses_schedule(s)):>8}{str(stage_requires_collision(s)):>10}")
+              f"{str(stage_uses_height_course(s)):>8}{str(stage_requires_collision(s)):>10}")
 
-    # 历史位移表从课程阶段生效，先把计数器推到该阶段。
+    # 将阶段和板底设置为真实课程口径。
     env.common_step_counter = STAGE3_END
+    env.reset()
+    write_hole_bottom_z(env.scene["hole1"], 0.064)
     robot = env.scene["robot"]
     state = torch.zeros(env.num_envs, 13, device=env.device)
     state[:, 2] = 0.06
     state[:, 3] = 0.0
     state[:, 4] = -0.70710678
     state[:, 5] = -0.70710678
-    state[:, 0] = 0.25          # 超过第一段 0.2 m
+    state[:, 0] = 0.25          # 位于板中心之后
     robot.write_root_state_to_sim(state)
     env.sim.forward()               # 写 qpos 后必须 forward, 否则读到的是旧位置
     env.command_manager.compute(dt=env.step_dt)
     cmd2 = env.command_manager.get_command("hole_cmd")
+    torch.testing.assert_close(
+        cmd2[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]],
+        torch.tensor([[0.055, 0.020]]).expand(env.num_envs, -1), atol=1e-6, rtol=0,
+    )
     print(f"     x=0.25 m 时命令: h_F {float(cmd2[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, "
-          f"h_H {float(cmd2[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (期望第二段 55/20)")
+          f"h_H {float(cmd2[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (低板后半段 55/20)")
     env.close()
 
 
@@ -162,9 +169,9 @@ def main() -> None:
     check_command()
     check_curriculum()
     check_env()
-    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、三阶段课程 "
-          "(0-1k 正常档随机 / 1k-2k 含低高度全档随机 / 2k+ 单板真实碰撞高度课程)、"
-          "动作 14 维 / 观测 113 维；历史位置表保持可回放")
+    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、四阶段课程 "
+          "(0-1k 正常档随机 / 1k-2k 全档随机 / 2k-3k 走廊热身 / 3k+ 单板真实碰撞课程)、"
+          "动作 14 维 / 观测 113 维；高度规则按基座世界 X 查表")
     print("     注: 课程阶段的实体碰撞由 rl/runner.py 在阶段边界重建环境完成 "
           "(contype 编译期固化, 运行期改无效)")
 

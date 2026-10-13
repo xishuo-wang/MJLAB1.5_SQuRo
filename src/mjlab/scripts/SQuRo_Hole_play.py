@@ -28,7 +28,9 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     get_current_stage,
     stage_requires_collision,
     stage_uses_height_course,
+    HEIGHT_INITIAL_MIN,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_bottom_z,
@@ -36,8 +38,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_hole_entities,
     configure_single_hole_entities,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_INITIAL_MIN
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
@@ -364,9 +364,6 @@ def run_play(cfg: PlayConfig):
     if cmd_cfg is not None:
         if cfg.command_source == "schedule":
             # 与训练同源：前三阶段随机高度池，第四阶段单板高度规则。
-            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
             cmd_cfg.enable_height_course = True      # type: ignore[attr-defined]
             cmd_cfg.enable_course_progress = False   # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
@@ -375,12 +372,7 @@ def run_play(cfg: PlayConfig):
             print("[INFO] 命令来源 = schedule（跟随训练：前三阶段随机高度池，第四阶段单板高度规则）")
 
         elif cfg.command_source == "fixed":
-            # 关闭位置表与时间表
-            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
-            cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
-            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            # 固定和随机命令关闭高度课程
             cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
             fixed_hF = 0.055 if cfg.fixed_height_F is None else cfg.fixed_height_F
             fixed_hH = 0.055 if cfg.fixed_height_H is None else cfg.fixed_height_H
@@ -391,12 +383,7 @@ def run_play(cfg: PlayConfig):
                   f"(h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity})")
 
         else:  # random
-            # 关闭位置表与时间表
-            cmd_cfg.use_position_schedule = False    # type: ignore[attr-defined]
-            cmd_cfg.position_schedule = None         # type: ignore[attr-defined]
-            cmd_cfg.use_height_schedule = False      # type: ignore[attr-defined]
-            cmd_cfg.height_schedule = None           # type: ignore[attr-defined]
-            cmd_cfg.stage_schedule_fallback = False  # type: ignore[attr-defined]
+            # 固定和随机命令关闭高度课程
             cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]

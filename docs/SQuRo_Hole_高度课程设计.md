@@ -2,7 +2,7 @@
 
 ## 单板几何
 
-训练课程使用原 `HOLE_LAYOUT` 第一块板的几何：中心 X=0.2 m、Y=0、半长 0.015 m、半宽 0.1 m、厚度 0.01 m。`position.z` 表示板底。`HOLE_LAYOUT` 仍保留三块旧板，供旧配置和历史位置表可视化使用；单板配置由 `build_single_hole_entities` 构造。
+训练课程使用原 `HOLE_LAYOUT` 第一块板的几何：中心 X=0.2 m、Y=0、半长 0.015 m、半宽 0.1 m、厚度 0.01 m。`position.z` 表示板底。`HOLE_LAYOUT` 仍用于前三阶段的无碰撞场景及短板／长板可视化；第四阶段单板配置由 `build_single_hole_entities` 构造。
 
 板体是 mocap 实体。`hole_mocap_id` 按板体名称解析它自己的 mocap 下标；`entity.indexing.mocap_id` 指向框架的空 `mocap_base`，不能用来移动碰撞板。复位后由 `write_hole_bottom_z` 写入板体的 `mocap_pos`。虚拟净空奖励和课程记录读取同一板体高度；验收另用 `geom_pos_w.z` 减去编译模型的半厚度，独立检查真实碰撞板底，防止写读同一个错误下标仍通过。
 
@@ -10,7 +10,7 @@
 
 ## 高度查表规则
 
-规则参数只定义在 `mdp/height_schedule.py`，可视化脚本与训练命令调用同一个 tensor 函数。设板的 X 范围为 `[x1,x2]`，板底为 `h`：
+规则参数只定义在 `mdp/config.py`，共享查表函数及高度课程状态定义在 `mdp/curriculums.py`；可视化脚本与训练命令调用同一个 tensor 函数。设板的 X 范围为 `[x1,x2]`，板底为 `h`：
 
 - `L=x1-0.150`、`R=x2+0.100`、`M=(x1+x2)/2`。
 - 查表位置统一为 `base_Link` 的世界 X，即 `robot.data.root_link_pos_w[:, 0]`。
@@ -77,3 +77,21 @@
 历史版本曾验证主回放入口的 7 种工况，以及从 1999 iter 至 2001 iter 的切换短训；其边界是旧版 2000 iter，不作为本次 3000 iter 边界的验证证据。
 
 此前 `2026-10-13_02-36-41` 已完成旧三阶段版本的 6000 iter 训练，48 mm 累计通过率 96.38%，包含多代训练策略。本次四阶段走廊与新命令方案尚待正式训练，验收仅证明通路与数值定义，不代表策略已经收敛。
+
+## 模块整理与无效定义清理
+
+2026-10-13 整理以格式调整后的 `7ad81be` 为基准，训练参数和注册奖励不变。`height_curriculum.py`、`height_schedule.py` 已迁入既有文件并删除；高度范围、成功率门槛与查表余量集中在 `config.py`，`HeightCurriculumState`、`rule_bounds`、`sample_base_heights` 集中在 `curriculums.py`。课程状态仍以原字段字典保存，命令格式与检查点版本不变。
+
+删除 `STAGE3_POSITION_SCHEDULE`、时间表／位移表配置与 fallback 通路。`schedule` 回放继续跟随当前训练的随机高度池和单板高度规则；`fixed`／`random` 保留。可视化只展示当前短板和长板规则，复位与诊断验收改为验证基座世界 X 的进入、中点和离开边界。
+
+删除未注册的 `energy/cot/joint_acc/y_offset/joint_limits/action_acc` 六个奖励函数、对应课程曲线以及未被公式读取的 `alpha_spn_*`、`alpha_neck_*`。已注册的 `foot_clearance`、`reached` 并非恒零函数，继续保留，避免改变训练目标。
+
+同步删除未使用的执行器控制范围、脊柱扭转分组、旧参考序关节编号缓存及解析接口、CSV 配置字段、未使用的正常态摆线参数和分析脚本变量。正常态参考仍使用原腿部 CSV，低姿态摆线参数和可选脊柱 CSV 通路保持不变。
+
+第一批迁移专用的 `verify_hole_index_equivalence.py`、`dump_numeric_signature.py`、`compare_numeric_signature.py` 已删除；历史证据与源码仍可从 Git 获取。未被调用的任务 ONNX 元数据转接文件 `rl/exporter.py` 也已删除，runner 继续使用框架的导出功能。
+
+整理前后以固定种子、相同动作和四阶段真实 CPU 环境比较，576,463 个标量逐元素完全一致，覆盖完整参考表、有效课程参数、观测、已注册奖励、命令、仿真状态、部分复位及课程序列化；证据位于 `logs/hole_cleanup_audit_20261013/`。
+
+保留的六个 Hole 验收入口全部通过，碰撞验收 42 项通过；Backup 阶段奖励 88 项回归通过。整理前生成的新命令检查点通过五种主回放工况及连续复位验收，旧命令检查点仍被拒绝。短板／长板可视化的 PNG、SVG 与参数 JSON 正常导出。
+
+固定 55/20 mm 参考回放及课程回放的 CSV 输出正常。前者仍报告既有的 `H_spine1_joint` 参考 −0.65 rad 超出模型下限 −0.60 rad；实际限位来自模型，已删除的备份范围表没有参与控制。这项参考标定问题需另作行为实验，本次保持参考数值以便训练归因。

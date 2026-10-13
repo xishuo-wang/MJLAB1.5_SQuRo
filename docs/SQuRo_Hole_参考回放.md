@@ -4,32 +4,32 @@
 
 ## 使用
 
-在项目根目录运行，前后高度单位均为米，两个参数必须手动给定：
+当前入口读取脚本顶部的直接配置常量，不解析命令行参数。运行前修改 `HEIGHT_F`、`HEIGHT_H`（单位米）、`VISUALIZE`、`DURATION`、`DEVICE`、`ENABLE_COLLISION` 和 `OUTPUT_DIR`：
 
-```powershell
-# 前高后低，打开原生查看器
-uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay --height-f 0.055 --height-h 0.02
-# 检查课程中的前高 60 mm / 后低 20 mm
-uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay --height-f 0.06 --height-h 0.02
-# 前低后高对照
-uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay --height-f 0.02 --height-h 0.05
-# 无窗运行，保存数据与对照曲线
-uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay --height-f 0.055 --height-h 0.02 --visualize none --duration 10
-# 保存视频
-uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay --height-f 0.055 --height-h 0.02 --visualize video
+```python
+HEIGHT_F = 0.055
+HEIGHT_H = 0.020
+VISUALIZE = "none"  # 无窗；交互窗口用 viewer，录制视频用 video
+DURATION = 10.0
 ```
 
-默认单环境、10 秒、限高板无碰撞。地面、机器人接触与模型动力学保留。通过 `--enable-collision` 开启限高板碰撞；固定高度不会随位置切换，因此这个选项不是完整钻洞课程验收。
+在项目根目录执行：
 
-通过 `--output-dir` 修改输出根目录，默认 `logs/rsl_rl/SQuRo_Hole/reference_replay/`，每次生成带时间、前后高度与碰撞状态的子目录。
+```powershell
+uv run python -B -m mjlab.scripts.SQuRo_Hole_Replay
+```
+
+默认单环境、10 秒、限高板无碰撞。地面、机器人接触与模型动力学保留。设置 `ENABLE_COLLISION=True` 开启限高板碰撞；固定高度不会随位置切换，因此该配置不是完整钻洞课程验收。
+
+通过 `OUTPUT_DIR` 修改输出根目录，默认 `logs/rsl_rl/SQuRo_Hole/reference_replay/`，每次生成带时间、前后高度与碰撞状态的子目录。
 
 ## 与训练参考的一致性
 
 - 直接调用 `mdp/reference.py` 的 `get_reference_joint_pos` 和 `get_reference_joint_vel`，沿用模式判定、最近高度档、相位离散采样及头颈参考。
 - 不复制 IK 或轨迹公式，不改参考表、关节范围、执行器增益或力矩上限。
-- 用动作项运行时的关节顺序、缩放和偏置，将参考角反解为位置控制动作。参考列序由 `mdp/indices.py` 及 `resolve_joint_ids` 解析。
+- 用动作项运行时的关节顺序、缩放和偏置，将参考角反解为位置控制动作。参考出口已按执行器顺序排列，模型关节编号由 `mdp/indices.py` 的 `resolve_model_indices` 解析。
 - 绕过 PPO 与 RSL-RL 的动作裁剪，原始关节参考直接交给现有位置执行器；模型自身控制范围和物理限位仍然生效。
-- 固定前后高度，关闭位置表、时间表和课程兜底；关闭奖励及自动终止重置，摔倒后的行为保留到回放结束。手动重置查看器后相位跟随环境归零。
+- 固定前后高度并关闭高度课程；关闭奖励及自动终止重置，摔倒后的行为保留到回放结束。手动重置查看器后相位跟随环境归零。
 - 使用任务原始初态，不直接写入参考 qpos，也不添加起步插值。最初几秒包含初态到参考的过渡，评估稳定步态时应与后续周期分开。
 
 当前高度档只有 20、40、50、55 mm。输入 45 或 60 mm 时仍按训练规则取最近档，控制台显示选档信息。Mode 2 的前腿轨迹本身不随前高度变化，脚本如实复现这一行为。

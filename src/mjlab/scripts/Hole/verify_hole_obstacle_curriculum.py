@@ -20,15 +20,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     STEPS_PER_ITER,
     THRESHOLD_HEIGHT,
     get_current_stage,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.entity import (
-    configure_single_hole_entities,
-    hole_collision_enabled,
-    read_bottom_z,
-    write_hole_bottom_z,
-)
-from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_INITIAL_MIN,
     HEIGHT_MAX,
     HEIGHT_MIN,
@@ -36,8 +27,17 @@ from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import (
     HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    HeightCurriculumState,
     rule_bounds,
     sample_base_heights,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
+    configure_single_hole_entities,
+    hole_collision_enabled,
+    read_bottom_z,
+    write_hole_bottom_z,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_SPN_IDS,

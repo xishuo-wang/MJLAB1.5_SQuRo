@@ -20,7 +20,7 @@ def check_value(log: dict, key: str, expected: float, atol: float = 1e-4) -> Non
 # 用四种已知朝向和速度的状态检查分组日志。
 def check_modes_and_directions(env) -> None:
     command = env.command_manager.get_term("hole_cmd")
-    command.cfg.stage_schedule_fallback = False
+    command.enable_height_course = False
     robot = env.scene["robot"]
     state = torch.zeros(env.num_envs, 13, device=env.device)
     state[:, :7] = robot.data.root_link_pose_w
@@ -72,9 +72,9 @@ def check_empty_modes(env) -> None:
 # 日志必须在位置表更新命令后记录，并保留观测动作维度。
 def check_schedule_logging(env) -> None:
     command = env.command_manager.get_term("hole_cmd")
-    command.cfg.stage_schedule_fallback = True
+    command.enable_height_course = True
     env.reset()
-    write_positions(env, (0.199, 0.201, 0.319, 0.321))
+    write_positions(env, (0.199, 0.201, 0.314, 0.316))
     env.command_manager.compute(dt=0.0)
     log = env.extras["log"]
     for name, expected in (("前低后高", 0.25), ("前高后低", 0.5), ("双高", 0.25), ("双低", 0.0)):

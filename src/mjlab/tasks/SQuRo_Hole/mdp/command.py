@@ -4,7 +4,7 @@ from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from .config import (
     ANGLE_VALUES,
@@ -28,30 +28,18 @@ from .config import (
     get_current_stage,
     heights_for_stage,
     stage_uses_height_course,
-    stage_uses_schedule,
+    HEIGHT_MIN_SAMPLE_PROBABILITY,
+)
+from .curriculums import (
+    HeightCurriculumState,
+    sample_base_heights,
 )
 from .entity import read_bottom_z, write_hole_bottom_z
-from .height_curriculum import HeightCurriculumState
-from .height_schedule import HEIGHT_MIN_SAMPLE_PROBABILITY, sample_base_heights
 from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
-
-
-
-# 历史位置表（仅供 legacy 回放与对照可视化）。
-STAGE3_POSITION_SCHEDULE = [
-    (0.0, 0.02, 0.05),
-    (0.2, 0.055, 0.02),
-    (0.32, 0.055, 0.055),
-    (0.4, 0.04, 0.04),
-    (0.8, 0.055, 0.055),
-    (1.0, 0.02, 0.05),
-    (1.2, 0.055, 0.02),
-    (1.32, 0.055, 0.055),
-]
 
 
 
@@ -96,11 +84,6 @@ class HoleCommand(CommandTerm):
         self.angle_command = torch.zeros(self.num_envs, device=self.device)
         self.gait_freq_command.fill_(BASE_FREQ)
         self.curvature_command.fill_(BASE_CURVATURE)
-        self.has_printed_current_cmd = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        self.use_height_schedule = cfg.use_height_schedule
-        self.height_schedule = cfg.height_schedule or [] 
-        self.use_position_schedule = cfg.use_position_schedule
-        self.position_schedule = cfg.position_schedule or []
         self.enable_height_course = cfg.enable_height_course
         self.enable_course_progress = cfg.enable_course_progress
         self.height_curriculum_state = HeightCurriculumState()
@@ -147,7 +130,7 @@ class HoleCommand(CommandTerm):
     # 从已写入的根位姿记录起点，避开复位前的缓存位置；见 docs/SQuRo_Hole_课程复位.md。
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
         root_pose_ids = self.robot.indexing.free_joint_q_adr
-        assert root_pose_ids is not None, "位置表要求机器人带浮动根关节"
+        assert root_pose_ids is not None, "位移诊断要求机器人带浮动根关节"
         self.start_positions[env_ids] = self.robot.data.data.qpos[env_ids][:, root_pose_ids[:3]]
 
 
@@ -155,56 +138,12 @@ class HoleCommand(CommandTerm):
     def _get_available_heights(self, stage: int) -> Optional[list]:
         return heights_for_stage(stage)
 
-    
-    def _should_use_schedule(self, stage: int) -> bool:
-        if self.use_position_schedule and self.position_schedule:
-            return True
-        
-        if self.use_height_schedule and self.height_schedule:
-            return True
-
-        if self.enable_height_course and stage_uses_height_course(stage):
-            return False
-        
-        if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
-            return True
-        
-        return False
-
-    
-    def _get_schedule(self, stage: int) -> List[Tuple[float, float, float]]:
-        # 最高优先级：cfg 中配置的位置表
-        if self.use_position_schedule and self.position_schedule:
-            return self.position_schedule
-        
-        # 次优先级：cfg 中配置的时间表
-        if self.use_height_schedule and self.height_schedule:
-            return self.height_schedule
-        
-        # 历史阶段位置表，仅用于显式 legacy 配置。
-        if stage_uses_schedule(stage) and self.cfg.stage_schedule_fallback:
-            return STAGE3_POSITION_SCHEDULE
-        
-        return []
-
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n_envs = len(env_ids)  
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        # 判断是否使用时间表
-        use_schedule = self._should_use_schedule(stage)
-        schedule = self._get_schedule(stage) if use_schedule else []
-        
-        if use_schedule and schedule:
-            if self._allow_obstacle_resample:
-                self._set_neutral_command(env_ids)
-                self._update_start_positions(env_ids)
-            else:
-                self._update_command_from_schedule(env_ids, schedule)
-            return
-
         if self.enable_height_course and stage_uses_height_course(stage):
             if self._allow_obstacle_resample:
                 self._sample_obstacle_height(env_ids)
@@ -215,7 +154,7 @@ class HoleCommand(CommandTerm):
         # 使用随机采样
         available_heights = self._get_available_heights(stage)
         if available_heights is None:
-            # 非课程配置的历史回放兜底。
+            # 固定和随机命令回放仍使用完整高度池。
             available_heights = FULL_HEIGHT_VALUES
         
         # 初始化命令张量
@@ -257,7 +196,6 @@ class HoleCommand(CommandTerm):
         self.height_H_command[env_ids] = height_H
         self.angle_command[env_ids] = angle
         self._update_obstacle_height_command()
-        self.has_printed_current_cmd[env_ids] = False
         
         # 重置起始位置
         self._update_start_positions(env_ids)
@@ -338,73 +276,11 @@ class HoleCommand(CommandTerm):
             return self.angle_values_tensor[angle_idx].item()
 
 
-    # 根据位置表更新命令
-    def _update_command_from_schedule(self, env_ids: torch.Tensor, schedule: List[Tuple[float, float, float]]) -> None:
-        if not schedule:
-            return
-        
-        n_envs = len(env_ids)
-        device = self.device
-        
-        # 获取当前位置
-        current_positions = self.robot.data.root_link_pos_w[env_ids]  # [n_envs, 3]
-        start_positions = self.start_positions[env_ids]  # [n_envs, 3]
-        
-        # 计算移动距离（X方向，只考虑前进方向）
-        travel_distance = current_positions[:, 0] - start_positions[:, 0]  # [n_envs]
-        travel_distance = torch.clamp(travel_distance, min=0.0)  # 不允许负距离
-        
-        # 将位置表转换为张量
-        schedule_distances = torch.tensor([s[0] for s in schedule], device=device)  # [len(schedule)]
-        schedule_hF = torch.tensor([s[1] for s in schedule], device=device)         # [len(schedule)]
-        schedule_hH = torch.tensor([s[2] for s in schedule], device=device)         # [len(schedule)]
-        
-        # 向量化查找：对于每个距离，找到最后一个 <= 当前距离的索引
-        schedule_indices = torch.searchsorted(schedule_distances, travel_distance, side='right') - 1
-        schedule_indices = torch.clamp(schedule_indices, min=0, max=len(schedule) - 1)
-        
-        # 批量获取高度值
-        height_F = schedule_hF[schedule_indices]  # [n_envs]
-        height_H = schedule_hH[schedule_indices]  # [n_envs]
-        
-        # 速度与随机采样路径共用同一公式 (见 compute_command_velocity)
-        vel_x = compute_command_velocity(height_F, height_H)
-        
-        # 显式值优先于位置表: 显式指定的字段在位置表算完后覆盖
-        if self.cfg.fixed_height_F is not None:
-            height_F = torch.full_like(height_F, float(self.cfg.fixed_height_F))
-        if self.cfg.fixed_height_H is not None:
-            height_H = torch.full_like(height_H, float(self.cfg.fixed_height_H))
-        if self.cfg.fixed_velocity is not None:
-            vel_x = torch.full_like(vel_x, float(self.cfg.fixed_velocity))
-        
-        # 批量计算角度
-        angle = torch.zeros(n_envs, device=device)
-        if self.cfg.fixed_angle is not None:
-            angle = torch.full_like(angle, float(self.cfg.fixed_angle))
-        
-        # 批量更新命令张量
-        self.vel_command[env_ids] = vel_x
-        self.height_F_command[env_ids] = height_F
-        self.height_H_command[env_ids] = height_H
-        self.angle_command[env_ids] = angle
-        self._update_obstacle_height_command()
-        self.has_printed_current_cmd[env_ids] = False
-
-
     def _update_command(self) -> None:
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        # 判断是否使用时间表
-        use_schedule = self._should_use_schedule(stage)
-        schedule = self._get_schedule(stage) if use_schedule else []
-        
-        # 使用时间表模式，每个时间步都需要更新命令
-        if use_schedule and schedule:
-            env_ids = torch.arange(self.num_envs, device=self.device)
-            self._update_command_from_schedule(env_ids, schedule)
-        elif self.enable_height_course and stage_uses_height_course(stage):
+        if self.enable_height_course and stage_uses_height_course(stage):
             self._update_command_from_height_rule()
         self._update_obstacle_height_command()
         self._log_diagnostics()
@@ -513,11 +389,6 @@ class HoleCommandCfg(CommandTermCfg):
     fixed_height_F: Optional[float] = None
     fixed_height_H: Optional[float] = None
     fixed_angle: Optional[float] = None  
-    use_height_schedule: bool = False  
-    height_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(开始时间, 前肢高度, 后肢高度), ...]
-    use_position_schedule: bool = False  # 是否使用位置表
-    position_schedule: List[Tuple[float, float, float]] = field(default_factory=list)  # [(距离阈值, 前肢高度, 后肢高度), ...]
-    stage_schedule_fallback: bool = True        # 课程关闭时是否启用 legacy 表；fixed/random 回放可关闭
     enable_height_course: bool = False
     enable_course_progress: bool = True
     log_detailed_metrics: bool = False

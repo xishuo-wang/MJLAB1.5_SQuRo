@@ -11,13 +11,16 @@ import mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.SQuRo_Hole.mdp.config import COURSE_START
+from mjlab.tasks.SQuRo_Hole.mdp.config import (
+    COURSE_START,
+    HEIGHT_MAX,
+    HEIGHT_MIN,
+)
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     configure_single_hole_entities,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.height_curriculum import HeightCurriculumState
-from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_MAX, HEIGHT_MIN
 from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 from mjlab.viewer import NativeMujocoViewer
 

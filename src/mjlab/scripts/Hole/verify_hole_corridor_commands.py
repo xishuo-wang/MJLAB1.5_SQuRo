@@ -53,7 +53,6 @@ def verify_corridor() -> None:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 4
     cfg.commands["hole_cmd"].enable_height_course = False
-    cfg.commands["hole_cmd"].stage_schedule_fallback = False
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     try:
         env.common_step_counter = STAGE2_END

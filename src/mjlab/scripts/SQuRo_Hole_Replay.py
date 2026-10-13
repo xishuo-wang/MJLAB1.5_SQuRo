@@ -83,11 +83,7 @@ def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     command.fixed_height_F = args.height_f
     command.fixed_height_H = args.height_h
     command.fixed_angle = 0.0
-    command.use_position_schedule = False
-    command.position_schedule = []
-    command.use_height_schedule = False
-    command.height_schedule = []
-    command.stage_schedule_fallback = False
+    command.enable_height_course = False
     command.debug_vis = False
     cfg.rewards = {}
     cfg.terminations = {}

@@ -5,7 +5,7 @@ import torch
 
 from mjlab.entity import Entity, EntityCfg
 
-from .height_schedule import HEIGHT_INITIAL_MIN
+from .config import HEIGHT_INITIAL_MIN
 
 # 三块限高板的几何: 板底 z 即板体 position.z, 板厚 2*half_thickness 向上长
 # 板底 = position.z, 板顶 = position.z + 2*half_thickness

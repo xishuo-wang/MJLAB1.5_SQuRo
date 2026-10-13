@@ -178,7 +178,7 @@ def check_state_roundtrip() -> None:
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
     from mjlab.tasks.SQuRo_Hole.mdp.entity import SINGLE_HOLE_LAYOUT
-    from mjlab.tasks.SQuRo_Hole.mdp.height_schedule import HEIGHT_INITIAL_MIN
+    from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN
     check("课程阶段 layout 仅保留单板", len(layout) == len(SINGLE_HOLE_LAYOUT), f"{len(layout)}")
     check("最低板高课程状态已保存", bool(saved.get("height_course")))
     if layout:

@@ -6,8 +6,8 @@ import xml.etree.ElementTree as ET
 from scipy.integrate import trapezoid
 from matplotlib.widgets import Button
 from matplotlib.gridspec import GridSpec
-from typing import List, Tuple, Optional, Union
-from scipy.signal import welch, savgol_filter, find_peaks
+from typing import Optional
+from scipy.signal import savgol_filter
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _ACT_JOINT_NAMES, _ACT_NECK_IDS
 
 
@@ -43,18 +43,11 @@ NECK_JOINTS = [_ACT_JOINT_NAMES[i].removesuffix("_joint") for i in _ACT_NECK_IDS
 
 # 足端配置
 FOOT_NAMES = ['FR', 'FL', 'HR', 'HL']
-FOOT_LABELS = ['FR (右前)', 'FL (左前)', 'HR (右后)', 'HL (左后)']
-FOOT_COLORS = ['#E41A1C', '#377EB8', '#4DAF4A', '#984EA3']
 
 # 统一文本样式配置
 STATS_FONTSIZE = 10
 STATS_BGCOLOR = '#FFF8DC'
 STATS_ALPHA = 1.0
-
-# 脊柱频谱分析配置（保留，当前未使用）
-_WELCH_NPERSEG = 128
-_WELCH_NFFT = 512
-
 
 
 def get_scaled_action(df, joint_name):

@@ -57,7 +57,6 @@ _ACT_SPN_H_PITCH_ID = _ACT_H_SPINE1_ID                          # 后脊柱俯�
 _ACT_SPN_H_ROLL_ID  = _ACT_H_BODY_ID                            # 后脊柱扭转: 9
 _ACT_SPN_F_IDS = (_ACT_SPN_F_YAW_ID,   _ACT_SPN_F_ROLL_ID)      # 前脊柱合并: (0, 1)
 _ACT_SPN_H_IDS = (_ACT_SPN_H_PITCH_ID, _ACT_SPN_H_ROLL_ID)      # 后脊柱合并: (8, 9)
-_ACT_SPN_ROLL_IDS = (_ACT_SPN_F_ROLL_ID, _ACT_SPN_H_ROLL_ID)    # 脊柱扭转合并: (1, 9)
 _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: (0, 1, 8, 9)
 
 
@@ -97,25 +96,6 @@ LINKAGE_JOINT_NAMES = (
     "HL_hip1_joint", "HL_knee1_joint", "HL_knee2_joint", "HL_knee3_joint",
     "HR_hip1_joint", "HR_knee1_joint", "HR_knee2_joint", "HR_knee3_joint",
 )
-
-
-# 执行器控制范围
-_ACT_CTRL_RANGE: dict[str, tuple[float, float]] = {
-    "F_spine1_joint":    (-0.6, 0.6),
-    "F_body_joint":      (-1.57, 1.57),
-    "Neck_yaw_joint":    (-0.8, 0.8),
-    "Neck_pitch_joint":  (-0.9, 0.9),
-    "FL_shoulder_joint": (-1.5, 1.9),
-    "FL_elbow_joint":    (-1.8, 2.5),
-    "FR_shoulder_joint": (-1.5, 1.9),
-    "FR_elbow_joint":    (-1.8, 2.5),
-    "H_spine1_joint":    (-0.6, 0.6),
-    "H_body_joint":      (-1.57, 1.57),
-    "HL_hip_joint":      (-1.5, 0.8),
-    "HL_knee_joint":     (-0.5, 1.9),
-    "HR_hip_joint":      (-1.5, 0.8),
-    "HR_knee_joint":     (-0.5, 1.9),
-}
 
 
 # 虚拟碰撞采样点
