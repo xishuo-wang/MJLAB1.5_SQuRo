@@ -113,9 +113,11 @@ ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES)
 
 class ModelIndices:
     __slots__ = (
-        "f_body_id", "h_body_id",
+        "f_body_id", 
+        "h_body_id",
         "foot_site_ids",
-        "f_body_site_ids", "h_body_site_ids",
+        "f_body_site_ids", 
+        "h_body_site_ids",
         "joint_ids",
         "linkage_joint_ids",
     )
@@ -129,6 +131,7 @@ class ModelIndices:
         self.foot_site_ids: tuple[int, ...] = ()
         self.joint_ids: tuple[int, ...] = ()
         self.linkage_joint_ids: tuple[int, ...] = ()
+
 
 _MODEL_INDICES = ModelIndices()
 
@@ -167,10 +170,12 @@ def resolve_model_indices(entity) -> None:
     print(f"  actuator 顺序: {list(joint_names)}")
 
 
+
 # 将执行器分组映射为模型关节编号。
 def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[int, ...]:
     resolve_model_indices(entity)
     return tuple(_MODEL_INDICES.joint_ids[i] for i in actuator_ids)
+
 
 
 # 按传感器公开名称解析足端力的列顺序。
