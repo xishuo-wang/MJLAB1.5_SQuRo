@@ -82,9 +82,6 @@ FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]
 # 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
 STAGE_COLLISION = (False, False, False, True)
 
-# 角度命令候选 (度)
-ANGLE_VALUES = [0.0]
-
 
 
 # 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。

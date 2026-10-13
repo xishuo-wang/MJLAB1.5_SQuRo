@@ -219,13 +219,12 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 身体角度奖励
+# 身体角度奖励，修正坐标系后的目标角度固定为零。
 def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_heightF = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_heightH = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    desired_angle = cmd_term.angle_command
     roll_error = torch.zeros(env.num_envs, device=env.device)
     sigma = 50
 
@@ -234,7 +233,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     if low_heightF_mask.any():
         f_body_quat = asset.data.body_link_quat_w[low_heightF_mask, _MODEL_INDICES.f_body_id]
         f_body_roll = _quaternion_to_roll(f_body_quat) + math.pi/2  # +90度转换为弧度
-        f_roll_error = torch.abs(f_body_roll - desired_angle[low_heightF_mask])
+        f_roll_error = torch.abs(f_body_roll)
         f_roll_error = torch.min(f_roll_error, 2 * math.pi - f_roll_error)
         roll_error[low_heightF_mask] = f_roll_error
         sigma = 50
@@ -244,7 +243,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     if low_heightH_mask.any():
         h_body_quat = asset.data.body_link_quat_w[low_heightH_mask, _MODEL_INDICES.h_body_id]
         h_body_roll = _quaternion_to_roll(h_body_quat) - math.pi/2  # -90度转换为弧度
-        h_roll_error = torch.abs(h_body_roll - desired_angle[low_heightH_mask])
+        h_roll_error = torch.abs(h_body_roll)
         h_roll_error = torch.min(h_roll_error, 2 * math.pi - h_roll_error)
         roll_error[low_heightH_mask] = h_roll_error
         sigma = 50

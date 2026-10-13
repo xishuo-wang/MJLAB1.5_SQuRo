@@ -11,7 +11,6 @@ from .config import (
     BASE_SPEED,
     BASE_HEIGHT,
     COMMAND_DIM,
-    ANGLE_VALUES,
     CMD_VEL_X_IDS,
     MODE_BOTH_LOW,
     MODE_HIND_LOW,
@@ -80,9 +79,6 @@ class HoleCommand(CommandTerm):
         self.gait_freq_command = self.command_tensor[:, CMD_GAIT_FREQ_IDS]
         self.curvature_command = self.command_tensor[:, CMD_CURVATURE_IDS]
         self.obstacle_height_command = self.command_tensor[:, CMD_OBSTACLE_HEIGHT_IDS]
-        self.height_F_command = self.height_f_command
-        self.height_H_command = self.height_h_command
-        self.angle_command = torch.zeros(self.num_envs, device=self.device)
         self.gait_freq_command.fill_(BASE_FREQ)
         self.curvature_command.fill_(BASE_CURVATURE)
         self.enable_height_course = cfg.enable_height_course
@@ -94,7 +90,6 @@ class HoleCommand(CommandTerm):
         self.obstacle_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
         self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
-        self.angle_values_tensor = torch.tensor(ANGLE_VALUES, device=self.device)
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
@@ -158,7 +153,6 @@ class HoleCommand(CommandTerm):
         vel_x = torch.zeros(n_envs, device=self.device)
         height_F = torch.zeros(n_envs, device=self.device)
         height_H = torch.zeros(n_envs, device=self.device)
-        angle = torch.zeros(n_envs, device=self.device)
         
         # 为每个环境采样
         for i in range(n_envs):
@@ -169,8 +163,6 @@ class HoleCommand(CommandTerm):
                 height_F[i] = self.cfg.fixed_height_F
             if self.cfg.fixed_height_H is not None:
                 height_H[i] = self.cfg.fixed_height_H
-            if self.cfg.fixed_angle is not None:
-                angle[i] = self.cfg.fixed_angle
             
             # 如果固定值未设置，则使用采样逻辑
             if self.cfg.fixed_height_F is None or self.cfg.fixed_height_H is None:
@@ -184,14 +176,11 @@ class HoleCommand(CommandTerm):
             if self.cfg.fixed_velocity is None:
                 vel_x[i] = self._determine_velocity(height_F[i], height_H[i])
 
-            if self.cfg.fixed_angle is None:
-                angle[i] = self._determine_angle(height_F[i], height_H[i])
         
         # 更新命令张量
         self.vel_command[env_ids] = vel_x
-        self.height_F_command[env_ids] = height_F
-        self.height_H_command[env_ids] = height_H
-        self.angle_command[env_ids] = angle
+        self.height_f_command[env_ids] = height_F
+        self.height_h_command[env_ids] = height_H
         self._update_obstacle_height_command()
         
         # 重置起始位置
@@ -217,13 +206,11 @@ class HoleCommand(CommandTerm):
     def _set_neutral_command(self, env_ids: torch.Tensor) -> None:
         heights = torch.full((len(env_ids),), BASE_HEIGHT, device=self.device)
         velocity = compute_command_velocity(heights, heights)
-        angle = torch.full_like(heights, float(self.cfg.fixed_angle or 0.0))
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
         self.vel_command[env_ids] = velocity
-        self.height_F_command[env_ids] = heights
-        self.height_H_command[env_ids] = heights
-        self.angle_command[env_ids] = angle
+        self.height_f_command[env_ids] = heights
+        self.height_h_command[env_ids] = heights
         self._update_obstacle_height_command()
 
 
@@ -236,15 +223,11 @@ class HoleCommand(CommandTerm):
         bottom_z = read_bottom_z(self.obstacle_entity)
         front, hind = sample_base_heights(base_x, float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,) # type: ignore
         velocity = compute_command_velocity(front, hind)
-        angle = torch.zeros_like(front)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
-        if self.cfg.fixed_angle is not None:
-            angle.fill_(float(self.cfg.fixed_angle))
         self.vel_command[:] = velocity
-        self.height_F_command[:] = front
-        self.height_H_command[:] = hind
-        self.angle_command[:] = angle
+        self.height_f_command[:] = front
+        self.height_h_command[:] = hind
         self.obstacle_height_command[:] = bottom_z
 
 
@@ -261,15 +244,6 @@ class HoleCommand(CommandTerm):
         return float(compute_command_velocity(height_F, height_H))
 
 
-    # 决定角度
-    def _determine_angle(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        if height_F >= THRESHOLD_HEIGHT and height_H >= THRESHOLD_HEIGHT:
-            return 0.0
-        else:
-            angle_idx = torch.randint(0, len(ANGLE_VALUES), (1,), device=self.device)
-            return self.angle_values_tensor[angle_idx].item()
-
-
     def _update_command(self) -> None:
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
@@ -283,8 +257,8 @@ class HoleCommand(CommandTerm):
     # 按更新后的命令记录模式覆盖与物理方向；口径见 docs/SQuRo_Hole_课程复位.md。
     def _log_diagnostics(self) -> None:
         resolve_model_indices(self.robot)
-        front_low = self.height_F_command < THRESHOLD_HEIGHT
-        hind_low = self.height_H_command < THRESHOLD_HEIGHT
+        front_low = self.height_f_command < THRESHOLD_HEIGHT
+        hind_low = self.height_h_command < THRESHOLD_HEIGHT
         groups = (
             ("双高", ~front_low & ~hind_low),
             ("前低后高", front_low & ~hind_low),
@@ -347,21 +321,18 @@ class HoleCommand(CommandTerm):
             return
             
         batch = visualizer.env_idx
-        
         if batch >= self.num_envs:
             return
         
         base_pos = self.robot.data.root_link_pos_w[batch].cpu().numpy()
         actual_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
         cmd_vel = self.vel_command_w[batch].cpu().numpy()
-        
         if torch.norm(self.robot.data.root_link_pos_w[batch]) < 1e-6:
             return
         
         scale = self.cfg.viz.scale
         z_offset = self.cfg.viz.z_offset
         arrow_width = 0.01
-        
         cmd_start = base_pos + [0, 0, z_offset]
         cmd_end = cmd_start + cmd_vel * scale
         visualizer.add_arrow(cmd_start, cmd_end, color=(0.2, 0.2, 0.8, 0.8), width=arrow_width)
@@ -382,7 +353,6 @@ class HoleCommandCfg(CommandTermCfg):
     fixed_velocity: Optional[float] = None
     fixed_height_F: Optional[float] = None
     fixed_height_H: Optional[float] = None
-    fixed_angle: Optional[float] = None  
     enable_height_course: bool = False
     enable_course_progress: bool = True
     log_detailed_metrics: bool = False

@@ -83,7 +83,6 @@ def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     command = cast(HoleCommandCfg, cfg.commands["hole_cmd"])
     command.fixed_height_F = args.height_f
     command.fixed_height_H = args.height_h
-    command.fixed_angle = 0.0
     command.enable_height_course = False
     command.debug_vis = False
     cfg.rewards = {}
