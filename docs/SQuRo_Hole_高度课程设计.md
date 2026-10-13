@@ -34,6 +34,8 @@
 
 训练阶段 1 为 0～1k iter，阶段 2 为 1k～2k iter；从 2k iter 的阶段 3 开始，runner 一次重建为单板并开启真实碰撞，之后只通过 reset 更新高度，不再重建环境。每回合为 12 秒（1200 步），默认训练预算 6000 iter。交互或无头评估可使用 `uv run python -B -m mjlab.scripts.SQuRo_Hole_curriculum_play --checkpoint <checkpoint> --no-show --steps 2000`；默认固定在 checkpoint 的当前 `Zmin`，指定 `--obstacle-height` 可固定其他合法板高，`--random-height` 则按 checkpoint 当前范围采样。评估不会推进课程，并将完成回合写入 CSV。
 
+主回放脚本 `SQuRo_Hole_play` 中，`obstacle_height=None` 优先读取检查点高度范围的 `Zmin` 作为板底，显式板高优先；没有高度课程记录的旧检查点沿用布局或配置默认。课程阶段的 `schedule` 模式还会将回放采样上下界都设为该最低档，每次复位保持同一板高，课程进度冻结。`fixed`/`random` 命令模式同样使用所选板高，但不会启用高度课程，场景构造和命令逻辑沿用原规则。需要范围随机采样时使用专用课程回放脚本的 `--random-height`。
+
 ## 训练与验收
 
 从头训练使用 `uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard`。训练前两阶段保留原奖励数值，课程阶段沿用旧第四阶段的全部权重与 σ；仅净空奖励阈值改为读取每个环境的实际板底高度。动作仍为 14 维，观测仍为 113 维。

@@ -433,6 +433,9 @@ def run_play(cfg: PlayConfig):
         and stage_uses_height_course(final_stage)
     )
     if use_course:
+        # 未显式指定板高时，固定在检查点当前最低档。
+        if cfg.obstacle_height is None:
+            course_state["z_max"] = course_state["z_min"]
         configure_single_hole_entities(env_cfg, enable_collision=collision)
         cmd_cfg.enable_height_course = True          # type: ignore[attr-defined]
         cmd_cfg.height_curriculum_state = course_state  # type: ignore[attr-defined]
@@ -445,12 +448,12 @@ def run_play(cfg: PlayConfig):
         saved_layout = [d for d in saved_layout
                         if str(d.get("name", "")).lower() == "hole1"]
     applied = apply_saved_layout(env_cfg, saved_layout)
-    # 板高优先级: 命令行显式 > 课程当前档 (仅课程阶段); 其余沿用检查点布局/配置默认
+    # 板高优先级：显式值 > 检查点最低档 > 布局或配置默认。
     board_z: float | None = None
     board_src = ""
     if cfg.obstacle_height is not None:
         board_z, board_src = float(cfg.obstacle_height), "命令行显式指定"
-    elif use_course:
+    elif saved_hole.get("height_course") or use_course:
         board_z = float(course_state.get("z_min", HEIGHT_INITIAL_MIN))
         board_src = "检查点 height_course.z_min"
     n_board = set_obstacle_bottom_z(env_cfg, board_z) if board_z is not None else 0
