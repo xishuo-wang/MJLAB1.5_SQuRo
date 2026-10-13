@@ -1,6 +1,3 @@
-# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <path>
-# uv run python -B -m mjlab.scripts.SQuRo_Hole_play --agent zero --no-video
-
 import re
 import tyro
 import math
@@ -16,21 +13,19 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
-    STEPS_PER_ITER,
     CMD_VEL_X_IDS,
+    STEPS_PER_ITER,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_GAIT_FREQ_IDS,
     CMD_CURVATURE_IDS,
-    CMD_OBSTACLE_HEIGHT_IDS,
     get_current_stage,
+    HEIGHT_INITIAL_MIN,
+    CMD_OBSTACLE_HEIGHT_IDS,
     stage_requires_collision,
     stage_uses_height_course,
-    HEIGHT_INITIAL_MIN,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_bottom_z,
@@ -38,18 +33,18 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_hole_entities,
     configure_single_hole_entities,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
-    _ACT_JOINT_NAMES,
-    _MODEL_INDICES,
     FOOT_NAMES,
+    _MODEL_INDICES,
     FOOT_SITE_NAMES,
+    _ACT_JOINT_NAMES,
     resolve_model_indices,
     resolve_foot_force_ids,
 )
-
-
+from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
+from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
+from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state, validate_hole_command_schema
 
 TASK_NAME = "Mjlab-SQuRo-Hole"
 
@@ -139,16 +134,12 @@ class JointDataRecorder:
         self.num_envs = num_envs
         self.data_records = []
         self.step_count = 0
-
-        # CSV 关节列名沿用执行器全局顺序。
         self.joint_names = [name.removesuffix("_joint") for name in _ACT_JOINT_NAMES]
         self.action_names = self.joint_names
         self.foot_names = list(FOOT_NAMES)
         self.foot_site_names = list(FOOT_SITE_NAMES)
         self._foot_site_ids = None
-        self._joint_ids_resolved = None   # ← 新增: 按名称缓存的关节 id
-
-        # 参考列序已与执行器序同步 (见 reference.get_reference_joint_state), 列名直接复用
+        self._joint_ids_resolved = None
         self.ref_names = self.joint_names
 
 
@@ -167,9 +158,7 @@ class JointDataRecorder:
 
         # 记录足端接触力以及位置
         contact_sensor = unwrapped.scene["feet_ground_contact"]
-        feet_contact = contact_sensor.data.force.reshape(
-            unwrapped.num_envs, len(contact_sensor.primary_names), -1, 3
-        ).sum(dim=2)
+        feet_contact = contact_sensor.data.force.reshape(unwrapped.num_envs, len(contact_sensor.primary_names), -1, 3).sum(dim=2)
         force_ids = resolve_foot_force_ids(contact_sensor)
         if self._foot_site_ids is None:
             self._foot_site_ids, _ = asset.find_sites(self.foot_site_names, preserve_order=True)
@@ -247,10 +236,7 @@ class JointDataRecorder:
         joint_ids = _MODEL_INDICES.joint_ids
         joint_pos_all = asset.data.joint_pos[idx, joint_ids]
         joint_vel_all = asset.data.joint_vel[idx, joint_ids]
-        joint_acc_all = (
-            asset.data.joint_acc[idx, joint_ids]
-            if hasattr(asset.data, 'joint_acc') else None
-        )
+        joint_acc_all = (asset.data.joint_acc[idx, joint_ids] if hasattr(asset.data, 'joint_acc') else None)
         # actuator_force 的顺序也是 actuator 顺序，与 self.joint_names 一一对应
         actuator_force_all = asset.data.actuator_force[idx]
 
@@ -345,8 +331,7 @@ def run_play(cfg: PlayConfig):
             video_name = extract_video_name_from_checkpoint(resume_path)
         log_dir = resume_path.parent
     else:
-        log_dir = (Path("logs") / "rsl_rl" / TASK_NAME.replace("Mjlab-", "").replace("-", "_")
-                   / "dummy").resolve()
+        log_dir = (Path("logs") / "rsl_rl" / TASK_NAME.replace("Mjlab-", "").replace("-", "_") / "dummy").resolve()
         video_name = f"dummy_{cfg.agent}"
 
     if cfg.num_envs is not None:
@@ -431,11 +416,9 @@ def run_play(cfg: PlayConfig):
     else:
         configure_hole_entities(env_cfg, enable_collision=collision)
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
-    # 课程阶段只保留 hole1, 否则检查点里的三板布局会把 hole2/hole3 重新加回来
     saved_layout = saved_hole.get("layout") or []
     if use_course:
-        saved_layout = [d for d in saved_layout
-                        if str(d.get("name", "")).lower() == "hole1"]
+        saved_layout = [d for d in saved_layout if str(d.get("name", "")).lower() == "hole1"]
     applied = apply_saved_layout(env_cfg, saved_layout)
     # 板高优先级：显式值 > 检查点最低档 > 布局或配置默认。
     board_z: float | None = None
@@ -525,7 +508,7 @@ def run_play(cfg: PlayConfig):
         policy = runner.get_inference_policy(device=device)
         env = runner.env
 
-    # 阶段对齐: 必须先把步数写回再 reset, 否则命令与板高仍按 stage1 采样
+    # 阶段对齐
     env.unwrapped.common_step_counter = final_step
     env.reset()
     print(f"[INFO] 阶段对齐到 step {final_step} → stage {get_current_stage(final_step)} (按检查点记录)")
