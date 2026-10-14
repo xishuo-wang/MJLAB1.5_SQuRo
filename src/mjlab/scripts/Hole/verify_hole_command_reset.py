@@ -1,4 +1,4 @@
-# 用法：uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
+﻿# 用法：uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
 # 验证真实环境的复位起点、部分复位及基座高度规则边界。
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_H_IDS,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    COURSE_START,
+    STAGE3_STEP,
     HeightCurriculumState,
     rule_bounds,
 )
@@ -32,7 +32,7 @@ def make_env(reset_func=events.reset_model) -> ManagerBasedRlEnv:
     cfg.terminations = {"timeout": cfg.terminations["timeout"]}
     cfg.events["reset_all"].func = reset_func
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
-    env.common_step_counter = COURSE_START
+    env.common_step_counter = STAGE3_STEP
     env.reset(seed=42)
     return env
 

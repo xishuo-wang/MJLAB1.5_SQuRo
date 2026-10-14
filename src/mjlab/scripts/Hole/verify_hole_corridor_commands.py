@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 from types import SimpleNamespace
@@ -20,8 +20,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     WARMUP_OBSTACLE_HEIGHT,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    COURSE_START,
-    STAGE2_END,
+    STAGE3_STEP,
+    STAGE2_STEP,
     STEPS_PER_ITER,
     get_current_stage,
     heights_for_stage,
@@ -42,11 +42,11 @@ def verify_stages() -> None:
         assert stage == expected
         assert stage_requires_collision(stage) == (expected == 4)
     previous = reward_weight_curriculum.get_reward_weights(1000 * STEPS_PER_ITER)
-    warmup = reward_weight_curriculum.get_reward_weights(STAGE2_END)
+    warmup = reward_weight_curriculum.get_reward_weights(STAGE2_STEP)
     assert all(warmup[key] == value for key, value in previous.items() if key != "corridor")
     assert previous["corridor"] == 0.0 and warmup["corridor"] == 5.0
     assert heights_for_stage(2) == heights_for_stage(3)
-    physical = reward_weight_curriculum.get_reward_weights(COURSE_START)
+    physical = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     assert physical["corridor"] == physical["body_contact"] == 5.0
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
@@ -73,10 +73,10 @@ def verify_warmup_without_boards() -> None:
         torch.testing.assert_close(command.command[[1, 3]], keep)
         obs, reward, _, _, _ = env.step(torch.zeros(4, 14))
         assert torch.isfinite(obs["actor"]).all() and torch.isfinite(reward).all()
-        env.common_step_counter = COURSE_START - 1
+        env.common_step_counter = STAGE3_STEP - 1
         env.episode_length_buf[:] = env.max_episode_length - 1
         obs, reward, _, timeouts, _ = env.step(torch.zeros(4, 14))
-        assert timeouts.all() and env.common_step_counter == COURSE_START
+        assert timeouts.all() and env.common_step_counter == STAGE3_STEP
         assert list(env.scene.entities) == ["robot"] and not command.obstacle_height_sampled.any()
         torch.testing.assert_close(obs["actor"][:, -1], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
         assert torch.isfinite(reward).all()
@@ -93,7 +93,7 @@ def verify_corridor() -> None:
     cfg.commands["hole_cmd"].enable_height_course = False
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     try:
-        env.common_step_counter = STAGE2_END
+        env.common_step_counter = STAGE2_STEP
         env.reset(seed=47)
         command = env.command_manager.get_term("hole_cmd")
         obs = env.observation_manager.compute()["actor"]
@@ -121,13 +121,13 @@ def verify_corridor() -> None:
             -2.5 * (1.0 - math.exp(-2000.0 * 0.002 ** 2)),
         ])
         torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
-        env.common_step_counter = STAGE2_END - 1
+        env.common_step_counter = STAGE2_STEP - 1
         assert not bool(compute_corridor_reward(env).any())
-        env.common_step_counter = COURSE_START
+        env.common_step_counter = STAGE3_STEP
         torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
         print("[通过] 两段分别读取最高site，无位置门控，低于上限不罚，2k启用且3k后保留")
 
-        env.common_step_counter = STAGE2_END
+        env.common_step_counter = STAGE2_STEP
         env.reset()
         env.episode_length_buf[:] = 17
         reference_pos, reference_vel = get_reference_joint_state(env)

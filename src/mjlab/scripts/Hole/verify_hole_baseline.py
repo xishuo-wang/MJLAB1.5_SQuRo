@@ -1,4 +1,4 @@
-# uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
+﻿# uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 # Hole 验证：参考表、单板高度规则、四阶段课程、实体碰撞与观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
@@ -17,9 +17,9 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     NUM_STAGES,
-    STAGE1_END,
-    STAGE2_END,
-    STAGE3_END,
+    STAGE1_STEP,
+    STAGE2_STEP,
+    STAGE3_STEP,
     STEPS_PER_ITER,
     HeightCurriculumState,
     get_current_stage,
@@ -89,12 +89,12 @@ def check_command() -> None:
     print(f"     reset 后命令: vel_x {float(cmd[0, CMD_VEL_X_IDS]):.3f} m/s, "
           f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (热身随机高度池)")
     print(f"[3] 命令阶段边界: step 0 → stage {get_current_stage(0)}, "
-          f"step {STAGE1_END} → stage {get_current_stage(STAGE1_END)}, "
-          f"step {STAGE2_END} → stage {get_current_stage(STAGE2_END)}, "
-          f"step {STAGE3_END} → stage {get_current_stage(STAGE3_END)}")
+          f"step {STAGE1_STEP} → stage {get_current_stage(STAGE1_STEP)}, "
+          f"step {STAGE2_STEP} → stage {get_current_stage(STAGE2_STEP)}, "
+          f"step {STAGE3_STEP} → stage {get_current_stage(STAGE3_STEP)}")
     print("[3b] 四阶段定义 (边界唯一定义在 mdp/curriculums.py):")
     print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'高度课程':>8}{'要求碰撞':>10}")
-    bounds = [0, STAGE1_END // STEPS_PER_ITER, STAGE2_END // STEPS_PER_ITER, STAGE3_END // STEPS_PER_ITER]
+    bounds = [0, STAGE1_STEP // STEPS_PER_ITER, STAGE2_STEP // STEPS_PER_ITER, STAGE3_STEP // STEPS_PER_ITER]
     for s in range(1, NUM_STAGES + 1):
         lo = bounds[s - 1]
         hi = bounds[s] - 1 if s < NUM_STAGES else "∞"
@@ -104,7 +104,7 @@ def check_command() -> None:
               f"{str(stage_uses_height_course(s)):>8}{str(stage_requires_collision(s)):>10}")
 
     # 将阶段和板底设置为真实课程口径。
-    env.common_step_counter = STAGE3_END
+    env.common_step_counter = STAGE3_STEP
     env.reset()
     write_hole_bottom_z(env.scene["hole1"], 0.064)
     robot = env.scene["robot"]
@@ -130,7 +130,7 @@ def check_command() -> None:
 # 课程权重: 阶段阈值与生效段
 def check_curriculum() -> None:
     # 阶段阈值 = iter 边界 × 每 iter 步数
-    thresholds = [0, STAGE1_END, STAGE2_END, STAGE3_END]
+    thresholds = [0, STAGE1_STEP, STAGE2_STEP, STAGE3_STEP]
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
     keys = ["body_contact", "height", "mimic_pos", "height_sigma"]
     header = "".join(f"{k:>16}" for k in keys)
@@ -140,10 +140,10 @@ def check_curriculum() -> None:
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
               f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
-    eff = reward_weight_curriculum.get_reward_weights(STAGE3_END)
+    eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
           f"vel={eff['vel']}, body_contact={eff['body_contact']}, "
-          f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_END)}")
+          f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_STEP)}")
 
 
 # 实体碰撞与观测维度

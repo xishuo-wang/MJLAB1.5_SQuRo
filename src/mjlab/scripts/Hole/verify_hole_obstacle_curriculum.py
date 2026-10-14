@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import torch
 
@@ -23,10 +23,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    COURSE_START,
-    COURSE_START_ITER,
+    STAGE3_STEP,
+    STAGE3_ITER,
     HEIGHT_COURSE_STAGE,
-    STAGE2_END_ITER,
+    STAGE2_ITER,
     STEPS_PER_ITER,
     HeightCurriculumState,
     get_current_stage,
@@ -70,7 +70,7 @@ def make_env() -> ManagerBasedRlEnv:
     command.enable_course_progress = False
     command.height_curriculum_state = HeightCurriculumState().state_dict()
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
-    env.common_step_counter = COURSE_START
+    env.common_step_counter = STAGE3_STEP
     env.reset(seed=37)
     return env
 
@@ -79,10 +79,10 @@ def make_env() -> ManagerBasedRlEnv:
 def verify_shared_rule() -> None:
     check(
         "三段热身后在 3000 iter 进入第四阶段课程",
-        get_current_stage(STAGE2_END_ITER * STEPS_PER_ITER - 1) == 2
-        and get_current_stage(STAGE2_END_ITER * STEPS_PER_ITER) == 3
-        and get_current_stage(COURSE_START - 1) == 3
-        and get_current_stage(COURSE_START) == HEIGHT_COURSE_STAGE == 4,
+        get_current_stage(STAGE2_ITER * STEPS_PER_ITER - 1) == 2
+        and get_current_stage(STAGE2_ITER * STEPS_PER_ITER) == 3
+        and get_current_stage(STAGE3_STEP - 1) == 3
+        and get_current_stage(STAGE3_STEP) == HEIGHT_COURSE_STAGE == 4,
     )
     for center, half_length in ((0.2, 0.015), (0.6, 0.100)):
         left, middle, right = rule_bounds(center, half_length)
@@ -117,9 +117,9 @@ def verify_shared_rule() -> None:
 
 # 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
 def verify_curriculum_state() -> None:
-    state = HeightCurriculumState(start_iteration=COURSE_START_ITER)
+    state = HeightCurriculumState(start_iteration=STAGE3_ITER)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, True, STAGE2_END_ITER + 1, 2, True)
+        state.record_episode(HEIGHT_INITIAL_MIN, True, STAGE2_ITER + 1, 2, True)
     check("第二阶段和无碰撞回合不会推进课程", state.z_min == HEIGHT_INITIAL_MIN and state.all_height_episode_count == 0)
     state = HeightCurriculumState(start_iteration=0)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
@@ -163,7 +163,7 @@ def verify_fine_height_steps() -> None:
     state = HeightCurriculumState()
     for index, height_mm in enumerate(expected_mm[1:], start=1):
         previous_height = state.z_min
-        iteration = COURSE_START_ITER + index * HEIGHT_MIN_DWELL_ITERATIONS
+        iteration = STAGE3_ITER + index * HEIGHT_MIN_DWELL_ITERATIONS
         for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
             state.record_episode(previous_height, True, iteration, HEIGHT_COURSE_STAGE, True)
         check(f"课程由 {previous_height * 1000:g} 降到 {height_mm} mm",

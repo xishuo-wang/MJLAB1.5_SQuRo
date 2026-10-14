@@ -32,7 +32,7 @@ STAGE1_ITER = 1000
 STAGE2_ITER = 2000
 STAGE3_ITER = 3000
 HEIGHT_COURSE_STAGE = 4
-STAGE3_STEP = STAGE1_ITER * STEPS_PER_ITER
+STAGE1_STEP = STAGE1_ITER * STEPS_PER_ITER
 STAGE2_STEP = STAGE2_ITER * STEPS_PER_ITER
 STAGE3_STEP = STAGE3_ITER * STEPS_PER_ITER
 
@@ -88,7 +88,7 @@ STAGE_COLLISION = (False, False, False, True)
 
 # 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
 def get_current_stage(step_counter: int) -> int:
-    if step_counter < STAGE3_STEP:
+    if step_counter < STAGE1_STEP:
         return 1
     if step_counter < STAGE2_STEP:
         return 2

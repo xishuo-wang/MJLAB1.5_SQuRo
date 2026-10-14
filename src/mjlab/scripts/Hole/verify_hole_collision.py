@@ -1,4 +1,4 @@
-# uv run python -B -m mjlab.scripts.Hole.verify_hole_collision
+﻿# uv run python -B -m mjlab.scripts.Hole.verify_hole_collision
 # 碰撞重构验收: 几何一致性 / 编译掩码 / 物理开关 / Runner 重建 / checkpoint 状态
 # 任一项不通过即以非零码退出 (此前只打印结果, 失败也返回 0)
 
@@ -12,7 +12,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    STAGE3_END,
+    STAGE3_STEP,
     get_current_stage,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -117,9 +117,9 @@ def check_rebuild() -> None:
     vec = RslRlVecEnvWrapper(env, None)
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), "tmp_verify_log", device="cpu")
 
-    env.common_step_counter = STAGE3_END - 1
+    env.common_step_counter = STAGE3_STEP - 1
     check("iter 2999 不需重建", not runner._hole_change_needed())
-    env.common_step_counter = STAGE3_END
+    env.common_step_counter = STAGE3_STEP
     check("进入高度课程需重建", runner._hole_change_needed())
     n_before = runner.env.unwrapped.scene.num_envs
     obs = runner._apply_hole_rebuild(refresh_obs=True)
@@ -127,7 +127,7 @@ def check_rebuild() -> None:
     check("num_envs 保持", runner.env.unwrapped.scene.num_envs == n_before,
           f"{runner.env.unwrapped.scene.num_envs}")
     check("common_step_counter 保持",
-          int(runner.env.unwrapped.common_step_counter) == STAGE3_END)
+          int(runner.env.unwrapped.common_step_counter) == STAGE3_STEP)
     check("观测形状保持", tuple(obs.shape) == (n_before,), f"{tuple(obs.shape)}")
     check("不反复重建", not runner._hole_change_needed())
     try:
@@ -168,7 +168,7 @@ def check_state_roundtrip() -> None:
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     vec = RslRlVecEnvWrapper(env, None)
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), "tmp_verify_log", device="cpu")
-    env.common_step_counter = STAGE3_END
+    env.common_step_counter = STAGE3_STEP
     runner._apply_hole_rebuild(refresh_obs=False)
     path = "tmp_verify_log/hole_state_probe.pt"
     os.makedirs("tmp_verify_log", exist_ok=True)
@@ -176,7 +176,7 @@ def check_state_roundtrip() -> None:
     saved = read_hole_state(path)
     check("hole_state 已写入", bool(saved), f"version={saved.get('version')}")
     check("版本号正确", saved.get("version") == HOLE_STATE_VERSION)
-    check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_END))
+    check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_STEP))
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
     from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN
@@ -188,7 +188,7 @@ def check_state_roundtrip() -> None:
         check(f"layout 记录编译配置的板底 ({expect_bottom})",
               abs(float(layout[0]["position"][2]) - expect_bottom) < 1e-9,
               f"{layout[0]['position']}")
-    check("env_state 步数可读", read_env_step(path) == STAGE3_END, f"{read_env_step(path)}")
+    check("env_state 步数可读", read_env_step(path) == STAGE3_STEP, f"{read_env_step(path)}")
     try:
         runner.env.close()
     except Exception:
