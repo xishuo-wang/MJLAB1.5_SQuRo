@@ -6,9 +6,8 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .config import (
-    BASE_HEIGHT,
     BASE_FREQ,
-    CMD_GAIT_FREQ_IDS,
+    BASE_HEIGHT,
     HEIGHT_LIST,
     NECK_REF_POS,
     HIND_HOLD_POS,
@@ -21,17 +20,18 @@ from .config import (
     CMD_HEIGHT_H_IDS,
     THRESHOLD_HEIGHT,
     TABLE_RESOLUTION,
+    CMD_GAIT_FREQ_IDS,
 )
 from .indices import (
+    _ACT_SPN_IDS,
+    _ACT_NECK_IDS,
     _ACT_F_LEG_IDS,
+    _ACT_H_LEG_IDS,
     _ACT_FL_LEG_IDS,
     _ACT_FR_LEG_IDS,
-    _ACT_H_LEG_IDS,
     _ACT_HL_LEG_IDS,
     _ACT_HR_LEG_IDS,
     _ACT_JOINT_NAMES,
-    _ACT_NECK_IDS,
-    _ACT_SPN_IDS,
     SPN_H_PITCH_SLOT,
 )
 
