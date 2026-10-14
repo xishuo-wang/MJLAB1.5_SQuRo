@@ -35,10 +35,6 @@ HEIGHT_COURSE_STAGE = 4
 STAGE1_STEP = STAGE1_ITER * STEPS_PER_ITER
 STAGE2_STEP = STAGE2_ITER * STEPS_PER_ITER
 STAGE3_STEP = STAGE3_ITER * STEPS_PER_ITER
-
-
-
-# 奖励曲线直接共用阶段边界
 _STAGES = (0, STAGE1_ITER, STAGE2_ITER, STAGE3_ITER)
 
 
@@ -78,15 +74,12 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 
 
-# 脊柱误差的逐轴缩放, 顺序 = 参考表脊柱 4 列 (F_spine1, F_body, H_spine1, H_body)
-# 即 (侧摆, 扭转, 俯仰, 扭转)
-SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)
-
-# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
-STAGE_COLLISION = (False, False, False, True)
+SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)    # 脊柱误差缩放 (F_spine1, F_body, H_spine1, H_body)
+STAGE_COLLISION = (False, False, False, True)       # 受限空间碰撞课程
 
 
-# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
+
+# 按全局步数获取当前阶段
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_STEP:
         return 1
@@ -111,7 +104,7 @@ def stage_requires_collision(stage: int) -> bool:
 
 
 
-# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
+# 按阶段获取高度跟踪采样范围
 def heights_for_stage(stage: int):
     if stage == 1:
         return RANDOM_HEIGHT_VALUES
@@ -136,9 +129,10 @@ class RewardWeightCurriculum:
         return result
 
 
-    # 关卡是否要求开启限高板碰撞 (只读视图, 供基线脚本展示课程意图)
+    # 关卡是否要求开启限高板碰撞
     def should_enable_holes(self, current_step: int) -> bool:
         return stage_requires_collision(get_current_stage(current_step))
+
 
 
 reward_weight_curriculum = RewardWeightCurriculum()
