@@ -28,7 +28,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     reward_weight_curriculum,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_bottom_z
+from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_mocap
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_corridor_reward
@@ -152,7 +152,7 @@ def verify_obstacle_prior() -> None:
         command = env.command_manager.get_term("hole_cmd")
         obstacle = env.scene.entities["obstacle"]
         target = torch.tensor([0.048, 0.052, 0.070, 0.090])
-        write_obstacle_bottom_z(obstacle, target)
+        write_obstacle_mocap(obstacle, target)
         actual = read_geom_bottom_z(env)
         command._update_command()
         torch.testing.assert_close(actual, target, atol=1e-6, rtol=0)

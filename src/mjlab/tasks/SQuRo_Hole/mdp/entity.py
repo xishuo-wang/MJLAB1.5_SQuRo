@@ -33,8 +33,8 @@ class ObstacleEntity(Entity):
         self._build_geometry()
 
 
-    def _build_geometry(self):
-        half_t = self.cfg.size[2]
+    def _build_geometry(self) -> None:
+        half_thickness = self.cfg.size[2]
         body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position, mocap=True,)
         kwargs: dict = {}
         if self.cfg.solref is not None:
@@ -43,7 +43,7 @@ class ObstacleEntity(Entity):
             kwargs["solimp"] = self.cfg.solimp
         body.add_geom(
             name=f"{self.cfg.name}_geom",
-            pos=(0, 0, half_t),
+            pos=(0, 0, half_thickness),
             size=self.cfg.size,
             type=mujoco.mjtGeom.mjGEOM_BOX,
             rgba=self.cfg.rgba,
@@ -125,17 +125,17 @@ def obstacle_collision_enabled(env) -> bool:
 def obstacle_mocap_id(entity) -> int:
     local, _ = entity.find_bodies([entity.cfg.name], preserve_order=True)
     if not local:
-        raise ValueError(f"{entity.cfg.name} 实体里找不到同名 body")
+        raise ValueError(f"{entity.cfg.name} 里找不到同名 body")
     body_id = int(entity.indexing.body_ids[local[0]])
     mocap_id = int(entity.data.model.body_mocapid[body_id])
     if mocap_id < 0:
-        raise ValueError(f"{entity.cfg.name} 板体不是 mocap 体")
+        raise ValueError(f"{entity.cfg.name} 不是 mocap 体")
     return mocap_id
 
 
 
-# 将板底高度写入板体 mocap
-def write_obstacle_bottom_z(entity, bottom_z, env_ids=None) -> None:
+# 把板体的完整 mocap 位姿写入: x/y 取配置位置, z 取板底高度
+def write_obstacle_mocap(entity, bottom_z, env_ids=None) -> None:
     mocap_pos = entity.data.data.mocap_pos
     mocap_id = obstacle_mocap_id(entity)
     mocap_poses = mocap_pos[:, mocap_id, :]
@@ -233,7 +233,7 @@ def apply_saved_layout(env_cfg, layout: list) -> int:
         if not isinstance(existing, ObstacleEntityCfg):
             position = d.get("position")
             size = d.get("size")
-            if position is None or size is None or not key.startswith("obstacle"):
+            if position is None or size is None or key != primary_name:
                 continue
             existing = ObstacleEntityCfg(
                 name=str(d.get("name", key)),

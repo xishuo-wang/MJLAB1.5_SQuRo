@@ -33,7 +33,7 @@ from .curriculums import (
     heights_for_stage,
     stage_uses_height_course,
 )
-from .entity import read_obstacle_bottom_z, write_obstacle_bottom_z
+from .entity import read_obstacle_bottom_z, write_obstacle_mocap
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -195,7 +195,7 @@ class HoleCommand(CommandTerm):
         heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
         self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
-        write_obstacle_bottom_z(self.obstacle, heights, env_ids)
+        write_obstacle_mocap(self.obstacle, heights, env_ids)
         self._update_obstacle_height_command()
 
 

@@ -37,7 +37,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
     obstacle_collision_enabled,
     read_obstacle_bottom_z,
-    write_obstacle_bottom_z,
+    write_obstacle_mocap,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_SPN_IDS,
@@ -231,7 +231,7 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
     obstacle = env.scene.entities["obstacle"]
-    write_obstacle_bottom_z(obstacle, 0.070)
+    write_obstacle_mocap(obstacle, 0.070)
     x1 = float(obstacle.cfg.position[0]) - float(obstacle.cfg.size[0])
     x2 = float(obstacle.cfg.position[0]) + float(obstacle.cfg.size[0])
     bottom = float(read_obstacle_bottom_z(obstacle)[0])
@@ -317,7 +317,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
         [0.3, 0.0, -0.2, 0.0], [-0.3, 0.0, 0.2, 0.0],
     ])
     robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos))
-    write_obstacle_bottom_z(obstacle, 0.064)
+    write_obstacle_mocap(obstacle, 0.064)
     read_geom_bottom_z(env)
     command._update_command_by_height_rule()
     values = command.command
@@ -325,7 +325,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.020, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
-    write_obstacle_bottom_z(obstacle, 0.090)
+    write_obstacle_mocap(obstacle, 0.090)
     read_geom_bottom_z(env)
     command._update_command_by_height_rule()
     expected = values.new_tensor([0.055, 0.060, 0.060, 0.055])
@@ -341,19 +341,19 @@ def verify_real_env() -> None:
     obstacle = env.scene.entities["obstacle"]
     check("训练环境只保留单板且碰撞已编译", list(name for name in env.scene.entities if name.startswith("obstacle")) == ["obstacle"] and obstacle_collision_enabled(env))
     targets = torch.tensor([HEIGHT_MIN, 0.052, 0.070, 0.090], device=env.device)
-    write_obstacle_bottom_z(obstacle, targets, torch.arange(4, device=env.device))
+    write_obstacle_mocap(obstacle, targets, torch.arange(4, device=env.device))
     written = read_obstacle_bottom_z(obstacle).clone()
     check("板体 mocap 逐环境写入与即时读取", torch.allclose(written, targets))
     check("独立碰撞几何的板底随四个采样高度移动", torch.allclose(
         read_geom_bottom_z(env), targets, atol=1e-6,
     ))
     keep = written[[1, 3]].clone()
-    write_obstacle_bottom_z(obstacle, 0.051, torch.tensor([0, 2], device=env.device))
+    write_obstacle_mocap(obstacle, 0.051, torch.tensor([0, 2], device=env.device))
     check("部分写入不污染其他环境", torch.equal(read_obstacle_bottom_z(obstacle)[[1, 3]], keep))
     check("部分写入只移动指定环境的实际碰撞板", torch.allclose(
         read_geom_bottom_z(env), torch.tensor([0.051, 0.052, 0.051, 0.090]), atol=1e-6,
     ))
-    write_obstacle_bottom_z(obstacle, torch.tensor([0.054, 0.056]), slice(1, 4, 2))
+    write_obstacle_mocap(obstacle, torch.tensor([0.054, 0.056]), slice(1, 4, 2))
     check("切片写入正确移动实际碰撞板", torch.allclose(
         read_geom_bottom_z(env), torch.tensor([0.051, 0.054, 0.051, 0.056]), atol=1e-6,
     ))

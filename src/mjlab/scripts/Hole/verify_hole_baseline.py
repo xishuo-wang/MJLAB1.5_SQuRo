@@ -30,7 +30,11 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     stage_requires_collision,
     stage_uses_height_course,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity, write_obstacle_bottom_z
+from mjlab.tasks.SQuRo_Hole.mdp.entity import (
+    configure_obstacle_entity,
+    obstacle_collision_enabled,
+    write_obstacle_mocap,
+)
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_NUM,
     _ACT_FL_LEG_IDS,
@@ -41,14 +45,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     HEIGHT_LIST,
     Initialize_Tables,
 )
-
-# 从实体本身读限高板碰撞开关, 不缓存"以为改成了什么"
-def obstacle_collision_enabled(env) -> bool:
-    entity = env.scene.entities.get("obstacle")
-    if entity is None:
-        return False
-    return int(getattr(entity.cfg, "contype", 0)) > 0
-
 
 # 参考表结构与模式/高度档的作用
 def check_reference() -> None:
@@ -108,7 +104,7 @@ def check_command() -> None:
     # 将阶段和板底设置为真实课程口径。
     env.common_step_counter = STAGE3_STEP
     env.reset()
-    write_obstacle_bottom_z(env.scene["obstacle"], 0.064)
+    write_obstacle_mocap(env.scene["obstacle"], 0.064)
     robot = env.scene["robot"]
     state = torch.zeros(env.num_envs, 13, device=env.device)
     state[:, 2] = 0.06
