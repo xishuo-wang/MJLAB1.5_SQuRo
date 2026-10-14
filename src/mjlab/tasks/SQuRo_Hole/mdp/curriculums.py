@@ -5,75 +5,41 @@ from .config import (
     HEIGHT_MAX,
     HEIGHT_MIN,
     HEIGHT_STEP,
-    HEIGHT_FINE_STEP_THRESHOLD,
-    HEIGHT_FINE_STEP,
     BASE_HEIGHT,
     EXIT_MARGIN,
     ENTRY_MARGIN,
+    HEIGHT_FINE_STEP,
     LOW_TARGET_HEIGHT,
-    HEIGHT_INITIAL_MIN,
     BODY_HEIGHT_OFFSET,
-    OBSTACLE_HEIGHT_SPLIT,
-    RANDOM_HEIGHT_VALUES,
     FULL_HEIGHT_VALUES,
+    HEIGHT_INITIAL_MIN,
+    RANDOM_HEIGHT_VALUES,
+    OBSTACLE_HEIGHT_SPLIT,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
     HEIGHT_MIN_SUCCESS_BATCH,
+    HEIGHT_FINE_STEP_THRESHOLD,
     HEIGHT_MIN_DWELL_ITERATIONS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 
-# 课程阶段：两段原有热身、全位置走廊热身、单板真实碰撞课程。
-# 阶段边界与阶段判定集中在本文件, config.py 只保留可调参数。
-STAGE1_END_ITER = 1000
-STAGE2_END_ITER = 2000
-STAGE3_END_ITER = 3000
-COURSE_START_ITER = STAGE3_END_ITER
-HEIGHT_COURSE_STAGE = 4
-NUM_STAGES = 4
+
 
 STEPS_PER_ITER = 48
-STAGE1_END = STAGE1_END_ITER * STEPS_PER_ITER
-STAGE2_END = STAGE2_END_ITER * STEPS_PER_ITER
-STAGE3_END = STAGE3_END_ITER * STEPS_PER_ITER
-COURSE_START = COURSE_START_ITER * STEPS_PER_ITER
-
-# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
-STAGE_COLLISION = (False, False, False, True)
-
-# 奖励曲线直接共用阶段边界。
-_STAGES = (0, STAGE1_END_ITER, STAGE2_END_ITER, COURSE_START_ITER)
-
-
-# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
-def get_current_stage(step_counter: int) -> int:
-    if step_counter < STAGE1_END:
-        return 1
-    if step_counter < STAGE2_END:
-        return 2
-    if step_counter < STAGE3_END:
-        return 3
-    return HEIGHT_COURSE_STAGE
+NUM_STAGES = 4
+STAGE0_ITER = 0
+STAGE1_ITER = 1000
+STAGE2_ITER = 2000
+STAGE3_ITER = 3000
+HEIGHT_COURSE_STAGE = 4
+STAGE3_STEP = STAGE1_ITER * STEPS_PER_ITER
+STAGE2_STEP = STAGE2_ITER * STEPS_PER_ITER
+STAGE3_STEP = STAGE3_ITER * STEPS_PER_ITER
 
 
-# 判断是否已进入真实碰撞高度课程。
-def stage_uses_height_course(stage: int) -> bool:
-    return stage >= HEIGHT_COURSE_STAGE
 
-
-# 该阶段是否要求实体碰撞
-def stage_requires_collision(stage: int) -> bool:
-    idx = min(max(int(stage), 1), NUM_STAGES) - 1
-    return STAGE_COLLISION[idx]
-
-
-# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
-def heights_for_stage(stage: int):
-    if stage == 1:
-        return RANDOM_HEIGHT_VALUES
-    if stage in (2, 3):
-        return FULL_HEIGHT_VALUES
-    return None
+# 奖励曲线直接共用阶段边界
+_STAGES = (0, STAGE1_ITER, STAGE2_ITER, STAGE3_ITER)
 
 
 
@@ -115,6 +81,43 @@ _CURVES: dict[str, tuple[float, ...]] = {
 # 脊柱误差的逐轴缩放, 顺序 = 参考表脊柱 4 列 (F_spine1, F_body, H_spine1, H_body)
 # 即 (侧摆, 扭转, 俯仰, 扭转)
 SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)
+
+# 各阶段是否要求限高板实体碰撞 (编译期固化; 切换由 runner 重建环境完成)
+STAGE_COLLISION = (False, False, False, True)
+
+
+# 按全局步数取当前阶段，统一命令、奖励课程与碰撞边界。
+def get_current_stage(step_counter: int) -> int:
+    if step_counter < STAGE3_STEP:
+        return 1
+    if step_counter < STAGE2_STEP:
+        return 2
+    if step_counter < STAGE3_STEP:
+        return 3
+    return HEIGHT_COURSE_STAGE
+
+
+
+# 判断是否已进入真实碰撞高度课程。
+def stage_uses_height_course(stage: int) -> bool:
+    return stage >= HEIGHT_COURSE_STAGE
+
+
+
+# 该阶段是否要求实体碰撞
+def stage_requires_collision(stage: int) -> bool:
+    idx = min(max(int(stage), 1), NUM_STAGES) - 1
+    return STAGE_COLLISION[idx]
+
+
+
+# 按阶段获取热身高度池; 课程阶段不使用随机高度命令池。
+def heights_for_stage(stage: int):
+    if stage == 1:
+        return RANDOM_HEIGHT_VALUES
+    if stage in (2, 3):
+        return FULL_HEIGHT_VALUES
+    return None
 
 
 
@@ -188,7 +191,7 @@ def sample_base_heights(
 # 逐环境回合结果聚合为最低板高课程状态。
 class HeightCurriculumState:
     VERSION = 1
-    def __init__(self, start_iteration: int = COURSE_START_ITER):
+    def __init__(self, start_iteration: int = STAGE3_ITER):
         self.z_min = HEIGHT_INITIAL_MIN
         self.z_max = HEIGHT_MAX
         self.level_start_iteration = int(start_iteration)
