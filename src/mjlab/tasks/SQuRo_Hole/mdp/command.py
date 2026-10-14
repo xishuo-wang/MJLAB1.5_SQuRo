@@ -3,8 +3,8 @@ import torch
 from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
-from typing import TYPE_CHECKING, Optional, Tuple, overload
 from mjlab.managers.command_manager import CommandTerm
+from typing import TYPE_CHECKING, Optional, Tuple, overload
 from .config import (
     BASE_FREQ,
     BASE_SPEED,
