@@ -129,6 +129,7 @@ class HoleCommand(CommandTerm):
         return heights_for_stage(stage)
 
 
+    # 重采样高度、速度和障碍高度命令
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         n_envs = len(env_ids)  
         current_step = self._env.common_step_counter
@@ -144,7 +145,7 @@ class HoleCommand(CommandTerm):
         # 使用随机采样
         available_heights = self._get_available_heights(stage)
         if available_heights is None:
-            # 固定和随机命令回放仍使用完整高度池。
+            # 固定和随机命令回放仍使用完整高度池
             available_heights = FULL_HEIGHT_VALUES
         
         # 初始化命令张量
@@ -228,7 +229,7 @@ class HoleCommand(CommandTerm):
         self.obstacle_height_command[:] = bottom_z
 
 
-    # 采样前后肢高度组合: 两侧独立采样
+    # 采样前后肢高度组合，两侧独立采样
     def _sample_heights(self, available_heights: list) -> tuple:
         values = torch.tensor(available_heights, device=self.device)
         idx_F = torch.randint(0, len(available_heights), (1,), device=self.device)
@@ -236,11 +237,12 @@ class HoleCommand(CommandTerm):
         return values[idx_F], values[idx_H]
 
 
-    # 绝对速度 (随机采样路径)
+    # 计算绝对速度，用于随机采样路径
     def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
         return float(compute_command_velocity(height_F, height_H))
 
 
+    # 按当前课程阶段更新高度和速度命令
     def _update_command(self) -> None:
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
@@ -250,7 +252,7 @@ class HoleCommand(CommandTerm):
         self._update_obstacle_height_command()
 
 
-    # 回合重置: 重新锚定位移起点
+    # 回合重置时重新锚定位移起点
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:  # type: ignore[override]
         self._allow_obstacle_resample = True
         extras = super().reset(env_ids)
@@ -263,6 +265,7 @@ class HoleCommand(CommandTerm):
         return extras
 
 
+    # 可视化命令速度和实际速度
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         if not self.cfg.debug_vis:
             return
