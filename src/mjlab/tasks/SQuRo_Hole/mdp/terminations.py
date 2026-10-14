@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
-from .entity import hole_collision_enabled, read_bottom_z
+from .entity import obstacle_collision_enabled, read_obstacle_bottom_z
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .curriculums import STEPS_PER_ITER, get_current_stage, stage_uses_height_course
 
@@ -62,7 +62,7 @@ class HolePassageMonitor:
         command = env.command_manager._terms.get("hole_cmd")
         valid_course = (
             stage_uses_height_course(get_current_stage(env.common_step_counter))
-            and hole_collision_enabled(env)
+            and obstacle_collision_enabled(env)
             and command is not None
             and command.enable_height_course  # type: ignore
         )
@@ -73,15 +73,15 @@ class HolePassageMonitor:
         resolve_model_indices(robot)
         front = robot.data.site_pos_w[:, _MODEL_INDICES.f_body_site_ids]
         hind = robot.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids]
-        board = env.scene.entities.get("hole1")
-        if board is None:
+        obstacle = env.scene.entities.get("obstacle")
+        if obstacle is None:
             return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-        x1 = float(board.cfg.position[0]) - float(board.cfg.size[0])  # type: ignore
-        x2 = float(board.cfg.position[0]) + float(board.cfg.size[0])  # type: ignore
-        y0 = float(board.cfg.position[1])  # type: ignore
-        half_width = float(board.cfg.size[1])  # type: ignore
-        bottom = read_bottom_z(board)
+        x1 = float(obstacle.cfg.position[0]) - float(obstacle.cfg.size[0])  # type: ignore
+        x2 = float(obstacle.cfg.position[0]) + float(obstacle.cfg.size[0])  # type: ignore
+        y0 = float(obstacle.cfg.position[1])  # type: ignore
+        half_width = float(obstacle.cfg.size[1])  # type: ignore
+        bottom = read_obstacle_bottom_z(obstacle)
         front_min = front[..., 0].min(dim=1).values
         front_max = front[..., 0].max(dim=1).values
         hind_min = hind[..., 0].min(dim=1).values
@@ -151,7 +151,7 @@ class HolePassageMonitor:
                     success,
                     int(env.common_step_counter // STEPS_PER_ITER),
                     get_current_stage(env.common_step_counter),
-                    hole_collision_enabled(env),
+                    obstacle_collision_enabled(env),
                     eligible=valid,
                     failure_code=failure_code,
                 )
@@ -181,7 +181,7 @@ class HolePassageMonitor:
 
 
 # 执行永不触发的穿板监测项
-def monitor_hole_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
+def monitor_restricted_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
     monitor = getattr(env, "_hole_passage_monitor", None)
     if monitor is None:
         with torch.inference_mode(False):

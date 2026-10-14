@@ -124,7 +124,7 @@ class RewardWeightCurriculum:
 
 
     # 判断是否要求开启限高板碰撞
-    def should_enable_holes(self, current_step: int) -> bool:
+    def should_enable_obstacle(self, current_step: int) -> bool:
         return stage_requires_collision(get_current_stage(current_step))
 
 
@@ -161,17 +161,17 @@ def sample_base_heights(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     left, middle, right = rule_bounds(center_x, half_length)
     bottom = torch.as_tensor(bottom_z, device=base_x.device, dtype=base_x.dtype)
-    high_board = bottom >= OBSTACLE_HEIGHT_SPLIT
+    high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
     high_target = bottom - BODY_HEIGHT_OFFSET
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)
-    front = torch.where(high_board & in_range, high_target, front)
-    hind = torch.where(high_board & in_range, high_target, hind)
-    front = torch.where((~high_board) & front_low, LOW_TARGET_HEIGHT, front)
-    hind = torch.where((~high_board) & hind_low, LOW_TARGET_HEIGHT, hind)
+    front = torch.where(high_obstacle & in_range, high_target, front)
+    hind = torch.where(high_obstacle & in_range, high_target, hind)
+    front = torch.where((~high_obstacle) & front_low, LOW_TARGET_HEIGHT, front)
+    hind = torch.where((~high_obstacle) & hind_low, LOW_TARGET_HEIGHT, hind)
     return front, hind
 
 

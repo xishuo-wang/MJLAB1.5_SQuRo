@@ -22,8 +22,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     MODE_FRONT_LOW,
     MODE_HIND_LOW,
     THRESHOLD_HEIGHT,
-    HOLE_POSITION,
-    HOLE_SIZE,
+    OBSTACLE_POSITION,
+    OBSTACLE_SIZE,
     HEIGHT_INITIAL_MIN,
     VIRTUAL_CLEARANCE_MARGIN,
     BODY_HEIGHT_OFFSET,
@@ -63,8 +63,8 @@ class ScheduleCase:
 # 预览真实短板和独立长板示例，长板不进入训练场景。
 def build_cases(start_x: float) -> list[ScheduleCase]:
     boards = [
-        ("Hole1", *HOLE_POSITION, HOLE_SIZE[0], HOLE_SIZE[2]),
-        ("LongPreview", 0.6, HOLE_POSITION[1], HEIGHT_INITIAL_MIN, 0.100, HOLE_SIZE[2]),
+        ("obstacle", *OBSTACLE_POSITION, OBSTACLE_SIZE[0], OBSTACLE_SIZE[2]),
+        ("LongPreview", 0.6, OBSTACLE_POSITION[1], HEIGHT_INITIAL_MIN, 0.100, OBSTACLE_SIZE[2]),
     ]
     short = min(boards, key=lambda board: board[4])
     long = max(boards, key=lambda board: board[4])
@@ -199,7 +199,7 @@ def draw_panel(
     for position in knots:
         if x_min < position < x_max:
             markers.append(ax.axvline(position, color="#cbd5e1", linewidth=0.8))
-    upper = max(PREVIEW_HEIGHT_MAX + 2 * HOLE_SIZE[2], max(HEIGHT_LIST)) * 1000
+    upper = max(PREVIEW_HEIGHT_MAX + 2 * OBSTACLE_SIZE[2], max(HEIGHT_LIST)) * 1000
     ax.set(xlim=(x_min, x_max), ylim=(0, upper + 12), title=title,
            xlabel=xlabel, ylabel="高度（mm）")
     ax.grid(axis="y", alpha=0.2)

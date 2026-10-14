@@ -90,7 +90,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # X线速度跟踪奖励
-def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:    
+def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:    
     # 获取实际速度
     asset: Entity = env.scene["robot"]
     actual_vel_x = asset.data.root_link_lin_vel_w[:, 0]

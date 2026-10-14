@@ -17,14 +17,14 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     HeightCurriculumState,
     rule_bounds,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities
+from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity
 
 
 # 构造只保留超时终止的真实 CPU 环境。
 def make_env(reset_func=events.reset_model) -> ManagerBasedRlEnv:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 4
-    configure_single_hole_entities(cfg, enable_collision=True)
+    configure_obstacle_entity(cfg, enable_collision=True)
     state = HeightCurriculumState()
     state.z_min = state.z_max = 0.064
     cfg.commands["hole_cmd"].height_curriculum_state = state.state_dict()
@@ -85,8 +85,8 @@ def check_partial_reset(env: ManagerBasedRlEnv) -> None:
 
 # 在连续复位后检查当前单板高度规则的三个边界。
 def check_schedule_boundaries(env: ManagerBasedRlEnv) -> None:
-    board = env.scene["hole1"].cfg
-    left, middle, right = rule_bounds(board.position[0], board.size[0])
+    obstacle = env.scene["obstacle"].cfg
+    left, middle, right = rule_bounds(obstacle.position[0], obstacle.size[0])
     cases = (
         ((left - 1e-6, left + 1e-6, middle - 1e-6, middle + 1e-6),
          [[0.055, 0.055], [0.02, 0.055], [0.02, 0.055], [0.055, 0.02]]),

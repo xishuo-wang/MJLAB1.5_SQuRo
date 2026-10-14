@@ -25,7 +25,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_CURVATURE_IDS,
     CMD_OBSTACLE_HEIGHT_IDS,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import build_single_hole_entities
+from mjlab.tasks.SQuRo_Hole.mdp.entity import build_obstacle_entity
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _MODEL_INDICES,
     FOOT_NAMES,
@@ -79,7 +79,7 @@ def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 1
     if args.enable_collision:
-        cfg.scene.entities.update(build_single_hole_entities(enable_collision=True))
+        cfg.scene.entities.update(build_obstacle_entity(enable_collision=True))
     command = cast(HoleCommandCfg, cfg.commands["hole_cmd"])
     command.fixed_height_F = args.height_f
     command.fixed_height_H = args.height_h

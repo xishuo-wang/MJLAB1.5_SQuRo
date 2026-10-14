@@ -30,7 +30,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     stage_requires_collision,
     stage_uses_height_course,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities, write_hole_bottom_z
+from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity, write_obstacle_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_NUM,
     _ACT_FL_LEG_IDS,
@@ -43,8 +43,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.reference import (
 )
 
 # 从实体本身读限高板碰撞开关, 不缓存"以为改成了什么"
-def hole_collision_enabled(env) -> bool:
-    entity = env.scene.entities.get("hole1")
+def obstacle_collision_enabled(env) -> bool:
+    entity = env.scene.entities.get("obstacle")
     if entity is None:
         return False
     return int(getattr(entity.cfg, "contype", 0)) > 0
@@ -77,7 +77,7 @@ def check_reference() -> None:
 def check_command() -> None:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole", play=True)
     cfg.scene.num_envs = 8
-    configure_single_hole_entities(cfg, enable_collision=False)
+    configure_obstacle_entity(cfg, enable_collision=False)
     state = HeightCurriculumState()
     state.z_min = state.z_max = 0.070
     cfg.commands["hole_cmd"].enable_height_course = True
@@ -85,8 +85,8 @@ def check_command() -> None:
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     env.reset()
     cmd = env.command_manager.get_command("hole_cmd")
-    board = env.scene["hole1"].cfg
-    left, middle, right = rule_bounds(board.position[0], board.size[0])
+    obstacle = env.scene["obstacle"].cfg
+    left, middle, right = rule_bounds(obstacle.position[0], obstacle.size[0])
     print(f"\n[2] 单板高度规则: 进入 {left:.3f} m，中点 {middle:.3f} m，离开 {right:.3f} m")
     print(f"     reset 后命令: vel_x {float(cmd[0, CMD_VEL_X_IDS]):.3f} m/s, "
           f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (热身随机高度池)")
@@ -108,7 +108,7 @@ def check_command() -> None:
     # 将阶段和板底设置为真实课程口径。
     env.common_step_counter = STAGE3_STEP
     env.reset()
-    write_hole_bottom_z(env.scene["hole1"], 0.064)
+    write_obstacle_bottom_z(env.scene["obstacle"], 0.064)
     robot = env.scene["robot"]
     state = torch.zeros(env.num_envs, 13, device=env.device)
     state[:, 2] = 0.06
@@ -141,11 +141,11 @@ def check_curriculum() -> None:
         w = reward_weight_curriculum.get_reward_weights(step)
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
-              f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
+              f"{str(reward_weight_curriculum.should_enable_obstacle(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
           f"vel={eff['vel']}, corridor={eff['corridor']}, "
-          f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_STEP)}")
+          f"enable_holes={reward_weight_curriculum.should_enable_obstacle(STAGE3_STEP)}")
 
 
 # 实体碰撞与观测维度
@@ -161,7 +161,7 @@ def check_env() -> None:
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
         obs = env.reset()
         obs_dict = obs[0] if isinstance(obs, tuple) else obs
-        print(f"     [{tag}] 初始限高板碰撞={hole_collision_enabled(env)} (前三阶段无板 / 课程阶段重建开), "
+        print(f"     [{tag}] 初始限高板碰撞={obstacle_collision_enabled(env)} (前三阶段无板 / 课程阶段重建开), "
               f"actor {tuple(obs_dict['actor'].shape)}, "
               f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {_ACT_NUM}")
         if not play:

@@ -31,7 +31,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     apply_saved_layout,
     set_obstacle_bottom_z,
     set_obstacle_visibility,
-    configure_single_hole_entities,
+    configure_obstacle_entity,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     FOOT_NAMES,
@@ -68,7 +68,7 @@ class PlayConfig:
     fixed_height_F: float | None = 0.055    # 期望前肢高度
     fixed_height_H: float | None = 0.020    # 期望后肢高度
     collision: bool | None = None           # 障碍物碰撞
-    obstacles_viz: bool = True              # 可视化障碍物
+    obstacle_viz: bool = True              # 可视化障碍物
     obstacle_height: float | None = None    # 障碍物板底高度 (m); None = 用检查点记录的课程档
 
 
@@ -375,7 +375,7 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
-    saved_hole = read_hole_state(resume_path) if resume_path is not None else {}
+    saved_state = read_hole_state(resume_path) if resume_path is not None else {}
     if resume_path is not None:
         recorded = read_env_step(resume_path)
         if recorded is not None:
@@ -390,12 +390,12 @@ def run_play(cfg: PlayConfig):
     # 碰撞优先级: 显式 > 检查点记录 > 按上面解析出的最终阶段推断
     if cfg.collision is not None:
         collision, coll_src = cfg.collision, "命令行显式指定"
-    elif saved_hole.get("collision") is not None:
-        collision, coll_src = bool(saved_hole["collision"]), "检查点 hole_state"
+    elif saved_state.get("collision") is not None:
+        collision, coll_src = bool(saved_state["collision"]), "检查点 hole_state"
     else:
         collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
     # 与训练同源：热身无板，课程使用单板；显式碰撞允许提前诊断。
-    course_state = dict(saved_hole.get("height_course") or HeightCurriculumState().state_dict())
+    course_state = dict(saved_state.get("height_course") or HeightCurriculumState().state_dict())
     if cfg.obstacle_height is not None:
         course_state["z_min"] = float(cfg.obstacle_height)
         course_state["z_max"] = float(cfg.obstacle_height)
@@ -404,9 +404,9 @@ def run_play(cfg: PlayConfig):
         and cmd_cfg is not None
         and stage_uses_height_course(final_stage)
     )
-    show_board = stage_uses_height_course(final_stage) or cfg.collision is True
-    if show_board:
-        configure_single_hole_entities(env_cfg, enable_collision=collision)
+    show_obstacle = stage_uses_height_course(final_stage) or cfg.collision is True
+    if show_obstacle:
+        configure_obstacle_entity(env_cfg, enable_collision=collision)
     if use_course:
         # 未显式指定板高时，固定在检查点当前最低档。
         if cfg.obstacle_height is None:
@@ -414,33 +414,33 @@ def run_play(cfg: PlayConfig):
         cmd_cfg.enable_height_course = True          # type: ignore[attr-defined]
         cmd_cfg.height_curriculum_state = course_state  # type: ignore[attr-defined]
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
-    saved_layout = (saved_hole.get("layout") or []) if show_board else []
+    saved_layout = (saved_state.get("layout") or []) if show_obstacle else []
     applied = apply_saved_layout(env_cfg, saved_layout)
     # 板高优先级：显式值 > 检查点最低档 > 布局或配置默认。
-    board_z: float | None = None
-    board_src = ""
+    obstacle_z: float | None = None
+    obstacle_src = ""
     if cfg.obstacle_height is not None:
-        board_z, board_src = float(cfg.obstacle_height), "命令行显式指定"
-    elif (saved_hole.get("height_course") and stage_uses_height_course(final_stage)) or use_course:
-        board_z = float(course_state["z_min"])
-        board_src = "检查点 height_course.z_min"
-    n_board = set_obstacle_bottom_z(env_cfg, board_z) if board_z is not None else 0
+        obstacle_z, obstacle_src = float(cfg.obstacle_height), "命令行显式指定"
+    elif (saved_state.get("height_course") and stage_uses_height_course(final_stage)) or use_course:
+        obstacle_z = float(course_state["z_min"])
+        obstacle_src = "检查点 height_course.z_min"
+    n_obstacle = set_obstacle_bottom_z(env_cfg, obstacle_z) if obstacle_z is not None else 0
     # 障碍物可见性: 仅改 rgba, 不改碰撞; 放在几何应用之后以免被覆盖
-    n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.obstacles_viz)
-    if board_z is not None and n_board:
-        print(f"[INFO] 障碍物板底 = {board_z:.4f} m (来源: {board_src}; 共 {n_board} 块)")
-    elif board_z is not None:
-        print(f"[WARN] 场景里没有障碍物实体, 障碍物高度 {board_z:.4f} 未生效 (来源: {board_src})")
+    n_hidden = set_obstacle_visibility(env_cfg, visible=cfg.obstacle_viz)
+    if obstacle_z is not None and n_obstacle:
+        print(f"[INFO] 障碍物板底 = {obstacle_z:.4f} m (来源: {obstacle_src}; 共 {n_obstacle} 块)")
+    elif obstacle_z is not None:
+        print(f"[WARN] 场景里没有障碍物实体, 障碍物高度 {obstacle_z:.4f} 未生效 (来源: {obstacle_src})")
     else:
         print("[INFO] 障碍物板底 = 检查点布局/配置默认值（当前阶段未启用高度课程或未记录课程档）")
     print(f"[INFO] 阶段解析: step {final_step} → stage {final_stage} (来源: {stage_src})")
     print(f"[INFO] 限高板碰撞 = {'开' if collision else '关'} (来源: {coll_src})"
           + (f"; 已应用检查点几何 {applied} 块板" if applied else ""))
-    if not cfg.obstacles_viz:
+    if not cfg.obstacle_viz:
         print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
-    if saved_hole:
-        print(f"[INFO] 检查点 hole_state: stage={saved_hole.get('stage')}, "
-              f"记录碰撞={saved_hole.get('collision')}")
+    if saved_state:
+        print(f"[INFO] 检查点 hole_state: stage={saved_state.get('stage')}, "
+              f"记录碰撞={saved_state.get('collision')}")
 
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]

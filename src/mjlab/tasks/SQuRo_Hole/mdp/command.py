@@ -22,9 +22,9 @@ from .config import (
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
     FULL_HEIGHT_VALUES,
+    HEIGHT_MIN_SAMPLE_PROBABILITY,
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
-    HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 from .curriculums import (
     sample_base_heights,
@@ -33,7 +33,7 @@ from .curriculums import (
     heights_for_stage,
     stage_uses_height_course,
 )
-from .entity import read_bottom_z, write_hole_bottom_z
+from .entity import read_obstacle_bottom_z, write_obstacle_bottom_z
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -101,7 +101,7 @@ class HoleCommand(CommandTerm):
         self.height_curriculum_state = HeightCurriculumState()
         if cfg.height_curriculum_state:
             self.height_curriculum_state.load_state_dict(cfg.height_curriculum_state)
-        self.obstacle_entity = env.scene.entities.get("hole1")
+        self.obstacle = env.scene.entities.get("obstacle")
         self.obstacle_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
         self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
@@ -128,10 +128,10 @@ class HoleCommand(CommandTerm):
 
     # 有板时读取真实板底，无板时使用100毫米占位
     def _update_obstacle_height_command(self) -> None:
-        if self.obstacle_entity is None:
+        if self.obstacle is None:
             self.obstacle_height_command.fill_(WARMUP_OBSTACLE_HEIGHT)
         else:
-            self.obstacle_height_command[:] = read_bottom_z(self.obstacle_entity)
+            self.obstacle_height_command[:] = read_obstacle_bottom_z(self.obstacle)
 
 
     # 从已写入的根位姿记录起点，避开复位前的缓存位置
@@ -152,7 +152,7 @@ class HoleCommand(CommandTerm):
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle_entity is not None:
+        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle is not None:
             if self._allow_obstacle_resample:
                 self._sample_obstacle_height(env_ids)
                 self._set_neutral_command(env_ids)
@@ -204,7 +204,7 @@ class HoleCommand(CommandTerm):
 
     # 仅在回合重置时采样一次板底高度
     def _sample_obstacle_height(self, env_ids: torch.Tensor) -> None:
-        if self.obstacle_entity is None:
+        if self.obstacle is None:
             raise RuntimeError("高度课程需要受限空间实体")
         lower = self.height_curriculum_state.z_min
         upper = self.height_curriculum_state.z_max
@@ -213,7 +213,7 @@ class HoleCommand(CommandTerm):
         heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
         self.obstacle_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
-        write_hole_bottom_z(self.obstacle_entity, heights, env_ids)
+        write_obstacle_bottom_z(self.obstacle, heights, env_ids)
         self._update_obstacle_height_command()
 
 
@@ -231,12 +231,12 @@ class HoleCommand(CommandTerm):
 
     # 使用 base_Link 的世界 X 统一查单板高度表
     def _update_command_from_height_rule(self) -> None:
-        if self.obstacle_entity is None:
+        if self.obstacle is None:
             raise RuntimeError("高度课程需要受限空间实体")
-        board_cfg = self.obstacle_entity.cfg
+        entity_cfg = self.obstacle.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
-        bottom_z = read_bottom_z(self.obstacle_entity)
-        front, hind = sample_base_heights(base_x, float(board_cfg.position[0]), float(board_cfg.size[0]), bottom_z,) # type: ignore
+        bottom_z = read_obstacle_bottom_z(self.obstacle)
+        front, hind = sample_base_heights(base_x, float(entity_cfg.position[0]), float(entity_cfg.size[0]), bottom_z,) # type: ignore
         velocity = compute_command_velocity(front, hind)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
@@ -264,7 +264,7 @@ class HoleCommand(CommandTerm):
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
-        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle_entity is not None:
+        if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle is not None:
             self._update_command_from_height_rule()
         self._update_obstacle_height_command()
 

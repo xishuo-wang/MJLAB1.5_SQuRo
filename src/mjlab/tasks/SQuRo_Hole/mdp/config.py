@@ -36,7 +36,7 @@ HIND_HOLD_POS = (0.80, -0.15)                   # 当前基线的后腿收缩参
 
 
 # 受限空间高度课程相关配置
-WARMUP_OBSTACLE_HEIGHT = 0.100                  # 无实体时的100毫米板高占位
+WARMUP_OBSTACLE_HEIGHT = 0.100         # 无实体时的 100 毫米板高占位
 OBSTACLE_HEIGHT_SPLIT = 0.070
 ENTRY_MARGIN = 0.150
 EXIT_MARGIN = 0.100
@@ -53,6 +53,6 @@ HEIGHT_MIN_SUCCESS_BATCH = 256                  # 推进课程要求成功批次
 HEIGHT_MIN_SUCCESS_RATE = 0.60                  # 推进课程要求成功率
 HEIGHT_REQUIRED_BATCHES = 2                     # 推进课程要求连续成功批次
 HEIGHT_MIN_DWELL_ITERATIONS = 100
-HOLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)  # 真实课程的初始板底位置
-HOLE_SIZE = (0.015, 0.1, 0.005)                 # 单板半长、半宽、半厚
+OBSTACLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)  # 真实课程的初始板底位置
+OBSTACLE_SIZE = (0.015, 0.1, 0.005)                 # 单板半长、半宽、半厚
 VIRTUAL_CLEARANCE_MARGIN = 0.0025               # 板底净空余量

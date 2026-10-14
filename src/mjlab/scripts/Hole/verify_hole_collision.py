@@ -17,10 +17,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
-    build_single_hole_entities,
-    configure_hole_entities,
-    hole_collision_enabled,
-    hole_geometry,
+    build_obstacle_entity,
+    configure_obstacle_collision,
+    obstacle_collision_enabled,
+    obstacle_geometry,
 )
 
 TASK = "Mjlab-SQuRo-Hole"
@@ -37,8 +37,8 @@ def build(collision: bool, n: int = 1, play: bool = False,
           disable_terminations: bool = False) -> ManagerBasedRlEnv:
     cfg = load_env_cfg(TASK, play=play)
     cfg.scene.num_envs = n
-    cfg.scene.entities.update(build_single_hole_entities(enable_collision=collision))
-    configure_hole_entities(cfg, enable_collision=collision)
+    cfg.scene.entities.update(build_obstacle_entity(enable_collision=collision))
+    configure_obstacle_collision(cfg, enable_collision=collision)
     if disable_terminations:
         # 物理开关测试要观察未被重置的轨迹; fallen 会触发 auto_reset 把机器人拉回原点
         cfg.terminations = {}
@@ -52,7 +52,7 @@ def check_geometry() -> None:
     print("[1] 几何一致性 (板底 = position.z, 中心 = 板底 + 半厚)")
     env = build(True)
     print(f"     {'板':<7}{'x 区间':>18}{'板底':>9}{'板顶':>9}{'虚拟阈值':>10}{'余量':>8}")
-    for g in hole_geometry():
+    for g in obstacle_geometry():
         e = env.scene.entities[g["name"].lower()]
         dz = g["bottom_z"] - g["virtual_z_threshold"]
         rng = f"[{g['x_min']:.3f},{g['x_max']:.3f}]"
@@ -74,7 +74,7 @@ def check_mask() -> None:
         env = build(collision)
         m = env.sim.mj_model
         vals = [(int(m.geom_contype[i]), int(m.geom_conaffinity[i]))
-                for i in range(m.ngeom) if "Hole" in (m.geom(i).name or "")]
+                for i in range(m.ngeom) if "obstacle" in (m.geom(i).name or "")]
         want = 1 if collision else 0
         check(f"碰撞={'开' if collision else '关'} 单板掩码 = {vals}",
               len(vals) == 1 and all(v == (want, want) for v in vals))
@@ -118,18 +118,18 @@ def check_rebuild() -> None:
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), "tmp_verify_log", device="cpu")
 
     env.common_step_counter = STAGE3_STEP - 1
-    check("iter 2999 不需重建", not runner._hole_change_needed())
+    check("iter 2999 不需重建", not runner._obstacle_change_needed())
     env.common_step_counter = STAGE3_STEP
-    check("进入高度课程需重建", runner._hole_change_needed())
+    check("进入高度课程需重建", runner._obstacle_change_needed())
     n_before = runner.env.unwrapped.scene.num_envs
-    obs = runner._apply_hole_rebuild(refresh_obs=True)
-    check("重建后碰撞 = 开", hole_collision_enabled(runner.env.unwrapped))
+    obs = runner._apply_obstacle_rebuild(refresh_obs=True)
+    check("重建后碰撞 = 开", obstacle_collision_enabled(runner.env.unwrapped))
     check("num_envs 保持", runner.env.unwrapped.scene.num_envs == n_before,
           f"{runner.env.unwrapped.scene.num_envs}")
     check("common_step_counter 保持",
           int(runner.env.unwrapped.common_step_counter) == STAGE3_STEP)
     check("观测形状保持", tuple(obs.shape) == (n_before,), f"{tuple(obs.shape)}")
-    check("不反复重建", not runner._hole_change_needed())
+    check("不反复重建", not runner._obstacle_change_needed())
     try:
         runner.env.close()
     except Exception:
@@ -141,12 +141,12 @@ def check_rebuild_preserves_custom() -> None:
     print("\n[5] 重建保留自定义板位与接触参数")
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 1
-    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
-    ent = cfg.scene.entities["hole1"]
+    cfg.scene.entities.update(build_obstacle_entity(enable_collision=False))
+    ent = cfg.scene.entities["obstacle"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
-    configure_hole_entities(cfg, enable_collision=True)
-    ent2 = cfg.scene.entities["hole1"]
+    configure_obstacle_collision(cfg, enable_collision=True)
+    ent2 = cfg.scene.entities["obstacle"]
     check("位置保留", tuple(ent2.position) == (0.35, 0.0, 0.0675), f"{tuple(ent2.position)}")
     check("solref 保留", ent2.solref is not None and tuple(ent2.solref) == (0.03, 1.0),
           f"{ent2.solref}")
@@ -168,7 +168,7 @@ def check_state_roundtrip() -> None:
     vec = RslRlVecEnvWrapper(env, None)
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), "tmp_verify_log", device="cpu")
     env.common_step_counter = STAGE3_STEP
-    runner._apply_hole_rebuild(refresh_obs=False)
+    runner._apply_obstacle_rebuild(refresh_obs=False)
     path = "tmp_verify_log/hole_state_probe.pt"
     os.makedirs("tmp_verify_log", exist_ok=True)
     runner.save(path)
@@ -178,7 +178,7 @@ def check_state_roundtrip() -> None:
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
     from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN
-    check("课程阶段 layout 仅保留单板", len(layout) == 1 and layout[0]["name"].lower() == "hole1", f"{len(layout)}")
+    check("课程阶段 layout 仅保留单板", len(layout) == 1 and layout[0]["name"].lower() == "obstacle", f"{len(layout)}")
     check("最低板高课程状态已保存", bool(saved.get("height_course")))
     if layout:
         # 板底期望值取几何表单一来源, 不再写死字面量
@@ -201,13 +201,13 @@ def check_reward_geometry() -> None:
     print("\n[7] 虚拟约束读实际场景几何 (自定义板位)")
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 1
-    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
-    ent = cfg.scene.entities["hole1"]
+    cfg.scene.entities.update(build_obstacle_entity(enable_collision=False))
+    ent = cfg.scene.entities["obstacle"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
-    configure_hole_entities(cfg, enable_collision=False)
+    configure_obstacle_collision(cfg, enable_collision=False)
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
-    g0 = hole_geometry(env)[0]
+    g0 = obstacle_geometry(env)[0]
     check("x 区间跟随自定义位置", abs(g0["x_min"] - 0.335) < 1e-9 and abs(g0["x_max"] - 0.365) < 1e-9,
           f"[{g0['x_min']:.3f},{g0['x_max']:.3f}]")
     check("板底跟随自定义位置", abs(g0["bottom_z"] - 0.0675) < 1e-9, f"{g0['bottom_z']:.4f}")
@@ -227,11 +227,11 @@ def check_layout_roundtrip() -> None:
     os.makedirs(probe_dir, exist_ok=True)
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 2
-    cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
-    ent = cfg.scene.entities["hole1"]
+    cfg.scene.entities.update(build_obstacle_entity(enable_collision=False))
+    ent = cfg.scene.entities["obstacle"]
     ent.position = (0.35, 0.0, 0.0675)
     ent.solref = (0.03, 1.0)
-    configure_hole_entities(cfg, enable_collision=True)
+    configure_obstacle_collision(cfg, enable_collision=True)
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     vec = RslRlVecEnvWrapper(env, None)
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), probe_dir, device="cpu")
@@ -245,7 +245,7 @@ def check_layout_roundtrip() -> None:
     # 干净配置 + apply_saved_layout → 复现
     cfg2 = load_env_cfg(TASK, play=True)
     n = apply_saved_layout(cfg2, saved.get("layout") or [])
-    e2 = cfg2.scene.entities["hole1"]
+    e2 = cfg2.scene.entities["obstacle"]
     check("回放复现位置", tuple(e2.position) == (0.35, 0.0, 0.0675), f"{tuple(e2.position)}")
     check("回放复现 solref", e2.solref is not None and tuple(e2.solref) == (0.03, 1.0),
           f"{e2.solref}")
@@ -256,7 +256,7 @@ def check_layout_roundtrip() -> None:
         {"name": "Hole2", "position": [0.6, 0.0, 0.07], "size": [0.1, 0.1, 0.005]},
         {"name": "Hole3", "position": [1.2, 0.0, 0.05], "size": [0.015, 0.1, 0.005]},
     ])
-    check("多板 layout 仅保留单板", n_multi == 1 and list(cfg3.scene.entities) == ["robot", "hole1"],
+    check("多板 layout 仅保留单板", n_multi == 1 and list(cfg3.scene.entities) == ["robot", "obstacle"],
           f"n={n_multi} entities={list(cfg3.scene.entities)}")
     try:
         runner.env.close()
@@ -272,13 +272,13 @@ def check_visibility() -> None:
     for visible in (True, False):
         cfg = load_env_cfg(TASK)
         cfg.scene.num_envs = 1
-        cfg.scene.entities.update(build_single_hole_entities(enable_collision=False))
-        configure_hole_entities(cfg, enable_collision=True)
+        cfg.scene.entities.update(build_obstacle_entity(enable_collision=False))
+        configure_obstacle_collision(cfg, enable_collision=True)
         n = set_obstacle_visibility(cfg, visible=visible)
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
         m = env.sim.mj_model
         rows = [(np.round(m.geom_rgba[i], 3).tolist(), int(m.geom_contype[i]))
-                for i in range(m.ngeom) if "Hole" in (m.geom(i).name or "")]
+                for i in range(m.ngeom) if "obstacle" in (m.geom(i).name or "")]
         want_rgba = [0.5, 0.5, 0.5, 0.5] if visible else [0.0, 0.0, 0.0, 0.0]
         check(f"可见={visible} rgba={want_rgba} ({n} 块)",
               len(rows) == 1 and all(r[0] == want_rgba for r in rows))

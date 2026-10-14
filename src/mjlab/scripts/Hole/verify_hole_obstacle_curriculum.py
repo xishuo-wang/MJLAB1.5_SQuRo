@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import torch
 
@@ -34,10 +34,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     sample_base_heights,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
-    configure_single_hole_entities,
-    hole_collision_enabled,
-    read_bottom_z,
-    write_hole_bottom_z,
+    configure_obstacle_entity,
+    obstacle_collision_enabled,
+    read_obstacle_bottom_z,
+    write_obstacle_bottom_z,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_SPN_IDS,
@@ -46,7 +46,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
-    monitor_hole_passage,
+    monitor_restricted_passage,
 )
 
 FAILURES: list[str] = []
@@ -63,7 +63,7 @@ def check(name: str, passed: bool) -> None:
 def make_env() -> ManagerBasedRlEnv:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole", play=True)
     cfg.scene.num_envs = 4
-    configure_single_hole_entities(cfg, enable_collision=True)
+    configure_obstacle_entity(cfg, enable_collision=True)
     command = cfg.commands["hole_cmd"]
     command.enable_height_course = True
     command.enable_course_progress = False
@@ -85,7 +85,7 @@ def verify_shared_rule() -> None:
     )
     for center, half_length in ((0.2, 0.015), (0.6, 0.100)):
         left, middle, right = rule_bounds(center, half_length)
-        board = ("Hole", center, 0.0, 0.07, half_length, 0.005)
+        obstacle = ("Hole", center, 0.0, 0.07, half_length, 0.005)
         for dtype in (torch.float32, torch.float64):
             positions = torch.tensor([
                 left - 1e-6, left, middle - 1e-6, middle,
@@ -106,8 +106,8 @@ def verify_shared_rule() -> None:
             front, hind = sample_base_heights(query, center, half_length, height)
             check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
                   not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
-            preview = sample_rule_schedule(query.numpy() - 0.1, board, height, start_x=0.1)
-            current = sample_base_commands(query.numpy() - 0.1, board, height, start_x=0.1)
+            preview = sample_rule_schedule(query.numpy() - 0.1, obstacle, height, start_x=0.1)
+            current = sample_base_commands(query.numpy() - 0.1, obstacle, height, start_x=0.1)
             check("非零起点下生产、曲线及游标读数一致且速度为正",
                   torch.allclose(torch.as_tensor(preview["height_f"]), front)
                   and torch.allclose(torch.as_tensor(current["height_h"]), hind)
@@ -226,15 +226,15 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
     command = env.command_manager.get_term("hole_cmd")
     command.obstacle_height_sampled[:] = True
     with torch.inference_mode():
-        monitor_hole_passage(env)
+        monitor_restricted_passage(env)
     monitor = env._hole_passage_monitor
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
-    board = env.scene.entities["hole1"]
-    write_hole_bottom_z(board, 0.070)
-    x1 = float(board.cfg.position[0]) - float(board.cfg.size[0])
-    x2 = float(board.cfg.position[0]) + float(board.cfg.size[0])
-    bottom = float(read_bottom_z(board)[0])
+    obstacle = env.scene.entities["obstacle"]
+    write_obstacle_bottom_z(obstacle, 0.070)
+    x1 = float(obstacle.cfg.position[0]) - float(obstacle.cfg.size[0])
+    x2 = float(obstacle.cfg.position[0]) + float(obstacle.cfg.size[0])
+    bottom = float(read_obstacle_bottom_z(obstacle)[0])
 
     set_sites(env, x1 - 0.01)
     monitor.compute()
@@ -282,29 +282,29 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
 # 验证周期命令重采样不移动障碍。
 def verify_dynamic_sources(env: ManagerBasedRlEnv) -> None:
     command = env.command_manager.get_term("hole_cmd")
-    board = env.scene.entities["hole1"]
-    previous = read_bottom_z(board).clone()
+    obstacle = env.scene.entities["obstacle"]
+    previous = read_obstacle_bottom_z(obstacle).clone()
     command._resample_command(torch.arange(env.num_envs, device=env.device))
-    check("周期命令重采样不改变回合板高", torch.equal(read_bottom_z(board), previous))
+    check("周期命令重采样不改变回合板高", torch.equal(read_obstacle_bottom_z(obstacle), previous))
 
 
 # 从独立的碰撞几何与编译尺寸读取实际板底。
 def read_geom_bottom_z(env: ManagerBasedRlEnv) -> torch.Tensor:
-    board = env.scene.entities["hole1"]
-    local_ids, _ = board.find_geoms([f"{board.cfg.name}_geom"], preserve_order=True)
+    obstacle = env.scene.entities["obstacle"]
+    local_ids, _ = obstacle.find_geoms([f"{obstacle.cfg.name}_geom"], preserve_order=True)
     geom_id = local_ids[0]
-    global_id = int(board.indexing.geom_ids[geom_id])
+    global_id = int(obstacle.indexing.geom_ids[geom_id])
     half_thickness = float(env.sim.mj_model.geom_size[global_id, 2])
     env.sim.forward()
     env.scene.update(0.0)
-    return board.data.geom_pos_w[:, geom_id, 2] - half_thickness
+    return obstacle.data.geom_pos_w[:, geom_id, 2] - half_thickness
 
 
 # 改变脊柱姿态后，命令仍只跟随 base_Link 的世界 X。
 def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     env.reset()
     robot = env.scene["robot"]
-    board = env.scene.entities["hole1"]
+    obstacle = env.scene.entities["obstacle"]
     command = env.command_manager.get_term("hole_cmd")
     resolve_model_indices(robot)
     pose = robot.data.root_link_pose_w.clone()
@@ -317,7 +317,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
         [0.3, 0.0, -0.2, 0.0], [-0.3, 0.0, 0.2, 0.0],
     ])
     robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos))
-    write_hole_bottom_z(board, 0.064)
+    write_obstacle_bottom_z(obstacle, 0.064)
     read_geom_bottom_z(env)
     command._update_command_from_height_rule()
     values = command.command
@@ -325,7 +325,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.020, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
-    write_hole_bottom_z(board, 0.090)
+    write_obstacle_bottom_z(obstacle, 0.090)
     read_geom_bottom_z(env)
     command._update_command_from_height_rule()
     expected = values.new_tensor([0.055, 0.060, 0.060, 0.055])
@@ -338,31 +338,31 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
 # 验收真实碰撞几何、逐环境复位和动态奖励阈值。
 def verify_real_env() -> None:
     env = make_env()
-    board = env.scene.entities["hole1"]
-    check("训练环境只保留单板且碰撞已编译", list(name for name in env.scene.entities if name.startswith("hole")) == ["hole1"] and hole_collision_enabled(env))
+    obstacle = env.scene.entities["obstacle"]
+    check("训练环境只保留单板且碰撞已编译", list(name for name in env.scene.entities if name.startswith("obstacle")) == ["obstacle"] and obstacle_collision_enabled(env))
     targets = torch.tensor([HEIGHT_MIN, 0.052, 0.070, 0.090], device=env.device)
-    write_hole_bottom_z(board, targets, torch.arange(4, device=env.device))
-    written = read_bottom_z(board).clone()
+    write_obstacle_bottom_z(obstacle, targets, torch.arange(4, device=env.device))
+    written = read_obstacle_bottom_z(obstacle).clone()
     check("板体 mocap 逐环境写入与即时读取", torch.allclose(written, targets))
     check("独立碰撞几何的板底随四个采样高度移动", torch.allclose(
         read_geom_bottom_z(env), targets, atol=1e-6,
     ))
     keep = written[[1, 3]].clone()
-    write_hole_bottom_z(board, 0.051, torch.tensor([0, 2], device=env.device))
-    check("部分写入不污染其他环境", torch.equal(read_bottom_z(board)[[1, 3]], keep))
+    write_obstacle_bottom_z(obstacle, 0.051, torch.tensor([0, 2], device=env.device))
+    check("部分写入不污染其他环境", torch.equal(read_obstacle_bottom_z(obstacle)[[1, 3]], keep))
     check("部分写入只移动指定环境的实际碰撞板", torch.allclose(
         read_geom_bottom_z(env), torch.tensor([0.051, 0.052, 0.051, 0.090]), atol=1e-6,
     ))
-    write_hole_bottom_z(board, torch.tensor([0.054, 0.056]), slice(1, 4, 2))
+    write_obstacle_bottom_z(obstacle, torch.tensor([0.054, 0.056]), slice(1, 4, 2))
     check("切片写入正确移动实际碰撞板", torch.allclose(
         read_geom_bottom_z(env), torch.tensor([0.051, 0.054, 0.051, 0.056]), atol=1e-6,
     ))
     keep = read_geom_bottom_z(env)[[1, 3]].clone()
     with torch.inference_mode():
-        monitor_hole_passage(env)
+        monitor_restricted_passage(env)
     monitor = env._hole_passage_monitor
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
-    after_reset = read_bottom_z(board).clone()
+    after_reset = read_obstacle_bottom_z(obstacle).clone()
     check("部分 reset 重采样且保留其他环境板高", torch.equal(after_reset[[1, 3]], keep) and torch.all(after_reset[[0, 2]] >= HEIGHT_INITIAL_MIN))
     actual = read_geom_bottom_z(env)
     check("部分 reset 后碰撞几何与采样高度一致", torch.allclose(actual, after_reset, atol=1e-6)
@@ -376,7 +376,7 @@ def verify_real_env() -> None:
     command.height_curriculum_state.z_max = HEIGHT_MIN
     env.reset()
     check("46毫米复位采样、实际碰撞几何和命令先验一致",
-          torch.allclose(read_bottom_z(board), torch.full_like(targets, HEIGHT_MIN))
+          torch.allclose(read_obstacle_bottom_z(obstacle), torch.full_like(targets, HEIGHT_MIN))
           and torch.allclose(read_geom_bottom_z(env), torch.full_like(targets, HEIGHT_MIN), atol=1e-6)
           and torch.allclose(command.obstacle_height_command, torch.full_like(targets, HEIGHT_MIN)))
     env.close()

@@ -28,7 +28,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     reward_weight_curriculum,
     stage_requires_collision,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
+from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_corridor_reward
@@ -52,7 +52,7 @@ def verify_stages() -> None:
 
 
 # 验证完整0～3000轮均无板，固定先验不改变随机高度池。
-def verify_warmup_without_boards() -> None:
+def verify_warmup_without_obstacle() -> None:
     cfg = load_env_cfg("Mjlab-SQuRo-Hole")
     cfg.scene.num_envs = 4
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -61,7 +61,7 @@ def verify_warmup_without_boards() -> None:
         for iteration in (0, 999, 1000, 1999, 2000, 2999):
             env.common_step_counter = iteration * STEPS_PER_ITER
             obs, _ = env.reset(seed=19)
-            assert list(env.scene.entities) == ["robot"] and not hole_geometry(env)
+            assert list(env.scene.entities) == ["robot"] and not obstacle_geometry(env)
             torch.testing.assert_close(command.command[:, CMD_OBSTACLE_HEIGHT_IDS], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
             torch.testing.assert_close(obs["actor"][:, -1], torch.full((4,), WARMUP_OBSTACLE_HEIGHT))
             pool = torch.tensor(heights_for_stage(get_current_stage(env.common_step_counter)))
@@ -150,9 +150,9 @@ def verify_obstacle_prior() -> None:
     env = make_env()
     try:
         command = env.command_manager.get_term("hole_cmd")
-        board = env.scene.entities["hole1"]
+        obstacle = env.scene.entities["obstacle"]
         target = torch.tensor([0.048, 0.052, 0.070, 0.090])
-        write_hole_bottom_z(board, target)
+        write_obstacle_bottom_z(obstacle, target)
         actual = read_geom_bottom_z(env)
         command._update_command()
         torch.testing.assert_close(actual, target, atol=1e-6, rtol=0)
@@ -211,7 +211,7 @@ def main() -> None:
     torch.set_num_threads(1)
     verify_stages()
     verify_angle_independence()
-    verify_warmup_without_boards()
+    verify_warmup_without_obstacle()
     verify_corridor()
     verify_obstacle_prior()
     print("[结论] 走廊热身与六维命令验收全部通过")
