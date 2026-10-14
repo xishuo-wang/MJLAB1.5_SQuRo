@@ -392,6 +392,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
 
     tables = {
         "front_pos": front_pos_table, "hind_pos": hind_pos_table, "spine_pos": spine_pos_table,
+        "neck_pos": torch.tensor(NECK_REF_POS, device=device, dtype=front_pos_table.dtype),
         "front_vel": front_vel_table, "hind_vel": hind_vel_table, "spine_vel": spine_vel_table,
         "phase_range": torch.linspace(0, 1, TABLE_RESOLUTION, device=device),
         "height_list": HEIGHT_LIST, "device": device,
@@ -399,13 +400,6 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
         "mode_periods": mode_periods,
     }
     return tables
-
-
-
-# 头颈参考位置: 与模式/高度无关, 逐关节取 NECK_REF_POS (顺序 Neck_yaw, Neck_pitch)
-def _neck_ref_pos(mode: torch.Tensor) -> torch.Tensor:
-    values = torch.tensor(NECK_REF_POS, device=mode.device, dtype=torch.float32)
-    return values.unsqueeze(0).expand(mode.shape[0], len(_ACT_NECK_IDS))
 
 
 
@@ -459,7 +453,7 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     joint_pos[:, _ACT_F_LEG_IDS] = tables["front_pos"][mode, height_indices_F, phase_indices][:, _ACT_F_LEG_IDS]
     joint_pos[:, _ACT_H_LEG_IDS] = tables["hind_pos"][mode, height_indices_H, phase_indices][:, _ACT_H_LEG_IDS]
     joint_pos[:, _ACT_SPN_IDS] = tables["spine_pos"][mode, height_indices_min, phase_indices][:, _ACT_SPN_IDS]
-    joint_pos[:, _ACT_NECK_IDS] = _neck_ref_pos(mode)
+    joint_pos[:, _ACT_NECK_IDS] = tables["neck_pos"]
 
     joint_vel[:, _ACT_F_LEG_IDS] = tables["front_vel"][mode, height_indices_F, phase_indices][:, _ACT_F_LEG_IDS]
     joint_vel[:, _ACT_H_LEG_IDS] = tables["hind_vel"][mode, height_indices_H, phase_indices][:, _ACT_H_LEG_IDS]
