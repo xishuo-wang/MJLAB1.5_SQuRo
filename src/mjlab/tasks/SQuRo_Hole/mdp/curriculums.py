@@ -25,6 +25,7 @@ from .config import (
 
 
 
+# 训练阶段与课程步数配置
 STEPS_PER_ITER = 48
 NUM_STAGES = 4
 STAGE0_ITER = 0
@@ -39,7 +40,7 @@ _STAGES = (0, STAGE1_ITER, STAGE2_ITER, STAGE3_ITER)
 
 
 
-# 奖励权重课程曲线
+# 奖励权重与 σ 课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
     "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
@@ -52,20 +53,16 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.2, 1.0),
     "corridor":                 (0.0, 0.0, 5.0, 5.0),
-    # 角度 σ 按各环境高度模式选择。
+    # 非奖励项
     "sigma_angle_low":          (50.0, 50.0, 50.0, 50.0),
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
-    # 位置/速度模仿的腿部 σ
     "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
-    # 位置/速度模仿的脊柱 σ
     "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_spn_vel":            (0.1, 0.1, 0.1, 0.1),
-    # 头颈 σ: 曲线与脊柱一致, 保证替换模仿奖励前后行为不变
     "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
     "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
-    # 高度 σ
     "height_sigma":             (500.0, 1000.0, 1000.0, 1000.0),
 }
 
@@ -76,7 +73,7 @@ STAGE_COLLISION = (False, False, False, True)       # 受限空间碰撞课程
 
 
 
-# 按全局步数获取当前阶段
+# 根据全局步数获取当前课程阶段
 def get_current_stage(step_counter: int) -> int:
     if step_counter < STAGE1_STEP:
         return 1
@@ -88,13 +85,13 @@ def get_current_stage(step_counter: int) -> int:
 
 
 
-# 判断是否已进入真实碰撞高度课程。
+# 判断是否已进入真实碰撞高度课程
 def stage_uses_height_course(stage: int) -> bool:
     return stage >= HEIGHT_COURSE_STAGE
 
 
 
-# 该阶段是否要求实体碰撞
+# 判断该阶段是否要求实体碰撞
 def stage_requires_collision(stage: int) -> bool:
     idx = min(max(int(stage), 1), NUM_STAGES) - 1
     return STAGE_COLLISION[idx]
@@ -111,7 +108,7 @@ def heights_for_stage(stage: int):
 
 
 
-# 奖励权重课程: 按当前训练 iter 返回各奖励项权重/σ
+# 奖励权重课程
 class RewardWeightCurriculum:
     def get_reward_weights(self, current_step: int) -> dict[str, float]:
         current_iter = current_step // STEPS_PER_ITER
@@ -126,7 +123,7 @@ class RewardWeightCurriculum:
         return result
 
 
-    # 关卡是否要求开启限高板碰撞
+    # 判断是否要求开启限高板碰撞
     def should_enable_holes(self, current_step: int) -> bool:
         return stage_requires_collision(get_current_stage(current_step))
 
@@ -136,7 +133,7 @@ reward_weight_curriculum = RewardWeightCurriculum()
 
 
 
-# 获取课程参数，缺失定义时明确报错。
+# 获取课程参数
 def get_curriculum_reward_weight(env, reward_name: str) -> float:
     weights = reward_weight_curriculum.get_reward_weights(env.common_step_counter)
     try:
@@ -145,7 +142,7 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
         raise KeyError(f"课程参数 {reward_name!r} 未在 _CURVES 定义") from None
 
 
-# 从单板几何计算查表边界。
+# 从单板几何计算查表边界
 def rule_bounds(center_x: float, half_length: float) -> tuple[float, float, float]:
     x1 = center_x - half_length
     x2 = center_x + half_length
@@ -155,7 +152,7 @@ def rule_bounds(center_x: float, half_length: float) -> tuple[float, float, floa
     return left, middle, right
 
 
-# 按 base_Link 的世界 X 统一决定前后端高度，低板两段互斥。
+# 按 base_Link 的世界 X 统一决定前后端高度
 def sample_base_heights(
     base_x: torch.Tensor,
     center_x: float,
@@ -179,7 +176,7 @@ def sample_base_heights(
 
 
 
-# 逐环境回合结果聚合为最低板高课程状态。
+# 高度课程状态
 class HeightCurriculumState:
     def __init__(self, start_iteration: int = STAGE3_ITER):
         self.z_min = HEIGHT_INITIAL_MIN
@@ -196,7 +193,7 @@ class HeightCurriculumState:
         self.history: list[dict] = []
 
 
-    # 记录一条真实碰撞回合并判断是否应降档。
+    # 记录一条真实碰撞回合并判断是否推进课程
     def record_episode(
         self,
         bottom_z: float,
@@ -242,11 +239,7 @@ class HeightCurriculumState:
             return result
 
         rate = self.batch_success_count / self.batch_count
-        self.consecutive_success_batches = (
-            self.consecutive_success_batches + 1
-            if rate >= HEIGHT_MIN_SUCCESS_RATE
-            else 0
-        )
+        self.consecutive_success_batches = (self.consecutive_success_batches + 1 if rate >= HEIGHT_MIN_SUCCESS_RATE else 0)
         self.history.append({
             "z_min": self.z_min,
             "iteration": int(iteration),
@@ -264,7 +257,7 @@ class HeightCurriculumState:
         return result
 
 
-    # 为所有降档路径填充统一日志数据。
+    # 为所有降档路径填充统一日志数据
     def _set_advance_result(self, result: dict) -> None:
         previous_z_min = self.history[-1]["z_min"]
         previous_batch = self.history[-1]
@@ -277,7 +270,7 @@ class HeightCurriculumState:
         })
 
 
-    # 在成功批数与驻留时间都达标时降低未来采样下界。
+    # 在成功批数与驻留时间都达标时降低未来采样下界
     def _advance_if_ready(self, iteration: int) -> bool:
         dwell = int(iteration) - self.level_start_iteration
         if (
@@ -297,7 +290,7 @@ class HeightCurriculumState:
         return True
 
 
-    # 生成可保存到 checkpoint 的课程状态。
+    # 生成可保存到 checkpoint 的课程状态
     def state_dict(self) -> dict:
         return {
             "z_min": self.z_min,
@@ -316,7 +309,7 @@ class HeightCurriculumState:
         }
 
 
-    # 从 checkpoint 状态恢复课程统计。
+    # 从 checkpoint 状态恢复课程统计
     def load_state_dict(self, state: dict) -> None:
         for name in (
             "z_min", "z_max", "level_start_iteration", "batch_count",
@@ -330,7 +323,7 @@ class HeightCurriculumState:
         self.failure_counts = dict(state.get("failure_counts", self.failure_counts))
 
 
-    # 汇总当前档日志: 最低档成功率/失败率与挡位推进进度。
+    # 汇总当前档日志: 最低档成功率/失败率与挡位推进进度
     def metrics(self) -> dict[str, Any]:
         success_rate = self.level_success_count / max(1, self.level_episode_count)
         return {
