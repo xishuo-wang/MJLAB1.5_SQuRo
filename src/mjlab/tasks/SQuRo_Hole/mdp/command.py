@@ -104,14 +104,14 @@ class HoleCommand(CommandTerm):
         return self.command_tensor
 
 
-    # 可视化使用三维速度箭头，策略命令只保留前向速度。
+    # 可视化使用三维速度箭头
     @property
     def vel_command_w(self) -> torch.Tensor:
         zeros = torch.zeros_like(self.vel_command)
         return torch.stack((self.vel_command, zeros, zeros), dim=-1)
 
 
-    # 有板时读取真实板底，无板热身使用100毫米占位。
+    # 有板时读取真实板底，无板时使用100毫米占位
     def _update_obstacle_height_command(self) -> None:
         if self.obstacle_entity is None:
             self.obstacle_height_command.fill_(WARMUP_OBSTACLE_HEIGHT)
@@ -119,14 +119,14 @@ class HoleCommand(CommandTerm):
             self.obstacle_height_command[:] = read_bottom_z(self.obstacle_entity)
 
 
-    # 从已写入的根位姿记录起点，避开复位前的缓存位置；见 docs/SQuRo_Hole_课程复位.md。
+    # 从已写入的根位姿记录起点，避开复位前的缓存位置
     def _update_start_positions(self, env_ids: torch.Tensor) -> None:
         root_pose_ids = self.robot.indexing.free_joint_q_adr
         assert root_pose_ids is not None, "位移诊断要求机器人带浮动根关节"
         self.start_positions[env_ids] = self.robot.data.data.qpos[env_ids][:, root_pose_ids[:3]]
 
 
-    # 根据阶段获取热身随机高度池。
+    # 根据阶段获取随机高度采样池
     def _get_available_heights(self, stage: int) -> Optional[list]:
         return heights_for_stage(stage)
 
@@ -186,7 +186,7 @@ class HoleCommand(CommandTerm):
         self._update_start_positions(env_ids)
 
 
-    # 仅在回合重置时采样一次板底高度。
+    # 仅在回合重置时采样一次板底高度
     def _sample_obstacle_height(self, env_ids: torch.Tensor) -> None:
         if self.obstacle_entity is None:
             raise RuntimeError("高度课程需要受限空间实体")
@@ -201,7 +201,7 @@ class HoleCommand(CommandTerm):
         self._update_obstacle_height_command()
 
 
-    # 写入新回合的中性命令，等待 forward 后按躯干位置更新。
+    # 写入新回合的中性命令，等待 forward 后按躯干位置更新
     def _set_neutral_command(self, env_ids: torch.Tensor) -> None:
         heights = torch.full((len(env_ids),), BASE_HEIGHT, device=self.device)
         velocity = compute_command_velocity(heights, heights)
@@ -213,7 +213,7 @@ class HoleCommand(CommandTerm):
         self._update_obstacle_height_command()
 
 
-    # 使用 base_Link 的世界 X 统一查单板高度表。
+    # 使用 base_Link 的世界 X 统一查单板高度表
     def _update_command_from_height_rule(self) -> None:
         if self.obstacle_entity is None:
             raise RuntimeError("高度课程需要受限空间实体")
