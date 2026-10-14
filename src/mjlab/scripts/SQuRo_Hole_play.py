@@ -65,8 +65,8 @@ class PlayConfig:
     record_data: bool = True
     command_source: Literal["schedule", "fixed", "random"] = "schedule"
     fixed_velocity: float | None = None     # 期望速度
-    fixed_height_F: float | None = 0.055    # 期望前肢高度
-    fixed_height_H: float | None = 0.020    # 期望后肢高度
+    fixed_height_f: float | None = 0.055    # 期望前肢高度
+    fixed_height_h: float | None = 0.020    # 期望后肢高度
     collision: bool | None = None           # 障碍物碰撞
     obstacle_viz: bool = True              # 可视化障碍物
     obstacle_height: float | None = None    # 障碍物板底高度 (m); None = 用检查点记录的课程档
@@ -342,8 +342,8 @@ def run_play(cfg: PlayConfig):
         env_cfg.viewer.width = cfg.video_width
 
     # 命令来源
-    fixed_hF: float | None = None
-    fixed_hH: float | None = None
+    fixed_height_f: float | None = None
+    fixed_height_h: float | None = None
 
     cmd_cfg = env_cfg.commands.get("hole_cmd")
     if cmd_cfg is not None:
@@ -352,27 +352,27 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.enable_height_course = True      # type: ignore[attr-defined]
             cmd_cfg.enable_course_progress = False   # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
-            cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
-            cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_f = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_h = None            # type: ignore[attr-defined]
             print("[INFO] 命令来源 = schedule（跟随训练：前三阶段随机高度池，第四阶段单板高度规则）")
 
         elif cfg.command_source == "fixed":
             # 固定和随机命令关闭高度课程
             cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
-            fixed_hF = 0.055 if cfg.fixed_height_F is None else cfg.fixed_height_F
-            fixed_hH = 0.055 if cfg.fixed_height_H is None else cfg.fixed_height_H
-            cmd_cfg.fixed_height_F = fixed_hF        # type: ignore[attr-defined]
-            cmd_cfg.fixed_height_H = fixed_hH        # type: ignore[attr-defined]
+            fixed_height_f = 0.055 if cfg.fixed_height_f is None else cfg.fixed_height_f
+            fixed_height_h = 0.055 if cfg.fixed_height_h is None else cfg.fixed_height_h
+            cmd_cfg.fixed_height_f = fixed_height_f        # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_h = fixed_height_h        # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[attr-defined]
             print(f"[INFO] 命令来源 = fixed "
-                  f"(h_F={fixed_hF}, h_H={fixed_hH}, vel={cfg.fixed_velocity})")
+                  f"(h_F={fixed_height_f}, h_H={fixed_height_h}, vel={cfg.fixed_velocity})")
 
         else:  # random
             # 固定和随机命令关闭高度课程
             cmd_cfg.enable_height_course = False     # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
-            cmd_cfg.fixed_height_F = None            # type: ignore[attr-defined]
-            cmd_cfg.fixed_height_H = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_f = None            # type: ignore[attr-defined]
+            cmd_cfg.fixed_height_h = None            # type: ignore[attr-defined]
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
     saved_state = read_hole_state(resume_path) if resume_path is not None else {}
@@ -445,10 +445,10 @@ def run_play(cfg: PlayConfig):
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]
     if cfg.command_source == "fixed":
-        if fixed_hF is not None:
-            suffix_parts.append(f"hF{fixed_hF * 1000:.0f}")
-        if fixed_hH is not None:
-            suffix_parts.append(f"hH{fixed_hH * 1000:.0f}")
+        if fixed_height_f is not None:
+            suffix_parts.append(f"hF{fixed_height_f * 1000:.0f}")
+        if fixed_height_h is not None:
+            suffix_parts.append(f"hH{fixed_height_h * 1000:.0f}")
         if cfg.fixed_velocity is not None:
             suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
     if cfg.collision is not None:

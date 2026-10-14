@@ -43,25 +43,25 @@ if TYPE_CHECKING:
 
 # 按当前高度命令判定高度模式
 @overload
-def get_height_mode(height_F: float, height_H: float) -> int: ...
+def get_height_mode(height_f: float, height_h: float) -> int: ...
 
 
 @overload
-def get_height_mode(height_F: torch.Tensor, height_H: torch.Tensor) -> torch.Tensor: ...
+def get_height_mode(height_f: torch.Tensor, height_h: torch.Tensor) -> torch.Tensor: ...
 
 
 # 标量可视化与批量参考查询共用四种模式判定
-def get_height_mode(height_F: float | torch.Tensor, height_H: float | torch.Tensor) -> int | torch.Tensor:
-    if isinstance(height_F, torch.Tensor) and isinstance(height_H, torch.Tensor):
-        front_low = height_F < THRESHOLD_HEIGHT
-        hind_low = height_H < THRESHOLD_HEIGHT
+def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tensor) -> int | torch.Tensor:
+    if isinstance(height_f, torch.Tensor) and isinstance(height_h, torch.Tensor):
+        front_low = height_f < THRESHOLD_HEIGHT
+        hind_low = height_h < THRESHOLD_HEIGHT
         return torch.where(
             front_low,
             torch.where(hind_low, MODE_BOTH_LOW, MODE_FRONT_LOW),
             torch.where(hind_low, MODE_HIND_LOW, MODE_BOTH_HIGH),
         )
-    front_low = height_F < THRESHOLD_HEIGHT
-    hind_low = height_H < THRESHOLD_HEIGHT
+    front_low = height_f < THRESHOLD_HEIGHT
+    hind_low = height_h < THRESHOLD_HEIGHT
     if front_low and hind_low:
         return MODE_BOTH_LOW
     if front_low:
@@ -73,10 +73,10 @@ def get_height_mode(height_F: float | torch.Tensor, height_H: float | torch.Tens
 
 
 # 根据高度命令生成前向速度：v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2
-def compute_command_velocity(height_F, height_H):
-    lower = torch.minimum(height_F, height_H)
+def compute_cmd_vel_x(height_f, height_h):
+    lower = torch.minimum(height_f, height_h)
     height_scale = lower / BASE_HEIGHT
-    n_low = (height_F < THRESHOLD_HEIGHT).long() + (height_H < THRESHOLD_HEIGHT).long()
+    n_low = (height_f < THRESHOLD_HEIGHT).long() + (height_h < THRESHOLD_HEIGHT).long()
     speed_scale = (2.0 - n_low.float()) / 2.0
     return BASE_SPEED * height_scale * speed_scale
 
@@ -87,22 +87,22 @@ class HoleCommand(CommandTerm):
     def __init__(self, cfg: HoleCommandCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)  
         self.robot: Entity = env.scene[cfg.asset_name]
-        self.command_tensor = torch.zeros(self.num_envs, COMMAND_DIM, device=self.device)
-        self.vel_command = self.command_tensor[:, CMD_VEL_X_IDS]
-        self.height_f_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]
-        self.height_h_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]
-        self.gait_freq_command = self.command_tensor[:, CMD_GAIT_FREQ_IDS]
-        self.curvature_command = self.command_tensor[:, CMD_CURVATURE_IDS]
-        self.obstacle_height_command = self.command_tensor[:, CMD_OBSTACLE_HEIGHT_IDS]
-        self.gait_freq_command.fill_(BASE_FREQ)
-        self.curvature_command.fill_(BASE_CURVATURE)
+        self.command_buffer = torch.zeros(self.num_envs, COMMAND_DIM, device=self.device)
+        self.command_vel_x = self.command_buffer[:, CMD_VEL_X_IDS]
+        self.command_height_f = self.command_buffer[:, CMD_HEIGHT_F_IDS]
+        self.command_height_h = self.command_buffer[:, CMD_HEIGHT_H_IDS]
+        self.command_gait_freq = self.command_buffer[:, CMD_GAIT_FREQ_IDS]
+        self.command_curvature = self.command_buffer[:, CMD_CURVATURE_IDS]
+        self.command_obstacle_height = self.command_buffer[:, CMD_OBSTACLE_HEIGHT_IDS]
+        self.command_gait_freq.fill_(BASE_FREQ)
+        self.command_curvature.fill_(BASE_CURVATURE)
         self.enable_height_course = cfg.enable_height_course
         self.enable_course_progress = cfg.enable_course_progress
         self.height_curriculum_state = HeightCurriculumState()
         if cfg.height_curriculum_state:
             self.height_curriculum_state.load_state_dict(cfg.height_curriculum_state)
         self.obstacle = env.scene.entities.get("obstacle")
-        self.obstacle_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
+        self.obstacle_sampled_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
         self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -114,24 +114,25 @@ class HoleCommand(CommandTerm):
         self._allow_obstacle_resample = False
 
 
+    # 覆写基类抽象 property
     @property
     def command(self) -> torch.Tensor:
-        return self.command_tensor
+        return self.command_buffer
 
 
     # 可视化使用三维速度箭头
     @property
     def vel_command_w(self) -> torch.Tensor:
-        zeros = torch.zeros_like(self.vel_command)
-        return torch.stack((self.vel_command, zeros, zeros), dim=-1)
+        zeros = torch.zeros_like(self.command_vel_x)
+        return torch.stack((self.command_vel_x, zeros, zeros), dim=-1)
 
 
     # 有板时读取真实板底，无板时使用100毫米占位
     def _update_obstacle_height_command(self) -> None:
         if self.obstacle is None:
-            self.obstacle_height_command.fill_(WARMUP_OBSTACLE_HEIGHT)
+            self.command_obstacle_height.fill_(WARMUP_OBSTACLE_HEIGHT)
         else:
-            self.obstacle_height_command[:] = read_obstacle_bottom_z(self.obstacle)
+            self.command_obstacle_height[:] = read_obstacle_bottom_z(self.obstacle)
 
 
     # 从已写入的根位姿记录起点，避开复位前的缓存位置
@@ -139,11 +140,6 @@ class HoleCommand(CommandTerm):
         root_pose_ids = self.robot.indexing.free_joint_q_adr
         assert root_pose_ids is not None, "位移诊断要求机器人带浮动根关节"
         self.start_positions[env_ids] = self.robot.data.data.qpos[env_ids][:, root_pose_ids[:3]]
-
-
-    # 根据阶段获取随机高度采样池
-    def _get_available_heights(self, stage: int) -> Optional[list]:
-        return heights_for_stage(stage)
 
 
     # 重采样高度、速度和障碍高度命令
@@ -160,42 +156,42 @@ class HoleCommand(CommandTerm):
             return
         
         # 使用随机采样
-        available_heights = self._get_available_heights(stage)
+        available_heights = heights_for_stage(stage)
         if available_heights is None:
             # 固定和随机命令回放仍使用完整高度池
             available_heights = FULL_HEIGHT_VALUES
         
         # 初始化命令张量
         vel_x = torch.zeros(n_envs, device=self.device)
-        height_F = torch.zeros(n_envs, device=self.device)
-        height_H = torch.zeros(n_envs, device=self.device)
+        height_f = torch.zeros(n_envs, device=self.device)
+        height_h = torch.zeros(n_envs, device=self.device)
         
         # 为每个环境采样
         for i in range(n_envs):
             # 检查是否使用固定值
             if self.cfg.fixed_velocity is not None:
                 vel_x[i] = self.cfg.fixed_velocity
-            if self.cfg.fixed_height_F is not None:
-                height_F[i] = self.cfg.fixed_height_F
-            if self.cfg.fixed_height_H is not None:
-                height_H[i] = self.cfg.fixed_height_H
+            if self.cfg.fixed_height_f is not None:
+                height_f[i] = self.cfg.fixed_height_f
+            if self.cfg.fixed_height_h is not None:
+                height_h[i] = self.cfg.fixed_height_h
             
             # 如果固定值未设置，则使用采样逻辑
-            if self.cfg.fixed_height_F is None or self.cfg.fixed_height_H is None:
-                sampled_height_F, sampled_height_H = self._sample_heights(available_heights)
-                if self.cfg.fixed_height_F is None:
-                    height_F[i] = sampled_height_F
-                if self.cfg.fixed_height_H is None:
-                    height_H[i] = sampled_height_H
+            if self.cfg.fixed_height_f is None or self.cfg.fixed_height_h is None:
+                sampled_height_f, sampled_height_h = self._sample_heights(available_heights)
+                if self.cfg.fixed_height_f is None:
+                    height_f[i] = sampled_height_f
+                if self.cfg.fixed_height_h is None:
+                    height_h[i] = sampled_height_h
             
             # 如果固定速度未设置，则根据高度计算速度
             if self.cfg.fixed_velocity is None:
-                vel_x[i] = self._determine_velocity(height_F[i], height_H[i])
+                vel_x[i] = self._compute_sampled_velocity(height_f[i], height_h[i])
 
         # 更新命令张量
-        self.vel_command[env_ids] = vel_x
-        self.height_f_command[env_ids] = height_F
-        self.height_h_command[env_ids] = height_H
+        self.command_vel_x[env_ids] = vel_x
+        self.command_height_f[env_ids] = height_f
+        self.command_height_h[env_ids] = height_h
         self._update_obstacle_height_command()
         
         # 重置起始位置
@@ -211,7 +207,7 @@ class HoleCommand(CommandTerm):
         uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
         at_minimum = torch.rand(len(env_ids), device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
         heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
-        self.obstacle_bottom_z[env_ids] = heights
+        self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
         write_obstacle_bottom_z(self.obstacle, heights, env_ids)
         self._update_obstacle_height_command()
@@ -220,30 +216,30 @@ class HoleCommand(CommandTerm):
     # 写入新回合的中性命令，等待 forward 后按躯干位置更新
     def _set_neutral_command(self, env_ids: torch.Tensor) -> None:
         heights = torch.full((len(env_ids),), BASE_HEIGHT, device=self.device)
-        velocity = compute_command_velocity(heights, heights)
+        velocity = compute_cmd_vel_x(heights, heights)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
-        self.vel_command[env_ids] = velocity
-        self.height_f_command[env_ids] = heights
-        self.height_h_command[env_ids] = heights
+        self.command_vel_x[env_ids] = velocity
+        self.command_height_f[env_ids] = heights
+        self.command_height_h[env_ids] = heights
         self._update_obstacle_height_command()
 
 
     # 使用 base_Link 的世界 X 统一查单板高度表
-    def _update_command_from_height_rule(self) -> None:
+    def _update_command_by_height_rule(self) -> None:
         if self.obstacle is None:
             raise RuntimeError("高度课程需要受限空间实体")
-        entity_cfg = self.obstacle.cfg
+        obstacle_cfg = self.obstacle.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_obstacle_bottom_z(self.obstacle)
-        front, hind = sample_base_heights(base_x, float(entity_cfg.position[0]), float(entity_cfg.size[0]), bottom_z,) # type: ignore
-        velocity = compute_command_velocity(front, hind)
+        front, hind = sample_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z,) # type: ignore
+        velocity = compute_cmd_vel_x(front, hind)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
-        self.vel_command[:] = velocity
-        self.height_f_command[:] = front
-        self.height_h_command[:] = hind
-        self.obstacle_height_command[:] = bottom_z
+        self.command_vel_x[:] = velocity
+        self.command_height_f[:] = front
+        self.command_height_h[:] = hind
+        self.command_obstacle_height[:] = bottom_z
 
 
     # 采样前后肢高度组合，两侧独立采样
@@ -255,8 +251,8 @@ class HoleCommand(CommandTerm):
 
 
     # 计算绝对速度，用于随机采样路径
-    def _determine_velocity(self, height_F: torch.Tensor, height_H: torch.Tensor) -> float:
-        return float(compute_command_velocity(height_F, height_H))
+    def _compute_sampled_velocity(self, height_f: torch.Tensor, height_h: torch.Tensor) -> float:
+        return float(compute_cmd_vel_x(height_f, height_h))
 
 
     # 按当前课程阶段更新高度和速度命令
@@ -265,7 +261,7 @@ class HoleCommand(CommandTerm):
         stage = get_current_stage(current_step)
         
         if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle is not None:
-            self._update_command_from_height_rule()
+            self._update_command_by_height_rule()
         self._update_obstacle_height_command()
 
 
@@ -318,8 +314,8 @@ class HoleCommandCfg(CommandTermCfg):
     resampling_time_range: Tuple[float, float] = (3.0, 4.0)
     debug_vis: bool = False
     fixed_velocity: Optional[float] = None
-    fixed_height_F: Optional[float] = None
-    fixed_height_H: Optional[float] = None
+    fixed_height_f: Optional[float] = None
+    fixed_height_h: Optional[float] = None
     enable_height_course: bool = False
     enable_course_progress: bool = True
     height_curriculum_state: dict = field(default_factory=dict)

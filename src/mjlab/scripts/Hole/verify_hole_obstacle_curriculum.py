@@ -319,7 +319,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos))
     write_obstacle_bottom_z(obstacle, 0.064)
     read_geom_bottom_z(env)
-    command._update_command_from_height_rule()
+    command._update_command_by_height_rule()
     values = command.command
     check("脊柱侧摆和俯仰变化时，低板仍按基座 X 在中点互斥切换",
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
@@ -327,7 +327,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
     write_obstacle_bottom_z(obstacle, 0.090)
     read_geom_bottom_z(env)
-    command._update_command_from_height_rule()
+    command._update_command_by_height_rule()
     expected = values.new_tensor([0.055, 0.060, 0.060, 0.055])
     check("高板前后端同步进入和离开基座区间",
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
@@ -378,7 +378,7 @@ def verify_real_env() -> None:
     check("46毫米复位采样、实际碰撞几何和命令先验一致",
           torch.allclose(read_obstacle_bottom_z(obstacle), torch.full_like(targets, HEIGHT_MIN))
           and torch.allclose(read_geom_bottom_z(env), torch.full_like(targets, HEIGHT_MIN), atol=1e-6)
-          and torch.allclose(command.obstacle_height_command, torch.full_like(targets, HEIGHT_MIN)))
+          and torch.allclose(command.command_obstacle_height, torch.full_like(targets, HEIGHT_MIN)))
     env.close()
 
 

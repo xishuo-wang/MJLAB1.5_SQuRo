@@ -81,8 +81,8 @@ def configure_env(args: ReplayConfig) -> ManagerBasedRlEnvCfg:
     if args.enable_collision:
         cfg.scene.entities.update(build_obstacle_entity(enable_collision=True))
     command = cast(HoleCommandCfg, cfg.commands["hole_cmd"])
-    command.fixed_height_F = args.height_f
-    command.fixed_height_H = args.height_h
+    command.fixed_height_f = args.height_f
+    command.fixed_height_h = args.height_h
     command.enable_height_course = False
     command.debug_vis = False
     cfg.rewards = {}

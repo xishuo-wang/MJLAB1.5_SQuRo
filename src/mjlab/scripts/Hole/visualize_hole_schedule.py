@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from mjlab.tasks.SQuRo_Hole.mdp.command import (
-    compute_command_velocity,
+    compute_cmd_vel_x,
     get_height_mode,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
@@ -147,7 +147,7 @@ def sample_base_commands(
         "base_position_world": position + start_x,
         "height_f": front,
         "height_h": hind,
-        "velocity_x": compute_command_velocity(front_tensor, hind_tensor).numpy(),
+        "velocity_x": compute_cmd_vel_x(front_tensor, hind_tensor).numpy(),
         "reference_height_f": heights[(front_tensor[:, None] - heights).abs().argmin(dim=1)].numpy(),
         "reference_height_h": heights[(hind_tensor[:, None] - heights).abs().argmin(dim=1)].numpy(),
     }
