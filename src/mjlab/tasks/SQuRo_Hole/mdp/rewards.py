@@ -1,36 +1,30 @@
 from __future__ import annotations
-
 import math
-from typing import TYPE_CHECKING
-
 import torch
-
 from mjlab.entity import Entity
+from typing import TYPE_CHECKING
 from mjlab.utils.lab_api.math import euler_xyz_from_quat
-
 from .config import (
     BASE_HEIGHT,
-    CMD_HEIGHT_F_IDS,
-    CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
     THRESHOLD_HEIGHT,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
     BODY_HEIGHT_OFFSET,
+)
+from .indices import (
+    _ACT_LEG_IDS,
+    _ACT_SPN_IDS,
+    _ACT_NECK_IDS,
+    _ACT_F_LEG_IDS,
+    _MODEL_INDICES,
+    resolve_actuator_joint_ids,
 )
 from .curriculums import (
     SPN_AXIS_SCALE,
     get_curriculum_reward_weight,
 )
-from .indices import (
-    _ACT_F_LEG_IDS,
-    _ACT_LEG_IDS,
-    _ACT_NECK_IDS,
-    _ACT_SPN_IDS,
-    _MODEL_INDICES,
-    resolve_actuator_joint_ids,
-)
-from .reference import (
-    get_reference_joint_state,
-)
+from .reference import get_reference_joint_state
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -172,7 +166,6 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
     # 只保留 Mode 0 的奖励，其他为 0
     reward = reward * mode0_mask.float()
     weight = get_curriculum_reward_weight(env, "foot_clearance")
-    
     
     return reward * weight
 
