@@ -365,7 +365,7 @@ def Initialize_Tables_Hole(device: torch.device) -> Dict[str, Any]:
                 
             spine_pos_table[mode, height_idx, :, _ACT_SPN_IDS] = spine_tensor
         
-    # 根据位置表差分计算速度表。
+    # 根据位置表差分计算速度表
     mode_periods = torch.full((NUM_MODES,), 1.0 / BASE_FREQ, device=device)
     dt = (mode_periods / TABLE_RESOLUTION).view(NUM_MODES, 1, 1, 1)
 
