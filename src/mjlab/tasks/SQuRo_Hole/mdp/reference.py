@@ -35,7 +35,10 @@ from .indices import (
     _ACT_FR_LEG_IDS,
     _ACT_HL_LEG_IDS,
     _ACT_HR_LEG_IDS,
-    SPN_H_PITCH_SLOT,
+    _ACT_SPN_F_YAW_ID,
+    _ACT_SPN_F_ROLL_ID,
+    _ACT_SPN_H_PITCH_ID,
+    _ACT_SPN_H_ROLL_ID,
 )
 
 
@@ -343,25 +346,24 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
                 hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
                 hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
 
-            # 脊柱参考轨迹
+            # 脊柱参考轨迹: 整行按执行器列写入, 与表列序一致, 无需再散射
             if mode != MODE_BOTH_HIGH:
-                # 低高度模式：固定脊柱姿态
-                spine_angles = np.zeros((TABLE_RESOLUTION, len(_ACT_SPN_IDS)))
-                spine_angles[:, SPN_H_PITCH_SLOT] = -0.65
+                # 低高度模式: 固定后脊柱俯仰, 其余列保持 0
+                spine_angles = np.zeros((TABLE_RESOLUTION, _ACT_NUM))
+                spine_angles[:, _ACT_SPN_H_PITCH_ID] = -0.65
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
             elif USE_SPINE_CSV and xoy_spine_data is not None and yoz_spine_data is not None:
-                # 正常模式：使用CSV脊柱数据
-                xoy_angles = csv_spine_trajectory(phases_np, xoy_spine_data)
-                yoz_angles = csv_spine_trajectory(phases_np, yoz_spine_data)
-                spine_tensor = torch.tensor(
-                    np.stack([xoy_angles, yoz_angles, xoy_angles, yoz_angles], axis=-1),
-                    device=device, dtype=torch.float32
-                )
-            else:
-                spine_angles = np.zeros((TABLE_RESOLUTION, len(_ACT_SPN_IDS)))
+                # 正常模式: CSV 脊柱数据按执行器列写入 (前侧摆/前扭转/后俯仰/后扭转)
+                spine_angles = np.zeros((TABLE_RESOLUTION, _ACT_NUM))
+                spine_angles[:, _ACT_SPN_F_YAW_ID] = csv_spine_trajectory(phases_np, xoy_spine_data)
+                spine_angles[:, _ACT_SPN_F_ROLL_ID] = csv_spine_trajectory(phases_np, yoz_spine_data)
+                spine_angles[:, _ACT_SPN_H_PITCH_ID] = csv_spine_trajectory(phases_np, xoy_spine_data)
+                spine_angles[:, _ACT_SPN_H_ROLL_ID] = csv_spine_trajectory(phases_np, yoz_spine_data)
                 spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
-                
-            spine_pos_table[mode, height_idx, :, _ACT_SPN_IDS] = spine_tensor
+            else:
+                spine_tensor = torch.zeros((TABLE_RESOLUTION, _ACT_NUM), device=device, dtype=torch.float32)
+
+            spine_pos_table[mode, height_idx] = spine_tensor
         
     # 根据位置表差分计算速度表
     mode_periods = torch.full((NUM_MODES,), 1.0 / BASE_FREQ, device=device)

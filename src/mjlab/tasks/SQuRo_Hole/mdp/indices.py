@@ -57,7 +57,6 @@ _ACT_SPN_H_ROLL_ID  = _ACT_H_BODY_ID                            # 后脊柱扭�
 _ACT_SPN_F_IDS = (_ACT_SPN_F_YAW_ID,   _ACT_SPN_F_ROLL_ID)      # 前脊柱合并: (0, 1)
 _ACT_SPN_H_IDS = (_ACT_SPN_H_PITCH_ID, _ACT_SPN_H_ROLL_ID)      # 后脊柱合并: (8, 9)
 _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: (0, 1, 8, 9)
-SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)      # 后脊柱俯仰在参考表脊柱列中的下标
 
 
 # 头部索引
