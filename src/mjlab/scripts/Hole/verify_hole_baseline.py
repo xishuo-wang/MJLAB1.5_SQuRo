@@ -12,6 +12,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
+    NUM_MODES,
     TABLE_RESOLUTION,
     THRESHOLD_HEIGHT,
 )
@@ -31,12 +32,12 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_single_hole_entities, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    _ACT_NUM,
     _ACT_FL_LEG_IDS,
     _ACT_HL_LEG_IDS,
     _ACT_SPN_H_PITCH_ID,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
-    ACTUATOR_NUM,
     HEIGHT_LIST,
     Initialize_Tables,
 )
@@ -54,9 +55,10 @@ def check_reference() -> None:
     tables = Initialize_Tables("cpu")
     front = tables["front_pos"]
     num_modes = front.shape[0]
+    assert num_modes == NUM_MODES
     print(f"[1] 参考表 front_pos {tuple(front.shape)} "
-          f"(模式 {num_modes} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × {ACTUATOR_NUM} 关节) "
-          f"被控关节数 {ACTUATOR_NUM}")
+          f"(模式 {num_modes} × 高度档 {len(HEIGHT_LIST)} × 相位 {TABLE_RESOLUTION} × {_ACT_NUM} 关节) "
+          f"被控关节数 {_ACT_NUM}")
     print(f"{'模式':>6}{'高度(mm)':>10}{'FL肩幅度':>12}{'HL髋幅度':>12}{'脊柱H_spine1':>14}")
     for mode in range(num_modes):
         for h_idx, h in enumerate(HEIGHT_LIST):
@@ -161,7 +163,7 @@ def check_env() -> None:
         obs_dict = obs[0] if isinstance(obs, tuple) else obs
         print(f"     [{tag}] 初始限高板碰撞={hole_collision_enabled(env)} (前三阶段无板 / 课程阶段重建开), "
               f"actor {tuple(obs_dict['actor'].shape)}, "
-              f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {ACTUATOR_NUM}")
+              f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {_ACT_NUM}")
         if not play:
             print(f"     仿真: timestep={cfg.sim.mujoco.timestep}, decimation={cfg.decimation}, "
                   f"episode={cfg.episode_length_s}s → {env.max_episode_length} 步/回合")
@@ -174,7 +176,7 @@ def main() -> None:
     check_command()
     check_curriculum()
     check_env()
-    print("\n[结论] 参考表 3 模式 × 4 高度档 × 500 相位 × 14 关节 (含头颈)、四阶段课程 "
+    print(f"\n[结论] 参考表 {NUM_MODES} 模式 × {len(HEIGHT_LIST)} 高度档 × {TABLE_RESOLUTION} 相位 × {_ACT_NUM} 关节 (含头颈)、四阶段课程 "
           "(0-1k 正常档随机 / 1k-2k 全档随机 / 2k-3k 走廊热身 / 3k+ 单板真实碰撞课程)、"
           "动作 14 维 / 观测 113 维；高度规则按基座世界 X 查表")
     print("     注: 课程阶段的实体碰撞由 rl/runner.py 在阶段边界重建环境完成 "

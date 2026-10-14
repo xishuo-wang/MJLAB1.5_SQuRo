@@ -13,6 +13,7 @@ MODE_BOTH_HIGH = 0          # 前后肢均高
 MODE_FRONT_LOW = 1          # 前肢低后肢高
 MODE_HIND_LOW = 2           # 前肢高后肢低
 MODE_BOTH_LOW = 3           # 前后肢均低
+NUM_MODES = MODE_BOTH_LOW + 1
 
 
 # 命令相关索引

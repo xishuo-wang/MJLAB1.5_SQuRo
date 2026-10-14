@@ -3,7 +3,7 @@ import torch
 from mjlab.entity import Entity
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple, overload
 from mjlab.managers.command_manager import CommandTerm
 from .config import (
     BASE_FREQ,
@@ -42,7 +42,24 @@ if TYPE_CHECKING:
 
 
 # 按当前高度命令判定高度模式
-def get_height_mode(height_F: float, height_H: float) -> int:
+@overload
+def get_height_mode(height_F: float, height_H: float) -> int: ...
+
+
+@overload
+def get_height_mode(height_F: torch.Tensor, height_H: torch.Tensor) -> torch.Tensor: ...
+
+
+# 标量可视化与批量参考查询共用四种模式判定
+def get_height_mode(height_F: float | torch.Tensor, height_H: float | torch.Tensor) -> int | torch.Tensor:
+    if isinstance(height_F, torch.Tensor) and isinstance(height_H, torch.Tensor):
+        front_low = height_F < THRESHOLD_HEIGHT
+        hind_low = height_H < THRESHOLD_HEIGHT
+        return torch.where(
+            front_low,
+            torch.where(hind_low, MODE_BOTH_LOW, MODE_FRONT_LOW),
+            torch.where(hind_low, MODE_HIND_LOW, MODE_BOTH_HIGH),
+        )
     front_low = height_F < THRESHOLD_HEIGHT
     hind_low = height_H < THRESHOLD_HEIGHT
     if front_low and hind_low:
