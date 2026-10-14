@@ -6,10 +6,10 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional
 from .config import (
+    NUM_MODES,
     BASE_FREQ,
     BASE_HEIGHT,
     HEIGHT_LIST,
-    NUM_MODES,
     NECK_REF_POS,
     HIND_HOLD_POS,
     MODE_HIND_LOW,
@@ -17,14 +17,13 @@ from .config import (
     USE_SPINE_CSV,
     MODE_BOTH_HIGH,
     MODE_FRONT_LOW,
-    LOW_TARGET_HEIGHT,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     THRESHOLD_HEIGHT,
     TABLE_RESOLUTION,
     CMD_GAIT_FREQ_IDS,
+    LOW_TARGET_HEIGHT,
 )
-from .command import get_height_mode
 from .indices import (
     _ACT_NUM,
     _ACT_SPN_IDS,
@@ -37,9 +36,10 @@ from .indices import (
     _ACT_HR_LEG_IDS,
     _ACT_SPN_F_YAW_ID,
     _ACT_SPN_F_ROLL_ID,
-    _ACT_SPN_H_PITCH_ID,
     _ACT_SPN_H_ROLL_ID,
+    _ACT_SPN_H_PITCH_ID,
 )
+from .command import get_height_mode
 
 
 
@@ -98,7 +98,7 @@ def get_height_scale_factor(target_height: float, base_height: float = BASE_HEIG
 def load_csv_leg(csv_path: str, is_front: bool = True) -> Dict[str, Any]:
     cache_key = "front" if is_front else "hind"
     if _LEG_CSV_CACHE[cache_key] is not None:
-        return _LEG_CSV_CACHE[cache_key]    
+        return _LEG_CSV_CACHE[cache_key]     # type: ignore
     
     df = pd.read_csv(csv_path)
     fps = CSV_PARAMS["fps"]
@@ -119,7 +119,7 @@ def load_csv_leg(csv_path: str, is_front: bool = True) -> Dict[str, Any]:
 def load_csv_spine(csv_path: str, spine_type: str) -> Dict[str, Any]:
     cache_key = spine_type
     if _SPINE_CSV_CACHE[cache_key] is not None:
-        return _SPINE_CSV_CACHE[cache_key]
+        return _SPINE_CSV_CACHE[cache_key] # type: ignore
     
     df = pd.read_csv(csv_path)
     time_data = np.arange(len(df)) / CSV_PARAMS["fps"]

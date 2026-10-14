@@ -1,8 +1,8 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
-from .entity import obstacle_collision_enabled, read_obstacle_bottom_z
 from .indices import _MODEL_INDICES, resolve_model_indices
+from .entity import obstacle_collision_enabled, read_obstacle_bottom_z
 from .curriculums import STEPS_PER_ITER, get_current_stage, stage_uses_height_course
 
 

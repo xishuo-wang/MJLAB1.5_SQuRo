@@ -1,15 +1,13 @@
-import copy
 import os
+import copy
 import time
-
 import torch
 import wandb
 from rsl_rl.utils import check_nan
-
-from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
-from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
+from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.runner import MjlabOnPolicyRunner
+from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     get_current_stage,
@@ -17,13 +15,14 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
-    configure_obstacle_collision,
     configure_obstacle_entity,
     obstacle_collision_enabled,
+    configure_obstacle_collision,
 )
 
 
-# 读取 checkpoint 里记录的 hole_state / env_state (回放侧在建环境前要用)
+
+# 读取 checkpoint 里记录的 hole_state / env_state
 def read_hole_state(checkpoint_path) -> dict:
     try:
         loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
@@ -33,6 +32,7 @@ def read_hole_state(checkpoint_path) -> dict:
     infos = loaded.get("infos") or {}
     state = infos.get("hole_state") if isinstance(infos, dict) else None
     return state if isinstance(state, dict) else {}
+
 
 
 # 读取 checkpoint 里记录的全局步数
@@ -48,46 +48,38 @@ def read_env_step(checkpoint_path) -> int | None:
     return None
 
 
+
 class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     env: RslRlVecEnvWrapper
-
     def __init__(self, env, train_cfg, log_dir=None, device="cpu") -> None:
         super().__init__(env, train_cfg, log_dir, device)
-        # 进入高度课程时重建环境并创建单板。
-        # 留一份本次启动的 env_cfg 副本作重建模板, 否则命令行覆盖会退回注册值。
         self._obstacle_device = device
         self._obstacle_env_cfg = copy.deepcopy(env.unwrapped.cfg)  # type: ignore
         self._obstacle_num_envs = int(env.unwrapped.scene.num_envs)  # type: ignore
         self._obstacle_clip_actions = getattr(env, "clip_actions", None)
         self._obstacle_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
         self._obstacle_command = env.unwrapped.command_manager._terms.get("hole_cmd")  # type: ignore
-        self._obstacle_height_course_enabled = bool(
-            self._obstacle_command is not None
-            and self._obstacle_command.enable_height_course
-        )
-        self._height_curriculum_state = (
-            self._obstacle_command.height_curriculum_state
-            if self._obstacle_command is not None else None
-        )
+        self._obstacle_height_course_enabled = bool(self._obstacle_command is not None and self._obstacle_command.enable_height_course)
+        self._height_curriculum_state = (self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None)
 
-    # 当前实际编译进仿真的碰撞开关 (唯一来源是场景里的实体本身)
+
+    # 当前实际编译进仿真的碰撞开关
     def _obstacle_compiled_collision(self) -> bool:
         return obstacle_collision_enabled(self.env.unwrapped)
+
 
     # 课程在当前位置要求的碰撞开关
     def _obstacle_target_collision(self) -> bool:
         step = int(self.env.unwrapped.common_step_counter)
         return stage_requires_collision(get_current_stage(step))
 
-    # 是否需要重建: 目标与**实际编译值**不一致
+
+    # 是否需要重建: 目标与实际编译值不一致
     def _obstacle_change_needed(self) -> bool:
         compiled = self._obstacle_compiled_collision()
         if self._obstacle_target_collision() != compiled:
             return True
-        if (
-            stage_uses_height_course(get_current_stage(int(self.env.unwrapped.common_step_counter)))
-            and self._obstacle_height_course_enabled
-        ):
+        if (stage_uses_height_course(get_current_stage(int(self.env.unwrapped.common_step_counter))) and self._obstacle_height_course_enabled):
             obstacle_keys = [
                 key for key, entity in self.env.unwrapped.scene.entities.items()
                 if key.startswith("obstacle") and hasattr(entity, "cfg")
@@ -95,20 +87,21 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             return set(obstacle_keys) != {"obstacle"}
         return False
 
-    # 清掉"未结束回合"的累计, 避免跨重建拼接统计
+
+    # 清掉未结束回合的累计, 避免跨重建拼接统计
     def _clear_logger_episode_state(self) -> None:
         logger = self.logger
         try:
             logger.ep_extras.clear()
         except AttributeError:
             pass
-        for name in ("cur_reward_sum", "cur_episode_length",
-                     "cur_ereward_sum", "cur_ireward_sum"):
+        for name in ("cur_reward_sum", "cur_episode_length", "cur_ereward_sum", "cur_ireward_sum"):
             buf = getattr(logger, name, None)
             if buf is not None:
                 buf.zero_()
 
-    # 重建环境 (换碰撞开关), 并按需重新取观测
+
+    # 重建环境, 并按需重新取观测
     def _apply_obstacle_rebuild(self, refresh_obs: bool):
         step_counter = int(self.env.unwrapped.common_step_counter)
         collision = self._obstacle_target_collision()
@@ -119,14 +112,10 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         if stage_uses_height_course(stage):
             configure_obstacle_entity(env_cfg, enable_collision=collision)
             if self._obstacle_height_course_enabled:
-                env_cfg.commands["hole_cmd"].height_curriculum_state = (
-                    self._height_curriculum_state.state_dict()  # type: ignore
-                )
+                env_cfg.commands["hole_cmd"].height_curriculum_state = (self._height_curriculum_state.state_dict())  # type: ignore
         else:
             configure_obstacle_collision(env_cfg, enable_collision=collision)
-        new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._obstacle_device,
-                                    render_mode=self._obstacle_render_mode)
-        # 新环境从 0 起算, 必须接管全局步数, 否则下一轮判据又读到阶段 1 而反复重建
+        new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._obstacle_device, render_mode=self._obstacle_render_mode)
         new_env.common_step_counter = step_counter
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._obstacle_clip_actions)
         self.env.unwrapped.common_step_counter = step_counter
@@ -144,6 +133,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
               f"stage={get_current_stage(step_counter)}, iter {step_counter // STEPS_PER_ITER}, "
               f"num_envs={self._obstacle_num_envs}")
         return self.env.get_observations().to(self.device) if refresh_obs else None
+
 
     # 训练循环: 复制 rsl_rl 主循环, 在每轮采样前插入碰撞开关重建
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
@@ -171,22 +161,20 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             start = time.time()
             with torch.inference_mode():
                 for _ in range(self.cfg["num_steps_per_env"]):
-                    actions = self.alg.act(obs)
+                    actions = self.alg.act(obs) # type: ignore
                     obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
                     self._consume_obstacle_results(extras)
                     if self.cfg.get("check_for_nan", True):
                         check_nan(obs, rewards, dones)
-                    obs, rewards, dones = (obs.to(self.device), rewards.to(self.device),
-                                           dones.to(self.device))
+                    obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
                     self.alg.process_env_step(obs, rewards, dones, extras)
-                    intrinsic_rewards = (self.alg.intrinsic_rewards
-                                         if self.cfg["algorithm"]["rnd_cfg"] else None)
+                    intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
                     self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
 
                 stop = time.time()
                 collect_time = stop - start
                 start = stop
-                self.alg.compute_returns(obs)
+                self.alg.compute_returns(obs) # type: ignore
 
             loss_dict = self.alg.update()
 
@@ -210,9 +198,9 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
 
         if self.logger.writer is not None:
-            self.save(os.path.join(self.logger.log_dir,  # type: ignore
-                                   f"model_{self.current_learning_iteration}.pt"))
+            self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
             self.logger.stop_logging_writer()
+
 
     # 续训: 恢复环境状态, 首次采样前把碰撞开关对齐到课程目标
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
@@ -232,7 +220,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[INFO] 检查点 hole_state: stage={saved.get('stage')}, "
                   f"实际碰撞={saved.get('collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
-            # 校验保存的几何/接触参数与当前场景是否一致 (不一致时训练数据口径会变)
             mismatch = []
             current = {d["name"]: d for d in self._obstacle_scene_state()}
             for d in saved.get("layout") or []:
@@ -257,7 +244,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_obstacle_rebuild(refresh_obs=False)
         return infos
 
-    # 记录**实际场景里**的板几何与碰撞开关 (不是全局默认表), 供续训/回放复现
+
+    # 记录实际场景里的板几何与碰撞开关 (不是全局默认表), 供续训/回放复现
     def _obstacle_scene_state(self) -> list[dict]:
         scene = self.env.unwrapped.scene
         layout = []
@@ -271,14 +259,13 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 "size": list(ent.cfg.size),  # type: ignore
                 "contype": int(ent.cfg.contype),  # type: ignore
                 "conaffinity": int(ent.cfg.conaffinity),  # type: ignore
-                "solref": (list(ent.cfg.solref) if getattr(ent.cfg, "solref", None) is not None  # type: ignore
-                           else None),
-                "solimp": (list(ent.cfg.solimp) if getattr(ent.cfg, "solimp", None) is not None  # type: ignore
-                           else None),
+                "solref": (list(ent.cfg.solref) if getattr(ent.cfg, "solref", None) is not None else None), # type: ignore
+                "solimp": (list(ent.cfg.solimp) if getattr(ent.cfg, "solimp", None) is not None else None), # type: ignore
             })
         return layout
 
-    # 保存模型 (记录实际编译生效的碰撞与几何)
+
+    # 保存模型
     def save(self, path: str, infos=None):
         step = int(self.env.unwrapped.common_step_counter)
         extra = {
@@ -302,7 +289,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         except Exception as e:
             print(f"[WARN] ONNX export failed (training continues): {e}")
 
-    # 每个环境步消费终止阶段发布的回合结果快照。
+
+    # 每个环境步消费终止阶段发布的回合结果快照
     def _consume_obstacle_results(self, extras) -> None:
         env = self.env.unwrapped
         monitor = getattr(env, "_hole_passage_monitor", None)

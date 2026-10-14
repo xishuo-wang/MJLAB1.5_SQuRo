@@ -142,6 +142,7 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
         raise KeyError(f"课程参数 {reward_name!r} 未在 _CURVES 定义") from None
 
 
+
 # 从单板几何计算查表边界
 def obstacle_rule_bounds(center_x: float, half_length: float) -> tuple[float, float, float]:
     x1 = center_x - half_length
@@ -150,6 +151,7 @@ def obstacle_rule_bounds(center_x: float, half_length: float) -> tuple[float, fl
     middle = (x1 + x2) / 2.0
     right = x2 + EXIT_MARGIN
     return left, middle, right
+
 
 
 # 按 base_Link 的世界 X 统一决定前后端高度

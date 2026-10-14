@@ -132,9 +132,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities={
-                "robot": SQURO_ROBOT_CFG,
-            },
+            entities={"robot": SQURO_ROBOT_CFG,},
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,

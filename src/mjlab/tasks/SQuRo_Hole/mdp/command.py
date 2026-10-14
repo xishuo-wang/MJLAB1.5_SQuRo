@@ -22,15 +22,15 @@ from .config import (
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
     FULL_HEIGHT_VALUES,
-    HEIGHT_MIN_SAMPLE_PROBABILITY,
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
+    HEIGHT_MIN_SAMPLE_PROBABILITY,
 )
 from .curriculums import (
-    compute_base_heights,
-    HeightCurriculumState,
     get_current_stage,
     heights_for_stage,
+    compute_base_heights,
+    HeightCurriculumState,
     stage_uses_height_course,
 )
 from .entity import read_obstacle_bottom_z, write_obstacle_mocap

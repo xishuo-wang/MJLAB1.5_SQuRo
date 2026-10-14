@@ -6,10 +6,8 @@ from .config import HEIGHT_INITIAL_MIN, OBSTACLE_POSITION, OBSTACLE_SIZE, VIRTUA
 
 
 
-
 @dataclass
 class ObstacleEntityCfg(EntityCfg):
-    # 场景实体键取该名字的小写形式, 故直接使用下划线命名
     name: str = "obstacle"
     position: tuple[float, float, float] = OBSTACLE_POSITION            # 板底中心 x, y, 板底 z
     size: tuple[float, float, float] = OBSTACLE_SIZE                    # 半长，半宽，半厚
@@ -54,6 +52,7 @@ class ObstacleEntity(Entity):
         )
 
 
+
 # 构建真实碰撞课程使用的受限空间实体
 def build_obstacle_entity(enable_collision: bool, bottom_z: float = HEIGHT_INITIAL_MIN, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
@@ -69,7 +68,6 @@ def build_obstacle_entity(enable_collision: bool, bottom_z: float = HEIGHT_INITI
         **kwargs,
     )
     return {entity.name.lower(): entity}
-
 
 
 
@@ -185,7 +183,6 @@ def obstacle_geometry(env=None) -> list[dict]:
     scene = getattr(env, "scene", env)
     entities = getattr(scene, "entities", None) or {}
     return [_entity_geometry(ent.cfg) for ent in entities.values() if isinstance(getattr(ent, "cfg", None), ObstacleEntityCfg)]
-
 
 
 
