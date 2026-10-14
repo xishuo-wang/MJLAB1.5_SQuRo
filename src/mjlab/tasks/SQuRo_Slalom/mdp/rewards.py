@@ -19,6 +19,7 @@ from .path import (
 )
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
+from .corridor import compute_phase0_corridor_excess
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -261,6 +262,18 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     inner_h, outer_h = compute_corridor_side_excess(
         h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH, curvature
     )
+    # 一阶段使用完整躯干圆环，二阶段保留现有局部走廊。
+    cmd = env.command_manager._terms["slalom_cmd"]
+    arc_inner, arc_outer = compute_phase0_corridor_excess(env, ref_xy, path_heading, curvature)
+    phase1 = cmd.phase1_mask
+    inner_f = torch.where(phase1, inner_f, arc_inner[:, 0])
+    inner_h = torch.where(phase1, inner_h, arc_inner[:, 1])
+    outer_f = torch.where(phase1, outer_f, arc_outer[:, 0])
+    outer_h = torch.where(phase1, outer_h, arc_outer[:, 1])
+    v_f = torch.where(phase1, v_f, torch.maximum(inner_f, outer_f))
+    v_h = torch.where(phase1, v_h, torch.maximum(inner_h, outer_h))
+    e_f = torch.where(phase1, e_f, CORRIDOR_HALF_WIDTH + v_f)
+    e_h = torch.where(phase1, e_h, CORRIDOR_HALF_WIDTH + v_h)
     # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")

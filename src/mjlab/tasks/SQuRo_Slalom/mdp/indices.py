@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import mujoco
+import numpy as np
+
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
@@ -45,6 +48,7 @@ LINKAGE_JOINT_NAMES = (
 FOOT_SITE_NAMES = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site")
 FOOT_NAMES = tuple(name.split("_", 1)[0] for name in FOOT_SITE_NAMES)
 FOOT_GEOM_NAMES = tuple(f"{name}_foot_collision" for name in FOOT_NAMES)
+BODY_NAMES = ("F_body_Link", "H_body_Link")
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=_ACT_JOINT_NAMES)
 
 
@@ -68,7 +72,7 @@ _MODEL_INDICES = ModelIndices()
 def resolve_model_indices(entity) -> None:
     if _MODEL_INDICES.joint_ids and _MODEL_INDICES.linkage_joint_ids:
         return
-    body_ids, _ = entity.find_bodies(("F_body_Link", "H_body_Link"), preserve_order=True)
+    body_ids, _ = entity.find_bodies(BODY_NAMES, preserve_order=True)
     foot_ids, _ = entity.find_sites(FOOT_SITE_NAMES, preserve_order=True)
     joint_ids, joint_names = entity.find_joints(_ACT_JOINT_NAMES, preserve_order=True)
     linkage_ids, _ = entity.find_joints(LINKAGE_JOINT_NAMES, preserve_order=True)
@@ -92,3 +96,27 @@ def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[i
 # 足端力列按传感器名称排序。
 def resolve_foot_force_ids(sensor) -> tuple[int, ...]:
     return tuple(sensor.primary_names.index(name) for name in FOOT_GEOM_NAMES)
+
+
+# 从已编译网格解析前后躯干的身体局部三维包围盒。
+def resolve_body_envelope_bounds(entity, model: mujoco.MjModel) -> np.ndarray:
+    body_ids, _ = entity.find_bodies(BODY_NAMES, preserve_order=True)
+    global_ids = entity.indexing.body_ids[body_ids].cpu().tolist()
+    bounds = []
+    for name, body_id in zip(BODY_NAMES, global_ids, strict=True):
+        points = []
+        for geom_id in np.flatnonzero(model.geom_bodyid == body_id):
+            if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH:
+                raise ValueError(f"{name} 的包络只支持网格几何")
+            mesh_id = int(model.geom_dataid[geom_id])
+            start = int(model.mesh_vertadr[mesh_id])
+            count = int(model.mesh_vertnum[mesh_id])
+            rotation = np.empty(9)
+            mujoco.mju_quat2Mat(rotation, model.geom_quat[geom_id])
+            vertices = model.mesh_vert[start:start + count]
+            points.append(vertices @ rotation.reshape(3, 3).T + model.geom_pos[geom_id])
+        if not points:
+            raise ValueError(f"{name} 缺少包络网格")
+        vertices = np.concatenate(points)
+        bounds.append(np.stack((vertices.min(axis=0), vertices.max(axis=0))))
+    return np.asarray(bounds)

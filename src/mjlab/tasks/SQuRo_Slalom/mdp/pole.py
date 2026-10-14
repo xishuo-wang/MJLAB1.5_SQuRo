@@ -7,7 +7,7 @@ from .path import get_smooth_x_sw
 
 
 # 杆几何常量
-POLE_RADIUS = 0.01          # 直径 1cm
+POLE_RADIUS = 0.01          # 半径 1cm
 POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
 POLE_NUM = 12               # 杆数量 (覆盖 2Hz@20s 全程: 0.15m 间距 → 0~1.65m)
 
