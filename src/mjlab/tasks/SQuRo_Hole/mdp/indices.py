@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 
-
 # 执行器顺序
 _ACT_JOINT_NAMES = [
     "F_spine1_joint",       # 脊柱侧摆: 0
@@ -58,18 +57,14 @@ _ACT_SPN_H_ROLL_ID  = _ACT_H_BODY_ID                            # 后脊柱扭�
 _ACT_SPN_F_IDS = (_ACT_SPN_F_YAW_ID,   _ACT_SPN_F_ROLL_ID)      # 前脊柱合并: (0, 1)
 _ACT_SPN_H_IDS = (_ACT_SPN_H_PITCH_ID, _ACT_SPN_H_ROLL_ID)      # 后脊柱合并: (8, 9)
 _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: (0, 1, 8, 9)
+SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)      # 参考表的执行器序存储
 
 
 # 头部索引
 _ACT_NECK_IDS = (_ACT_NECK_YAW_ID, _ACT_NECK_PITCH_ID)          # 头颈两列: (2, 3)
 
 
-# 参考表按执行器序存储, 各部位直接用自己的执行器下标读写 (见 reference.py)
-# 脊柱局部张量按 _ACT_SPN_IDS 排列时 H_spine1 落在第几列
-SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)
-
-
-# 闭链被动关节按基线复位顺序解析。
+# 闭链被动关节
 LINKAGE_JOINT_NAMES = (
     "FL_shoulder1_joint", "FL_elbow1_joint", "FL_elbow2_joint", "FL_elbow3_joint",
     "FR_shoulder1_joint", "FR_elbow1_joint", "FR_elbow2_joint", "FR_elbow3_joint",
@@ -113,6 +108,7 @@ _MODEL_INDICES = ModelIndices()
 
 
 
+# 解析并缓存模型 body、site 和关节索引
 def resolve_model_indices(entity) -> None:
     if (_MODEL_INDICES.f_body_id >= 0 and _MODEL_INDICES.joint_ids
             and _MODEL_INDICES.linkage_joint_ids):
@@ -147,13 +143,13 @@ def resolve_model_indices(entity) -> None:
 
 
 
-# 将执行器分组映射为模型关节编号。
+# 将执行器分组映射为模型关节编号
 def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[int, ...]:
     resolve_model_indices(entity)
     return tuple(_MODEL_INDICES.joint_ids[i] for i in actuator_ids)
 
 
 
-# 按传感器公开名称解析足端力的列顺序。
+# 按传感器公开名称解析足端力的列顺序
 def resolve_foot_force_ids(sensor) -> tuple[int, ...]:
     return tuple(sensor.primary_names.index(name) for name in FOOT_GEOM_NAMES)
