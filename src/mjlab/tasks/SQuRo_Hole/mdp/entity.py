@@ -19,6 +19,7 @@ class HoleEntityCfg(EntityCfg):
     solref: tuple[float, ...] | None = None
     solimp: tuple[float, ...] | None = None
 
+
     def build(self) -> "HoleEntity":
         return HoleEntity(cfg=self)
 
@@ -26,7 +27,6 @@ class HoleEntityCfg(EntityCfg):
 
 class HoleEntity(Entity):
     cfg: HoleEntityCfg
-
     def __init__(self, cfg: HoleEntityCfg):
         super().__init__(cfg)
         self._build_geometry()
@@ -34,11 +34,7 @@ class HoleEntity(Entity):
 
     def _build_geometry(self):
         half_t = self.cfg.size[2]
-        body = self._spec.worldbody.add_body(
-            name=self.cfg.name,
-            pos=self.cfg.position,
-            mocap=True,
-        )
+        body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position, mocap=True,)
         kwargs: dict = {}
         if self.cfg.solref is not None:
             kwargs["solref"] = self.cfg.solref
@@ -58,10 +54,7 @@ class HoleEntity(Entity):
 
 
 # 构建真实碰撞课程使用的单板实体。
-def build_single_hole_entities(enable_collision: bool,
-                               bottom_z: float = HEIGHT_INITIAL_MIN,
-                               solref: tuple[float, ...] | None = None,
-                               solimp: tuple[float, ...] | None = None) -> dict:
+def build_single_hole_entities(enable_collision: bool, bottom_z: float = HEIGHT_INITIAL_MIN, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
     kwargs: dict = {}
     if solref is not None:
@@ -97,7 +90,7 @@ def configure_hole_entities(env_cfg, enable_collision: bool, solref: tuple[float
 
 
 
-# 将训练配置切换为单板几何并保留显式碰撞开关。
+# 将训练配置切换为单板几何并保留显式碰撞开关
 def configure_single_hole_entities(env_cfg, enable_collision: bool, bottom_z: float = HEIGHT_INITIAL_MIN) -> dict:
     entities = dict(env_cfg.scene.entities)
     key, fresh = next(iter(build_single_hole_entities(enable_collision, bottom_z).items()))
@@ -127,7 +120,7 @@ def hole_collision_enabled(env) -> bool:
 
 
 
-# 板体自身的 mocap 下标; entity.indexing.mocap_id 指向 root 的空 mocap_base, 不能用于板
+# 板体自身的 mocap 下标
 def hole_mocap_id(entity) -> int:
     local, _ = entity.find_bodies([entity.cfg.name], preserve_order=True)
     if not local:
@@ -140,7 +133,7 @@ def hole_mocap_id(entity) -> int:
 
 
 
-# 将板底高度写入板体 mocap，支持全量或部分环境更新
+# 将板底高度写入板体 mocap
 def write_hole_bottom_z(entity, bottom_z, env_ids=None) -> None:
     mocap_pos = entity.data.data.mocap_pos
     mocap_id = hole_mocap_id(entity)
