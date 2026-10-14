@@ -10,8 +10,8 @@ from .config import HEIGHT_INITIAL_MIN, HOLE_POSITION, HOLE_SIZE, VIRTUAL_CLEARA
 @dataclass
 class HoleEntityCfg(EntityCfg):
     name: str = "Hole1"
-    position: tuple[float, float, float] = HOLE_POSITION   # 板底中心 (x, y, 板底 z)
-    size: tuple[float, float, float] = HOLE_SIZE     # 半长, 半宽, 半厚
+    position: tuple[float, float, float] = HOLE_POSITION            # 板底中心 x, y, 板底 z
+    size: tuple[float, float, float] = HOLE_SIZE                    # 半长，半宽，半厚
     rgba: tuple[float, float, float, float] = (0.5, 0.5, 0.5, 0.5)
     mass: float = 1.0
     contype: int = 1
@@ -53,7 +53,7 @@ class HoleEntity(Entity):
         )
 
 
-# 构建真实碰撞课程使用的单板实体。
+# 构建真实碰撞课程使用的受限空间实体
 def build_single_hole_entities(enable_collision: bool, bottom_z: float = HEIGHT_INITIAL_MIN, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
     kwargs: dict = {}
@@ -72,7 +72,7 @@ def build_single_hole_entities(enable_collision: bool, bottom_z: float = HEIGHT_
 
 
 
-# 保留实际板体的位置、尺寸和接触参数，只替换碰撞掩码。
+# 保留实际板体的位置、尺寸和接触参数，只替换碰撞掩码
 def configure_hole_entities(env_cfg, enable_collision: bool, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
     entities = dict(env_cfg.scene.entities)
@@ -177,7 +177,7 @@ def _entity_geometry(cfg) -> dict:
 
 
 
-# 查询实际场景板几何，无环境参数时返回默认单板配置。
+# 查询实际场景板几何，无环境参数时返回默认单板配置
 def hole_geometry(env=None) -> list[dict]:
     if env is None:
         return [_entity_geometry(HoleEntityCfg())]
@@ -201,7 +201,7 @@ def set_obstacle_bottom_z(env_cfg, bottom_z: float) -> int:
 
 
 
-# 设置实际板体的可见性，仅改外观。
+# 设置实际板体的可见性，仅改外观
 def set_obstacle_visibility(env_cfg, visible: bool, hidden_rgba: tuple = (0.0, 0.0, 0.0, 0.0), shown_rgba: tuple = (0.5, 0.5, 0.5, 0.5)) -> int:
     entities = dict(env_cfg.scene.entities)
     rgba = tuple(shown_rgba) if visible else tuple(hidden_rgba)
