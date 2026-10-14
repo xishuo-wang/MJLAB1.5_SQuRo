@@ -180,7 +180,7 @@ class HolePassageMonitor:
 
 
 
-# 执行永不触发的穿板监测项。
+# 执行永不触发的穿板监测项
 def monitor_hole_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
     monitor = getattr(env, "_hole_passage_monitor", None)
     if monitor is None:
