@@ -26,7 +26,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     get_current_stage,
     heights_for_stage,
     reward_weight_curriculum,
-    rule_bounds,
+    obstacle_rule_bounds,
     stage_requires_collision,
     stage_uses_height_course,
 )
@@ -86,7 +86,7 @@ def check_command() -> None:
     env.reset()
     cmd = env.command_manager.get_command("hole_cmd")
     obstacle = env.scene["obstacle"].cfg
-    left, middle, right = rule_bounds(obstacle.position[0], obstacle.size[0])
+    left, middle, right = obstacle_rule_bounds(obstacle.position[0], obstacle.size[0])
     print(f"\n[2] 单板高度规则: 进入 {left:.3f} m，中点 {middle:.3f} m，离开 {right:.3f} m")
     print(f"     reset 后命令: vel_x {float(cmd[0, CMD_VEL_X_IDS]):.3f} m/s, "
           f"h_F {float(cmd[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, h_H {float(cmd[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (热身随机高度池)")

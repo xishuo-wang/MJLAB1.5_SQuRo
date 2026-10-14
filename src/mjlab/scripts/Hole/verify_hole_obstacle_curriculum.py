@@ -25,13 +25,13 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_STEP,
     STAGE3_ITER,
-    HEIGHT_COURSE_STAGE,
+    HEIGHT_RULE_STAGE,
     STAGE2_ITER,
     STEPS_PER_ITER,
     HeightCurriculumState,
     get_current_stage,
-    rule_bounds,
-    sample_base_heights,
+    obstacle_rule_bounds,
+    compute_base_heights,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
@@ -81,10 +81,10 @@ def verify_shared_rule() -> None:
         get_current_stage(STAGE2_ITER * STEPS_PER_ITER - 1) == 2
         and get_current_stage(STAGE2_ITER * STEPS_PER_ITER) == 3
         and get_current_stage(STAGE3_STEP - 1) == 3
-        and get_current_stage(STAGE3_STEP) == HEIGHT_COURSE_STAGE == 4,
+        and get_current_stage(STAGE3_STEP) == HEIGHT_RULE_STAGE == 4,
     )
     for center, half_length in ((0.2, 0.015), (0.6, 0.100)):
-        left, middle, right = rule_bounds(center, half_length)
+        left, middle, right = obstacle_rule_bounds(center, half_length)
         obstacle = ("Hole", center, 0.0, 0.07, half_length, 0.005)
         for dtype in (torch.float32, torch.float64):
             positions = torch.tensor([
@@ -92,7 +92,7 @@ def verify_shared_rule() -> None:
                 middle + 1e-6, right, right + 1e-6,
             ], dtype=dtype)
             for height in (HEIGHT_MIN, 0.048, 0.064, 0.069999, 0.070, 0.090):
-                front, hind = sample_base_heights(positions, center, half_length, height)
+                front, hind = compute_base_heights(positions, center, half_length, height)
                 if height < 0.070:
                     expected_f = positions.new_tensor([0.055, 0.020, 0.020, 0.055, 0.055, 0.055, 0.055])
                     expected_h = positions.new_tensor([0.055, 0.055, 0.055, 0.020, 0.020, 0.020, 0.055])
@@ -103,7 +103,7 @@ def verify_shared_rule() -> None:
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
         for height in (HEIGHT_MIN, 0.048, 0.064, 0.068, 0.070, 0.090):
-            front, hind = sample_base_heights(query, center, half_length, height)
+            front, hind = compute_base_heights(query, center, half_length, height)
             check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
                   not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
             preview = sample_rule_schedule(query.numpy() - 0.1, obstacle, height, start_x=0.1)
@@ -116,36 +116,36 @@ def verify_shared_rule() -> None:
 
 # 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
 def verify_curriculum_state() -> None:
-    state = HeightCurriculumState(start_iteration=STAGE3_ITER)
+    state = HeightCurriculumState(level_start_iteration=STAGE3_ITER)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
         state.record_episode(HEIGHT_INITIAL_MIN, True, STAGE2_ITER + 1, 2, True)
     check("第二阶段和无碰撞回合不会推进课程", state.z_min == HEIGHT_INITIAL_MIN and state.all_height_episode_count == 0)
-    state = HeightCurriculumState(start_iteration=0)
+    state = HeightCurriculumState(level_start_iteration=0)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, True, 100, HEIGHT_COURSE_STAGE, True)
+        state.record_episode(HEIGHT_INITIAL_MIN, True, 100, HEIGHT_RULE_STAGE, True)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, False, 100, HEIGHT_COURSE_STAGE, True)
+        state.record_episode(HEIGHT_INITIAL_MIN, False, 100, HEIGHT_RULE_STAGE, True)
     check("失败批清零连续达标批数", state.consecutive_success_batches == 0)
     for iteration in range(HEIGHT_MIN_DWELL_ITERATIONS + 1):
         for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-            state.record_episode(HEIGHT_INITIAL_MIN, True, iteration, HEIGHT_COURSE_STAGE, True)
+            state.record_episode(HEIGHT_INITIAL_MIN, True, iteration, HEIGHT_RULE_STAGE, True)
         if state.z_min < HEIGHT_INITIAL_MIN:
             break
     check("达到两批、驻留期和 60% 后才降档", state.z_min == HEIGHT_INITIAL_MIN - 0.002 and state.consecutive_success_batches == 0)
     state.z_min = HEIGHT_MIN
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        state.record_episode(HEIGHT_MIN, True, 1000, HEIGHT_COURSE_STAGE, True)
+        state.record_episode(HEIGHT_MIN, True, 1000, HEIGHT_RULE_STAGE, True)
     check("最低档不会跌破课程下界", state.z_min == HEIGHT_MIN)
     restored = HeightCurriculumState()
     restored.load_state_dict(state.state_dict())
     check("课程 checkpoint 状态往返", restored.state_dict() == state.state_dict())
     check("最低成功率门槛为 60%", HEIGHT_MIN_SUCCESS_RATE == 0.60 and HEIGHT_MAX == 0.090)
 
-    delayed = HeightCurriculumState(start_iteration=0)
+    delayed = HeightCurriculumState(level_start_iteration=0)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        delayed.record_episode(HEIGHT_INITIAL_MIN, True, 99, HEIGHT_COURSE_STAGE, True)
+        delayed.record_episode(HEIGHT_INITIAL_MIN, True, 99, HEIGHT_RULE_STAGE, True)
     delayed_result = delayed.record_episode(
-        HEIGHT_INITIAL_MIN, True, 100, HEIGHT_COURSE_STAGE, True
+        HEIGHT_INITIAL_MIN, True, 100, HEIGHT_RULE_STAGE, True
     )
     check(
         "驻留达标后的部分批次降档也返回完整日志字段",
@@ -164,37 +164,37 @@ def verify_fine_height_steps() -> None:
         previous_height = state.z_min
         iteration = STAGE3_ITER + index * HEIGHT_MIN_DWELL_ITERATIONS
         for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-            state.record_episode(previous_height, True, iteration, HEIGHT_COURSE_STAGE, True)
+            state.record_episode(previous_height, True, iteration, HEIGHT_RULE_STAGE, True)
         check(f"课程由 {previous_height * 1000:g} 降到 {height_mm} mm",
               state.z_min == height_mm / 1000 and state.consecutive_success_batches == 0)
     check("46毫米下限与完整降档序列一致", HEIGHT_MIN == expected_mm[-1] / 1000)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        state.record_episode(state.z_min, True, iteration + HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+        state.record_episode(state.z_min, True, iteration + HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
     check("46毫米达标后保持下限", state.z_min == HEIGHT_MIN)
 
-    fine = HeightCurriculumState(start_iteration=0)
+    fine = HeightCurriculumState(level_start_iteration=0)
     fine.z_min = 0.050
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS - 1, HEIGHT_COURSE_STAGE, True)
+        fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS - 1, HEIGHT_RULE_STAGE, True)
     check("50毫米档成功达标后仍须满足驻留时间", fine.z_min == 0.050)
-    fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+    fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
     check("50毫米驻留达标后只降低1毫米", fine.z_min == 0.049)
 
-    failed = HeightCurriculumState(start_iteration=0)
+    failed = HeightCurriculumState(level_start_iteration=0)
     failed.z_min = 0.050
     for passed in (True, False):
         for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-            failed.record_episode(failed.z_min, passed, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+            failed.record_episode(failed.z_min, passed, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
     check("细步长阶段失败批仍清零且不降档",
           failed.z_min == 0.050 and failed.consecutive_success_batches == 0)
 
-    old = HeightCurriculumState(start_iteration=0)
+    old = HeightCurriculumState(level_start_iteration=0)
     old.z_min = 0.048
     restored = HeightCurriculumState()
     restored.load_state_dict(old.state_dict())
     check("旧48毫米检查点加载时保留原课程状态", restored.state_dict() == old.state_dict())
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        restored.record_episode(0.048, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_COURSE_STAGE, True)
+        restored.record_episode(0.048, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
     check("旧48毫米检查点达标后按新规则降至47毫米", restored.z_min == 0.047)
 
 

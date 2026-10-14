@@ -35,8 +35,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    sample_base_heights,
-    rule_bounds as _shared_rule_bounds,
+    compute_base_heights,
+    obstacle_rule_bounds as _shared_rule_bounds,
 )
 
 MODE_LABELS = {
@@ -83,7 +83,7 @@ def build_cases(start_x: float) -> list[ScheduleCase]:
             if index + 1 < len(boards)
             else board[1] + board[4] - start_x + 0.2
         )
-        rule_left, _, rule_right = rule_bounds(board)
+        rule_left, _, rule_right = _shared_rule_bounds(board[1], board[4])
         padding = PREVIEW_X_PADDING
         left = min(left, rule_left - start_x - padding)
         right = max(right, rule_right - start_x + padding)
@@ -123,7 +123,7 @@ def sample_rule_schedule(
     for boundary in boundaries:
         query_world[np.abs(query_world - boundary) <= tolerance] = boundary
     query = torch.as_tensor(query_world, dtype=torch.float64)
-    front, hind = sample_base_heights(query, board[1], board[4], bottom_z)
+    front, hind = compute_base_heights(query, board[1], board[4], bottom_z)
     return {
         "position": position,
         "height_f": front.cpu().numpy(),

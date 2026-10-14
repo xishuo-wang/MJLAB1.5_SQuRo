@@ -32,7 +32,7 @@ STAGE0_ITER = 0
 STAGE1_ITER = 1000
 STAGE2_ITER = 2000
 STAGE3_ITER = 3000
-HEIGHT_COURSE_STAGE = 4
+HEIGHT_RULE_STAGE = 4
 STAGE1_STEP = STAGE1_ITER * STEPS_PER_ITER
 STAGE2_STEP = STAGE2_ITER * STEPS_PER_ITER
 STAGE3_STEP = STAGE3_ITER * STEPS_PER_ITER
@@ -69,7 +69,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 
 SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)    # 脊柱误差缩放 (F_spine1, F_body, H_spine1, H_body)
-STAGE_COLLISION = (False, False, False, True)       # 受限空间碰撞课程
+STAGE_COLLISION_ENABLED = (False, False, False, True)       # 受限空间碰撞课程
 
 
 
@@ -81,25 +81,25 @@ def get_current_stage(step_counter: int) -> int:
         return 2
     if step_counter < STAGE3_STEP:
         return 3
-    return HEIGHT_COURSE_STAGE
+    return HEIGHT_RULE_STAGE
 
 
 
 # 判断是否已进入真实碰撞高度课程
 def stage_uses_height_course(stage: int) -> bool:
-    return stage >= HEIGHT_COURSE_STAGE
+    return stage >= HEIGHT_RULE_STAGE
 
 
 
 # 判断该阶段是否要求实体碰撞
 def stage_requires_collision(stage: int) -> bool:
     idx = min(max(int(stage), 1), NUM_STAGES) - 1
-    return STAGE_COLLISION[idx]
+    return STAGE_COLLISION_ENABLED[idx]
 
 
 
 # 按阶段获取高度跟踪采样范围
-def heights_for_stage(stage: int):
+def heights_for_stage(stage: int) -> list | None:
     if stage == 1:
         return RANDOM_HEIGHT_VALUES
     if stage in (2, 3):
@@ -143,7 +143,7 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
 
 
 # 从单板几何计算查表边界
-def rule_bounds(center_x: float, half_length: float) -> tuple[float, float, float]:
+def obstacle_rule_bounds(center_x: float, half_length: float) -> tuple[float, float, float]:
     x1 = center_x - half_length
     x2 = center_x + half_length
     left = x1 - ENTRY_MARGIN
@@ -153,13 +153,13 @@ def rule_bounds(center_x: float, half_length: float) -> tuple[float, float, floa
 
 
 # 按 base_Link 的世界 X 统一决定前后端高度
-def sample_base_heights(
+def compute_base_heights(
     base_x: torch.Tensor,
     center_x: float,
     half_length: float,
     bottom_z: torch.Tensor | float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    left, middle, right = rule_bounds(center_x, half_length)
+    left, middle, right = obstacle_rule_bounds(center_x, half_length)
     bottom = torch.as_tensor(bottom_z, device=base_x.device, dtype=base_x.dtype)
     high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
     front = torch.full_like(base_x, BASE_HEIGHT)
@@ -178,10 +178,10 @@ def sample_base_heights(
 
 # 高度课程状态
 class HeightCurriculumState:
-    def __init__(self, start_iteration: int = STAGE3_ITER):
+    def __init__(self, level_start_iteration: int = STAGE3_ITER):
         self.z_min = HEIGHT_INITIAL_MIN
         self.z_max = HEIGHT_MAX
-        self.level_start_iteration = int(start_iteration)
+        self.level_start_iteration = int(level_start_iteration)
         self.batch_count = 0
         self.batch_success_count = 0
         self.consecutive_success_batches = 0
@@ -213,7 +213,7 @@ class HeightCurriculumState:
             "success_rate": self.batch_success_count / max(1, self.batch_count),
             "sample_count": self.batch_count,
         }
-        if not eligible or stage != HEIGHT_COURSE_STAGE or not collision_enabled:
+        if not eligible or stage != HEIGHT_RULE_STAGE or not collision_enabled:
             return result
 
         height = float(bottom_z)

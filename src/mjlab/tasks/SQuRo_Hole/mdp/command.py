@@ -27,7 +27,7 @@ from .config import (
     CMD_OBSTACLE_HEIGHT_IDS,
 )
 from .curriculums import (
-    sample_base_heights,
+    compute_base_heights,
     HeightCurriculumState,
     get_current_stage,
     heights_for_stage,
@@ -218,7 +218,7 @@ class HoleCommand(CommandTerm):
         obstacle_cfg = self.obstacle.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_obstacle_bottom_z(self.obstacle)
-        front, hind = sample_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z,) # type: ignore
+        front, hind = compute_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z,) # type: ignore
         velocity = compute_cmd_vel_x(front, hind)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))

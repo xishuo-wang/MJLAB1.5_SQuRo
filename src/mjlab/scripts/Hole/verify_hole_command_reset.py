@@ -15,7 +15,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_STEP,
     HeightCurriculumState,
-    rule_bounds,
+    obstacle_rule_bounds,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity
 
@@ -86,7 +86,7 @@ def check_partial_reset(env: ManagerBasedRlEnv) -> None:
 # 在连续复位后检查当前单板高度规则的三个边界。
 def check_schedule_boundaries(env: ManagerBasedRlEnv) -> None:
     obstacle = env.scene["obstacle"].cfg
-    left, middle, right = rule_bounds(obstacle.position[0], obstacle.size[0])
+    left, middle, right = obstacle_rule_bounds(obstacle.position[0], obstacle.size[0])
     cases = (
         ((left - 1e-6, left + 1e-6, middle - 1e-6, middle + 1e-6),
          [[0.055, 0.055], [0.02, 0.055], [0.02, 0.055], [0.055, 0.02]]),
