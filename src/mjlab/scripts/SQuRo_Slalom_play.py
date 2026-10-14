@@ -14,6 +14,7 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     _STEPS_PER_ITER,
+    PHASE1_END_ITER,
     get_training_phase,
     get_curriculum_pole_spacing,
 )
@@ -50,14 +51,21 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Slalom 任务相关配置
-    fixed_velocity: float | None = 0.1
-    fixed_height_f: float | None = 0.055
-    fixed_height_h: float | None = 0.055
-    fixed_gait_freq: float | None = 2.0
-    fixed_curvature: float | None = -25
-    fixed_pole_spacing: float | None = 0.15
+    command_source: Literal["转圈", "绕杆"] | None = None  # 转圈=一阶段, 绕杆=二阶段; None=按检查点轮数判定
+    fixed_velocity: float | None = 0.1      # 期望速度; None = 任务默认 (随曲率/间距变化)
+    fixed_height_f: float | None = 0.055    # 期望前肢高度; None = 任务默认
+    fixed_height_h: float | None = 0.055    # 期望后肢高度; None = 任务默认
+    fixed_gait_freq: float | None = 2.0     # 步频; None = 任务默认 (每回合 U(1,2) 采样)
+    fixed_curvature: float | None = -25     # 仅转圈阶段生效; None = 任务默认 (每回合随机采样)
+    fixed_pole_spacing: float | None = 0.15  # 仅绕杆阶段生效; None = 任务默认 (跟随课程)
     enable_collision: bool = False
-    phase0_only: bool | None = None
+    phase0_only: bool | None = None         # command_source 为 None 时的细粒度覆盖
+    smoke_steps: int | None = None          # 无窗自检: 只跑 N 步打印统计后退出 (不启动 viewer)
+
+
+# 固定值显示: None 表示交给任务默认
+def fmt_fixed(value: float | None) -> str:
+    return "任务默认" if value is None else f"{value:g}"
 
 
 # 安全读取保存的配置字段，不构造 YAML 中的 Python 对象。
@@ -340,13 +348,13 @@ def run_play(cfg: PlayConfig):
     saved_env = read_saved_config(resume_path, "env") if resume_path is not None else {}
     saved_agent = read_saved_config(resume_path, "agent") if resume_path is not None else {}
     saved_command = saved_env.get("commands", {}).get("slalom_cmd", {})
-    cmd_cfg.phase0_only = (  # type: ignore[attr-defined]
-        cfg.phase0_only if cfg.phase0_only is not None
-        else str(saved_command.get("phase0_only", "false")).lower() == "true"
-    )
     if saved_agent:
         saved_clip = saved_agent.get("clip_actions", "null")
         agent_cfg.clip_actions = None if saved_clip.lower() in ("null", "none", "") else float(saved_clip)
+        saved_steps = str(saved_agent.get("num_steps_per_env", "null")).lower()
+        if saved_steps not in ("null", "none", "") and int(saved_steps) != _STEPS_PER_ITER:
+            print(f"[WARN] 检查点按每轮 {int(saved_steps)} 步训练, 当前口径为 {_STEPS_PER_ITER} 步/轮; "
+                  f"课程按轮次对齐故不受影响, 但检查点里的 step 计数不可直接比较")
     if saved_env:
         env_cfg.decimation = int(saved_env.get("decimation", env_cfg.decimation))
         saved_mujoco = saved_env.get("sim", {}).get("mujoco", {})
@@ -355,44 +363,58 @@ def run_play(cfg: PlayConfig):
         train_iter = extract_iter_from_checkpoint(resume_path)
         align_iter = max(0, train_iter - 10)  # -10 避免边界效应，与 env 内部对齐
 
-    # 用 align_iter 判断阶段，保证与 env.common_step_counter 一致
-    align_step = align_iter * _STEPS_PER_ITER
-    is_slalom_phase = get_training_phase(align_step, cmd_cfg.phase0_only) == 1  # type: ignore[attr-defined]
+    # 阶段判定优先级: command_source > phase0_only > 检查点记录 > 检查点轮数
+    if cfg.command_source is not None:
+        is_slalom_phase = cfg.command_source == "绕杆"
+        stage_src = f"命令行 command_source={cfg.command_source}"
+    elif cfg.phase0_only is not None:
+        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, cfg.phase0_only) == 1
+        stage_src = f"命令行 phase0_only={cfg.phase0_only}"
+    elif "phase0_only" in saved_command:
+        saved_phase0 = str(saved_command["phase0_only"]).lower() == "true"
+        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, saved_phase0) == 1
+        stage_src = f"检查点 phase0_only={saved_phase0}"
+    else:
+        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, False) == 1
+        stage_src = (f"检查点轮数 iter {align_iter}" if resume_path is not None
+                     else "无检查点, 默认一阶段")
 
-    # 命令固定值覆盖 — 按阶段互斥: Phase 0 用 curvature, Phase 1 用 pole_spacing
-    cmd_cfg = env_cfg.commands.get("slalom_cmd")
-    if cmd_cfg is not None and TRAINED_MODE:
-        if cfg.fixed_velocity is not None:
-            cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore
-        if cfg.fixed_height_f is not None:
-            cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore
-        if cfg.fixed_height_h is not None:
-            cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore
-        if cfg.fixed_gait_freq is not None:
-            cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore
-        if is_slalom_phase:
-            # Phase 1: 绕杆 — curvature 动态, 杆间距覆盖课程
-            cmd_cfg.fixed_curvature = None  # type: ignore[assignment]
-            if cfg.fixed_pole_spacing is not None:
-                cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing  # type: ignore
-        else:
-            # Phase 0: 转弯基元 — 使用 fixed_curvature
-            if cfg.fixed_curvature is not None:
-                cmd_cfg.fixed_curvature = cfg.fixed_curvature  # type: ignore
+    # 阶段由解析结果唯一决定, 回放期间不再翻转
+    cmd_cfg.phase0_only = not is_slalom_phase  # type: ignore[attr-defined]
+    if is_slalom_phase and align_iter < PHASE1_END_ITER:
+        print(f"[WARN] iter {align_iter} 早于绕杆阶段起点 iter {PHASE1_END_ITER}, 按 {stage_src} 对齐到起点")
+        align_iter = PHASE1_END_ITER
+    align_step = align_iter * _STEPS_PER_ITER
+
+    # 命令固定值: 转圈用 fixed_curvature, 绕杆用 fixed_pole_spacing, 两者互斥; 为 None 的字段用任务默认
+    if cmd_cfg is not None:
+        cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[assignment]
+        cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore[assignment]
+        cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore[assignment]
+        cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore[assignment]
+        cmd_cfg.fixed_curvature = None if is_slalom_phase else cfg.fixed_curvature  # type: ignore[assignment]
+        cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing if is_slalom_phase else None  # type: ignore[assignment]
+
+    stage_name = "绕杆 (Phase 1)" if is_slalom_phase else "转圈 (Phase 0)"
+    stage_value = (f"杆间距={fmt_fixed(cfg.fixed_pole_spacing)}"
+                   if is_slalom_phase else f"曲率={fmt_fixed(cfg.fixed_curvature)}")
+    print(f"[INFO] 阶段 = {stage_name} | 判定来源 = {stage_src}")
+    print(f"[INFO] 命令固定值: vel={fmt_fixed(cfg.fixed_velocity)} h_f={fmt_fixed(cfg.fixed_height_f)} "
+          f"h_h={fmt_fixed(cfg.fixed_height_h)} gait={fmt_fixed(cfg.fixed_gait_freq)} | {stage_value}")
 
     # 构建命令后缀（用于视频和CSV文件名）
-    cmd_suffix_parts = []
+    cmd_suffix_parts = ["raogan" if is_slalom_phase else "zhuanquan"]
     if is_slalom_phase:
         spacing_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
         cmd_suffix_parts.append(f"sp{get_effective_pole_spacing(spacing_raw):.2f}")
-    elif cfg.fixed_curvature is not None:
-        cmd_suffix_parts.append(f"cu{cfg.fixed_curvature}")
-    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}" if cmd_suffix_parts else ""
+    else:
+        cmd_suffix_parts.append("cuauto" if cfg.fixed_curvature is None else f"cu{cfg.fixed_curvature:g}")
+    cmd_suffix = f"-{'-'.join(cmd_suffix_parts)}"
     if video_name is not None:
         video_name = f"{video_name}{cmd_suffix}"
 
     # 绕杆阶段：用正确的杆间距重建杆实体（覆盖 env_cfg 中的默认占位）
-    if is_slalom_phase and TRAINED_MODE:
+    if is_slalom_phase:
         pole_sp_raw = cfg.fixed_pole_spacing if cfg.fixed_pole_spacing is not None else get_curriculum_pole_spacing(align_step)
         pole_sp = get_effective_pole_spacing(pole_sp_raw)   # 与期望轨迹一致 (不兼容区间 → 无直行最小间距)
         positions = generate_pole_positions(spacing=pole_sp, num_poles=POLE_NUM, start_x=pole_sp, start_y=POLE_Y)  # 杆1 在 x=spacing
@@ -408,14 +430,12 @@ def run_play(cfg: PlayConfig):
         print("[WARN] 虚拟智能体的视频录制已禁用")
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
-    # 检查点轮次统一换算为当前课程口径。
-    curriculum_step = align_iter * _STEPS_PER_ITER
 
-    # 对齐 curriculum 阶段（使用与阶段判断一致的 align_iter）
-    if TRAINED_MODE and resume_path is not None and train_iter > 0:
-        env.common_step_counter = curriculum_step
-        phase_name = "绕杆阶段" if is_slalom_phase else "基元阶段"
-        print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{phase_name}]")
+    # 对齐 curriculum 阶段（用与阶段判定同一口径的 align_step, 回放期间阶段不再翻转）
+    # 无检查点时为 0; 显式指定绕杆时已按阶段起点钳过, 故 dummy 模式也能跑二阶段
+    env.common_step_counter = align_step
+    if align_step > 0:
+        print(f"[INFO] curriculum 对齐到 iter {align_iter} (step {align_step}) [{stage_name}]")
 
     # 绕杆阶段：确认杆间距 (有效间距, 与期望轨迹一致)
     if is_slalom_phase:
@@ -477,8 +497,33 @@ def run_play(cfg: PlayConfig):
             strict=True,
             map_location=device
         )
-        env.unwrapped.common_step_counter = curriculum_step
+        env.unwrapped.common_step_counter = align_step
         policy = runner.get_inference_policy(device=device)
+
+    # 无窗自检: 推 N 步打印统计后退出 (不启动 viewer)
+    if cfg.smoke_steps is not None:
+        obs_dict = env.reset()
+        obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
+        # 必须 no_grad: 本任务的 actions 观测带 history_length, 历史缓冲的 where(out=) 不接受需要梯度的输入
+        with torch.no_grad():
+            for _ in range(cfg.smoke_steps):
+                act = policy(obs_in)
+                obs_dict, rew, dones, extras = env.step(act)
+                obs_in = obs_dict[0] if isinstance(obs_dict, tuple) else obs_dict
+        robot = env.unwrapped.scene["robot"]
+        body_pos = robot.data.body_link_pos_w
+        cmd = env.unwrapped.command_manager.get_command("slalom_cmd")
+        print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
+        print(f"[INFO] 命令 = {[round(float(v), 4) for v in cmd[0].tolist()]}")
+        print(f"[INFO] F_body x={float(body_pos[0, _MODEL_INDICES.f_body_id, 0]):.4f} "
+              f"z={float(body_pos[0, _MODEL_INDICES.f_body_id, 2]):.4f} | "
+              f"H_body x={float(body_pos[0, _MODEL_INDICES.h_body_id, 0]):.4f} "
+              f"z={float(body_pos[0, _MODEL_INDICES.h_body_id, 2]):.4f}")
+        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")  # type: ignore[index]
+        if data_recorder:
+            data_recorder.save_to_csv()
+        env.close()
+        return
 
     # 运行查看器
     try:

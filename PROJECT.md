@@ -312,13 +312,36 @@ MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0531**（平滑路径�
 
 ## 回放脚本 (scripts/SQuRo_Slalom_play.py)
 
-提取 `train_iter` → `align_iter = max(0, train_iter-10)`
+阶段判定优先级（`--command-source` 是最外层开关）：
 
-- 避免运行 3999 轮的策略时误加载到 Phase1(4000)
-- 读取保存的 `phase0_only`；锁定时所有轮次均为 Phase 0，否则按 `align_iter < 4000` 识别
-- `--phase0-only True` 强制验证一阶段；旧训练按保存的物理步长、decimation 和动作裁剪回放
-- Phase 0：设 `fixed_curvature`；Phase 1：设 `fixed_pole_spacing` 并清除 `fixed_curvature`
-- Phase 1 用正确间距重建杆实体，可视化需要与期望路径一致
+| 优先级 | 来源 | 说明 |
+| --- | --- | --- |
+| 1 | `--command-source 转圈 / 绕杆` | 显式指定一阶段（Phase 0 转弯基元）或二阶段（Phase 1 绕杆） |
+| 2 | `--phase0-only True/False` | 细粒度覆盖，仅在 command_source 为 None 时生效 |
+| 3 | 检查点 `params/env.yaml` 的 `phase0_only` | 训练侧当前锁定一阶段，故多数检查点会判定为转圈 |
+| 4 | 检查点轮数 `align_iter = max(0, train_iter-10)` | -10 避免运行 3999 轮的策略时误加载到 Phase 1(4000) |
+
+解析出的阶段唯一决定 `cfg.phase0_only`（`= not is_slalom_phase`），回放期间不再翻转；
+显式 `绕杆` 而检查点轮次早于 `PHASE1_END_ITER` 时打印警告并对齐到该起点。
+旧训练按保存的物理步长、decimation 和动作裁剪回放；检查点 `num_steps_per_env` 与当前口径
+不一致时只报警告（课程按轮次对齐，不受影响，但 step 计数不可直接比较）。
+
+**命令固定值**（`None` 一律表示"交给任务默认"，会随曲率/间距变化）：
+
+| 选项 | 生效方式 |
+| --- | --- |
+| `--fixed-curvature` | 仅转圈阶段生效；None = 每回合按课程随机采样 |
+| `--fixed-pole-spacing` | 仅绕杆阶段生效；None = 跟随课程（`get_curriculum_pole_spacing`） |
+| `--fixed-velocity` | 基础速度（最终速度仍按 `base×gait×scale(κ)` 变） |
+| `--fixed-height-f/h`、`--fixed-gait-freq` | 固定高度/步频；None = 任务默认（步频每回合 U(1,2) 采样） |
+
+两者互斥由阶段决定：`fixed_curvature` 与 `fixed_pole_spacing` 一定只有一个被写入
+（另一个置 None），避免"回放转圈却带着杆间距"这类错配。绕杆阶段用有效间距重建杆实体，
+可视化与期望路径一致；视频/CSV 文件名带阶段标签（`zhuanquan` / `raogan`）。
+
+`--smoke-steps N` 为无窗自检：只推 N 步、打印命令与前后躯干位置后退出（不启动 viewer），
+自检路径必须在 `torch.no_grad()` 下推步 —— 本任务 `actions` 观测带 `history_length=2`，
+历史缓冲的 `where(..., out=)` 不接受需要梯度的输入。
 
 CSV 记录关节角度、速度、动作空间输出等信息，并保存视频。
 
@@ -339,7 +362,8 @@ uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger tensor
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (19 项, 桩环境不建 env)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_env_smoke         # 端到端自检 (真实 env, 含重置边界)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_training_setup    # 索引、课程、PPO 与内侧约束 (11 项)
-uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint-file <ckpt> --phase0-only True
+uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint-file <ckpt>              # 阶段自动判定
+uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --agent zero --command-source 绕杆 --smoke-steps 50 --no-video  # 无窗自检
 uv run python -B -m mjlab.scripts.Backup.dump_training_scalars <run_dir> --list  # 读训练日志标量 (通用)
 ```
 
