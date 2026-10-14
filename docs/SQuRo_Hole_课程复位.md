@@ -48,20 +48,18 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
 日志在 sim.forward 和位置表更新之后记录当帧状态，不修改奖励或观测。
 指标保留为独立张量，逐步采样不会把历史值覆盖；避免逐项转为 Python 数值造成 GPU 同步。
 
-四种模式的 TensorBoard 前缀为 `Metrics/双高`、`Metrics/前低后高`、
-`Metrics/前高后低`、`Metrics/双低`，每种模式只记录以下指标：
+速度与高度误差走 `Data/` 前缀，共四项：
 
-| 指标后缀 | 含义 |
+| 指标 | 含义 |
 | --- | --- |
-| `占比` | 当帧该模式的环境比例 |
-| `前躯干方向误差均值_度` | F 物理前向相对世界 +X 的绝对角误差，仅两种单低模式记录 |
+| `Data/act_vel_x` | 实测前向速度均值 |
+| `Data/cmd_vel_x` | 命令前向速度均值 |
+| `Data/error_height_F` | 前躯干高度误差 |
+| `Data/error_height_H` | 后躯干高度误差 |
 
-另记录 `Metrics/课程/阶段` 与 `Metrics/运动/侧向速度绝对值均值`。
+高度课程四项（`Metrics/Zmin_m`、`Metrics/success_rate`、`Metrics/failure_rate`、
+`Metrics/level_progress`）由 runner 在阶段 4 记录，见 `docs/SQuRo_Hole_高度课程设计.md`。
 
-F 段 yaw 减 π/2、H 段 yaw 加 π/2，再折回 ±π。
-无样本的模式占比和均值记录为零；占比零不代表该模式表现良好。
-
-原先按模式分组的 `样本数`、`相对X均值`、`前向/侧向速度均值`、
-`后躯干方向误差均值_度` 以及 `Metrics/位移/*` 已随
-`log_detailed_metrics` 开关一并删除，不再输出。
+模式分组占比、模式方向误差、`课程/阶段`、`运动/侧向速度绝对值均值`、`走廊/*`
+以及 `vel_error_mean` 均已删除，不再输出。
 

@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from typing import TYPE_CHECKING, Optional, Tuple
 from mjlab.managers.command_manager import CommandTerm
-from mjlab.utils.lab_api.math import euler_xyz_from_quat, wrap_to_pi
 from .config import (
     BASE_FREQ,
     BASE_SPEED,
@@ -35,7 +34,6 @@ from .curriculums import (
     stage_uses_height_course,
 )
 from .entity import read_bottom_z, write_hole_bottom_z
-from .indices import _MODEL_INDICES, resolve_model_indices
 
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -250,36 +248,6 @@ class HoleCommand(CommandTerm):
         if self.enable_height_course and stage_uses_height_course(stage) and self.obstacle_entity is not None:
             self._update_command_from_height_rule()
         self._update_obstacle_height_command()
-        self._log_diagnostics()
-
-
-    # 按更新后的命令记录模式覆盖与物理方向；口径见 docs/SQuRo_Hole_课程复位.md。
-    def _log_diagnostics(self) -> None:
-        resolve_model_indices(self.robot)
-        front_low = self.height_f_command < THRESHOLD_HEIGHT
-        hind_low = self.height_h_command < THRESHOLD_HEIGHT
-        groups = (
-            ("双高", ~front_low & ~hind_low),
-            ("前低后高", front_low & ~hind_low),
-            ("前高后低", ~front_low & hind_low),
-            ("双低", front_low & hind_low),
-        )
-        positions = self.robot.data.root_link_pos_w
-        velocity = self.robot.data.root_link_lin_vel_w
-        body_ids = [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id]
-        quaternions = self.robot.data.body_link_quat_w[:, body_ids]
-        _, _, yaw = euler_xyz_from_quat(quaternions.reshape(-1, 4))
-        yaw = yaw.reshape(self.num_envs, len(body_ids))
-        offsets = yaw.new_tensor([-torch.pi / 2, torch.pi / 2])
-        heading_error = torch.rad2deg(wrap_to_pi(yaw + offsets)).abs()
-        log = self._env.extras["log"]
-        log["Metrics/课程/阶段"] = positions.new_tensor(get_current_stage(self._env.common_step_counter))
-        log["Metrics/运动/侧向速度绝对值均值"] = velocity[:, 1].abs().mean().detach()
-        for name, mask in groups:
-            log[f"Metrics/{name}/占比"] = mask.float().mean().detach()
-            if name in ("前低后高", "前高后低"):
-                mean_heading = (heading_error[:, 0] * mask).sum() / mask.sum().clamp_min(1)
-                log[f"Metrics/{name}/前躯干方向误差均值_度"] = mean_heading.detach()
 
 
     # 回合重置: 重新锚定位移起点

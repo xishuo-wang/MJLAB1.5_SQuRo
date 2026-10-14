@@ -102,9 +102,8 @@ def compute_linear_velocity_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算速度误差
     vel_error = torch.abs(desired_vel_x - actual_vel_x)
     # 记录 metrics 到 extras["log"]
-    env.extras["log"]["Metrics/vel_error_mean"] = vel_error.mean().item()
-    env.extras["log"]["Metrics/actual_vel_x_mean"] = actual_vel_x.mean().item()
-    env.extras["log"]["Metrics/cmd_vel_x_mean"] = desired_vel_x.mean().item()
+    env.extras["log"]["Data/act_vel_x"] = actual_vel_x.mean().item()
+    env.extras["log"]["Data/cmd_vel_x"] = desired_vel_x.mean().item()
     # 计算奖励
     reward = torch.exp(-100.0 * vel_error ** 2)
     reward = torch.where(min_speed_mask, torch.full_like(reward, -1.0), reward)
@@ -125,8 +124,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     height_F_error = torch.abs(z_ref_F - F_body_height)
     height_H_error = torch.abs(z_ref_H - H_body_height)
     # 记录 metrics
-    env.extras["log"]["Metrics/height_F_error_mean"] = height_F_error.mean().item()
-    env.extras["log"]["Metrics/height_H_error_mean"] = height_H_error.mean().item()
+    env.extras["log"]["Data/error_height_F"] = height_F_error.mean().item()
+    env.extras["log"]["Data/error_height_H"] = height_H_error.mean().item()
     sigma_height = get_curriculum_reward_weight(env, "height_sigma")
     w_height = get_curriculum_reward_weight(env, "height")
     r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
@@ -270,12 +269,8 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # 全位置走廊只惩罚两段最高采样点超出各自目标上限。
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "corridor")
-    log = env.extras["log"]
     if weight == 0.0:
-        zero = torch.zeros(env.num_envs, device=env.device)
-        log["Metrics/走廊/前段超限均值"] = zero.mean().detach()
-        log["Metrics/走廊/后段超限均值"] = zero.mean().detach()
-        return zero
+        return torch.zeros(env.num_envs, device=env.device)
 
     asset: Entity = env.scene["robot"]
     command = env.command_manager.get_command("hole_cmd")
@@ -286,8 +281,6 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + BODY_HEIGHT_OFFSET  # type: ignore
     excess = (surface_z - ceiling).clamp_min(0.0)
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
-    log["Metrics/走廊/前段超限均值"] = excess[:, 0].mean().detach()
-    log["Metrics/走廊/后段超限均值"] = excess[:, 1].mean().detach()
     return -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
 
 

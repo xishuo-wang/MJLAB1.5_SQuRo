@@ -56,9 +56,9 @@
 
 热身数据流为 `随机高度池＋固定100 mm先验 → 六维命令 → 参考与策略观测 → 策略动作`；真实课程为 `mocap板体 → 板高先验/高度查表 → 六维命令 → 参考与策略观测 → 策略动作`。runner在3000 iter从机器人场景重建为单板场景，保留步数和课程状态并重新取得观测；重建判据不再依赖启动时是否存在板体，从无板配置续训课程检查点也会在首次采样前创建板。
 
-新检查点 `hole_state.version=3`。旧检查点可在其训练时版本（如 `1d25a45`）继续回放，本次训练必须从头开始。
+检查点 `hole_state` 记录 stage、collision、layout 与 height_course；版本字段已随版本审查一并删除。旧检查点可在其训练时版本（如 `1d25a45`）继续回放，本次训练必须从头开始。
 
-默认 Metrics 保留前后高度误差、前向速度及误差、四种高度模式占比、两种单低模式的前段方向误差、侧向速度绝对值、课程阶段、走廊超限、实际板底净空超限，以及课程四项：`Metrics/Zmin_m`（当前最低板高）、`Metrics/success_rate`（当前最低档成功率）、`Metrics/failure_rate`（当前最低档失败率）、`Metrics/level_progress`（挡位推进进度 = 连续达标批数 / 所需批数）。原先按模式分组的样本数、位移极值与多套速度/朝向等调试项已随 `log_detailed_metrics` 开关一并删除。
+默认日志分两组：速度与高度误差走 `Data/` 前缀（`Data/act_vel_x`、`Data/cmd_vel_x`、`Data/error_height_F`、`Data/error_height_H`）；高度课程四项为 `Metrics/Zmin_m`（当前最低板高）、`Metrics/success_rate`（当前最低档成功率）、`Metrics/failure_rate`（当前最低档失败率）、`Metrics/level_progress`（挡位推进进度 = 连续达标批数 / 所需批数），仅阶段 4 记录。原先的模式分组占比与方向误差、`课程/阶段`、`运动/侧向速度绝对值均值`、`走廊/*`、`vel_error_mean` 均已删除。
 
 ## 训练与验收
 
