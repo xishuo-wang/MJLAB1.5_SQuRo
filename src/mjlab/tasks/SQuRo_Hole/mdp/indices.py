@@ -23,20 +23,21 @@ _ACT_JOINT_NAMES = [
 
 # 执行器对应索引
 _ACT_IDX = {name: i for i, name in enumerate(_ACT_JOINT_NAMES)}
-_ACT_F_SPINE1_ID    = _ACT_IDX["F_spine1_joint"]      # 脊柱侧摆: 0
-_ACT_F_BODY_ID      = _ACT_IDX["F_body_joint"]        # 前脊柱扭转: 1
-_ACT_NECK_YAW_ID    = _ACT_IDX["Neck_yaw_joint"]      # 头部侧摆: 2
-_ACT_NECK_PITCH_ID  = _ACT_IDX["Neck_pitch_joint"]    # 头部俯仰: 3
-_ACT_FL_SHOULDER_ID = _ACT_IDX["FL_shoulder_joint"]   # 左前肩: 4
-_ACT_FL_ELBOW_ID    = _ACT_IDX["FL_elbow_joint"]      # 左前肘: 5
-_ACT_FR_SHOULDER_ID = _ACT_IDX["FR_shoulder_joint"]   # 右前肩: 6
-_ACT_FR_ELBOW_ID    = _ACT_IDX["FR_elbow_joint"]      # 右前肘: 7
-_ACT_H_SPINE1_ID    = _ACT_IDX["H_spine1_joint"]      # 脊柱俯仰: 8
-_ACT_H_BODY_ID      = _ACT_IDX["H_body_joint"]        # 后脊柱扭转: 9
-_ACT_HL_HIP_ID      = _ACT_IDX["HL_hip_joint"]        # 左后髋: 10
-_ACT_HL_KNEE_ID     = _ACT_IDX["HL_knee_joint"]       # 左后膝: 11
-_ACT_HR_HIP_ID      = _ACT_IDX["HR_hip_joint"]        # 右后髋: 12
-_ACT_HR_KNEE_ID     = _ACT_IDX["HR_knee_joint"]       # 右后膝: 13
+_ACT_NUM = len(_ACT_JOINT_NAMES)                        # 驱动关节数量
+_ACT_F_SPINE1_ID    = _ACT_IDX["F_spine1_joint"]        # 脊柱侧摆: 0
+_ACT_F_BODY_ID      = _ACT_IDX["F_body_joint"]          # 前脊柱扭转: 1
+_ACT_NECK_YAW_ID    = _ACT_IDX["Neck_yaw_joint"]        # 头部侧摆: 2
+_ACT_NECK_PITCH_ID  = _ACT_IDX["Neck_pitch_joint"]      # 头部俯仰: 3
+_ACT_FL_SHOULDER_ID = _ACT_IDX["FL_shoulder_joint"]     # 左前肩: 4
+_ACT_FL_ELBOW_ID    = _ACT_IDX["FL_elbow_joint"]        # 左前肘: 5
+_ACT_FR_SHOULDER_ID = _ACT_IDX["FR_shoulder_joint"]     # 右前肩: 6
+_ACT_FR_ELBOW_ID    = _ACT_IDX["FR_elbow_joint"]        # 右前肘: 7
+_ACT_H_SPINE1_ID    = _ACT_IDX["H_spine1_joint"]        # 脊柱俯仰: 8
+_ACT_H_BODY_ID      = _ACT_IDX["H_body_joint"]          # 后脊柱扭转: 9
+_ACT_HL_HIP_ID      = _ACT_IDX["HL_hip_joint"]          # 左后髋: 10
+_ACT_HL_KNEE_ID     = _ACT_IDX["HL_knee_joint"]         # 左后膝: 11
+_ACT_HR_HIP_ID      = _ACT_IDX["HR_hip_joint"]          # 右后髋: 12
+_ACT_HR_KNEE_ID     = _ACT_IDX["HR_knee_joint"]         # 右后膝: 13
 
 
 # 腿部索引
