@@ -25,6 +25,7 @@ import torch
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
+from mjlab.scripts._diagnostics import BACKUP_EFFORT_DIR
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import WALL_X_POS, _STEPS_PER_ITER
@@ -35,7 +36,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
 # 配置段
 TASK_NAME = "Mjlab-SQuRo-Backup"
 CHECKPOINT = "logs/rsl_rl/SQuRo_Backup/2026-09-27_14-33-27_v1/model_8999.pt"
-OUT_DIR = Path("logs/backup_effort")
+OUT_DIR = BACKUP_EFFORT_DIR
 STEPS = 320                       # 一个循环 (λ=1 约 2.7 s) 并留余量
 REPEATS = 3                       # 每条件重复次数 (同一构建内, 给误差棒)
 WARMUP_STEPS = 30                 # 丢弃首次构建态

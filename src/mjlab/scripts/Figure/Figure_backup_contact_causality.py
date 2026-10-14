@@ -7,7 +7,7 @@
 # 图内标签用英文 (投稿图), 注释与打印用中文。
 # 用法:
 #   uv run python -B -m mjlab.scripts.Figure.Figure_backup_contact_causality \
-#       logs/backup_contact_causality/<run>/traces_iter8999.npz
+#       logs/diagnostics/SQuRo_Backup/contact_causality/<run>/traces_iter8999.npz
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -17,6 +17,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from mjlab.scripts._diagnostics import BACKUP_CONTACT_DIR
+
 # ============================================================
 # 中文字体配置
 # ============================================================
@@ -29,7 +31,7 @@ plt.rcParams["axes.unicode_minus"] = False
 # ============================================================
 # 配置区
 # ============================================================
-NPZ_PATH = r"D:\MuJoCoLab_1.5\logs\backup_contact_causality\2026-09-27_14-33-27_v1_soft\traces_iter8999.npz"
+NPZ_PATH = str(BACKUP_CONTACT_DIR / "2026-09-27_14-33-27_v1_soft" / "traces_iter8999.npz")
 T_CONTACT = 0.56
 OUT_SUFFIX = "causality_ad"
 

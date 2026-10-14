@@ -23,6 +23,7 @@ import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
+from mjlab.scripts._diagnostics import BACKUP_CONTACT_DIR
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
@@ -57,7 +58,7 @@ class Cfg:
     tag: str = ""                      # 输出目录后缀, 用于区分不同接触参数的批次
     device: str = "cuda:0"
     seed: int = 0
-    out_dir: str = "logs/backup_contact_causality"
+    out_dir: str = str(BACKUP_CONTACT_DIR)
 
 
 # 构造固定净宽的环境; wall_force=True 时挂墙接触传感器

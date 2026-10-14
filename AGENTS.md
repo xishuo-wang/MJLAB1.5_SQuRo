@@ -61,6 +61,7 @@ src/mjlab/
 
 ## 环境注意事项
 
+- **诊断产物统一归档**：审查报告、探针脚本、图表和诊断数据放在 `logs/diagnostics/<任务名>/`；默认路径集中在 `scripts/_diagnostics.py`。一次性输出和编译缓存用完清理，临时缓存统一放在 `logs/diagnostics/_cache/`。原始训练产物继续使用 `logs/rsl_rl/`。
 - **训练必须显式指定 tensorboard**：`--agent.logger tensorboard`（沙箱下 wandb 需要命名管道，会被拒绝）。
 - `logs/` 已在 `.gitignore` 中，训练产物不会误提交。
 - 跑 pytest 时加 `-p no:cacheprovider` 并设 `PYTHONDONTWRITEBYTECODE=1`，

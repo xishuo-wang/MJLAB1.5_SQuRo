@@ -26,6 +26,7 @@ import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
+from mjlab.scripts._diagnostics import BACKUP_PRIMITIVES_DIR
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
@@ -62,7 +63,7 @@ class Cfg:
     wall_contact_sensor: bool = False
     device: str = "cuda:0"
     seed: int = 0
-    out_dir: str = "logs/backup_primitives"
+    out_dir: str = str(BACKUP_PRIMITIVES_DIR)
 
 
 # 名义通道角的列序: [F_spine1, F_body, H_spine1, H_body] (参考表顺序)

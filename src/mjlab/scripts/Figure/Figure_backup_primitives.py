@@ -6,7 +6,7 @@
 #   raw        = S_i / sum_j S_j   (按未归一化激活面积, 会被行程最大的轴向压制)
 # 用法:
 #   uv run python -B -m mjlab.scripts.Figure.Figure_backup_primitives \
-#       logs/backup_primitives/<run>/primitives_iter8999.csv --window action
+#       logs/diagnostics/SQuRo_Backup/primitives/<run>/primitives_iter8999.csv --window action
 from __future__ import annotations
 
 from dataclasses import dataclass
