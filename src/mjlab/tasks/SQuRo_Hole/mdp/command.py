@@ -144,7 +144,6 @@ class HoleCommand(CommandTerm):
 
     # 重采样高度、速度和障碍高度命令
     def _resample_command(self, env_ids: torch.Tensor) -> None:
-        n_envs = len(env_ids)  
         current_step = self._env.common_step_counter
         stage = get_current_stage(current_step)
         
@@ -160,33 +159,20 @@ class HoleCommand(CommandTerm):
         if available_heights is None:
             # 固定和随机命令回放仍使用完整高度池
             available_heights = FULL_HEIGHT_VALUES
-        
-        # 初始化命令张量
-        vel_x = torch.zeros(n_envs, device=self.device)
-        height_f = torch.zeros(n_envs, device=self.device)
-        height_h = torch.zeros(n_envs, device=self.device)
-        
-        # 为每个环境采样
-        for i in range(n_envs):
-            # 检查是否使用固定值
-            if self.cfg.fixed_velocity is not None:
-                vel_x[i] = self.cfg.fixed_velocity
-            if self.cfg.fixed_height_f is not None:
-                height_f[i] = self.cfg.fixed_height_f
-            if self.cfg.fixed_height_h is not None:
-                height_h[i] = self.cfg.fixed_height_h
-            
-            # 如果固定值未设置，则使用采样逻辑
-            if self.cfg.fixed_height_f is None or self.cfg.fixed_height_h is None:
-                sampled_height_f, sampled_height_h = self._sample_heights(available_heights)
-                if self.cfg.fixed_height_f is None:
-                    height_f[i] = sampled_height_f
-                if self.cfg.fixed_height_h is None:
-                    height_h[i] = sampled_height_h
-            
-            # 如果固定速度未设置，则根据高度计算速度
-            if self.cfg.fixed_velocity is None:
-                vel_x[i] = self._compute_sampled_velocity(height_f[i], height_h[i])
+
+        # 整批采样: 未固定的一侧独立采样, 固定的一侧直接覆盖
+        sampled_height_f, sampled_height_h = self._sample_heights(available_heights, len(env_ids))
+        if self.cfg.fixed_height_f is not None:
+            sampled_height_f.fill_(self.cfg.fixed_height_f)
+        if self.cfg.fixed_height_h is not None:
+            sampled_height_h.fill_(self.cfg.fixed_height_h)
+        height_f, height_h = sampled_height_f, sampled_height_h
+
+        # 速度: 固定值优先, 否则按高度命令整批计算
+        if self.cfg.fixed_velocity is not None:
+            vel_x = torch.full((len(env_ids),), self.cfg.fixed_velocity, device=self.device)
+        else:
+            vel_x = compute_cmd_vel_x(height_f, height_h)
 
         # 更新命令张量
         self.command_vel_x[env_ids] = vel_x
@@ -242,17 +228,12 @@ class HoleCommand(CommandTerm):
         self.command_obstacle_height[:] = bottom_z
 
 
-    # 采样前后肢高度组合，两侧独立采样
-    def _sample_heights(self, available_heights: list) -> tuple:
+    # 整批采样前后肢高度组合，两侧独立采样
+    def _sample_heights(self, available_heights: list, count: int) -> tuple:
         values = torch.tensor(available_heights, device=self.device)
-        idx_F = torch.randint(0, len(available_heights), (1,), device=self.device)
-        idx_H = torch.randint(0, len(available_heights), (1,), device=self.device)
-        return values[idx_F], values[idx_H]
-
-
-    # 计算绝对速度，用于随机采样路径
-    def _compute_sampled_velocity(self, height_f: torch.Tensor, height_h: torch.Tensor) -> float:
-        return float(compute_cmd_vel_x(height_f, height_h))
+        idx_f = torch.randint(0, len(available_heights), (count,), device=self.device)
+        idx_h = torch.randint(0, len(available_heights), (count,), device=self.device)
+        return values[idx_f], values[idx_h]
 
 
     # 按当前课程阶段更新高度和速度命令
