@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from mjlab.entity import Entity
+from mjlab.utils.lab_api.math import euler_xyz_from_quat
 
 from .config import (
     BASE_HEIGHT,
@@ -229,7 +230,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     low_heightF_mask = desired_heightF < THRESHOLD_HEIGHT
     if low_heightF_mask.any():
         f_body_quat = asset.data.body_link_quat_w[low_heightF_mask, _MODEL_INDICES.f_body_id]
-        f_body_roll = _quaternion_to_roll(f_body_quat) + math.pi/2  # +90度转换为弧度
+        f_body_roll = euler_xyz_from_quat(f_body_quat)[0] + math.pi/2  # +90度转换为弧度
         f_roll_error = torch.abs(f_body_roll)
         f_roll_error = torch.min(f_roll_error, 2 * math.pi - f_roll_error)
         roll_error[low_heightF_mask] = f_roll_error
@@ -238,7 +239,7 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     low_heightH_mask = desired_heightH < THRESHOLD_HEIGHT
     if low_heightH_mask.any():
         h_body_quat = asset.data.body_link_quat_w[low_heightH_mask, _MODEL_INDICES.h_body_id]
-        h_body_roll = _quaternion_to_roll(h_body_quat) - math.pi/2  # -90度转换为弧度
+        h_body_roll = euler_xyz_from_quat(h_body_quat)[0] - math.pi/2  # -90度转换为弧度
         h_roll_error = torch.abs(h_body_roll)
         h_roll_error = torch.min(h_roll_error, 2 * math.pi - h_roll_error)
         roll_error[low_heightH_mask] = h_roll_error
@@ -247,9 +248,9 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     high_height_mask = ~(low_heightF_mask | low_heightH_mask)
     if high_height_mask.any():
         f_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.f_body_id]
-        f_roll_error = torch.abs(_quaternion_to_roll(f_body_quat) + math.pi/2)  
+        f_roll_error = torch.abs(euler_xyz_from_quat(f_body_quat)[0] + math.pi/2)
         h_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.h_body_id]
-        h_roll_error = torch.abs(_quaternion_to_roll(h_body_quat) - math.pi/2)  
+        h_roll_error = torch.abs(euler_xyz_from_quat(h_body_quat)[0] - math.pi/2)
         roll_error[high_height_mask] = (f_roll_error + h_roll_error)
         sigma[high_height_mask] = get_curriculum_reward_weight(env, "sigma_angle_high")
     
@@ -339,20 +340,3 @@ def _error_spn_scale(env, device, dtype) -> torch.Tensor:
         s = torch.tensor(scale, device=device, dtype=dtype)
         _SPN_SCALE_CACHE[key] = s
     return s
-
-
-
-
-# 辅助函数：四元数转偏航角（绕Z轴旋转）
-def _quaternion_to_roll(quat: torch.Tensor) -> torch.Tensor:
-    if quat.dim() == 1:
-        quat = quat.unsqueeze(0)
-    
-    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    
-    # 计算侧倾角（绕X轴）
-    sinr_cosp = 2 * (w * x + y * z)
-    cosr_cosp = 1 - 2 * (x * x + y * y)
-    roll = torch.atan2(sinr_cosp, cosr_cosp)
-    
-    return roll.squeeze()
