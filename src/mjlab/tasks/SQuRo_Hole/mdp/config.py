@@ -7,6 +7,7 @@ THRESHOLD_HEIGHT = 0.0395   # 高度阈值: 低于该值视为低高度
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]       # 0-1k 轮采样的高度值
 FULL_HEIGHT_VALUES = [0.02, 0.04, 0.045, 0.05, 0.055]   # 1-2k 轮采样的高度值
 
+
 # 四种高度模式
 MODE_BOTH_HIGH = 0          # 前后肢均高
 MODE_FRONT_LOW = 1          # 前肢低后肢高
@@ -26,33 +27,31 @@ CMD_OBSTACLE_HEIGHT_IDS = COMMAND_FIELDS.index("obstacle_height")
 
 
 # 预计算表相关配置
-HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]     # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
-TABLE_RESOLUTION = 500                      # 相位分辨率: 参考表第三维的采样点数
-USE_SPINE_CSV = False                       # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
-NECK_REF_POS = (0.0, -0.3)                  # 头颈相关参考姿态
-HIND_HOLD_POS = (0.80, -0.15)               # 当前基线的后腿收缩参考角
+HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]         # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
+TABLE_RESOLUTION = 500                          # 相位分辨率: 参考表第三维的采样点数
+USE_SPINE_CSV = False                           # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
+NECK_REF_POS = (0.0, -0.3)                      # 头颈相关参考姿态
+HIND_HOLD_POS = (0.80, -0.15)                   # 当前基线的后腿收缩参考角
 
 
-# 高度课程相关配置
+# 受限空间高度课程相关配置
 WARMUP_OBSTACLE_HEIGHT = 0.100                  # 无实体时的100毫米板高占位
 OBSTACLE_HEIGHT_SPLIT = 0.070
 ENTRY_MARGIN = 0.150
 EXIT_MARGIN = 0.100
 BODY_HEIGHT_OFFSET = 0.030
 LOW_TARGET_HEIGHT = 0.020
-HEIGHT_MIN = 0.046
-HEIGHT_MAX = 0.090
-HEIGHT_INITIAL_MIN = 0.070
-HEIGHT_STEP = 0.002
-HEIGHT_FINE_STEP_THRESHOLD = 0.050
-HEIGHT_FINE_STEP = 0.001
-HEIGHT_MIN_SAMPLE_PROBABILITY = 0.30
-HEIGHT_MIN_SUCCESS_BATCH = 256
-HEIGHT_MIN_SUCCESS_RATE = 0.60
-HEIGHT_REQUIRED_BATCHES = 2
+HEIGHT_MIN = 0.046                              # 受限空间高度最小值
+HEIGHT_MAX = 0.090                              # 受限空间高度最大值
+HEIGHT_INITIAL_MIN = 0.070                      # 课程开始时受限空间高度最小值
+HEIGHT_FINE_STEP_THRESHOLD = 0.050              # 课程阈值 50mm
+HEIGHT_STEP = 0.002                             # 大于阈值时课程 step
+HEIGHT_FINE_STEP = 0.001                        # 小于阈值时课程 step
+HEIGHT_MIN_SAMPLE_PROBABILITY = 0.30            # 最小高度固定采样概率
+HEIGHT_MIN_SUCCESS_BATCH = 256                  # 推进课程要求成功批次
+HEIGHT_MIN_SUCCESS_RATE = 0.60                  # 推进课程要求成功率
+HEIGHT_REQUIRED_BATCHES = 2                     # 推进课程要求连续成功批次
 HEIGHT_MIN_DWELL_ITERATIONS = 100
 HOLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)   # 真实课程的初始板底位置
 HOLE_SIZE = (0.015, 0.1, 0.005)                  # 单板半长、半宽、半厚
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                # 板底净空余量
-
-
