@@ -34,7 +34,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     resolve_foot_force_ids,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
-    Initialize_Tables,
+    initialize_tables,
     get_reference_joint_state,
 )
 from mjlab.utils.wrappers import VideoRecorder
@@ -146,7 +146,7 @@ class ReferenceTablePolicy:
     # ---------- 与原来相同：扫描一个完整周期，检查限位冲突 ----------
     def report_reference_limits(self) -> None:
         command = self.env.command_manager.get_command("hole_cmd")
-        tables = Initialize_Tables(self.env.device)
+        tables = initialize_tables(self.env.device)
         period = float(tables["mode_periods"].max())
         probe = SimpleNamespace(
             device=self.env.device,

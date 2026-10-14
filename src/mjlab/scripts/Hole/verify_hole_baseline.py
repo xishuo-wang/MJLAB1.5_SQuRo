@@ -43,12 +43,12 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import (
     HEIGHT_LIST,
-    Initialize_Tables,
+    initialize_tables,
 )
 
 # 参考表结构与模式/高度档的作用
 def check_reference() -> None:
-    tables = Initialize_Tables("cpu")
+    tables = initialize_tables("cpu")
     front = tables["front_pos"]
     num_modes = front.shape[0]
     assert num_modes == NUM_MODES

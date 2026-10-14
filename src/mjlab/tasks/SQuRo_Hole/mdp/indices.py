@@ -44,9 +44,9 @@ _ACT_FL_LEG_IDS = (_ACT_FL_SHOULDER_ID, _ACT_FL_ELBOW_ID)       # 左前腿: (4,
 _ACT_FR_LEG_IDS = (_ACT_FR_SHOULDER_ID, _ACT_FR_ELBOW_ID)       # 右前腿: (6, 7)
 _ACT_HL_LEG_IDS = (_ACT_HL_HIP_ID,      _ACT_HL_KNEE_ID)        # 左后腿: (10, 11)
 _ACT_HR_LEG_IDS = (_ACT_HR_HIP_ID,      _ACT_HR_KNEE_ID)        # 右后腿: (12, 13)
-_ACT_F_LEG_IDS  = _ACT_FL_LEG_IDS + _ACT_FR_LEG_IDS             # 前腿合并: (4, 5, 6, 7)
-_ACT_H_LEG_IDS  = _ACT_HL_LEG_IDS + _ACT_HR_LEG_IDS             # 后腿合并: (10, 11, 12, 13)
-_ACT_LEG_IDS    = _ACT_F_LEG_IDS  + _ACT_H_LEG_IDS              # 全腿合并: (4, 5, 6, 7, 10, 11, 12, 13)
+_ACT_LEG_F_IDS  = _ACT_FL_LEG_IDS + _ACT_FR_LEG_IDS             # 前腿合并: (4, 5, 6, 7)
+_ACT_LEG_H_IDS  = _ACT_HL_LEG_IDS + _ACT_HR_LEG_IDS             # 后腿合并: (10, 11, 12, 13)
+_ACT_LEG_IDS    = _ACT_LEG_F_IDS  + _ACT_LEG_H_IDS              # 全腿合并: (4, 5, 6, 7, 10, 11, 12, 13)
 
 
 # 脊柱索引
@@ -57,7 +57,7 @@ _ACT_SPN_H_ROLL_ID  = _ACT_H_BODY_ID                            # 后脊柱扭�
 _ACT_SPN_F_IDS = (_ACT_SPN_F_YAW_ID,   _ACT_SPN_F_ROLL_ID)      # 前脊柱合并: (0, 1)
 _ACT_SPN_H_IDS = (_ACT_SPN_H_PITCH_ID, _ACT_SPN_H_ROLL_ID)      # 后脊柱合并: (8, 9)
 _ACT_SPN_IDS   = _ACT_SPN_F_IDS + _ACT_SPN_H_IDS                # 脊柱合并: (0, 1, 8, 9)
-SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)      # 参考表的执行器序存储
+SPN_H_PITCH_SLOT = _ACT_SPN_IDS.index(_ACT_SPN_H_PITCH_ID)      # 后脊柱俯仰在参考表脊柱列中的下标
 
 
 # 头部索引
