@@ -27,7 +27,7 @@ CMD_OBSTACLE_HEIGHT_IDS = COMMAND_FIELDS.index("obstacle_height")
 
 
 # 预计算表相关配置
-HEIGHT_LIST = [0.02, 0.04, 0.05, 0.055]         # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
+HEIGHT_LIST = [0.02, 0.04, 0.045, 0.05, 0.055]  # 预计算表的高度档 (m): 参考表 [模式][高度档][相位][关节] 的第二维
 TABLE_RESOLUTION = 500                          # 相位分辨率: 参考表第三维的采样点数
 USE_SPINE_CSV = False                           # 是否启用脊柱 CSV 轨迹 (仓库内已打包, 默认不启用)
 NECK_REF_POS = (0.0, -0.3)                      # 头颈相关参考姿态
