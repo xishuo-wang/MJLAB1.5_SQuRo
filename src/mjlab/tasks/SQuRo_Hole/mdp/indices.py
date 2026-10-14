@@ -1,5 +1,4 @@
 from __future__ import annotations
-from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
 
@@ -84,10 +83,6 @@ REAR_SEG_SITE_NAMES  = tuple(f"H_body_{i}_site" for i in range(1, 10))
 FOOT_SITE_NAMES      = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site")
 FOOT_NAMES = tuple(name.split("_", 1)[0] for name in FOOT_SITE_NAMES)
 FOOT_GEOM_NAMES = tuple(f"{name}_foot_collision" for name in FOOT_NAMES)
-
-
-# 观测用配置
-ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES))
 
 
 

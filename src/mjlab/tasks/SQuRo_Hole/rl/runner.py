@@ -22,9 +22,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     hole_collision_enabled,
 )
 
-# 几何/状态格式版本: 换代时旧 checkpoint 需要显式迁移
-HOLE_STATE_VERSION = 3
-
 
 # 读取 checkpoint 里记录的 hole_state / env_state (回放侧在建环境前要用)
 def read_hole_state(checkpoint_path) -> dict:
@@ -230,13 +227,10 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         saved = (infos or {}).get("hole_state") or {}
         if saved.get("height_course") and self._height_curriculum_state is not None:
             self._height_curriculum_state.load_state_dict(saved["height_course"])
-        if not saved:
-            print("[WARN] 检查点没有 hole_state 记录 (旧格式): 无法判断它当时的碰撞配置; "
-                  "若它是在无真实碰撞下训练的, 不要当作已完成真实碰撞训练")
-        else:
+        if saved:
             step = int(self.env.unwrapped.common_step_counter)
-            print(f"[INFO] 检查点 hole_state: 版本={saved.get('version')}, "
-                  f"stage={saved.get('stage')}, 实际碰撞={saved.get('collision')}, "
+            print(f"[INFO] 检查点 hole_state: stage={saved.get('stage')}, "
+                  f"实际碰撞={saved.get('collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
             # 校验保存的几何/接触参数与当前场景是否一致 (不一致时训练数据口径会变)
             mismatch = []
@@ -288,7 +282,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     def save(self, path: str, infos=None):
         step = int(self.env.unwrapped.common_step_counter)
         extra = {
-            "version": HOLE_STATE_VERSION,
             "stage": get_current_stage(step),
             "collision": self._hole_compiled_collision(),
             "layout": self._hole_scene_state(),

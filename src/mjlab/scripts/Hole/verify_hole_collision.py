@@ -1,4 +1,4 @@
-﻿# uv run python -B -m mjlab.scripts.Hole.verify_hole_collision
+# uv run python -B -m mjlab.scripts.Hole.verify_hole_collision
 # 碰撞重构验收: 几何一致性 / 编译掩码 / 物理开关 / Runner 重建 / checkpoint 状态
 # 任一项不通过即以非零码退出 (此前只打印结果, 失败也返回 0)
 
@@ -159,7 +159,6 @@ def check_state_roundtrip() -> None:
     import os
 
     from mjlab.tasks.SQuRo_Hole.rl.runner import (
-        HOLE_STATE_VERSION,
         read_env_step,
         read_hole_state,
     )
@@ -174,8 +173,7 @@ def check_state_roundtrip() -> None:
     os.makedirs("tmp_verify_log", exist_ok=True)
     runner.save(path)
     saved = read_hole_state(path)
-    check("hole_state 已写入", bool(saved), f"version={saved.get('version')}")
-    check("版本号正确", saved.get("version") == HOLE_STATE_VERSION)
+    check("hole_state 已写入", bool(saved))
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_STEP))
     check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
     layout = saved.get("layout") or []
@@ -252,12 +250,14 @@ def check_layout_roundtrip() -> None:
     check("回放复现 solref", e2.solref is not None and tuple(e2.solref) == (0.03, 1.0),
           f"{e2.solref}")
     check("单板几何被应用", n == 1, f"{n}")
-    legacy_layout = list(saved.get("layout") or []) + [
+    # 多板 layout 只保留单板, 不会额外建板
+    cfg3 = load_env_cfg(TASK, play=True)
+    n_multi = apply_saved_layout(cfg3, list(saved.get("layout") or []) + [
         {"name": "Hole2", "position": [0.6, 0.0, 0.07], "size": [0.1, 0.1, 0.005]},
         {"name": "Hole3", "position": [1.2, 0.0, 0.05], "size": [0.015, 0.1, 0.005]},
-    ]
-    applied = apply_saved_layout(cfg2, legacy_layout)
-    check("旧三板检查点不会恢复额外板体", applied == 1 and list(cfg2.scene.entities) == ["robot", "hole1"])
+    ])
+    check("多板 layout 仅保留单板", n_multi == 1 and list(cfg3.scene.entities) == ["robot", "hole1"],
+          f"n={n_multi} entities={list(cfg3.scene.entities)}")
     try:
         runner.env.close()
     except Exception:

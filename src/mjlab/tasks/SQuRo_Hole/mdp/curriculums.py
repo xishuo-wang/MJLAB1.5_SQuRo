@@ -190,7 +190,6 @@ def sample_base_heights(
 
 # 逐环境回合结果聚合为最低板高课程状态。
 class HeightCurriculumState:
-    VERSION = 1
     def __init__(self, start_iteration: int = STAGE3_ITER):
         self.z_min = HEIGHT_INITIAL_MIN
         self.z_max = HEIGHT_MAX
@@ -310,7 +309,6 @@ class HeightCurriculumState:
     # 生成可保存到 checkpoint 的课程状态。
     def state_dict(self) -> dict:
         return {
-            "version": self.VERSION,
             "z_min": self.z_min,
             "z_max": self.z_max,
             "level_start_iteration": self.level_start_iteration,
@@ -329,8 +327,6 @@ class HeightCurriculumState:
 
     # 从 checkpoint 状态恢复课程统计。
     def load_state_dict(self, state: dict) -> None:
-        if int(state.get("version", 0)) != self.VERSION:
-            raise ValueError(f"不支持的高度课程状态版本: {state.get('version')}")
         for name in (
             "z_min", "z_max", "level_start_iteration", "batch_count",
             "batch_success_count", "consecutive_success_batches",

@@ -19,7 +19,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_H_IDS,
     CMD_GAIT_FREQ_IDS,
     CMD_CURVATURE_IDS,
-    HEIGHT_INITIAL_MIN,
     CMD_OBSTACLE_HEIGHT_IDS,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
@@ -423,7 +422,7 @@ def run_play(cfg: PlayConfig):
     if cfg.obstacle_height is not None:
         board_z, board_src = float(cfg.obstacle_height), "命令行显式指定"
     elif (saved_hole.get("height_course") and stage_uses_height_course(final_stage)) or use_course:
-        board_z = float(course_state.get("z_min", HEIGHT_INITIAL_MIN))
+        board_z = float(course_state["z_min"])
         board_src = "检查点 height_course.z_min"
     n_board = set_obstacle_bottom_z(env_cfg, board_z) if board_z is not None else 0
     # 障碍物可见性: 仅改 rgba, 不改碰撞; 放在几何应用之后以免被覆盖
@@ -440,8 +439,8 @@ def run_play(cfg: PlayConfig):
     if not cfg.obstacles_viz:
         print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
     if saved_hole:
-        print(f"[INFO] 检查点 hole_state: 版本={saved_hole.get('version')}, "
-              f"stage={saved_hole.get('stage')}, 记录碰撞={saved_hole.get('collision')}")
+        print(f"[INFO] 检查点 hole_state: stage={saved_hole.get('stage')}, "
+              f"记录碰撞={saved_hole.get('collision')}")
 
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]
