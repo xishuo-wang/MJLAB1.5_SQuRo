@@ -19,15 +19,12 @@ from .curriculums import (
     SPN_AXIS_SCALE,
     get_curriculum_reward_weight,
 )
-from .entity import VIRTUAL_CLEARANCE_MARGIN, hole_geometry, read_bottom_z
 from .indices import (
     _ACT_F_LEG_IDS,
     _ACT_LEG_IDS,
     _ACT_NECK_IDS,
     _ACT_SPN_IDS,
     _MODEL_INDICES,
-    FRONT_SEG_SITE_NAMES,
-    REAR_SEG_SITE_NAMES,
     resolve_actuator_joint_ids,
 )
 from .reference import (
@@ -276,59 +273,6 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-
-def compute_body_contact_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset = env.scene["robot"]
-    device = env.device
-    num_envs = env.num_envs
-
-    # 板几何 (x 覆盖区间 / 虚拟阈值) 读**实际场景实体**, 与实体碰撞共用同一份定义
-    geo = hole_geometry(env)
-    if not geo:
-        env.extras["log"]["Metrics/body_contact_excess"] = 0.0
-        return torch.zeros(num_envs, device=device)
-    obs_x_min = torch.tensor([g["x_min"] for g in geo], device=device)
-    obs_x_max = torch.tensor([g["x_max"] for g in geo], device=device)
-    scene = env.scene
-    obs_z_thresh = torch.stack(
-        [read_bottom_z(scene.entities[g["name"].lower()]) - VIRTUAL_CLEARANCE_MARGIN
-         for g in geo],
-        dim=1,
-    )
-
-    # 前肢/后肢躯干中心的 X 坐标 [num_envs, 2], 索引由 indices.py 解析
-    body_x = asset.data.body_link_pos_w[:, [_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], 0]
-
-    # 判断是否在障碍物X范围内 [num_envs, 2, 3]
-    in_obs_matrix = (body_x.unsqueeze(-1) >= obs_x_min) & (body_x.unsqueeze(-1) <= obs_x_max)
-    # 不在任何板区内的躯干无高度约束, 阈值抬到 +inf, 使其恒判为"未超出"
-    active_z_thresh = torch.where(
-        in_obs_matrix, obs_z_thresh[:, None, :].expand_as(in_obs_matrix),
-        torch.full_like(in_obs_matrix, float("inf"), dtype=obs_z_thresh.dtype)
-    ).min(dim=-1).values                                    # [num_envs, 2]
-
-    # 按身体部位聚合采样点高度。
-    seg_site_ids = list(_MODEL_INDICES.f_body_site_ids) + list(_MODEL_INDICES.h_body_site_ids)
-    all_sites_z = asset.data.site_pos_w[:, seg_site_ids, 2]
-    assert len(FRONT_SEG_SITE_NAMES) == len(REAR_SEG_SITE_NAMES), "前后段采样点数量必须一致"
-    all_sites_z = all_sites_z.view(num_envs, 2, len(FRONT_SEG_SITE_NAMES))
-    # 每段取最高的采样点与阈值比较, 超出量 v = max(surface - z_thresh, 0)
-    v = torch.clamp(all_sites_z.max(dim=-1).values - active_z_thresh, min=0.0)
-
-    sigma = get_curriculum_reward_weight(env, "sigma_body_contact")
-    weight = get_curriculum_reward_weight(env, "body_contact")
-    # 在范围内给奖励, 超出按超出量指数衰减 (形态对齐 Slalom 走廊奖励)
-    r_f = torch.exp(-sigma * v[:, 0] ** 2)
-    r_h = torch.exp(-sigma * v[:, 1] ** 2)
-    reward = (r_f + r_h) / 2
-
-    # 记录 metrics
-    env.extras["log"]["Metrics/body_contact_excess"] = v.mean().item()
-
-    return reward * weight
-
-
-
 # 全位置走廊只惩罚两段最高采样点超出各自目标上限。
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "corridor")
@@ -345,7 +289,7 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         asset.data.site_pos_w[:, _MODEL_INDICES.f_body_site_ids, 2].max(dim=1).values,
         asset.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids, 2].max(dim=1).values,
     ), dim=1)
-    ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + BODY_HEIGHT_OFFSET
+    ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + BODY_HEIGHT_OFFSET  # type: ignore
     excess = (surface_z - ceiling).clamp_min(0.0)
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     log["Metrics/走廊/前段超限均值"] = excess[:, 0].mean().detach()

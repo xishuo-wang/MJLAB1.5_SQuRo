@@ -132,7 +132,7 @@ def check_curriculum() -> None:
     # 阶段阈值 = iter 边界 × 每 iter 步数
     thresholds = [0, STAGE1_STEP, STAGE2_STEP, STAGE3_STEP]
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
-    keys = ["body_contact", "height", "mimic_pos", "height_sigma"]
+    keys = ["corridor", "height", "mimic_pos", "height_sigma"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
     for step in thresholds:
@@ -142,7 +142,7 @@ def check_curriculum() -> None:
               f"{str(reward_weight_curriculum.should_enable_holes(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
-          f"vel={eff['vel']}, body_contact={eff['body_contact']}, "
+          f"vel={eff['vel']}, corridor={eff['corridor']}, "
           f"enable_holes={reward_weight_curriculum.should_enable_holes(STAGE3_STEP)}")
 
 

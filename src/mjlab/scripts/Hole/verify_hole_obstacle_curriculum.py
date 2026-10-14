@@ -44,7 +44,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_body_contact_reward
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
     monitor_hole_passage,
@@ -280,29 +279,13 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
     check("未通过就 timeout 记失败分母", timeout["failure_code"] == 5 and not timeout["success"])
 
 
-# 验证周期命令重采样不移动障碍，以及虚拟净空随实际 mocap 高度变化。
+# 验证周期命令重采样不移动障碍。
 def verify_dynamic_sources(env: ManagerBasedRlEnv) -> None:
     command = env.command_manager.get_term("hole_cmd")
     board = env.scene.entities["hole1"]
     previous = read_bottom_z(board).clone()
     command._resample_command(torch.arange(env.num_envs, device=env.device))
     check("周期命令重采样不改变回合板高", torch.equal(read_bottom_z(board), previous))
-
-    robot = env.scene["robot"]
-    resolve_model_indices(robot)
-    body_ids = robot.indexing.body_ids[
-        torch.tensor([_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id], device=env.device)
-    ]
-    local_sites = list(_MODEL_INDICES.f_body_site_ids) + list(_MODEL_INDICES.h_body_site_ids)
-    site_ids = robot.indexing.site_ids[torch.tensor(local_sites, device=env.device)]
-    with torch.inference_mode():
-        robot.data.data.xpos[0, body_ids, 0] = float(board.cfg.position[0])
-        robot.data.data.site_xpos[0, site_ids, 2] = 0.080
-    write_hole_bottom_z(board, 0.048)
-    low_reward = compute_body_contact_reward(env)[0]
-    write_hole_bottom_z(board, 0.090)
-    high_reward = compute_body_contact_reward(env)[0]
-    check("虚拟净空奖励阈值跟随实际板底", high_reward > low_reward)
 
 
 # 从独立的碰撞几何与编译尺寸读取实际板底。

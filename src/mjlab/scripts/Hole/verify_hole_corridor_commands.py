@@ -31,7 +31,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 from mjlab.tasks.SQuRo_Hole.mdp.entity import hole_geometry, write_hole_bottom_z
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_body_contact_reward, compute_corridor_reward
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_corridor_reward
 
 
 # 验证三个边界两侧的阶段、奖励权重和课程门控。
@@ -47,7 +47,7 @@ def verify_stages() -> None:
     assert previous["corridor"] == 0.0 and warmup["corridor"] == 5.0
     assert heights_for_stage(2) == heights_for_stage(3)
     physical = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
-    assert physical["corridor"] == physical["body_contact"] == 5.0
+    assert physical["corridor"] == 5.0
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
 
@@ -67,7 +67,6 @@ def verify_warmup_without_boards() -> None:
             pool = torch.tensor(heights_for_stage(get_current_stage(env.common_step_counter)))
             assert torch.isin(command.command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]], pool).all()
             assert not command.obstacle_height_sampled.any()
-            assert not compute_body_contact_reward(env).any()
         keep = command.command[[1, 3]].clone()
         env.reset(env_ids=torch.tensor([0, 2]))
         torch.testing.assert_close(command.command[[1, 3]], keep)
