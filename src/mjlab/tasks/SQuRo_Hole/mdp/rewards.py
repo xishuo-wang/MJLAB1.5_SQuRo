@@ -179,12 +179,9 @@ def compute_reached_reward(env: ManagerBasedRlEnv, target_x: float = 1.5, sigma:
     # 计算x方向距离误差
     x_error = current_x - target_x
     distance = torch.abs(x_error)
-    
-    # 使用高斯函数计算奖励：距离越近奖励越大
-    # exp(-sigma * distance^2)，距离为0时奖励为1
     reward = torch.exp(-sigma * distance ** 2)
     
-    # 获取课程学习权重（如果有配置的话）
+    # 获取课程学习权重
     weight = get_curriculum_reward_weight(env, "reached")
     
     return reward * weight
@@ -209,7 +206,7 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 身体角度奖励，修正坐标系后的目标角度固定为零。
+# 身体角度奖励，修正坐标系后的目标角度固定为零
 def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
@@ -266,7 +263,7 @@ def compute_smoothness_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 全位置走廊只惩罚两段最高采样点超出各自目标上限。
+# 全位置走廊只惩罚两段最高采样点超出各自目标上限
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "corridor")
     if weight == 0.0:
@@ -299,7 +296,7 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     if not mode2_mask.any():
         return reward
     
-    # 按前腿执行器分组读取模型关节速度。
+    # 按前腿执行器分组读取模型关节速度
     joint_vel = asset.data.joint_vel
     front_leg_vel = joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_F_LEG_IDS)]
     vel_abs = torch.abs(front_leg_vel)
@@ -312,12 +309,11 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
 
 
 
-
 _SPN_SCALE_CACHE: dict = {}
 
 
 
-# 缓存脊柱逐轴误差缩放 (顺序 = F_spine1, F_body, H_spine1, H_body)
+# 缓存脊柱逐轴误差缩放
 def _error_spn_scale(env, device, dtype) -> torch.Tensor:
     scale = SPN_AXIS_SCALE
     key = (str(device), str(dtype), scale)
