@@ -2,6 +2,7 @@ import re
 import tyro
 import math
 import torch
+import tempfile
 import pandas as pd
 from pathlib import Path
 from typing import Literal
@@ -68,8 +69,8 @@ class PlayConfig:
     fixed_height_f: float | None = 0.055    # 期望前肢高度
     fixed_height_h: float | None = 0.020    # 期望后肢高度
     collision: bool | None = None           # 障碍物碰撞
-    obstacle_viz: bool = True              # 可视化障碍物
-    obstacle_height: float | None = None    # 障碍物板底高度 (m); None = 用检查点记录的课程档
+    obstacle_viz: bool = True               # 可视化障碍物
+    obstacle_height: float | None = 0.047   # 障碍物板底高度 (m)
 
 
 
@@ -97,7 +98,6 @@ def extract_video_name_from_checkpoint(checkpoint_path: Path) -> str:
 
 # 选择可写输出目录
 def resolve_output_dir(preferred: Path) -> Path:
-    import tempfile
     videos_dir = preferred / "videos"
     try:
         videos_dir.mkdir(parents=True, exist_ok=True)
@@ -445,14 +445,24 @@ def run_play(cfg: PlayConfig):
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]
     if cfg.command_source == "fixed":
+        # fixed: 只加 hF / hH / v（如果有）
         if fixed_height_f is not None:
             suffix_parts.append(f"hF{fixed_height_f * 1000:.0f}")
         if fixed_height_h is not None:
             suffix_parts.append(f"hH{fixed_height_h * 1000:.0f}")
         if cfg.fixed_velocity is not None:
             suffix_parts.append(f"v{cfg.fixed_velocity:.2f}")
-    if cfg.collision is not None:
-        suffix_parts.append("col1" if cfg.collision else "col0")
+    elif cfg.command_source == "schedule":
+        # schedule: 开启碰撞 -> oh<障碍物高度mm>；未开启碰撞 -> col0
+        if collision:
+            oh_value = obstacle_z if obstacle_z is not None else cfg.obstacle_height
+            if oh_value is not None:
+                suffix_parts.append(f"oh{oh_value * 1000:.0f}")
+            else:
+                print("[WARN] schedule 开启碰撞但无有效障碍物高度，未添加 oh 后缀")
+        else:
+            suffix_parts.append("col0")
+
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:
         video_name = f"{video_name}{suffix}"
