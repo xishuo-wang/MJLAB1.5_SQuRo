@@ -245,7 +245,7 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算动作差
     action_diff = current_action - prev_action
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_action_L1")
+    weight = get_curriculum_reward_weight(env, "weight_action_L2")
     # 计算惩罚
     p = -torch.sum(torch.square(action_diff), dim=1)
     penalty = p * weight
