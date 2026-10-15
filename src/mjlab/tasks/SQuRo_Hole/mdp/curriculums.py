@@ -43,27 +43,29 @@ _STAGES = (0, STAGE1_ITER, STAGE2_ITER, STAGE3_ITER)
 # 奖励权重与 σ 课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "mimic_pos":                (10.0, 10.0, 10.0, 10.0),
-    "mimic_vel":                (5.0, 5.0, 5.0, 5.0),
-    "vel":                      (5.0, 5.0, 5.0, 10.0),
-    "height":                   (2.5, 2.5, 2.5, 5.0),
+    "weight_mimic_pos":         (10.0, 10.0, 10.0, 10.0),
+    "weight_mimic_vel":         (5.0, 5.0, 5.0, 5.0),
+    "weight_vel":               (5.0, 5.0, 5.0, 10.0),
+    "weight_height":            (2.5, 2.5, 2.5, 5.0),
     "foot_clearance":           (1.0, 1.0, 1.0, 1.0),
-    "reached":                  (1.0, 1.0, 1.0, 1.0),
     "orientation":              (2.0, 2.0, 2.0, 4.0),
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.2, 1.0),
+    "weight_action_L1":         (0.1, 0.2, 0.2, 1.0),
     "corridor":                 (0.0, 0.0, 5.0, 5.0),
     # 非奖励项
+    "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
+    "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
+    "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
+    "sigma_spn_vel":            (0.1, 0.1, 0.1, 0.1),
+    "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
+    "sigma_vel":                (100, 100, 100, 100),
+    "sigma_height":             (500, 1000, 1000, 1000),
+
     "sigma_angle_low":          (50.0, 50.0, 50.0, 50.0),
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
-    "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
-    "sigma_leg_vel":            (0.1, 0.1, 0.1, 0.1),
-    "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
-    "sigma_spn_vel":            (0.1, 0.1, 0.1, 0.1),
-    "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
-    "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
-    "height_sigma":             (500.0, 1000.0, 1000.0, 1000.0),
 }
 
 
