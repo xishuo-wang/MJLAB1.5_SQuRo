@@ -65,6 +65,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
     "sigma_angle_low":          (50.0, 50.0, 50.0, 50.0),
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
+    "sigma_orientation":        (5.0, 5.0, 5.0, 5.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
 }
 

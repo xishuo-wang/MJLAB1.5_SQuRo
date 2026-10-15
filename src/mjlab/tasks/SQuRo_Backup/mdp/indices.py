@@ -1,5 +1,10 @@
 from __future__ import annotations
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
+    SPINE_FRONT_FRAME,
+    SPINE_HIND_FRAME,
+    SPINE_DEFORMATION_BODY_NAMES,
+)
 
 
 
@@ -26,12 +31,6 @@ SEGMENT_BELLY_BACK_SITES = (
     ("F_body_belly_site", "F_body_back_site"),
     ("H_body_belly_site", "H_body_back_site"),
 )
-
-# 形变接口使用独立实例索引；列向量依次为头向、左向、背向。
-SPINE_DEFORMATION_BODY_NAMES = ("F_body_Link", "base_Link", "H_body_Link")
-SPINE_FRONT_FRAME = ((0., 1., 0.), (0., 0., -1.), (-1., 0., 0.))
-SPINE_HIND_FRAME = ((0., -1., 0.), (0., 0., 1.), (-1., 0., 0.))
-
 
 # 按名称解析当前实体的三段索引，不复用训练任务的全局缓存。
 def resolve_spine_deformation_indices(entity) -> tuple[int, int, int]:

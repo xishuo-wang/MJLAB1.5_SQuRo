@@ -5,6 +5,12 @@ from mjlab.actuator.xml_actuator import XmlActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
 
+# 躯干物理坐标标定，列依次为头向、左向、背向，见 docs/SQuRo_实际脊柱形变角.md。
+SPINE_DEFORMATION_BODY_NAMES = ("F_body_Link", "base_Link", "H_body_Link")
+SPINE_FRONT_FRAME = ((0., 1., 0.), (0., 0., -1.), (-1., 0., 0.))
+SPINE_HIND_FRAME = ((0., -1., 0.), (0., 0., 1.), (-1., 0., 0.))
+
+
 # XML文件路径
 SQuRO_XML: Path = (MJLAB_SRC_PATH / "asset_zoo" / "robots" / "SQuRo" / "xmls" / "SQuRo.xml")
 assert SQuRO_XML.exists()

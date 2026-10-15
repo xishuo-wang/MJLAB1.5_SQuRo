@@ -16,7 +16,7 @@
 | 左向 | +X | −X |
 | 背向 | −Y | +Y |
 
-校正常量和具名索引解析位于 `tasks/SQuRo_Backup/mdp/indices.py`；当前模型的腹背 site 和头颈位置已用回归核对。
+校正常量统一位于 `asset_zoo/robots/SQuRo/SQuRo_constants.py`，Backup 的 `mdp/indices.py` 保留导入兼容并负责具名索引解析；当前模型的腹背 site 和头颈位置已用回归核对。
 
 先以最短旋转分别将两端解剖纵轴对齐到 `x_M`，同步搬运各自背向。绕 `x_M` 从后背向到前背向的有符号夹角为 `axial`。这是通过共同纵轴去弯曲后的相对扭转，不是绕世界轴的 roll 差。
 
@@ -50,7 +50,7 @@ reader.reset()                  # 全部清理
 
 分层：`tasks/SQuRo_Backup/api/spine_reader.py` 是**任务侧只读接口**（按名取实体刚体、装配解剖轴），
 放在 `api/` 而不是 `mdp/`，表示它**不参与 MDP**（不接奖励、观测、命令、终止）；
-底层算法在 `utils/spine_deformation.py`，与具体机器人无关。解剖常量仍在 `mdp/indices.py`。
+底层算法在 `utils/spine_deformation.py`，与具体机器人无关。解剖常量由机器人公共配置统一管理，Hole 的绝对偏航与滚转奖励也复用这套标定。
 
 离线分析、其他机器人或自定义参考点可以直接使用纯张量接口：
 

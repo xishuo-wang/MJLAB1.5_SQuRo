@@ -1,9 +1,12 @@
 from __future__ import annotations
-import math
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
-from mjlab.utils.lab_api.math import euler_xyz_from_quat
+from mjlab.utils.lab_api.math import matrix_from_quat
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
+    SPINE_FRONT_FRAME,
+    SPINE_HIND_FRAME,
+)
 from .config import (
     BASE_HEIGHT,
     CMD_VEL_X_IDS,
@@ -175,64 +178,49 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
 
         
 
-# 计算朝向奖励
-def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+# 用共享标定读取前后躯干的物理偏航角与滚转角。
+def _get_body_orientation(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
     asset: Entity = env.scene["robot"]
-    quat = asset.data.root_link_quat_w 
-    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    siny_cosp = 2 * (w * z + x * y)
-    cosy_cosp = 1 - 2 * (y * y + z * z)
-    yaw = torch.atan2(siny_cosp, cosy_cosp) - math.pi/2
-    yaw_error = torch.abs(yaw)
-    yaw_error_alt = torch.min(yaw_error, 2 * math.pi - yaw_error)
-    
-    reward = torch.exp(-5 * yaw_error_alt ** 2)
+    body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
+    quat = asset.data.body_link_quat_w[:, body_ids]
+    rotation = matrix_from_quat(quat) @ quat.new_tensor((SPINE_FRONT_FRAME, SPINE_HIND_FRAME))
+    yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
+    roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
+    return yaw, roll
+
+
+
+# 约束前后躯干物理偏航角的圆周均值朝向世界 +X。
+def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    yaw, _ = _get_body_orientation(env)
+    yaw_error = torch.atan2(torch.sin(yaw).mean(dim=1), torch.cos(yaw).mean(dim=1))
+    sigma = get_curriculum_reward_weight(env, "sigma_orientation")
     weight = get_curriculum_reward_weight(env, "orientation")
-    
+    reward = torch.exp(-sigma * yaw_error ** 2)
     return reward * weight
 
 
 
-# 身体角度奖励，修正坐标系后的目标角度固定为零
+# 按高度模式约束低侧躯干的物理滚转，双高与双低均约束两段。
 def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    roll_error = torch.zeros(env.num_envs, device=env.device)
-    sigma = torch.full_like(roll_error, get_curriculum_reward_weight(env, "sigma_angle_low"))
-
-    # 情况1: 前肢高度低
+    _, roll = _get_body_orientation(env)
+    f_roll_error, h_roll_error = torch.abs(roll).unbind(dim=1)
     low_height_F_mask = desired_height_F < THRESHOLD_HEIGHT
-    if low_height_F_mask.any():
-        f_body_quat = asset.data.body_link_quat_w[low_height_F_mask, _MODEL_INDICES.f_body_id]
-        f_body_roll = euler_xyz_from_quat(f_body_quat)[0] + math.pi/2  # +90度转换为弧度
-        f_roll_error = torch.abs(f_body_roll)
-        f_roll_error = torch.min(f_roll_error, 2 * math.pi - f_roll_error)
-        roll_error[low_height_F_mask] = f_roll_error
-    
-    # 情况2: 后肢高度低
     low_height_H_mask = desired_height_H < THRESHOLD_HEIGHT
-    if low_height_H_mask.any():
-        h_body_quat = asset.data.body_link_quat_w[low_height_H_mask, _MODEL_INDICES.h_body_id]
-        h_body_roll = euler_xyz_from_quat(h_body_quat)[0] - math.pi/2  # -90度转换为弧度
-        h_roll_error = torch.abs(h_body_roll)
-        h_roll_error = torch.min(h_roll_error, 2 * math.pi - h_roll_error)
-        roll_error[low_height_H_mask] = h_roll_error
-    
-    # 情况3: 两个高度都不低于阈值
     high_height_mask = ~(low_height_F_mask | low_height_H_mask)
-    if high_height_mask.any():
-        f_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.f_body_id]
-        f_roll_error = torch.abs(euler_xyz_from_quat(f_body_quat)[0] + math.pi/2)
-        h_body_quat = asset.data.body_link_quat_w[high_height_mask, _MODEL_INDICES.h_body_id]
-        h_roll_error = torch.abs(euler_xyz_from_quat(h_body_quat)[0] - math.pi/2)
-        roll_error[high_height_mask] = (f_roll_error + h_roll_error)
-        sigma[high_height_mask] = get_curriculum_reward_weight(env, "sigma_angle_high")
-    
-    reward = torch.exp(-sigma * roll_error ** 2)
+    # 保留双高误差相加的尺度，双低不再发生前段被后段覆盖。
+    roll_error = torch.where(high_height_mask | low_height_F_mask, f_roll_error, 0.0)
+    roll_error += torch.where(high_height_mask | low_height_H_mask, h_roll_error, 0.0)
+    sigma = torch.where(
+        high_height_mask,
+        get_curriculum_reward_weight(env, "sigma_angle_high"),
+        get_curriculum_reward_weight(env, "sigma_angle_low"),
+    )
     weight = get_curriculum_reward_weight(env, "angle")
-    
+    reward = torch.exp(-sigma * roll_error ** 2)
     return reward * weight
 
 
