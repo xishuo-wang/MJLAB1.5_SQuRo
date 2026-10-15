@@ -315,6 +315,8 @@
     </actuator>
 
     <contact>
+        <!-- 排除头部与前躯干的碰撞 -->
+        <exclude body1="Neck_pitch_Link" body2="F_body_Link"/>
         <pair geom1="floor" geom2="FL_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
         <pair geom1="floor" geom2="FR_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
         <pair geom1="floor" geom2="HL_foot_collision" friction="1 1 0.1 0.1 0.1" solimp="0.85 0.95 0.0008" solref="0.03 0.8"/>
