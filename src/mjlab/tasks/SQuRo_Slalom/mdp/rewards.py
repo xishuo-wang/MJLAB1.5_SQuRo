@@ -4,22 +4,14 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_SPN_IDS, _ACT_NECK_IDS
 from .path import (
-    BODY_REF_OFFSET,
     CORRIDOR_HALF_WIDTH,
-    F_BODY_HALF_LENGTH,
-    F_BODY_HALF_WIDTH,
-    H_BODY_HALF_LENGTH,
-    H_BODY_HALF_WIDTH,
-    compute_corridor_excess,
-    compute_corridor_side_excess,
     compute_path_ref,
     get_f_body_physical_heading,
-    get_h_body_physical_heading,
     get_path_curvature,
 )
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
-from .corridor import compute_phase0_corridor_excess
+from .corridor import compute_phase0_corridor_excess, compute_phase1_corridor_excess
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -239,41 +231,19 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # =========================================================================================
 # 走廊一致性奖励 — 身体包络不超出参考路径周围的允许走廊
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    # 获取参考路径
+    # 一阶段沿参考圆环，二阶段沿实际空间轨迹检查完整躯干包络。
     x_ref, y_ref, _, _, path_heading = compute_path_ref(env)
-    ref_xy = torch.stack([x_ref, y_ref], dim=1)  # [N, 2]
-    tangent = torch.stack([torch.cos(path_heading), torch.sin(path_heading)], dim=1)
-    ref_f = ref_xy + BODY_REF_OFFSET * tangent
-    ref_h = ref_xy - BODY_REF_OFFSET * tangent
-    # 计算走廊超出量
-    f_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.f_body_id, :2]
-    h_xy = asset.data.body_link_pos_w[:, _MODEL_INDICES.h_body_id, :2]
-    f_heading = get_f_body_physical_heading(env)
-    h_heading = get_h_body_physical_heading(env)
-    e_f = compute_corridor_excess(f_xy, f_heading, ref_f, path_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH)
-    e_h = compute_corridor_excess(h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH)
-    v_f = torch.clamp(e_f - CORRIDOR_HALF_WIDTH, min=0.0)
-    v_h = torch.clamp(e_h - CORRIDOR_HALF_WIDTH, min=0.0)
+    ref_xy = torch.stack([x_ref, y_ref], dim=1)
     curvature = get_path_curvature(env)
-    inner_f, outer_f = compute_corridor_side_excess(
-        f_xy, f_heading, ref_f, path_heading, F_BODY_HALF_LENGTH, F_BODY_HALF_WIDTH, curvature
-    )
-    inner_h, outer_h = compute_corridor_side_excess(
-        h_xy, h_heading, ref_h, path_heading, H_BODY_HALF_LENGTH, H_BODY_HALF_WIDTH, curvature
-    )
-    # 一阶段使用完整躯干圆环，二阶段保留现有局部走廊。
+    inner, outer = compute_phase0_corridor_excess(env, ref_xy, path_heading, curvature)
     cmd = env.command_manager._terms["slalom_cmd"]
-    arc_inner, arc_outer = compute_phase0_corridor_excess(env, ref_xy, path_heading, curvature)
-    phase1 = cmd.phase1_mask
-    inner_f = torch.where(phase1, inner_f, arc_inner[:, 0])
-    inner_h = torch.where(phase1, inner_h, arc_inner[:, 1])
-    outer_f = torch.where(phase1, outer_f, arc_outer[:, 0])
-    outer_h = torch.where(phase1, outer_h, arc_outer[:, 1])
-    v_f = torch.where(phase1, v_f, torch.maximum(inner_f, outer_f))
-    v_h = torch.where(phase1, v_h, torch.maximum(inner_h, outer_h))
-    e_f = torch.where(phase1, e_f, CORRIDOR_HALF_WIDTH + v_f)
-    e_h = torch.where(phase1, e_h, CORRIDOR_HALF_WIDTH + v_h)
+    phase1_ids = cmd.phase1_mask.nonzero(as_tuple=False).flatten()
+    if phase1_ids.numel():
+        inner[phase1_ids], outer[phase1_ids] = compute_phase1_corridor_excess(env, phase1_ids)
+    inner_f, inner_h = inner.unbind(dim=1)
+    outer_f, outer_h = outer.unbind(dim=1)
+    v_f, v_h = torch.maximum(inner, outer).unbind(dim=1)
+    e_f, e_h = CORRIDOR_HALF_WIDTH + v_f, CORRIDOR_HALF_WIDTH + v_h
     # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")

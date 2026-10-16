@@ -9,6 +9,7 @@ from mjlab.utils.lab_api.math import matrix_from_quat
 from .indices import _MODEL_INDICES, resolve_body_envelope_bounds
 from .path import CORRIDOR_HALF_WIDTH
 from .pole import POLE_RADIUS
+from .slalom_geometry import PROJECTION_STRIDE, get_spatial_slalom_tables
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 _BOX_SIGNS = tuple(product((-1.0, 1.0), repeat=3))
 _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
                    if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
+_ENVELOPE_SAMPLE_STEP = 0.002
 
 
 # 将完整三维包围盒随躯干实际姿态投影到水平面。
@@ -104,3 +106,83 @@ def compute_phase0_corridor_excess(
         curvature[:, None].expand(-1, 2).reshape(-1),
     )
     return inner.reshape(batch_size, 2), outer.reshape(batch_size, 2)
+
+
+# 粗定位后在线段上细化投影，接近段起点向后延伸为切线射线。
+def project_slalom_points(
+    points: torch.Tensor, tables: torch.Tensor, rows: torch.Tensor, spacing: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    points = points.clone()
+    period_x = 2 * spacing[:, None]
+    cycles = torch.floor((points[..., 0] - period_x) / period_x).clamp_min(0)
+    points[..., 0] -= cycles * period_x
+    coarse = tables[rows, ::PROJECTION_STRIDE, :2]
+    distance_sq = (points.square().sum(-1, keepdim=True) + coarse.square().sum(-1)[:, None]
+                   - 2 * torch.bmm(points, coarse.transpose(1, 2)))
+    nearest = distance_sq.argmin(dim=-1) * PROJECTION_STRIDE
+    offsets = torch.arange(-PROJECTION_STRIDE, PROJECTION_STRIDE, device=points.device)
+    indices = (nearest[..., None] + offsets).clamp(0, tables.shape[1] - 2)
+    start = tables[rows[:, None, None], indices]
+    end = tables[rows[:, None, None], indices + 1]
+    edges = end[..., :2] - start[..., :2]
+    delta = points[:, :, None] - start[..., :2]
+    fraction = ((delta * edges).sum(-1) / edges.square().sum(-1).clamp_min(1e-20)).clamp(0, 1)
+    residual = delta - fraction[..., None] * edges
+    best = residual.square().sum(-1).argmin(-1, keepdim=True)
+    chosen_residual = residual.gather(2, best[..., None].expand(-1, -1, -1, 2)).squeeze(2)
+    chosen_edge = edges.gather(2, best[..., None].expand(-1, -1, -1, 2)).squeeze(2)
+    curvature = torch.lerp(start[..., 3], end[..., 3], fraction).gather(2, best).squeeze(2)
+    distance = torch.linalg.vector_norm(chosen_residual, dim=-1)
+    lateral = chosen_edge[..., 0] * chosen_residual[..., 1] - chosen_edge[..., 1] * chosen_residual[..., 0]
+
+    origin = tables[rows, 0]
+    tangent = torch.stack((origin[:, 2].cos(), origin[:, 2].sin()), dim=-1)
+    ray_delta = points - origin[:, None, :2]
+    ray_residual = ray_delta - (ray_delta * tangent[:, None]).sum(-1).clamp_max(0)[..., None] * tangent[:, None]
+    ray_distance = torch.linalg.vector_norm(ray_residual, dim=-1)
+    use_ray = ray_distance < distance
+    ray_lateral = tangent[:, None, 0] * ray_residual[..., 1] - tangent[:, None, 1] * ray_residual[..., 0]
+    return (torch.minimum(distance, ray_distance), torch.where(use_ray, ray_lateral, lateral),
+            torch.where(use_ray, 0.0, curvature))
+
+
+# 沿投影盒十二条边采样，边界相邻点在三维中的间距不超过两毫米。
+def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor) -> torch.Tensor:
+    cached = getattr(env, "_slalom_envelope_samples", None)
+    if cached is None:
+        local = env._slalom_body_envelope_vertices
+        starts, ends, fractions = list(range(8)), list(range(8)), [0.0] * 8
+        for start, end in _BOX_EDGES:
+            count = max(1, int(torch.ceil(torch.linalg.vector_norm(local[:, end] - local[:, start], dim=-1).max()
+                                         / _ENVELOPE_SAMPLE_STEP).item()))
+            starts.extend([start] * (count - 1))
+            ends.extend([end] * (count - 1))
+            fractions.extend(i / count for i in range(1, count))
+        cached = (torch.tensor(starts, device=env.device), torch.tensor(ends, device=env.device),
+                  torch.tensor(fractions, device=env.device, dtype=vertices.dtype))
+        env._slalom_envelope_samples = cached
+    starts, ends, fractions = cached
+    return torch.lerp(vertices[:, :, starts], vertices[:, :, ends], fractions[None, None, :, None])
+
+
+# 二阶段按各包络点的最近实际轨迹计算内外越界，不依赖参考时钟的位置。
+def compute_phase1_corridor_excess(
+    env: ManagerBasedRlEnv, env_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    vertices = project_body_envelopes(env)[env_ids]
+    points = sample_body_envelopes(env, vertices)
+    origins = getattr(env.scene, "env_origins", None)
+    if origins is not None:
+        points = points - origins[env_ids, None, None, :2]
+    tables = getattr(env, "_slalom_spatial_tables", None)
+    if tables is None:
+        tables = torch.as_tensor(get_spatial_slalom_tables(), device=env.device, dtype=points.dtype)
+        env._slalom_spatial_tables = tables
+    cmd = env.command_manager._terms["slalom_cmd"]
+    distance, lateral, curvature = project_slalom_points(
+        points.flatten(1, 2), tables, cmd.slalom_curvature_index[env_ids], cmd.pole_spacing[env_ids])
+    excess = (distance - CORRIDOR_HALF_WIDTH).clamp_min(0)
+    inner_side = curvature * lateral > 0
+    inner = torch.where(inner_side, excess, 0.0).reshape(points.shape[:-1]).amax(-1)
+    outer = torch.where(inner_side, 0.0, excess).reshape(points.shape[:-1]).amax(-1)
+    return inner, outer

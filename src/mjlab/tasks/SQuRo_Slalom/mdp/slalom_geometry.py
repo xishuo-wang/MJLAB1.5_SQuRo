@@ -9,6 +9,9 @@ from .curriculums import SLALOM_CURVATURES, SMOOTH_TIME, SMOOTH_VEL, get_velocit
 _SEGMENT_SAMPLES = 256
 _APPROACH_SAMPLES = 256
 APPROACH_LENGTH = 0.03
+PROJECTION_STRIDE = 8
+_PROJECTION_PERIOD_SAMPLES = 512
+_PROJECTION_APPROACH_SAMPLES = 32
 
 
 # 按每段真实步长积分曲率，保留位置、切线和曲率的连续端点。
@@ -62,6 +65,25 @@ def curvature_from_spacing(spacing: float) -> int:
     if not np.isfinite(spacing) or spacing <= 0:
         raise ValueError("杆心距必须是有限正数")
     return min(SLALOM_CURVATURES, key=lambda k: abs(get_slalom_geometry(k)["spacing"] - spacing))
+
+
+# 按弧长生成接近段和两个周期，供身体包络查询实际空间轨迹。
+@lru_cache(maxsize=1)
+def get_spatial_slalom_tables() -> np.ndarray:
+    tables = []
+    for curvature in SLALOM_CURVATURES:
+        geometry = get_slalom_geometry(curvature)
+        pieces = []
+        for path, count, offset in ((geometry["approach"], _PROJECTION_APPROACH_SAMPLES, 0.0),
+                                    (geometry["period"], _PROJECTION_PERIOD_SAMPLES, geometry["spacing"]),
+                                    (geometry["period"], _PROJECTION_PERIOD_SAMPLES, 3 * geometry["spacing"])):
+            arc = np.linspace(0, path["arc"][-1], count + 1)
+            piece = np.stack([np.interp(arc, path["arc"], path[name])
+                              for name in ("x", "y", "heading", "kappa")], axis=-1)
+            piece[:, 0] += offset
+            pieces.append(piece if not pieces else piece[1:])
+        tables.append(np.concatenate(pieces))
+    return np.stack(tables)
 
 
 # 将空间路径重采样到等名义时间网格，运行时只需按行插值。
