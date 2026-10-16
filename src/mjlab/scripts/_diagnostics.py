@@ -1,7 +1,8 @@
-# 审查、诊断与临时编译缓存统一使用 logs/diagnostics。
+# 审查、诊断产物与临时编译缓存统一使用 logs/diagnostics。
 from mjlab import MJLAB_SRC_PATH
 
 DIAGNOSTICS_ROOT = MJLAB_SRC_PATH.parents[1] / "logs" / "diagnostics"
+HOLE_DIAGNOSTICS_ROOT = DIAGNOSTICS_ROOT / "SQuRo_Hole"
 BACKUP_DIAGNOSTICS_ROOT = DIAGNOSTICS_ROOT / "SQuRo_Backup"
 BACKUP_CONTACT_DIR = BACKUP_DIAGNOSTICS_ROOT / "contact_causality"
 BACKUP_EFFORT_DIR = BACKUP_DIAGNOSTICS_ROOT / "effort"
