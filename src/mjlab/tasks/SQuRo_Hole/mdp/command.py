@@ -26,6 +26,7 @@ from .config import (
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
+    HIGH_OBSTACLE_EQUAL_PROBABILITY,
 )
 from .curriculums import (
     get_current_stage,
@@ -106,6 +107,7 @@ class HoleCommand(CommandTerm):
         self.obstacle = env.scene.entities.get("obstacle")
         self.obstacle_sampled_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
         self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.obstacle_equal_height = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         self.course_episode_eligible = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
@@ -198,8 +200,19 @@ class HoleCommand(CommandTerm):
         heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
         self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
+        self._sample_high_obstacle_mode(env_ids)
         write_obstacle_mocap(self.obstacle, heights, env_ids)
         self._update_obstacle_height_command()
+
+
+    # 高板姿态每回合独立采样一次，显式配置可固定等高或分段。
+    def _sample_high_obstacle_mode(self, env_ids: torch.Tensor) -> None:
+        fixed = self.cfg.high_obstacle_equal_height
+        if fixed is None:
+            values = torch.rand(len(env_ids), device=self.device) < HIGH_OBSTACLE_EQUAL_PROBABILITY
+        else:
+            values = torch.full((len(env_ids),), fixed, device=self.device, dtype=torch.bool)
+        self.obstacle_equal_height[env_ids] = values
 
 
     # 写入新回合的中性命令，等待 forward 后按躯干位置更新
@@ -221,7 +234,7 @@ class HoleCommand(CommandTerm):
         obstacle_cfg = self.obstacle.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_obstacle_bottom_z(self.obstacle)
-        front, hind = compute_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z,) # type: ignore
+        front, hind = compute_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z, self.obstacle_equal_height,) # type: ignore
         velocity = compute_cmd_vel_x(front, hind)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
@@ -303,6 +316,7 @@ class HoleCommandCfg(CommandTermCfg):
     fixed_height_h: Optional[float] = None
     enable_height_course: bool = False
     enable_course_progress: bool = True
+    high_obstacle_equal_height: Optional[bool] = None
     height_curriculum_state: dict = field(default_factory=dict)
     
     @dataclass

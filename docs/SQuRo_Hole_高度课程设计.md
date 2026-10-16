@@ -14,7 +14,7 @@
 
 - `L=x1-0.150`、`R=x2+0.100`、`M=(x1+x2)/2`。
 - 查表位置统一为 `base_Link` 的世界 X，即 `robot.data.root_link_pos_w[:, 0]`。
-- 当 `h>=0.065` 时，基座 X 在 `[L,R]` 内，前后端同取离散挡位：`[65,70)` mm→40 mm、`[70,75)` mm→45 mm、`[75,80)` mm→50 mm、`[80,+∞)` mm→55 mm；区间外均为55 mm。
+- 当 `h>=0.065` 时，离散挡位为：`[65,70)` mm→40 mm、`[70,75)` mm→45 mm、`[75,80)` mm→50 mm、`[80,+∞)` mm→55 mm。每次回合复位按50%概率选择等高或分段；等高在 `[L,R]` 内前后同取该挡位；分段在 `[L,M)` 内前端取该挡位、后端55 mm，在 `[M,R]` 内交换。区间外均为55 mm。
 - 当 `h<0.065` 时，按板底高度离散到低姿态挡位：`[45,50)` mm→20 mm、`[50,55)` mm→25 mm、`[55,60)` mm→30 mm、`[60,65)` mm→35 mm。低于45 mm仍钳制到20 mm，当前课程下限保持46 mm。基座 X 在 `[L,M)` 内，前端取对应挡位、后端取55 mm；在 `[M,R]` 内，前端取55 mm、后端取对应挡位。区间外均为55 mm。
 - 中点立即切到前高后低；外侧左右端点均包含。两个低姿态区间互斥。
 
@@ -253,3 +253,19 @@ uv run python -B -m mjlab.scripts.Hole.calibrate_low_poses --heights 0.025 0.030
 按用户更正后的规则，`v=BASE_SPEED*(s(h_F)+s(h_H))/2`，采用算术平均。20／25／30／35 mm因子依次为0、7/33、14/33、7/11；40／45／50／55 mm依次为8/11、9/11、10/11、1。20～35 mm之间按端点线性插值，35～40 mm之间延续 `h/55`，因此固定回放中的非节点高度也连续且单调。前后端独立计算，固定速度回放仍由显式参数覆盖。
 
 以 `BASE_SPEED=0.2` m/s计算，20／20为0，20／55为0.100，25／55约0.1212，30／55约0.1424，35／55约0.1636，40／50约0.1636，55／55为0.200 m/s。双低不同高不再全部停步；任一端为20 mm也不再单独使速度归零。20／55相较旧公式约0.0364 m/s提高至0.100 m/s，会增加最低板高的前进要求，需重新训练确认。腿部固定角、步频2 Hz和速度奖励权重不随此次修改变化。
+
+## 高板等高与分段混合（2026-10-17）
+
+真实碰撞课程的每次回合复位，板底高度和姿态策略独立采样；等高概率由 `HIGH_OBSTACLE_EQUAL_PROBABILITY=0.50` 唯一管理。逐环境选择保存在 `HoleCommand.obstacle_equal_height`，回合内周期命令重采样不会改变选择，部分复位只更新对应环境。低于65 mm始终采用既有分段规则；板底达到80 mm后目标封顶55 mm，两种策略的高度命令自然相同。
+
+`HoleCommandCfg.high_obstacle_equal_height` 为 `None` 时按50%混合，为 `True` 时固定等高，为 `False` 时固定分段。训练默认混合。它只影响高板姿态规则，命令6维、观测113维、动作14维及课程成功门槛不变；模式通过现有前后高度命令体现，不增加独立观测槽。74 mm板底的等高命令为45／45 mm，分段为45／55→55／45 mm；后者按实际10 mm高度差产生约-0.185714 rad俯仰参考。
+
+检查点 `hole_state.high_obstacle_equal_height` 保存配置选择，供回放读取；物理回合不续接，重建后按当前命令配置重新采样，续训策略由当前训练配置决定。主回放显式参数优先于检查点配置；未指定时，新增字段为 `None` 的检查点保持混合，缺少字段的旧检查点默认等高。`fixed`／`random` 命令来源不使用位置规则，仍按原命令含义执行。回放CSV增加 `obstacle_equal_height` 列，高板视频名增加 `equal`／`segmented`／`mixed` 后缀，避免同板高的两种验证互相覆盖。
+
+```powershell
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint-file <检查点> --obstacle-height 0.074 --high-obstacle-equal-height True
+uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint-file <检查点> --obstacle-height 0.074 --high-obstacle-equal-height False
+uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule --short-height 0.074 --long-height 0.074 --high-obstacle-mode segmented
+```
+
+通用冻结评估工具同样支持 `--high-obstacle-mode saved|equal|segmented|mixed`，默认按检查点配置解释；每个环境首次回合的实际策略随评估结果保存。已验收混合采样、周期重采样保持、部分复位隔离、强制等高／分段、低板忽略开关，以及真实主回放入口的五种配置和连续复位。旧检查点配合新参考与新速度规则仅用于功能验证，不据此证明新策略的穿板能力。

@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--samples", type=int, default=32, help="每档随机动作回合数，另加一个确定性回合")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--high-obstacle-mode", choices=("saved", "equal", "segmented", "mixed"), default="saved")
     parser.add_argument("--output-dir", type=Path, default=HOLE_DIAGNOSTICS_ROOT / "checkpoint_evaluation")
     args = parser.parse_args()
     if args.samples < 0 or any(not math.isfinite(height) or height <= 0 for height in args.heights):
@@ -52,6 +53,7 @@ def main():
 
     # 覆盖采样方法，将每个环境的板高固定到对应评估档。
     def sample_heights(command, env_ids):
+        command._sample_high_obstacle_mode(env_ids)
         values = heights[env_ids]
         command.obstacle_sampled_bottom_z[env_ids] = values
         command.obstacle_height_sampled[env_ids] = True
@@ -68,9 +70,14 @@ def main():
             env = runner.env.unwrapped
             command = env.command_manager.get_term("hole_cmd")
             command.enable_course_progress = False
+            command.cfg.high_obstacle_equal_height = (
+                saved.get("high_obstacle_equal_height", True) if args.high_obstacle_mode == "saved"
+                else {"equal": True, "segmented": False, "mixed": None}[args.high_obstacle_mode]
+            )
             command._sample_obstacle_height = MethodType(sample_heights, command)
             torch.manual_seed(args.seed)
             obs, _ = runner.env.reset()
+            selected_modes = command.obstacle_equal_height.clone()
             monitor_restricted_passage(env)
             monitor = env._hole_passage_monitor
             monitor.consume()
@@ -97,6 +104,7 @@ def main():
                 episodes = [records[env_id] for env_id in range(offset + 1, offset + args.samples + 1)]
                 row = {"checkpoint": str(path.resolve()), "height": height,
                        "deterministic": records[offset], "deterministic_max_x": float(max_x[offset]),
+                       "deterministic_equal_height": bool(selected_modes[offset]),
                        "stochastic_samples": args.samples, "stochastic_successes": sum(item["success"] for item in episodes),
                        "outcome_counts": {code: sum(item["failure_code"] == code for item in episodes) for code in range(6)}}
                 summaries.append(row)

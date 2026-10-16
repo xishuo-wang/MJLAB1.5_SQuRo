@@ -21,6 +21,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_GAIT_FREQ_IDS,
     CMD_CURVATURE_IDS,
     CMD_OBSTACLE_HEIGHT_IDS,
+    OBSTACLE_HEIGHT_SPLIT,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
@@ -70,6 +71,7 @@ class PlayConfig:
     fixed_height_h: float | None = 0.020    # 期望后肢高度
     collision: bool | None = None           # 障碍物碰撞
     obstacle_viz: bool = True               # 可视化障碍物
+    high_obstacle_equal_height: bool | None = None  # 高板等高True／分段False，None沿用检查点
     obstacle_height: float | None = 0.047   # 障碍物板底高度 (m)
 
 
@@ -226,6 +228,8 @@ class JointDataRecorder:
         )
         for i, name in command_columns:
             record[name] = float(command[i].item())
+        cmd_term = unwrapped.command_manager.get_term("hole_cmd")
+        record['obstacle_equal_height'] = bool(cmd_term.obstacle_equal_height[idx])
         record['mode'] = mode_of(float(command[CMD_HEIGHT_F_IDS]), float(command[CMD_HEIGHT_H_IDS])) # type: ignore
         record['height_F_error'] = f_height - float(command[CMD_HEIGHT_F_IDS].item())
         record['height_H_error'] = h_height - float(command[CMD_HEIGHT_H_IDS].item())
@@ -376,6 +380,11 @@ def run_play(cfg: PlayConfig):
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
     saved_state = read_hole_state(resume_path) if resume_path is not None else {}
+    high_equal = cfg.high_obstacle_equal_height
+    if high_equal is None and saved_state:
+        high_equal = saved_state.get("high_obstacle_equal_height", True)
+    if cmd_cfg is not None:
+        cmd_cfg.high_obstacle_equal_height = high_equal  # type: ignore[attr-defined]
     if resume_path is not None:
         recorded = read_env_step(resume_path)
         if recorded is not None:
@@ -413,6 +422,8 @@ def run_play(cfg: PlayConfig):
             course_state["z_max"] = course_state["z_min"]
         cmd_cfg.enable_height_course = True          # type: ignore[attr-defined]
         cmd_cfg.height_curriculum_state = course_state  # type: ignore[attr-defined]
+        mode_label = "等高" if high_equal is True else "分段" if high_equal is False else "等高／分段各50%"
+        print(f"[INFO] 高板姿态 = {mode_label}（仅板底≥{OBSTACLE_HEIGHT_SPLIT * 1000:g}毫米生效）")
     # 回放: 应用检查点保存的板几何与接触参数 (重建时保留自定义几何的同一套口径)
     saved_layout = (saved_state.get("layout") or []) if show_obstacle else []
     applied = apply_saved_layout(env_cfg, saved_layout)
@@ -462,6 +473,8 @@ def run_play(cfg: PlayConfig):
                 print("[WARN] schedule 开启碰撞但无有效障碍物高度，未添加 oh 后缀")
         else:
             suffix_parts.append("col0")
+        if use_course and obstacle_z is not None and obstacle_z >= OBSTACLE_HEIGHT_SPLIT:
+            suffix_parts.append("equal" if high_equal is True else "segmented" if high_equal is False else "mixed")
 
     suffix = f"-{'-'.join(suffix_parts)}" if suffix_parts else ""
     if video_name is not None:

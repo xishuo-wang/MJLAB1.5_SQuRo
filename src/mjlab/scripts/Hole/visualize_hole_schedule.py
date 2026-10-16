@@ -109,7 +109,8 @@ def rule_knots(board: tuple, start_x: float = 0.0) -> np.ndarray:
 
 # 按 base_Link 的世界 X 查询同一时刻的前后目标高度。
 def sample_rule_schedule(
-    positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
+    positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0,
+    equal_height: bool = True,
 ) -> dict[str, np.ndarray]:
     position = np.asarray(positions, dtype=float)
     query_world = position.copy() + start_x
@@ -122,7 +123,7 @@ def sample_rule_schedule(
     for boundary in boundaries:
         query_world[np.abs(query_world - boundary) <= tolerance] = boundary
     query = torch.as_tensor(query_world, dtype=torch.float64)
-    front, hind = compute_base_heights(query, board[1], board[4], bottom_z)
+    front, hind = compute_base_heights(query, board[1], board[4], bottom_z, equal_height)
     return {
         "position": position,
         "height_f": front.cpu().numpy(),
@@ -132,10 +133,11 @@ def sample_rule_schedule(
 
 # 按同一个 base_Link 位置计算高度、速度和参考档位。
 def sample_base_commands(
-    positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0
+    positions: np.ndarray, board: tuple, bottom_z: float, start_x: float = 0.0,
+    equal_height: bool = True,
 ) -> dict[str, np.ndarray]:
     position = np.asarray(positions, dtype=float)
-    values = sample_rule_schedule(position, board, bottom_z, start_x)
+    values = sample_rule_schedule(position, board, bottom_z, start_x, equal_height)
     front = values["height_f"]
     hind = values["height_h"]
     front_tensor = torch.as_tensor(front, dtype=torch.float32)
@@ -211,7 +213,7 @@ def draw_panel(
 
 # 同步板高、base_Link 游标与同一时刻的前后命令读数。
 def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
-                      column: int, initial_height: float):
+                      column: int, initial_height: float, equal_height: bool = True):
     from matplotlib.widgets import Slider
 
     base_cursor = ax.axvline(case.board[1] - start_x,
@@ -234,7 +236,7 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
     def update(_value: float) -> None:
         bottom = float(height_slider.val) / 1000
         position = float(position_slider.val)
-        values = sample_rule_schedule(grid, case.board, bottom, start_x)
+        values = sample_rule_schedule(grid, case.board, bottom, start_x, equal_height)
         artists.front.set_ydata(values["height_f"] * 1000)
         artists.hind.set_ydata(values["height_h"] * 1000)
         artists.rectangles[0].set_y(bottom * 1000)
@@ -245,16 +247,16 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
         for marker in artists.markers:
             marker_x = float(marker.get_xdata()[0])
             is_outer = any(abs(marker_x - bound) < 1e-9 for bound in (left - start_x, right - start_x))
-            marker.set_visible(is_outer or bottom < OBSTACLE_HEIGHT_SPLIT)
-        current = sample_base_commands(np.array([position]), case.board, bottom, start_x)
+            marker.set_visible(is_outer or bottom < OBSTACLE_HEIGHT_SPLIT or not equal_height)
+        current = sample_base_commands(np.array([position]), case.board, bottom, start_x, equal_height)
         front, hind = float(current["height_f"][0]), float(current["height_h"][0])
         mode = MODE_LABELS[get_height_mode(front, hind)]
         rule = (f"高板：每5 mm一档，区间内前后同高，封顶{BASE_HEIGHT * 1000:g} mm"
-                if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：每5 mm一档，按基座 X 在板中点切换前低／后低")
+                if bottom >= OBSTACLE_HEIGHT_SPLIT and equal_height else "分段：每5 mm一档，按基座 X 在板中点切换前后目标")
         interval = (
             f"基座区间：[{left - start_x:.3f}, {right - start_x:.3f}] m"
-            if bottom >= OBSTACLE_HEIGHT_SPLIT
-            else f"前低：[{left - start_x:.3f}, {front_end - start_x:.3f})；后低：[{hind_start - start_x:.3f}, {right - start_x:.3f}] m"
+            if bottom >= OBSTACLE_HEIGHT_SPLIT and equal_height
+            else f"前段受限：[{left - start_x:.3f}, {front_end - start_x:.3f})；后段受限：[{hind_start - start_x:.3f}, {right - start_x:.3f}] m"
         )
         info.set_text(
             f"{rule}\n"
@@ -280,11 +282,12 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
 
 # 导出当前高度规则、布局和两种板型，便于复核图片来源。
 def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float,
-                     initial_heights: list[float]) -> None:
+                     initial_heights: list[float], equal_height: bool = True) -> None:
     data = {
         "start_x": start_x,
         "reference_height_list": HEIGHT_LIST,
         "virtual_clearance_margin": VIRTUAL_CLEARANCE_MARGIN,
+        "high_obstacle_equal_height": equal_height,
         "rule": {
             "obstacle_height_split": OBSTACLE_HEIGHT_SPLIT,
             "entry_margin": ENTRY_MARGIN,
@@ -317,7 +320,9 @@ def main() -> None:
     parser.add_argument("--start-x", type=float, default=0.0, help="复位起点的世界 X 坐标（m）")
     parser.add_argument("--short-height", type=float, default=None, help="短板预览的初始板底高度（m）")
     parser.add_argument("--long-height", type=float, default=None, help="长板预览的初始板底高度（m）")
+    parser.add_argument("--high-obstacle-mode", choices=("equal", "segmented"), default="equal", help="高板预览采用等高或分段")
     args = parser.parse_args()
+    equal_height = args.high_obstacle_mode == "equal"
     if not np.isfinite(args.start_x):
         parser.error("复位起点必须是有限数值")
     if args.no_show:
@@ -338,22 +343,22 @@ def main() -> None:
     for column, (case, height) in enumerate(zip(cases, initial_heights, strict=True)):
         ax = fig.add_subplot(grid[0, column])
         knots = rule_knots(case.board, args.start_x)
-        values = sample_rule_schedule(make_grid(case.x_min, case.x_max, knots), case.board, height, args.start_x)
+        values = sample_rule_schedule(make_grid(case.x_min, case.x_max, knots), case.board, height, args.start_x, equal_height)
         artists = draw_panel(ax, case.x_min, case.x_max, [case.board], args.start_x,
                              case.label, values, knots,
                              xlabel="base_Link 相对起点的 X 坐标（m）")
-        controls.append(add_rule_controls(fig, ax, case, artists, args.start_x, column, height))
+        controls.append(add_rule_controls(fig, ax, case, artists, args.start_x, column, height, equal_height))
     fig.suptitle("障碍物板高与高度—位置表联动预览", fontsize=17, y=0.985)
     handles, labels = fig.axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.52, 0.95),
                ncol=5, frameon=False, fontsize=9)
-    fig.text(0.075, 0.015, "前后目标共用 base_Link 的世界 X；低板在板中心立即切换为前高后低，两个低姿态区间互斥。", fontsize=9, color="#475569")
+    fig.text(0.075, 0.015, "前后目标共用 base_Link 的世界 X；分段模式在板中心立即切换前后目标，两个受限区间互斥。", fontsize=9, color="#475569")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for suffix in ("png", "svg"):
         path = args.output_dir / f"短板长板位置表.{suffix}"
         fig.savefig(path, dpi=180, facecolor="white")
         print(f"已保存图像：{path.resolve()}")
-    save_source_data(args.output_dir, cases, args.start_x, initial_heights)
+    save_source_data(args.output_dir, cases, args.start_x, initial_heights, equal_height)
     print(f"已保存位置表数据：{(args.output_dir / '位置表数据.json').resolve()}")
     if args.no_show:
         plt.close(fig)

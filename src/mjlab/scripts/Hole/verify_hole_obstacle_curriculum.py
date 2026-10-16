@@ -60,7 +60,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.command import get_height_mode, compute_cmd_vel_x
+from mjlab.tasks.SQuRo_Hole.mdp.command import HoleCommand, get_height_mode, compute_cmd_vel_x
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
@@ -85,6 +85,7 @@ def make_env() -> ManagerBasedRlEnv:
     command = cfg.commands["hole_cmd"]
     command.enable_height_course = True
     command.enable_course_progress = False
+    command.high_obstacle_equal_height = True
     command.height_curriculum_state = HeightCurriculumState().state_dict()
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
     env.common_step_counter = STAGE3_STEP
@@ -156,6 +157,60 @@ def verify_velocity_commands() -> None:
         check(f"{device}全部64种高度组合的速度符合独立缩放平均", torch.allclose(velocity, expected, atol=3e-8, rtol=0))
         check("速度前后交换对称，只有20／20毫米停步", torch.equal(velocity, velocity.T) and int((velocity == 0).sum()) == 1)
         check("任一端高度增加时速度不下降", bool((velocity.diff(dim=0) >= 0).all() and (velocity.diff(dim=1) >= 0).all()))
+
+
+# 验证高板两种策略等概率采样，且不会改变低板规则。
+def verify_high_obstacle_modes() -> None:
+    positions = torch.tensor([0.1, 0.1, 0.25, 0.25])
+    choices = torch.tensor([True, False, True, False])
+    front, hind = compute_base_heights(positions, 0.2, 0.015, 0.074, choices)
+    check("74毫米高板逐环境选择等高或分段", torch.allclose(front, front.new_tensor([0.045, 0.045, 0.045, 0.055]))
+          and torch.allclose(hind, hind.new_tensor([0.045, 0.055, 0.045, 0.045])))
+    for height, target in ((0.064999, 0.035), (0.065, 0.040), (0.080, 0.055)):
+        front, hind = compute_base_heights(positions, 0.2, 0.015, height, False)
+        check(f"{height * 1000:g}毫米分段正确覆盖65毫米边界与55毫米封顶",
+              torch.allclose(front, front.new_tensor([target, target, 0.055, 0.055]))
+              and torch.allclose(hind, hind.new_tensor([0.055, 0.055, target, target])))
+    low_equal = compute_base_heights(positions, 0.2, 0.015, 0.047, True)
+    low_split = compute_base_heights(positions, 0.2, 0.015, 0.047, False)
+    check("47毫米低板忽略高板等高选项", all(torch.equal(a, b) for a, b in zip(low_equal, low_split)))
+    fake = SimpleNamespace(cfg=SimpleNamespace(high_obstacle_equal_height=None), device="cpu",
+                           obstacle_equal_height=torch.ones(4096, dtype=torch.bool))
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(83)
+        HoleCommand._sample_high_obstacle_mode(fake, torch.arange(4096))
+    fraction = float(fake.obstacle_equal_height.float().mean())
+    check("默认4096回合的等高采样比例接近50%", 0.47 < fraction < 0.53)
+
+
+# 验证真实环境的固定策略、部分复位和回合内策略保持。
+def verify_high_obstacle_env(env: ManagerBasedRlEnv) -> None:
+    command = env.command_manager.get_term("hole_cmd")
+    command.cfg.high_obstacle_equal_height = None
+    with patch("mjlab.tasks.SQuRo_Hole.mdp.command.torch.rand", return_value=torch.tensor([0.1, 0.9, 0.1, 0.9])):
+        command._sample_high_obstacle_mode(torch.arange(env.num_envs))
+    robot = env.scene["robot"]
+    pose = robot.data.root_link_pose_w.clone()
+    pose[:, 0] = pose.new_tensor([0.1, 0.1, 0.25, 0.25])
+    robot.write_root_link_pose_to_sim(pose)
+    write_obstacle_mocap(env.scene["obstacle"], 0.074)
+    read_geom_bottom_z(env)
+    command._update_command_by_height_rule()
+    values = command.command
+    check("实际高板对应等高45／45或分段45／55、55／45毫米命令",
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.045, 0.045, 0.045, 0.055]))
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.045, 0.055, 0.045, 0.045])))
+    keep = command.obstacle_equal_height.clone()
+    command._resample_command(torch.arange(env.num_envs))
+    check("回合中周期重采样不会改变高板姿态策略", torch.equal(command.obstacle_equal_height, keep))
+    env.reset(env_ids=torch.tensor([1, 3]))
+    check("部分复位不会改变其他环境的策略", torch.equal(command.obstacle_equal_height[[0, 2]], keep[[0, 2]]))
+    for fixed in (True, False):
+        command.cfg.high_obstacle_equal_height = fixed
+        env.reset()
+        check(f"显式高板策略{fixed}覆盖所有复位环境", bool((command.obstacle_equal_height == fixed).all()))
+    command.cfg.high_obstacle_equal_height = True
+    env.reset()
 
 
 # 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
@@ -557,6 +612,7 @@ def verify_real_env() -> None:
           and torch.equal(actual[[1, 3]], keep))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
     verify_base_height_commands(env)
+    verify_high_obstacle_env(env)
     verify_continuous_reference(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
@@ -577,6 +633,7 @@ def main() -> None:
     print("单板受限空间高度课程验收")
     verify_shared_rule()
     verify_velocity_commands()
+    verify_high_obstacle_modes()
     verify_curriculum_state()
     verify_fine_height_steps()
     verify_real_env()

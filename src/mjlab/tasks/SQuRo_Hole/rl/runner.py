@@ -280,6 +280,10 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             "stage": get_current_stage(step),
             "collision": self._obstacle_compiled_collision(),
             "layout": self._obstacle_scene_state(),
+            "high_obstacle_equal_height": (
+                self._obstacle_command.cfg.high_obstacle_equal_height
+                if self._obstacle_command is not None else True
+            ),
             "height_course": (
                 self._height_curriculum_state.state_dict()
                 if self._height_curriculum_state is not None else None

@@ -169,10 +169,12 @@ def compute_base_heights(
     center_x: float,
     half_length: float,
     bottom_z: torch.Tensor | float,
+    equal_height: torch.Tensor | bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     left, middle, right = obstacle_rule_bounds(center_x, half_length)
     bottom = torch.as_tensor(bottom_z, device=base_x.device, dtype=base_x.dtype)
     high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
+    use_equal = high_obstacle & torch.as_tensor(equal_height, device=base_x.device, dtype=torch.bool)
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
     edges = bottom.new_tensor(OBSTACLE_HEIGHT_EDGES)
@@ -181,10 +183,10 @@ def compute_base_heights(
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)
-    front = torch.where(high_obstacle & in_range, target, front)
-    hind = torch.where(high_obstacle & in_range, target, hind)
-    front = torch.where((~high_obstacle) & front_low, target, front)
-    hind = torch.where((~high_obstacle) & hind_low, target, hind)
+    front = torch.where(use_equal & in_range, target, front)
+    hind = torch.where(use_equal & in_range, target, hind)
+    front = torch.where((~use_equal) & front_low, target, front)
+    hind = torch.where((~use_equal) & hind_low, target, hind)
     return front, hind
 
 
