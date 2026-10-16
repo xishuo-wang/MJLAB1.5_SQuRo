@@ -108,10 +108,16 @@ def verify_shared_rule() -> None:
                 left - 1e-6, left, middle - 1e-6, middle,
                 middle + 1e-6, right, right + 1e-6,
             ], dtype=dtype)
-            for height in (HEIGHT_MIN, 0.047, 0.048, 0.064, 0.0648, 0.064999, 0.065, 0.070, 0.075, 0.079999, 0.080, 0.090):
+            low_cases = (
+                (0.045, 0.020), (HEIGHT_MIN, 0.020), (0.047, 0.020), (0.049999, 0.020),
+                (0.050, 0.025), (0.050001, 0.025), (0.054999, 0.025),
+                (0.055, 0.030), (0.055001, 0.030), (0.059999, 0.030),
+                (0.060, 0.035), (0.060001, 0.035), (0.064999, 0.035),
+            )
+            for height, target in (*low_cases, *((height, min(height - 0.025, 0.055))
+                                  for height in (0.065, 0.070, 0.075, 0.079999, 0.080, 0.090))):
                 front, hind = compute_base_heights(positions, center, half_length, height)
                 if height < 0.065:
-                    target = height - 0.025
                     expected_f = positions.new_tensor([0.055, target, target, 0.055, 0.055, 0.055, 0.055])
                     expected_h = positions.new_tensor([0.055, 0.055, 0.055, target, target, target, 0.055])
                 else:
@@ -120,7 +126,7 @@ def verify_shared_rule() -> None:
                 check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
                 expected_modes = [0, 1, 1, 2, 2, 2, 0] if height < 0.065 else [0] * 7
-                check("65毫米分界两侧的连续目标与模式判定一致",
+                check("低板离散挡位、高板连续目标与模式判定一致",
                       get_height_mode(front, hind).tolist() == expected_modes)
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
         for height in (HEIGHT_MIN, 0.048, 0.064, 0.065, 0.068, 0.070, 0.080, 0.090):
@@ -390,8 +396,8 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     command._update_command_by_height_rule()
     values = command.command
     check("脊柱侧摆和俯仰变化时，低板仍按基座 X 在中点互斥切换",
-          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.039, 0.055, 0.055]))
-          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.039, 0.055]))
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.035, 0.055, 0.055]))
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.035, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
     for height, target in ((0.065, 0.040), (0.070, 0.045), (0.075, 0.050), (0.080, 0.055), (0.090, 0.055)):
         write_obstacle_mocap(obstacle, height)
@@ -408,6 +414,15 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     check("不同环境板高独立决定命令，高板目标不超过基准55毫米",
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], expected))
+    pose[:, 0] = 0.1
+    robot.write_root_link_pose_to_sim(pose)
+    write_obstacle_mocap(obstacle, values.new_tensor([0.047, 0.050, 0.055, 0.060]))
+    read_geom_bottom_z(env)
+    command._update_command_by_height_rule()
+    check("逐环境真实板高分别映射20／25／30／35毫米低姿态且先验仍为实际板高",
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.020, 0.025, 0.030, 0.035]))
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_full((4,), BASE_HEIGHT))
+          and torch.allclose(command.command_obstacle_height, values.new_tensor([0.047, 0.050, 0.055, 0.060])))
     env.reset()
 
 

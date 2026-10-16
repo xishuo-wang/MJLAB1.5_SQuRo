@@ -30,6 +30,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     ENTRY_MARGIN,
     EXIT_MARGIN,
     OBSTACLE_HEIGHT_SPLIT,
+    LOW_OBSTACLE_HEIGHT_EDGES,
+    LOW_POSE_CALIBRATION,
     HEIGHT_MAX as PREVIEW_HEIGHT_MAX,
     HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
 )
@@ -250,7 +252,7 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
         front, hind = float(current["height_f"][0]), float(current["height_h"][0])
         mode = MODE_LABELS[get_height_mode(front, hind)]
         rule = (f"高板：区间内前后同取 min(h−{BODY_HEIGHT_OFFSET * 1000:g} mm, {BASE_HEIGHT * 1000:g} mm)"
-                if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：按基座 X 在板中点切换前低／后低")
+                if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：每5 mm一档，按基座 X 在板中点切换前低／后低")
         interval = (
             f"基座区间：[{left - start_x:.3f}, {right - start_x:.3f}] m"
             if bottom >= OBSTACLE_HEIGHT_SPLIT
@@ -290,7 +292,9 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
             "entry_margin": ENTRY_MARGIN,
             "exit_margin": EXIT_MARGIN,
             "body_height_offset": BODY_HEIGHT_OFFSET,
-            "low_target_rule": "板底高度减躯干余量，受限侧使用固定角标定表插值",
+            "low_target_rule": "板高按左闭右开区间离散到20／25／30／35毫米标定档",
+            "low_obstacle_height_edges": LOW_OBSTACLE_HEIGHT_EDGES,
+            "low_target_heights": [row[0] for row in LOW_POSE_CALIBRATION[:-1]],
             "default_height": BASE_HEIGHT,
             "position_source": "base_Link_world_x",
             "front_low_end_inclusive": False,

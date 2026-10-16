@@ -48,6 +48,7 @@ LOW_SPINE_PITCH = -0.65                            # 最大高度差时保留原
 # 受限空间高度课程相关配置
 WARMUP_OBSTACLE_HEIGHT = 0.100                      # 无实体时的 100 毫米板高占位
 OBSTACLE_HEIGHT_SPLIT = 0.065
+LOW_OBSTACLE_HEIGHT_EDGES = (0.050, 0.055, 0.060)    # 低板升档边界，对应标定表前四档
 ENTRY_MARGIN = 0.150
 EXIT_MARGIN = 0.100
 BODY_HEIGHT_OFFSET = 0.025
