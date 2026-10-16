@@ -15,6 +15,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp import corridor
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import BODY_NAMES, resolve_body_envelope_bounds
 from mjlab.tasks.SQuRo_Slalom.mdp.path import CORRIDOR_HALF_WIDTH
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_RADIUS
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX
 
 
 # 生成可旋转的完整矩形投影，保留三维盒的顶点排列。
@@ -129,7 +130,7 @@ class TestSlalomAnnulus(unittest.TestCase):
             torch.tensor(np.array(references), dtype=torch.float32), torch.tensor(headings), torch.tensor(curvatures))
         torch.testing.assert_close(torch.stack(actual, dim=1), torch.tensor(expected, dtype=torch.float32), atol=2e-7, rtol=1e-5)
 
-    # 网格解析使用实体的全局编号，校准后的平放躯干可放入曲率 25 圆环。
+    # 网格解析使用全局编号，平放躯干可放入当前最大曲率圆环。
     def test_model_bounds_and_high_curvature_fit(self):
         model = get_spec().compile()
         ids = [model.body(name).id for name in BODY_NAMES]
@@ -138,9 +139,9 @@ class TestSlalomAnnulus(unittest.TestCase):
         half = (bounds[:, 1] - bounds[:, 0]) / 2
         for size in half:
             width, length = size[0], size[2]
-            center = (0.0, 0.04 - (POLE_RADIUS + width))
+            center = (0.0, 1 / CURVATURE_TARGET_MAX - (POLE_RADIUS + width))
             inner, outer = compute_annulus_side_excess(rectangle(center, length=length, width=width).unsqueeze(0),
-                torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
+                torch.zeros(1, 2), torch.zeros(1), torch.tensor([CURVATURE_TARGET_MAX]))
             self.assertLess(float(inner[0]), 1e-7)
             self.assertLess(float(outer[0]), 1e-7)
 

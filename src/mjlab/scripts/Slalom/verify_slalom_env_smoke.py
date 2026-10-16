@@ -9,7 +9,7 @@ import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER, PHASE1_END_ITER
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEPS_PER_ITER, PHASE1_END_ITER
 from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_path_ref, get_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
@@ -166,7 +166,8 @@ def check_phase0_training(u, act) -> None:
     u.common_step_counter = 8000 * _STEPS_PER_ITER
     if abs(float(u.step_dt) - 0.01) > 1e-8:
         fail("策略周期未对齐 Hole 的 0.01 秒")
-    for curvature in (15.0, -15.0, 20.0, -20.0, 25.0, -25.0):
+    for curvature in (sign * fraction * CURVATURE_TARGET_MAX
+                      for fraction in (0.5, 0.75, 1.0) for sign in (1, -1)):
         cmd.fixed_curvature = curvature
         u.reset()
         if cmd.slalom_mode_active or bool(cmd.phase1_mask.any()):
@@ -181,7 +182,7 @@ def check_phase0_training(u, act) -> None:
     recorder.record_step_data(u)
     if len(recorder.joint_names) != len(_ACT_JOINT_NAMES):
         fail("回放记录器关节列未同步")
-    print("    ±15、±20、±25 运行有限；超过 8000 轮仍使用一阶段；记录器可用")
+    print(f"    半幅、四分之三幅和最大曲率 ±{CURVATURE_TARGET_MAX:g} 运行有限；一阶段锁定及记录器可用")
 
 
 def main() -> int:

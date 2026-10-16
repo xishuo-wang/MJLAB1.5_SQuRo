@@ -16,6 +16,7 @@ from mjlab.tasks.SQuRo_Slalom.SQuRo_Slalom_env_cfg import SQuRo_Slalom_Env_Cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import events, indices
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, get_curvature_range
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
+    CURVATURE_TARGET, CURVATURE_TARGET_MAX, Rmin,
     _STEPS_PER_ITER, get_curriculum_reward_weight, reward_weight_curriculum,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_corridor_side_excess
@@ -66,10 +67,13 @@ class TestSlalomTrainingSetup(unittest.TestCase):
             self.assertEqual(get_curriculum_reward_weight(env, "sigma_spn_pos"), 10.0)
             self.assertEqual(get_curriculum_reward_weight(env, "weight_corridor"), 5.0)
 
-    # 课程覆盖最大曲率 25，后续轮次继续保持完整范围。
-    def test_curvature_range_reaches_25(self):
-        for iteration in (2000, 4000, 8000):
-            self.assertEqual(get_curvature_range(iteration * _STEPS_PER_ITER), (-25.0, 25.0))
+    # 一阶段和绕杆共享最大曲率 20，完整范围覆盖最后一千轮。
+    def test_curvature_range_reaches_20(self):
+        self.assertEqual(CURVATURE_TARGET_MAX, 20.0)
+        self.assertEqual(CURVATURE_TARGET, CURVATURE_TARGET_MAX)
+        self.assertAlmostEqual(Rmin, 0.05)
+        for iteration in (2000, 2999, 4000):
+            self.assertEqual(get_curvature_range(iteration * _STEPS_PER_ITER), (-20.0, 20.0))
         self.assertLess(get_curvature_range(0)[1], 15.0)
 
     # 左右转内侧互换，同时验证外侧不受内侧系数影响。

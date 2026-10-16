@@ -7,7 +7,7 @@
 | 子任务 | 任务 ID | 状态 | 文档位置 |
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
-| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 当前默认固定 Phase 0；100 Hz 与 Hole 对齐，曲率上限 25，待新训练验证 | [一阶段训练](docs/SQuRo_Slalom_一阶段训练.md) |
+| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 默认固定 Phase 0、3000 轮；100 Hz 与 Hole 对齐，曲率上限 20 对应最大形变 | [一阶段训练](docs/SQuRo_Slalom_一阶段训练.md) |
 | **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
 | **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-04 备份（mjlab 0.1.0）在 1.5 上恢复，只做接口适配；旧检查点可直接回放 | `docs/SQuRo_Hole_技术细节.md` |
 
@@ -145,7 +145,7 @@ src/mjlab/tasks/SQuRo_Slalom/
 
 ## 课程学习 (mdp/curriculums.py)
 
-当前训练默认 `phase0_only=True`：0 至 2000 轮曲率上限从 0.5 增长到 25，之后在完整范围训练至 8000 轮。
+当前训练默认 `phase0_only=True`：0 至 2000 轮曲率上限从 0.5 增长到 20，之后在完整范围训练至 3000 轮。
 路径、复位、杆可见性和奖励课程同时锁定一阶段。策略频率 100 Hz、48 步/轮，与当前 Hole 一致。
 以下两阶段课程仅在显式关闭该开关后启用；详细参数及训练入口见 [一阶段训练说明](docs/SQuRo_Slalom_一阶段训练.md)。
 
@@ -156,7 +156,7 @@ src/mjlab/tasks/SQuRo_Slalom/
 ```
 iter:   0 ─── 2000 ─── 4000 ─── 6000 ─── 8000
         PHASE1_MID  PHASE1_END  PHASE2_MID  PHASE2_END
-        κ 0.5→25    基元→绕杆   (预留)     (预留)
+        κ 0.5→20    基元→绕杆   (预留)     (预留)
         ├── Phase 0: 转弯基元 ──┤├── Phase 1: 绕杆 ──┤
 
 Phase 0: 圆弧路径, κ 课程增长, 步频 1~2Hz 随机, 杆透明
@@ -166,23 +166,23 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 2Rmin=0
 | 常量 | 值 | 用途 |
 |------|-----|------|
 | CURVATURE_MIN | 0.5 | Phase 0 κ 起始值 |
-| CURVATURE_TARGET_MAX | 25.0 | Phase 0 κ 上限 |
-| CURVATURE_TARGET | 25.0 | Phase 1 绕杆弧曲率 (= 1/Rmin, 与 CURVATURE_TARGET_MAX 相同) |
+| CURVATURE_TARGET_MAX | 20.0 | Phase 0 κ 上限及最大形变归一化 |
+| CURVATURE_TARGET | CURVATURE_TARGET_MAX | Phase 1 绕杆弧曲率 (= 1/Rmin)，复用唯一上限 |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
 | GAIT_FREQ_PHASE1 | 1.0 | 仅作初始值 (Phase 1 实际用 1~2Hz 随机采样) |
 | POLE_SPACING_START | 0.20 | Phase 1 起始杆间距 (iter 4000 前固定) |
-| POLE_SPACING_MIN | 0.08 | Phase 1 课程终点 (= 2Rmin; 实际被有效间距下界 0.0812 截住, 见下) |
+| 最小杆间距 | 约 0.1009 | 由 `get_pole_spacing_bounds()[0]` 按当前曲率几何计算 |
 | SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
 | SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
 | BASE_VEL | 0.1 | 基础速度 (m/s, 1Hz 时) |
 | VEL_MIN | 0.15 | 最大曲率下速度缩放 (转弯低速) |
 | STRAIGHT_VEL_SCALE | 0.5 | 直行段速度缩放 (= 直行基础速度 0.05 / BASE_VEL) |
 
-Rmin=0.04、tr=SMOOTH_VEL×SMOOTH_TIME=0.025 下实测：x_sw_half=0.04059、x_sw_full=0.05312，
-故**无直行最小间距 = 2×x_sw_half ≈ 0.0812 m**、**有直行下限 = 2×x_sw_full ≈ 0.1062 m**
-（见 `path.py` `_get_smooth_xsw`）。区间 (0.0812, 0.1062) 两种模式都无法周期匹配，**不可用**。
-课程据此分两段：iter 4000→`POLE_SPACING_RAMP_END_ITER`(5500) 在 [0.1062, 0.20] 内线性缩小，
-到 5500 一次性切到 0.0812 并保持到终点；几何边界由 `get_pole_spacing_bounds()`（内部惰性引用
+Rmin=0.05、tr=SMOOTH_VEL×SMOOTH_TIME=0.025 下实测：x_sw_half=0.05047、x_sw_full=0.06300，
+故**无直行最小间距 = 2×x_sw_half ≈ 0.1009 m**、**有直行下限 = 2×x_sw_full ≈ 0.1260 m**
+（见 `path.py` `_get_smooth_xsw`）。区间 (0.1009, 0.1260) 两种模式都无法周期匹配，**不可用**。
+课程据此分两段：iter 4000→`POLE_SPACING_RAMP_END_ITER`(5500) 在 [0.1260, 0.20] 内线性缩小，
+到 5500 一次性切到 0.1009 并保持到终点；几何边界由 `get_pole_spacing_bounds()`（内部惰性引用
 `path.py`）给出，**课程值恒落在可行区间**，不再依赖 `get_effective_pole_spacing` 的静默 clamp。
 
 ## 命令系统 (mdp/command.py)
@@ -191,13 +191,13 @@ Rmin=0.04、tr=SMOOTH_VEL×SMOOTH_TIME=0.025 下实测：x_sw_half=0.04059、x_s
 
 | 字段 | Phase 0 | Phase 1 | 更新 |
 |------|---------|---------|------|
-| vel_x | `base*gait*(1-0.85*|κ|/25)` | **变速**: `base*gait*(STRAIGHT_VEL_SCALE−(STRAIGHT_VEL_SCALE−VEL_MIN)·|κ|/25)`, 直行 0.05×gait / 弯道 0.015×gait, 每步更新 | Phase0: reset; Phase1: 每步 |
+| vel_x | `base*gait*(1-0.85*|κ|/20)` | **变速**: `base*gait*(STRAIGHT_VEL_SCALE−(STRAIGHT_VEL_SCALE−VEL_MIN)·|κ|/20)`, 直行 0.05×gait / 弯道 0.015×gait, 每步更新 | Phase0: reset; Phase1: 每步 |
 | height_f/h | 固定 0.055 | 固定 0.055 | 周期性 |
 | gait_freq | U(1.0,2.0) 随机, ep 内固定 | U(1.0,2.0) 随机, ep 内固定 | reset |
-| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±25↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
+| curvature | 课程采样/fixed_curvature | 每步 `get_path_curvature()` ±20↔0 (平滑 LUT) | Phase0: reset; Phase1: 每步 |
 
 Phase 1 每步动态更新：`_update_command` 中 curvature 跟随路径瞬时值（平滑 LUT 的过渡 κ）；
-**velocity 变速**——直行段（κ=0）scale=STRAIGHT_VEL_SCALE(0.5)、弯道（κ=±25）scale=VEL_MIN(0.15)，
+**velocity 变速**——直行段（κ=0）scale=STRAIGHT_VEL_SCALE(0.5)、弯道（κ=±20）scale=VEL_MIN(0.15)，
 线性过渡，每步随 κ 更新。回放 `fixed_velocity` 作为基础速度同样变速。
 
 **计时器归基类管**：`CommandTerm.compute` 已扣 `time_left` 并在到期时重采样，任务侧不得再扣
@@ -245,9 +245,9 @@ gait=1 时 τ=t，与旧实现逐点等价。
 
 ### 平滑 LUT 的双模式
 
-- **有直行模式**：间距 ≥ 2×x_sw_full (0.1062)，弧↔直行均有过渡；**直行段以杆为中心**——每根杆位于其直行段正中间（长度 L = spacing−2×x_sw_full），杆1/杆3 的直行段横跨周期边界、杆2 的直行段完整在周期内
-- **无直行模式**：间距 ≤ 2×x_sw_half (0.0812)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +25→0→+25 的 V 形过渡）
-- **不兼容区间** (0.0812, 0.1062)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动落到无直行最小间距
+- **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡；**直行段以杆为中心**——每根杆位于其直行段正中间（长度 L = spacing−2×x_sw_full），杆1/杆3 的直行段横跨周期边界、杆2 的直行段完整在周期内
+- **无直行模式**：间距 ≤ 2×x_sw_half (0.1009)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +20→0→+20 的 V 形过渡）
+- **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动落到无直行最小间距
 - 有效间距经 `active_pole_spacing` 统一处理（`fixed_pole_spacing` 覆盖值同样过这一步），
   `events.reset_model` 的出生点直接读该属性，保证**间距只有一个真源**
 
@@ -306,7 +306,7 @@ R = 1 / |κ|
 r = exp(-σ·(外侧越界² + 2·内侧越界²))
 ```
 
-杆半径为 10 mm，首轮安全裕量为 0；曲率 25 下保留内孔，直行退化为对称带。
+杆半径为 10 mm，首轮安全裕量为 0；曲率 20 下保留内孔，直行退化为对称带。
 二阶段暂时沿用局部切线带：
 
 ```
@@ -322,7 +322,7 @@ r = exp(-σ·(外侧越界² + 2·内侧越界²))
 
 ## 杆模块 (mdp/pole.py)
 
-MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0531**（平滑路径等效圆心，不等于 -Rmin=-0.04）。
+MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0630**（平滑路径等效圆心，不等于 -Rmin=-0.05）。
 训练全程 `contype=0`（无物理碰撞）。透明度由 `update_pole_visibility()` 按 `geom_type==CYLINDER` 匹配控制。
 杆数量 `POLE_NUM=12`。**杆实体位置在 env_cfg 里按 POLE_SPACING_START 一次性建好且从不移动**，
 课程缩间距时场景里的杆与实际参考路径不一致（无碰撞，故只影响可视化；回放脚本会按正确间距重建）。
@@ -368,7 +368,7 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 曲率 κ = 1/R (signed): κ>0=左转, κ<0=右转, κ=0=直行。
 每次 episode reset 时采样一次，episode 内保持不变——让 agent 针对固定转弯半径学习稳态步态。
 
-脊柱参考角: F_spine1 = clamp(-0.65 × κ/25, ±0.6)。
+脊柱参考角: F_spine1 = clamp(-0.65 × κ/20, ±0.6)，曲率 ±20 对应原 ±25 的最大形变。
 符号: 实测 F_body_heading = base_heading - F_spine1，左转需 F_spine1<0 → 取负号。
 参考表列索引、关节复位及足端力记录按名称管理，见 `mdp/indices.py`。
 
@@ -376,7 +376,7 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 
 ```powershell
 uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger tensorboard --env.commands.slalom-cmd.phase0-only True
-uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (19 项, 桩环境不建 env)
+uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (20 项, 桩环境不建 env)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_env_smoke         # 端到端自检 (真实 env, 含重置边界)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_training_setup    # 索引、课程、PPO 与内侧约束 (11 项)
 uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint-file <ckpt>              # 阶段自动判定
