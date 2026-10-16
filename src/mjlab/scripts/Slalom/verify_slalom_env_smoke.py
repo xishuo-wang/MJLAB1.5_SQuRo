@@ -13,6 +13,8 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEP
 from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_path_ref, get_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
+from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_NUM, pole_mocap_id
+from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry
 from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
 
 TASK_NAME = "Mjlab-SQuRo-Slalom"
@@ -82,7 +84,7 @@ def check_phase1(u, act) -> None:
     cmd_term = u.command_manager._terms["slalom_cmd"]
     if not bool(cmd_term.phase1_mask.all()):
         fail("对齐到 Phase 1 后 phase1_mask 不全为真")
-    print(f"    杆间距={cmd_term.active_pole_spacing:.4f} m")
+    print(f"    峰值曲率={cmd_term.slalom_peak_curvature.tolist()}，杆心距={cmd_term.active_pole_spacing.tolist()}")
 
     x_first = None
     for i in range(60):
@@ -113,7 +115,7 @@ def check_reset_boundary(u, act) -> None:
 
     if not bool(u.reset_buf.all()):
         fail("强制超时后 reset_buf 未标记全体环境")
-    expected_x = get_approach_start(spacing=cmd_term.active_pole_spacing)[0]
+    expected_x = get_approach_start(curvature=int(cmd_term.slalom_peak_curvature[0]))[0]
     x_ref, _, _, _, _ = compute_path_ref(u)
     got_x = float(x_ref[0])
     if abs(got_x - expected_x) > 1e-4:
@@ -185,6 +187,39 @@ def check_phase0_training(u, act) -> None:
     print(f"    半幅、四分之三幅和最大曲率 ±{CURVATURE_TARGET_MAX:g} 运行有限；一阶段锁定及记录器可用")
 
 
+# 检查全部整数条件、真实 mocap 写入及局部重置隔离。
+def check_mocap_geometry(u, act) -> None:
+    print("\n[6] 整数曲率与逐环境 mocap")
+    cmd = u.command_manager._terms["slalom_cmd"]
+    cmd.cfg.phase0_only = False
+    cmd.fixed_curvature = None
+    u.common_step_counter = PHASE1_STEP
+    for peak in range(5, 16):
+        cmd.cfg.fixed_slalom_curvature = peak
+        u.reset()
+        geometry = get_slalom_geometry(peak)
+        x, y, _, _, _ = compute_path_ref(u)
+        if abs(float(x[0] - u.scene["robot"].data.root_link_pos_w[0, 0])) > 1e-5:
+            fail(f"曲率 {peak} 的重置位置与参考不一致")
+        for i in range(POLE_NUM):
+            pole = u.scene.entities[f"pole{i}"]
+            position = pole.data.data.mocap_pos[:, pole_mocap_id(pole)]
+            origins = u.scene.env_origins
+            expected = origins.clone()
+            expected[:, 0] += (i + 1) * geometry["spacing"]
+            expected[:, 1] += geometry["pole_y"]
+            if not torch.allclose(position, expected, atol=1e-6):
+                fail(f"曲率 {peak} 的杆 {i} 未按实际路径更新")
+        step_and_check(u, act, f"曲率 {peak}")
+    before = u.sim.data.mocap_pos.clone()
+    cmd.cfg.fixed_slalom_curvature = 5
+    u.reset(env_ids=torch.tensor([0], device=u.device))
+    if not torch.equal(before[1], u.sim.data.mocap_pos[1]):
+        fail("局部重置改动了其他环境的实体杆")
+    cmd.cfg.fixed_slalom_curvature = None
+    print("    整数曲率五至十五、出生参考、全部杆位与局部重置隔离检查完成")
+
+
 def main() -> int:
     print("绕杆端到端自检")
     env, u = build_env()
@@ -195,6 +230,7 @@ def main() -> int:
         check_reset_boundary(u, act)
         check_mixed_phase(u, act)
         check_phase0_training(u, act)
+        check_mocap_geometry(u, act)
     finally:
         env.close()
 

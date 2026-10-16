@@ -17,7 +17,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     PHASE1_MID_ITER,
     PHASE2_END_ITER,
     POLE_SPACING_START,
-    VEL_MIN,
+    VEL_MIN, get_velocity_scale,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.events import reset_model
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
@@ -31,6 +31,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.path import (
     get_effective_pole_spacing,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_pole_spacing_bounds
+from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
 
 # 几何黄金数据仍采用历史时间步，真实频率由端到端自检检查。
 STEP_DT = 0.02
@@ -42,15 +43,13 @@ _LEFT_COLS = _ACT_FL_LEG_IDS + _ACT_HL_LEG_IDS
 _RIGHT_COLS = _ACT_FR_LEG_IDS + _ACT_HR_LEG_IDS
 _TABLE_RES = 50
 
-# 曲率上限二十、步频一赫兹、间距 0.20 米的参考路径基准。
-_GOLDEN_GAIT1 = {
-    0.5: (0.177928016, -0.001446403, 0.195492715, -17.645824432),
-    1.0: (0.191688076, -0.000076574, 0.027307453, -6.570054531),
-    2.0: (0.240488976, -0.000006160, -0.004760000, -2.791188478),
-    3.0: (0.264911771, -0.002995139, -0.312999994, -20.000000000),
-    5.0: (0.289018631, -0.020051571, -0.912999988, -20.000000000),
-    8.0: (0.301735938, -0.086727507, -1.342471957, 19.040006638),
-}
+# 为桩命令绑定当前整数曲率对应的逐环境几何。
+def bind_geometry(cmd, n, spacing=None):
+    peak = 15 if spacing is None else curvature_from_spacing(spacing)
+    cmd.slalom_curvature_index = torch.full((n,), peak - 5, dtype=torch.long)
+    geometry = get_slalom_geometry(peak)
+    cmd.pole_spacing = torch.full((n,), geometry["spacing"])
+    cmd.pole_y = torch.full((n,), geometry["pole_y"])
 
 
 # 构造只含参考计算所需字段的桩环境
@@ -79,6 +78,7 @@ def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_
     cmd.fixed_gait_freq = None
     cmd.fixed_curvature = None
     cmd.fixed_pole_spacing = spacing
+    bind_geometry(cmd, n, getattr(cmd.cfg, "fixed_pole_spacing", None))
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = torch.tensor(gait_freqs, dtype=torch.float32)
     cmd.vel_command = cmd.command_tensor[:, 0]
@@ -106,6 +106,8 @@ def make_timer_cmd(n=4, time_left=25.0):
     cmd.command_counter = torch.zeros(n, dtype=torch.long)
     cmd.metrics = {}
     cmd._update_metrics = lambda: None
+    cmd._update_command = lambda: None
+    bind_geometry(cmd, n)
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = 1.0
     cmd.fixed_velocity = None
@@ -138,6 +140,7 @@ def make_ref_state_env(curvatures, phases=None, gait=1.0, step_count=5):
     )
     cmd._env = env
     cmd.cfg = SlalomCommandCfg()
+    bind_geometry(cmd, n)
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = gait
     cmd.command_tensor[:, 4] = torch.tensor(curvatures, dtype=torch.float32)
@@ -208,16 +211,16 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertAlmostEqual(h[1].item(), hb[0].item(), places=6,
                                msg="步频 2.0 的参考朝向未落在 2 倍时间处")
 
-    # 当前上限的绕杆参考必须与已记录的基准逐点一致。
+    # 周期边界必须连续，位移必须等于两倍杆心距。
     def test_gait1_geometry_matches_baseline(self):
-        for t, (gx, gy, gh, gk) in _GOLDEN_GAIT1.items():
-            env = make_ref_env([1.0], [t], gait_scalar=1.0)
-            x, y, _, _, h = compute_slalom_path_ref(env)
-            k = env._path_kappa
-            self.assertAlmostEqual(x[0].item(), gx, places=6, msg=f"t={t} 参考 x 漂移")
-            self.assertAlmostEqual(y[0].item(), gy, places=6, msg=f"t={t} 参考 y 漂移")
-            self.assertAlmostEqual(h[0].item(), gh, places=6, msg=f"t={t} 参考朝向漂移")
-            self.assertAlmostEqual(k[0].item(), gk, places=4, msg=f"t={t} 参考曲率漂移")
+        for peak in range(5, 16):
+            geometry = get_slalom_geometry(peak)
+            path = geometry["period"]
+            self.assertAlmostEqual(float(path["x"][-1]), 2*geometry["spacing"], places=10)
+            self.assertAlmostEqual(float(path["y"][-1]), 0.0, places=8)
+            self.assertAlmostEqual(float(path["heading"][-1]), 0.0, places=8)
+            self.assertEqual(path["kappa"][0], path["kappa"][-1])
+            self.assertLessEqual(float(abs(path["kappa"]).max()), peak)
 
     # 命令计时器每个控制步只允许扣一次
     def test_timer_decrements_once_per_step(self):
@@ -239,61 +242,19 @@ class TestSlalomRefConsistency(unittest.TestCase):
                          msg="回合内触发了命令重采样, 步频会中途被其他批次改写")
         self.assertAlmostEqual(cmd.time_left[0].item(), 25.0 - 1000 * STEP_DT, delta=1e-3)
 
-    # 固定间距覆盖值也必须经过有效间距转换
+    # 固定杆距映射到最近整数曲率，并可反查到同一几何。
     def test_active_pole_spacing_applies_effective(self):
-        cmd = object.__new__(SlalomCommand)
-        cmd._env = NS(common_step_counter=PHASE1_STEP)
-        cmd.cfg = SlalomCommandCfg()
+        for peak in range(5, 16):
+            spacing = get_slalom_geometry(peak)["spacing"]
+            self.assertEqual(curvature_from_spacing(spacing), peak)
+            self.assertAlmostEqual(get_effective_pole_spacing(spacing), spacing, places=10)
 
-        # 不兼容区间内的覆盖值必须 clamp 到无直行最小间距
-        minimum, straight_floor = get_pole_spacing_bounds()
-        incompatible = (minimum + straight_floor) / 2
-        cmd.cfg.fixed_pole_spacing = incompatible
-        self.assertAlmostEqual(cmd.active_pole_spacing, get_effective_pole_spacing(incompatible),
-                               places=9, msg="覆盖值绕过了有效间距转换")
-        self.assertLess(cmd.active_pole_spacing, incompatible)
-
-        # 兼容区间内的覆盖值原样返回
-        cmd.cfg.fixed_pole_spacing = 0.15
-        self.assertAlmostEqual(cmd.active_pole_spacing, 0.15, places=9)
-        self.assertAlmostEqual(get_effective_pole_spacing(0.15), 0.15, places=9)
-
-    # 出生点必须与参考路径使用同一个杆间距
-    def test_reset_model_uses_command_spacing(self):
-        cmd = object.__new__(SlalomCommand)
-        env = NS(device=torch.device("cpu"), common_step_counter=PHASE1_STEP)
-        cmd._env = env
-        cmd.cfg = SlalomCommandCfg()
-        cmd.cfg.fixed_pole_spacing = 0.15
-
-        recorded = {}
-
-        def record_root(root_state, env_ids=None):
-            recorded["root"] = root_state.clone()
-
-        robot = NS(
-            num_joints=0,
-            write_root_state_to_sim=record_root,
-            write_joint_state_to_sim=lambda *a, **k: None,
-        )
-        env.scene = NS(entities={"robot": robot})
-        env.command_manager = NS(_terms={"slalom_cmd": cmd})
-
-        with patch("mjlab.tasks.SQuRo_Slalom.mdp.events.resolve_model_indices"):
-            reset_model(env, torch.tensor([0, 1]))
-
-        expected_x = get_approach_start(spacing=cmd.active_pole_spacing)[0]
-        for i in (0, 1):
-            self.assertAlmostEqual(recorded["root"][i, 0].item(), expected_x, places=6,
-                                   msg="出生点与参考路径的杆间距不一致")
-
-    # 默认三千轮预算保留完整曲率的一千轮训练。
+    # 总预算必须包含三千轮转圈和五千轮绕杆。
     def test_default_budget_covers_phase0_range(self):
         from mjlab.tasks.SQuRo_Slalom.config.rl_cfg import SQuRo_Slalom_PPO_Runner_Cfg
-
-        cfg = SQuRo_Slalom_PPO_Runner_Cfg()
-        self.assertEqual(cfg.max_iterations, 3000)
-        self.assertEqual(cfg.max_iterations - PHASE1_MID_ITER, 1000)
+        self.assertEqual(PHASE1_END_ITER, 3000)
+        self.assertEqual(PHASE1_END_ITER - PHASE1_MID_ITER, 1000)
+        self.assertEqual(SQuRo_Slalom_PPO_Runner_Cfg().max_iterations, 8000)
 
     # 曲率过零时腿部参考必须连续 (不允许整条腿的相位被换掉)
     def test_leg_ref_continuous_across_zero_curvature(self):
@@ -425,11 +386,10 @@ class TestSlalomRefConsistency(unittest.TestCase):
                                msg="未结束的旧阶段回合被套用了新阶段速度公式")
         self.assertAlmostEqual(cmd.command_tensor[0, 4].item(), 0.0, places=6,
                                msg="未结束的旧阶段回合的曲率被改写")
-        # env1: 已属新阶段 → 曲率取路径值, 速度按变速公式
-        self.assertAlmostEqual(cmd.command_tensor[1, 4].item(), -CURVATURE_TARGET_MAX,
-                               places=5, msg="新阶段回合的曲率未跟随路径")
-        self.assertAlmostEqual(cmd.command_tensor[1, 0].item(), BASE_VEL * 1.0 * VEL_MIN,
-                               places=6, msg="新阶段回合的速度不是变速公式结果")
+        # 新阶段的命令与本步路径及共用速度曲线一致。
+        self.assertAlmostEqual(cmd.command_tensor[1, 4].item(), float(env._path_kappa[1]), places=5)
+        self.assertAlmostEqual(cmd.command_tensor[1, 0].item(),
+                               BASE_VEL * get_velocity_scale(float(env._path_kappa[1])), places=6)
 
     # 重置后同一控制步内的首帧观测必须用新回合的参考 (框架顺序: 奖励 → 重置 → 观测)
     def test_reset_first_frame_uses_new_episode_reference(self):
@@ -454,35 +414,15 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertAlmostEqual(float(env._ref_phase[0]), 0.0, places=6,
                                msg="重置后的重算把相位又推进了一次")
 
-    # 接近段与绕杆主路径衔接处, 曲率与期望速度都必须连续
+    # 接近段和主路径在位置、朝向、曲率上连续。
     def test_approach_joins_lut_at_matching_curvature(self):
-        # 有直行模式 LUT 首段是直行 (κ=0), 无直行模式首段是 κ=-K 平台
-        cases = ((POLE_SPACING_START, 0.0),
-                 (get_effective_pole_spacing(0.08), -CURVATURE_TARGET_MAX))
-        for spacing, junction_kappa in cases:
-            env = make_ref_env([1.0], [0.0], spacing=spacing)
-            compute_slalom_path_ref(env)
-            tau_total = env._slalom_app_tbl["tau_total"]
-            self.assertGreater(tau_total, 2 * STEP_DT)
-
-            samples = []
-            for sign in (-1, 1):
-                t = tau_total + sign * 0.5 * STEP_DT      # 步频 1.0 → tau == t
-                e = make_ref_env([1.0], [t], spacing=spacing)
-                _, _, vx, vy, _ = compute_slalom_path_ref(e)
-                samples.append((float(e._path_kappa[0]), float(torch.hypot(vx[0], vy[0]))))
-            k_before, v_before = samples[0]
-            k_after, v_after = samples[1]
-
-            # 主路径起始曲率必须与接近段终点一致 (无直行时曾是 0 vs -K 的硬跳变)
-            self.assertAlmostEqual(k_after, junction_kappa, places=1,
-                                   msg=f"间距 {spacing:.4f}: 主路径起始曲率 {k_after:.3f} "
-                                       f"与期望 {junction_kappa:.3f} 不符")
-            self.assertLess(abs(k_after - k_before), 0.1 * CURVATURE_TARGET_MAX,
-                            msg=f"间距 {spacing:.4f}: 衔接处曲率跳变 {abs(k_after - k_before):.3f}")
-            self.assertLess(abs(v_after - v_before), 0.2 * max(v_before, v_after),
-                            msg=f"间距 {spacing:.4f}: 衔接处期望速度跳变 "
-                                f"{v_before:.4f} → {v_after:.4f} m/s")
+        for peak in range(5, 16):
+            geometry = get_slalom_geometry(peak)
+            approach, period = geometry["approach"], geometry["period"]
+            self.assertAlmostEqual(approach["x"][-1], geometry["spacing"], places=10)
+            self.assertAlmostEqual(approach["y"][-1], 0.0, places=10)
+            self.assertAlmostEqual(approach["heading"][-1], period["heading"][0], places=10)
+            self.assertAlmostEqual(approach["kappa"][-1], period["kappa"][0], places=10)
 
     # 阶段必须按回合起点锁定, 不得在回合中途随全局计数器翻转
     def test_phase_locked_at_episode_start(self):
@@ -519,40 +459,12 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertAlmostEqual(x2[0].item(), arc_x2[0].item(), places=6,
                                msg="回合中途被切到了绕杆路径")
 
-    # 杆间距课程不得落进几何不兼容区间 (否则会被静默 clamp 成断崖)
+    # 全部整数曲率的杆距严格递减，慢步频也能在回合内完成一个周期。
     def test_curriculum_spacing_avoids_incompatible_window(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-            POLE_SPACING_RAMP_END_ITER,
-            get_curriculum_pole_spacing,
-            get_pole_spacing_bounds,
-        )
-
-        min_spacing, straight_floor = get_pole_spacing_bounds()
-        self.assertLess(min_spacing, straight_floor)
-
-        prev = None
-        cliff_iters = []
-        for it in range(PHASE1_END_ITER, PHASE2_END_ITER + 1, 5):
-            sp = get_curriculum_pole_spacing(it * _STEPS_PER_ITER)
-            self.assertTrue(sp <= min_spacing + 1e-6 or sp >= straight_floor - 1e-6,
-                            msg=f"iter {it}: 间距 {sp:.5f} 落在不兼容区间")
-            # 课程值本身必须是有效间距, 不允许被 get_effective_pole_spacing 静默改写
-            self.assertAlmostEqual(get_effective_pole_spacing(sp), sp, places=9,
-                                   msg=f"iter {it}: 间距 {sp:.5f} 被静默 clamp")
-            if prev is not None:
-                self.assertLessEqual(sp, prev + 1e-9, msg=f"iter {it}: 间距课程非单调")
-                if prev - sp > 1e-3:
-                    cliff_iters.append(it)
-            prev = sp
-
-        self.assertEqual(len(cliff_iters), 1,
-                         msg=f"间距断崖应只出现一次, 实测 {cliff_iters}")
-        self.assertAlmostEqual(
-            get_curriculum_pole_spacing(POLE_SPACING_RAMP_END_ITER * _STEPS_PER_ITER),
-            min_spacing, places=9, msg="斜坡终点未切到无直行最小间距")
-        self.assertAlmostEqual(
-            get_curriculum_pole_spacing(PHASE2_END_ITER * _STEPS_PER_ITER),
-            min_spacing, places=9, msg="课程终点不是无直行最小间距")
+        spacings = [get_slalom_geometry(k)["spacing"] for k in range(5, 16)]
+        self.assertTrue(all(a > b for a, b in zip(spacings, spacings[1:])))
+        tables = get_timed_slalom_tables(BASE_VEL)
+        self.assertLess(float((tables["period_time"] + tables["approach_time"]).max()), 20.0)
 
 
 if __name__ == "__main__":

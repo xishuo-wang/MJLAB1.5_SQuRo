@@ -99,19 +99,18 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     commands: dict[str, CommandTermCfg] = {
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
-            phase0_only=not play,
-            resampling_time_range=(20.0, 30.0),
+            phase0_only=False,
             debug_vis=play,
             viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
         )
     }
 
-    # 杆实体的默认占位 (默认透明, Phase 1 训练由 update_pole_visibility 显示, Phase 1 回放由 SQuRo_play 重建为可见)
+    # 杆体逐回合通过 mocap 更新，首轮关闭实际碰撞。
     pole_entities: dict = {}
     for i in range(mdp.POLE_NUM):
         pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
                 name=f"pole{i}", position=((i + 1) * mdp.POLE_SPACING_START, mdp.POLE_Y, 0.0),  # 杆1 在 x=spacing
-                rgba=(0.9, 0.35, 0.2, 0.0),  # alpha=0, 默认透明
+                rgba=(0.9, 0.35, 0.2, 1.0),
             contype=0, conaffinity=0,
         )
 

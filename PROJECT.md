@@ -7,7 +7,7 @@
 | 子任务 | 任务 ID | 状态 | 文档位置 |
 | --- | --- | --- | --- |
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
-| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 默认固定 Phase 0、3000 轮；100 Hz 与 Hole 对齐，曲率上限 20 对应最大形变 | [一阶段训练](docs/SQuRo_Slalom_一阶段训练.md) |
+| **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 3000 轮后进入无直行绕杆，总计 8000 轮；整数峰值 5～15、mocap 杆体、首轮无实际碰撞 | [两阶段训练](docs/SQuRo_Slalom_二阶段训练.md) |
 | **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
 | **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-04 备份（mjlab 0.1.0）在 1.5 上恢复，只做接口适配；旧检查点可直接回放 | `docs/SQuRo_Hole_技术细节.md` |
 
@@ -119,6 +119,10 @@ uv run python -B -m mjlab.scripts.SQuRo_Backup_Replay --visualize none    # 手�
 ---
 
 # SQuRo_Slalom 任务（连续绕杆）
+
+2026-10-16 当前训练入口已采用曲率速度幂次 1.5、3000 轮自动切换、整数峰值曲率 5～15
+与无直行 mocap 杆阵列。下文保留旧路径方案的历史说明；现行参数与验证以
+[两阶段训练](docs/SQuRo_Slalom_二阶段训练.md) 为准。
 
 ## 文件结构
 

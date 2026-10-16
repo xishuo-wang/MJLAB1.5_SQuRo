@@ -3,7 +3,7 @@ from mjlab.rl import (
   RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER, PHASE2_END_ITER
 
 
 def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
@@ -40,8 +40,8 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="SQuRo_Slalom",
     save_interval=100,
     num_steps_per_env=_STEPS_PER_ITER,
-    # 一阶段先扩展曲率，再训练完整范围至 3000 轮。
-    max_iterations=3_000,
+    # 前三千轮转圈，之后五千轮训练无直行绕杆。
+    max_iterations=PHASE2_END_ITER,
     
     clip_actions=None,
     seed=42,

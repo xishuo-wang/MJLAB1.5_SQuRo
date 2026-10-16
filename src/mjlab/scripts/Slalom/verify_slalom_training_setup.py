@@ -34,6 +34,29 @@ def side_excess(offsets, kappas, heading=0.0, body_delta=0.0):
 
 
 class TestSlalomTrainingSetup(unittest.TestCase):
+    # 二阶段采样覆盖全部整数条件，并拒绝互相冲突的固定参数。
+    def test_integer_slalom_sampling(self):
+        cmd = object.__new__(SlalomCommand)
+        cmd._env = NS(device=torch.device("cpu"))
+        cmd.cfg = SQuRo_Slalom_Env_Cfg().commands["slalom_cmd"]
+        peaks = cmd._sample_slalom_indices(4096) + 5
+        self.assertEqual(set(peaks.tolist()), set(range(5, 16)))
+        cmd.cfg.fixed_slalom_curvature = 12
+        self.assertEqual(cmd._sample_slalom_indices(3).tolist(), [7, 7, 7])
+        cmd.cfg.fixed_pole_spacing = 0.2
+        with self.assertRaises(ValueError):
+            cmd._sample_slalom_indices(1)
+
+    # 曲率速度曲线保留端点、左右对称，并满足批准的十五曲率速度。
+    def test_velocity_curve(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_velocity_scale
+        values = get_velocity_scale(torch.tensor([0.0, 5.0, 10.0, 15.0, 20.0]))
+        self.assertTrue(bool((values[:-1] > values[1:]).all()))
+        self.assertAlmostEqual(get_velocity_scale(0.0), 1.0)
+        self.assertAlmostEqual(get_velocity_scale(20.0), 0.15)
+        self.assertAlmostEqual(0.1 * 2 * get_velocity_scale(15.0), 0.05125)
+        torch.testing.assert_close(get_velocity_scale(torch.tensor([-15.0])), values[3:4])
+
     # PPO 算法、网络、采样步数和动作裁剪与 Hole 对拍。
     def test_ppo_matches_hole(self):
         hole = SQuRo_Hole_PPO_Runner_Cfg()
@@ -44,19 +67,20 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertEqual(slalom.num_steps_per_env, _STEPS_PER_ITER)
         self.assertEqual(slalom.clip_actions, hole.clip_actions)
 
-    # 控制周期与物理步长均对齐 Hole，训练默认锁定一阶段。
+    # 控制周期与物理步长均对齐 Hole，训练允许自动进入绕杆。
     def test_policy_frequency_matches_hole(self):
         hole = SQuRo_Hole_Env_Cfg()
         slalom = SQuRo_Slalom_Env_Cfg()
         self.assertEqual(slalom.sim.mujoco.timestep, hole.sim.mujoco.timestep)
         self.assertEqual(slalom.decimation, hole.decimation)
         self.assertAlmostEqual(slalom.decimation * slalom.sim.mujoco.timestep, 0.01)
-        self.assertTrue(slalom.commands["slalom_cmd"].phase0_only)
+        self.assertFalse(slalom.commands["slalom_cmd"].phase0_only)
 
     # 跨过原绕杆边界后，路径与奖励仍使用一阶段。
     def test_phase0_lock_keeps_late_curriculum(self):
         cmd = object.__new__(SlalomCommand)
         cmd.cfg = SQuRo_Slalom_Env_Cfg().commands["slalom_cmd"]
+        cmd.cfg.phase0_only = True
         env = NS(command_manager=NS(_terms={"slalom_cmd": cmd}))
         cmd._env = env
         for iteration in (2000, 3999, 4000, 6000, 8000):
@@ -67,11 +91,11 @@ class TestSlalomTrainingSetup(unittest.TestCase):
             self.assertEqual(get_curriculum_reward_weight(env, "sigma_spn_pos"), 10.0)
             self.assertEqual(get_curriculum_reward_weight(env, "weight_corridor"), 5.0)
 
-    # 一阶段和绕杆共享最大曲率 20，完整范围覆盖最后一千轮。
+    # 一阶段保持二十归一化，绕杆峰值上限独立为十五。
     def test_curvature_range_reaches_20(self):
         self.assertEqual(CURVATURE_TARGET_MAX, 20.0)
-        self.assertEqual(CURVATURE_TARGET, CURVATURE_TARGET_MAX)
-        self.assertAlmostEqual(Rmin, 0.05)
+        self.assertEqual(CURVATURE_TARGET, 15.0)
+        self.assertAlmostEqual(Rmin, 1 / 15)
         for iteration in (2000, 2999, 4000):
             self.assertEqual(get_curvature_range(iteration * _STEPS_PER_ITER), (-20.0, 20.0))
         self.assertLess(get_curvature_range(0)[1], 15.0)

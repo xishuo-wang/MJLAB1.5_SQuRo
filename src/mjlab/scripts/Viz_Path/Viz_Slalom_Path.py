@@ -5,27 +5,27 @@ from matplotlib.patches import Circle
 
 # 直接从 Slalom 任务导入 RL 实际使用的平滑 LUT 路径生成函数 (保证展示 = 训练使用)
 from mjlab.tasks.SQuRo_Slalom.mdp.path import (
-    _approach_rev_table,
     _generate_slalom_lut_smooth_period,
     BODY_REF_OFFSET,
     CORRIDOR_HALF_WIDTH,
     _INIT_DIST,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_Y, generate_pole_positions
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SMOOTH_TIME, SMOOTH_VEL
+from mjlab.tasks.SQuRo_Slalom.mdp.pole import generate_pole_positions
+from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry, curvature_from_spacing
+from mjlab.scripts._diagnostics import SLALOM_DIAGNOSTICS_ROOT
 
 
-# ==================== 配置 ====================
-POLE_SPACING = 0.15             # 杆间距 (m) — 与回放默认 fixed_pole_spacing 一致
+# 当前整数曲率对应的实际无直行路径。
+PEAK_CURVATURE = 15
+POLE_SPACING = get_slalom_geometry(PEAK_CURVATURE)["spacing"]
+POLE_Y = get_slalom_geometry(PEAK_CURVATURE)["pole_y"]
 NUM_PERIODS = 3                 # 周期数
 NUM_POLES = 8                   # 显示杆数量
-CORRIDOR_HALF_WIDTH = 0.04      # 走廊半宽 (m) — 与 Slalom 任务 corridor 一致
-BODY_REF_OFFSET = 0.04          # F/H_body 中心沿路径切线偏移 (m) — 与 Slalom 任务一致
 
 X_RANGE = (0.0, 1.10)           # 显示 x 范围 (m)
 Y_RANGE = (-0.20, 0.20)         # 显示 y 范围 (m)
 N_SAMPLES = 400                 # 采样点数 (路径由 LUT 直接给出, 仅用于重采样)
-SAVE_PATH = Path(__file__).parent / "Path" / "Viz_Slalom_Path.png"
+SAVE_PATH = SLALOM_DIAGNOSTICS_ROOT / "path" / "Viz_Slalom_Path.png"
 
 
 # 生成 RL 实际使用的 base 期望路径 (接近段 + 多周期平滑 LUT)
@@ -48,8 +48,8 @@ def offset_path(px, py, ph, offset: float):
 
 # 生成接近段 (圆弧: 平台 -K + 过渡 -K→0, 终点 = (spacing, 0), 与 RL 一致)
 def generate_approach(spacing: float):
-    tbl = _approach_rev_table(_INIT_DIST, SMOOTH_VEL * SMOOTH_TIME)
-    return np.array(tbl["x"]) + spacing, np.array(tbl["y"])
+    tbl = get_slalom_geometry(curvature_from_spacing(spacing))["approach"]
+    return tbl["x"], tbl["y"]
 
 
 # 绘制单个子图: 路径 + 杆 + 走廊带 + 接近段

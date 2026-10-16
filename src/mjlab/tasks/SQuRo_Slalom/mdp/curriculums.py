@@ -7,32 +7,33 @@ import torch
 _STEPS_PER_ITER = 48                # 与 Hole 的每轮策略步数一致
 
 PHASE1_MID_ITER = 2000              # iter 0-2000: 转弯曲率增大
-PHASE1_END_ITER = 4000              # iter 2000-4000: 转弯基元
-PHASE2_MID_ITER = 6000              # iter 4000-6000: 绕杆间距缩小阶段
-PHASE2_END_ITER = 8000              # iter 6000-8000: 绕杆训练
+PHASE1_END_ITER = 3000              # 转圈结束后，新回合进入绕杆
+PHASE2_MID_ITER = 6000              # 绕杆奖励课程的后段边界
+PHASE2_END_ITER = 8000              # 完整训练预算
 
 CURVATURE_TARGET_MAX = 20.0         # 最大曲率同时用于命令采样与最大形变归一化
-CURVATURE_TARGET = CURVATURE_TARGET_MAX  # 绕杆弧曲率复用相同上限
+SLALOM_CURVATURE_MIN = 5
+SLALOM_CURVATURE_MAX = 15
+SLALOM_CURVATURES = tuple(range(SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX + 1))
+CURVATURE_TARGET = float(SLALOM_CURVATURE_MAX)  # 默认绕杆峰值，形变仍按二十归一化
 Rmin = 1.0 / CURVATURE_TARGET       # 最小转弯半径
 
-SMOOTH_TIME = 1.0                   # 单段过渡时间 (s)，弧段间曲率线性过渡, 平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
-SMOOTH_VEL = 0.025                  # 名义平滑速度 (m/s, = base(0.1)×gait(1)×scale(0.25))
+SMOOTH_TIME = 1.0                   # 仅用于定义固定平滑弧长，不代表实际过渡耗时
+SMOOTH_VEL = 0.025                  # 固定平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
 
-POLE_SPACING_START = 0.20           # 绕杆起始杆间距 (宽)
-POLE_SPACING_RAMP_END_ITER = 5500   # 间距斜坡终点: 在此一次性切到无直行最小间距
+POLE_SPACING_START = 0.20           # 编译占位；运行时杆距由本回合曲率决定
 
 GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
 GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
-GAIT_FREQ_PHASE1 = 1.0              # Phase 1 固定步频
 
-# 速度剖面 (Phase 1 变速: 直行段快, 转弯段慢, 线性过渡)
+# 两阶段共用速度曲线。
 BASE_VEL = 0.1                      # 基础速度 (m/s, 1Hz 时)
+VELOCITY_CURVATURE_POWER = 1.5
 VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯低速)
-STRAIGHT_VEL_SCALE = 0.5            # 直行段速度缩放 (= 直行基础速度 0.05 / BASE_VEL)
 
 
 # 奖励权重阶段
-_STAGES = (0, 2000, 4000, 6000)
+_STAGES = (0, PHASE1_MID_ITER, PHASE1_END_ITER, PHASE2_MID_ITER)
 
 
 _CURVES: dict[str, tuple[float, ...]] = {
@@ -76,29 +77,24 @@ def get_training_phase_batch(step_counter: torch.Tensor, phase0_only: bool = Fal
     return (step_counter // _STEPS_PER_ITER) >= PHASE1_END_ITER
 
 
-# 几何可行的杆间距边界 (无直行最小间距, 有直行下限); 由 path.py 计算, 惰性导入避免循环依赖
-_SPACING_BOUNDS: tuple[float, float] | None = None
+# 两阶段共用曲率速度曲线，保留直行和最大曲率的端点。
+def get_velocity_scale(curvature: Any) -> Any:
+    remaining = 1.0 - abs(curvature) / CURVATURE_TARGET_MAX
+    remaining = max(0.0, min(1.0, remaining)) if isinstance(remaining, (int, float)) else remaining.clip(0.0, 1.0)
+    return VEL_MIN + (1.0 - VEL_MIN) * remaining ** VELOCITY_CURVATURE_POWER
 
 
+# 无直行路径族的最小和最大杆心距。
 def get_pole_spacing_bounds() -> tuple[float, float]:
-    global _SPACING_BOUNDS
-    if _SPACING_BOUNDS is None:
-        from .path import _get_smooth_xsw
-        x_sw_half, x_sw_full = _get_smooth_xsw(SMOOTH_VEL * SMOOTH_TIME)
-        _SPACING_BOUNDS = (2.0 * x_sw_half, 2.0 * x_sw_full)
-    return _SPACING_BOUNDS
+    from .slalom_geometry import get_slalom_geometry
+    return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"],
+            get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
 
 
-# 获取杆间距 (确定性课程: 先在"有直行"区间线性缩小, 再一次性切到无直行最小间距)
+# 回放未指定条件时采用峰值十五；训练按回合采样整数峰值。
 def get_curriculum_pole_spacing(step_counter: int) -> float:
-    iter_num = step_counter // _STEPS_PER_ITER
-    if iter_num < PHASE1_END_ITER:
-        return POLE_SPACING_START
-    min_spacing, straight_floor = get_pole_spacing_bounds()
-    if iter_num >= POLE_SPACING_RAMP_END_ITER:
-        return min_spacing
-    progress = (iter_num - PHASE1_END_ITER) / (POLE_SPACING_RAMP_END_ITER - PHASE1_END_ITER)
-    return POLE_SPACING_START - progress * (POLE_SPACING_START - straight_floor)
+    del step_counter
+    return get_pole_spacing_bounds()[0]
 
 
 # 奖励权重课程

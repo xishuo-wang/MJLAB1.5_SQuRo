@@ -1,8 +1,7 @@
 from __future__ import annotations
-import math as _m
 import torch
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .path import _INIT_DIST, get_approach_start
+from .path import _INIT_DIST
 
 
 # 重置模型
@@ -15,18 +14,10 @@ def reset_model(env, env_ids):
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)
     
-    # 重置基座状态: Phase 1 用接近段圆弧起点, Phase 0 用直行起点 (与期望轨迹一致)
+    # 先写中性位姿，命令管理器随后按本回合采样的曲率写最终起点。
     root_state = torch.zeros(n, 13, device=env.device)
-    if env.command_manager._terms["slalom_cmd"].slalom_mode_active:
-        # 新几何: 起点右移杆间距 (接近段终点 = 第一根杆正上方 (spacing, 0))
-        # 间距取命令项的唯一真源 (含 fixed_pole_spacing 覆盖与有效间距转换)
-        spacing = env.command_manager._terms["slalom_cmd"].active_pole_spacing
-        ax, ay, ah = get_approach_start(spacing=spacing)
-        c, s = _m.cos(ah / 2), _m.sin(ah / 2)
-        qx, qy = 0.70710678 * (s - c), -0.70710678 * (c + s)
-    else:
-        ax, ay = -_INIT_DIST, 0.0
-        qx, qy = -0.70710678, -0.70710678
+    ax, ay = -_INIT_DIST, 0.0
+    qx, qy = -0.70710678, -0.70710678
 
     root_state[:, 0] = ax           # x
     root_state[:, 1] = ay           # y
