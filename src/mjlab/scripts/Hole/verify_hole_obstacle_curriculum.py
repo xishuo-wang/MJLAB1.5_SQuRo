@@ -114,19 +114,22 @@ def verify_shared_rule() -> None:
                 (0.055, 0.030), (0.055001, 0.030), (0.059999, 0.030),
                 (0.060, 0.035), (0.060001, 0.035), (0.064999, 0.035),
             )
-            for height, target in (*low_cases, *((height, min(height - 0.025, 0.055))
-                                  for height in (0.065, 0.070, 0.075, 0.079999, 0.080, 0.090))):
+            high_cases = (
+                (0.065, 0.040), (0.069999, 0.040), (0.070, 0.045), (0.074999, 0.045),
+                (0.075, 0.050), (0.079999, 0.050), (0.080, 0.055), (0.090, 0.055),
+            )
+            for height, target in (*low_cases, *high_cases):
                 front, hind = compute_base_heights(positions, center, half_length, height)
                 if height < 0.065:
                     expected_f = positions.new_tensor([0.055, target, target, 0.055, 0.055, 0.055, 0.055])
                     expected_h = positions.new_tensor([0.055, 0.055, 0.055, target, target, target, 0.055])
                 else:
-                    expected_f = positions.new_tensor([0.055, *([min(height - 0.025, 0.055)] * 5), 0.055])
+                    expected_f = positions.new_tensor([0.055, *([target] * 5), 0.055])
                     expected_h = expected_f
                 check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
                 expected_modes = [0, 1, 1, 2, 2, 2, 0] if height < 0.065 else [0] * 7
-                check("低板离散挡位、高板连续目标与模式判定一致",
+                check("各板高离散挡位与高低模式判定一致",
                       get_height_mode(front, hind).tolist() == expected_modes)
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
         for height in (HEIGHT_MIN, 0.048, 0.064, 0.065, 0.068, 0.070, 0.080, 0.090):
@@ -399,7 +402,8 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.035, 0.055, 0.055]))
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.035, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
-    for height, target in ((0.065, 0.040), (0.070, 0.045), (0.075, 0.050), (0.080, 0.055), (0.090, 0.055)):
+    for height, target in ((0.065, 0.040), (0.069, 0.040), (0.070, 0.045), (0.074, 0.045),
+                           (0.075, 0.050), (0.079, 0.050), (0.080, 0.055), (0.090, 0.055)):
         write_obstacle_mocap(obstacle, height)
         read_geom_bottom_z(env)
         command._update_command_by_height_rule()

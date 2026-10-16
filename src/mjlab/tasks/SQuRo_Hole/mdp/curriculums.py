@@ -10,8 +10,8 @@ from .config import (
     ENTRY_MARGIN,
     HEIGHT_FINE_STEP,
     BODY_HEIGHT_OFFSET,
-    LOW_POSE_CALIBRATION,
-    LOW_OBSTACLE_HEIGHT_EDGES,
+    HEIGHT_LIST,
+    OBSTACLE_HEIGHT_EDGES,
     FULL_HEIGHT_VALUES,
     HEIGHT_INITIAL_MIN,
     RANDOM_HEIGHT_VALUES,
@@ -175,17 +175,16 @@ def compute_base_heights(
     high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
-    target = (bottom - BODY_HEIGHT_OFFSET).clamp(max=BASE_HEIGHT)
-    edges = bottom.new_tensor(LOW_OBSTACLE_HEIGHT_EDGES)
-    low_heights = bottom.new_tensor([row[0] for row in LOW_POSE_CALIBRATION[:-1]])
-    low_target = low_heights[torch.bucketize(bottom.contiguous(), edges, right=True)]
+    edges = bottom.new_tensor(OBSTACLE_HEIGHT_EDGES)
+    heights = bottom.new_tensor(HEIGHT_LIST)
+    target = heights[torch.bucketize(bottom.contiguous(), edges, right=True)]
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)
     front = torch.where(high_obstacle & in_range, target, front)
     hind = torch.where(high_obstacle & in_range, target, hind)
-    front = torch.where((~high_obstacle) & front_low, low_target, front)
-    hind = torch.where((~high_obstacle) & hind_low, low_target, hind)
+    front = torch.where((~high_obstacle) & front_low, target, front)
+    hind = torch.where((~high_obstacle) & hind_low, target, hind)
     return front, hind
 
 
