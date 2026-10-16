@@ -290,7 +290,7 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
             "entry_margin": ENTRY_MARGIN,
             "exit_margin": EXIT_MARGIN,
             "body_height_offset": BODY_HEIGHT_OFFSET,
-            "low_target_rule": "板底高度减躯干余量，受限侧使用连续高度IK",
+            "low_target_rule": "板底高度减躯干余量，受限侧使用固定角标定表插值",
             "default_height": BASE_HEIGHT,
             "position_source": "base_Link_world_x",
             "front_low_end_inclusive": False,

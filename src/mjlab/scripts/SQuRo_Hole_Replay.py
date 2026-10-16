@@ -448,7 +448,7 @@ def main() -> None:
             for label, col in [("前", CMD_HEIGHT_F_IDS), ("后", CMD_HEIGHT_H_IDS)]:
                 height = float(cmd[col])
                 if height < THRESHOLD_HEIGHT:
-                    print(f"[连续参考] {label}高度 {height * 1000:g} mm，固定足端 (0, -h) 直接求逆运动学")
+                    print(f"[标定参考] {label}高度 {height * 1000:g} mm，使用固定角标定表分段插值")
                     continue
                 nearest = min(HEIGHT_LIST, key=lambda value: abs(value - height))
                 if not math.isclose(height, nearest, abs_tol=1e-6):

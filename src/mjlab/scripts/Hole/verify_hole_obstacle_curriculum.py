@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -22,6 +23,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     FULL_HEIGHT_VALUES,
     RANDOM_HEIGHT_VALUES,
     HEIGHT_LIST,
+    LOW_POSE_CALIBRATION,
+    LOW_SPINE_PITCH,
     THRESHOLD_HEIGHT,
     HEIGHT_INITIAL_MIN,
     HEIGHT_MAX,
@@ -52,6 +55,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_SPN_IDS,
     _ACT_LEG_F_IDS,
     _ACT_LEG_H_IDS,
+    _ACT_SPN_H_PITCH_ID,
     _MODEL_INDICES,
     resolve_model_indices,
 )
@@ -407,7 +411,7 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     env.reset()
 
 
-# 用足端正运动学复核连续IK、双低独立性、相位速度及表格一致性。
+# 验证固定角标定插值、脊柱高度差、双低独立性及表格一致性。
 def verify_continuous_reference(env: ManagerBasedRlEnv) -> None:
     check("前1000轮高度池保持不变", RANDOM_HEIGHT_VALUES == [0.04, 0.045, 0.05, 0.055])
     check("1000至3000轮扩展为八档", FULL_HEIGHT_VALUES == [0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055])
@@ -430,20 +434,20 @@ def verify_continuous_reference(env: ManagerBasedRlEnv) -> None:
     check("连续参考与速度均为有限值", bool(torch.isfinite(pos).all() and torch.isfinite(vel).all()))
     for height, leg_ids, is_front in ((heights[:, 0], _ACT_LEG_F_IDS, True), (heights[:, 1], _ACT_LEG_H_IDS, False)):
         low = height < THRESHOLD_HEIGHT
-        angles = pos[low][:, leg_ids].reshape(-1, 2, 2)
-        first, second = angles[..., 0], angles[..., 1]
-        if is_front:
-            a1, a2 = first + 0.868, -second - 2.643
-            x = -0.040 * a1.cos() - 0.040 * a2.cos()
-            z = -0.040 * a1.sin() + 0.040 * a2.sin()
-        else:
-            a1, a2 = first - 4.35, -second - 1.75
-            x = 0.036 * a2.sin() - 0.040 * a1.cos()
-            z = 0.036 * a2.cos() - 0.040 * a1.sin()
+        expected = []
+        for value in height[low].tolist():
+            value = min(max(value, LOW_POSE_CALIBRATION[0][0]), LOW_POSE_CALIBRATION[-1][0])
+            upper = next((index for index, row in enumerate(LOW_POSE_CALIBRATION) if row[0] >= value), len(LOW_POSE_CALIBRATION) - 1)
+            lower = max(0, upper - 1)
+            left, right = LOW_POSE_CALIBRATION[lower], LOW_POSE_CALIBRATION[upper]
+            fraction = (value - left[0]) / (right[0] - left[0]) if upper != lower else 0.0
+            left_angles = left[1] if is_front else left[2]
+            right_angles = right[1] if is_front else right[2]
+            expected.append([a + fraction * (b - a) for a, b in zip(left_angles, right_angles)])
+        expected_tensor = pos.new_tensor(expected).repeat(1, 2)
         label = "前" if is_front else "后"
-        check(f"{label}腿各连续高度的足端均为(0,-h)",
-              torch.allclose(x, torch.zeros_like(x), atol=2e-8, rtol=0)
-              and torch.allclose(z, -height[low, None].expand_as(z), atol=2e-8, rtol=0))
+        check(f"{label}腿连续高度严格按标定角度分段插值",
+              torch.allclose(pos[low][:, leg_ids], expected_tensor, atol=3e-7, rtol=0))
         check(f"{label}受限侧参考速度严格为零", bool((vel[low][:, leg_ids] == 0).all()))
         for index, height_value in enumerate(HEIGHT_LIST):
             if height_value >= THRESHOLD_HEIGHT:
@@ -451,8 +455,25 @@ def verify_continuous_reference(env: ManagerBasedRlEnv) -> None:
             rows = low & torch.isclose(height, height.new_tensor(height_value), atol=1e-8, rtol=0)
             mode = get_height_mode(heights[:, 0], heights[:, 1])[rows]
             key = "front_pos" if is_front else "hind_pos"
-            check(f"{label}腿{height_value * 1000:g}毫米预计算与直接IK一致",
+            check(f"{label}腿{height_value * 1000:g}毫米预计算与标定插值一致",
                   torch.allclose(pos[rows][:, leg_ids], tables[key][mode, index, 0][:, leg_ids], atol=1e-6))
+    low_mode = (heights < THRESHOLD_HEIGHT).any(dim=1)
+    difference = (heights[:, 0] - heights[:, 1]).abs()
+    expected_pitch = LOW_SPINE_PITCH * (difference / (BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0])).clamp(max=1.0)
+    expected_pitch = torch.where(low_mode, expected_pitch, 0.0)
+    check("四种模式均按实际前后高度差计算脊柱俯仰",
+          torch.allclose(pos[:, _ACT_SPN_H_PITCH_ID], expected_pitch, atol=1e-7, rtol=0))
+    equal_heights = heights[:, 0] == heights[:, 1]
+    check("双高与同高双低的脊柱俯仰均为零",
+          bool((pos[equal_heights | ~low_mode, _ACT_SPN_H_PITCH_ID] == 0).all()))
+    for height_value in (0.020, 0.025, 0.030, 0.035):
+        expected_value = LOW_SPINE_PITCH * (BASE_HEIGHT - height_value) / (BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0])
+        mask = torch.isclose(heights.min(dim=1).values, heights.new_tensor(height_value)) & (heights.max(dim=1).values == BASE_HEIGHT)
+        check(f"{height_value * 1000:g}/55毫米前后两种模式脊柱端点正确",
+              torch.allclose(pos[mask, _ACT_SPN_H_PITCH_ID], pos.new_full((int(mask.sum()),), expected_value), atol=1e-7, rtol=0))
+    with patch("mjlab.tasks.SQuRo_Hole.mdp.reference.inverse_kinematics", side_effect=AssertionError("在线参考不应计算IK")):
+        direct, _ = get_reference_joint_state(probe)
+    check("在线参考无需调用逆运动学", torch.equal(pos, direct))
     probe.episode_length_buf += 37
     shifted, _ = get_reference_joint_state(probe)
     for column, leg_ids in ((0, _ACT_LEG_F_IDS), (1, _ACT_LEG_H_IDS)):

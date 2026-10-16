@@ -16,6 +16,8 @@ from .config import (
     USE_SPINE_CSV,
     MODE_BOTH_HIGH,
     MODE_FRONT_LOW,
+    LOW_SPINE_PITCH,
+    LOW_POSE_CALIBRATION,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     THRESHOLD_HEIGHT,
@@ -247,6 +249,27 @@ def initialize_tables(device=None, force_reload=False) -> Dict[str, Any]:
 
 
 
+# 按固定角标定点分段插值，低姿态不再在线计算逆运动学。
+def get_low_leg_reference(height: torch.Tensor, is_front: bool) -> torch.Tensor:
+    knots = height.new_tensor([row[0] for row in LOW_POSE_CALIBRATION])
+    angles = height.new_tensor([row[1] if is_front else row[2] for row in LOW_POSE_CALIBRATION])
+    query = height.clamp(min=knots[0], max=knots[-1])
+    lower = (torch.searchsorted(knots, query.contiguous()) - 1).clamp(0, len(knots) - 2)
+    upper = lower + 1
+    fraction = (query - knots[lower]) / (knots[upper] - knots[lower])
+    return torch.lerp(angles[lower], angles[upper], fraction.unsqueeze(-1))
+
+
+
+# 按前后高度差插值脊柱俯仰，同高与双高均保持零。
+def get_spine_pitch_reference(height_f: torch.Tensor, height_h: torch.Tensor) -> torch.Tensor:
+    full_difference = BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0]
+    fraction = ((height_f - height_h).abs() / full_difference).clamp(max=1.0)
+    low = (height_f < THRESHOLD_HEIGHT) | (height_h < THRESHOLD_HEIGHT)
+    return torch.where(low, LOW_SPINE_PITCH * fraction, 0.0)
+
+
+
 # 初始化钻洞用预计算表
 def build_reference_tables(device: torch.device) -> Dict[str, Any]:
     front_trajectory = load_csv_leg(CSV_PATHS["front_leg"], is_front=True)
@@ -274,36 +297,39 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
             current_height = target_height
             # 前肢参考轨迹
             if mode in (MODE_FRONT_LOW, MODE_BOTH_LOW):
-                x_leg_fl, z_leg_fl = np.zeros(TABLE_RESOLUTION), np.full(TABLE_RESOLUTION, -current_height)
-                x_leg_fr, z_leg_fr = np.zeros(TABLE_RESOLUTION), np.full(TABLE_RESOLUTION, -current_height)
-            elif mode == MODE_HIND_LOW:
-                freq = cycloid_hind_low["freq"]
-                T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_hind_low["swing_ratio"]
-                t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["FL"] * T) % T
-                x_leg_fl, z_leg_fl = cycloid_trajectory(
-                    t_mods, T_sw, T - T_sw, cycloid_hind_low["stride_F"], cycloid_hind_low["height_F"],
-                    cycloid_hind_low["body_height_F"], cycloid_hind_low["rotate_angle_F"], cycloid_hind_low["x_offset_F"], 1
-                )
-                t_mods_fr = (phases_np * T + CSV_PARAMS["phase_lag"]["FR"] * T) % T
-                x_leg_fr, z_leg_fr = cycloid_trajectory(
-                    t_mods_fr, T_sw, T - T_sw, cycloid_hind_low["stride_F"], cycloid_hind_low["height_F"],
-                    cycloid_hind_low["body_height_F"], cycloid_hind_low["rotate_angle_F"], cycloid_hind_low["x_offset_F"], 1
-                )
-            else:  
-                x_leg_fl, z_leg_fl = csv_leg_trajectory(
-                    phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FL"], CSV_PARAMS["rotate_angle_F"], 
-                    height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
-                )
-                x_leg_fr, z_leg_fr = csv_leg_trajectory(
-                    phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FR"], CSV_PARAMS["rotate_angle_F"], 
-                    height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
-                )
-            
-            x_tensor_F = torch.tensor(np.stack([x_leg_fl, x_leg_fr], axis=-1), device=device, dtype=torch.float32)
-            z_tensor_F = torch.tensor(np.stack([z_leg_fl, z_leg_fr], axis=-1), device=device, dtype=torch.float32)
-            shoulder_angles, elbow_angles = inverse_kinematics(x_tensor_F, z_tensor_F, is_front=True)
-            front_pos_table[mode, height_idx, :, _ACT_FL_LEG_IDS] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
-            front_pos_table[mode, height_idx, :, _ACT_FR_LEG_IDS] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
+                height = torch.tensor(current_height, device=device, dtype=front_pos_table.dtype)
+                hold = get_low_leg_reference(height, is_front=True)
+                front_pos_table[mode, height_idx, :, _ACT_FL_LEG_IDS] = hold
+                front_pos_table[mode, height_idx, :, _ACT_FR_LEG_IDS] = hold
+            else:
+                if mode == MODE_HIND_LOW:
+                    freq = cycloid_hind_low["freq"]
+                    T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_hind_low["swing_ratio"]
+                    t_mods = (phases_np * T + CSV_PARAMS["phase_lag"]["FL"] * T) % T
+                    x_leg_fl, z_leg_fl = cycloid_trajectory(
+                        t_mods, T_sw, T - T_sw, cycloid_hind_low["stride_F"], cycloid_hind_low["height_F"],
+                        cycloid_hind_low["body_height_F"], cycloid_hind_low["rotate_angle_F"], cycloid_hind_low["x_offset_F"], 1
+                    )
+                    t_mods_fr = (phases_np * T + CSV_PARAMS["phase_lag"]["FR"] * T) % T
+                    x_leg_fr, z_leg_fr = cycloid_trajectory(
+                        t_mods_fr, T_sw, T - T_sw, cycloid_hind_low["stride_F"], cycloid_hind_low["height_F"],
+                        cycloid_hind_low["body_height_F"], cycloid_hind_low["rotate_angle_F"], cycloid_hind_low["x_offset_F"], 1
+                    )
+                else:
+                    x_leg_fl, z_leg_fl = csv_leg_trajectory(
+                        phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FL"], CSV_PARAMS["rotate_angle_F"],
+                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
+                    )
+                    x_leg_fr, z_leg_fr = csv_leg_trajectory(
+                        phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FR"], CSV_PARAMS["rotate_angle_F"],
+                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
+                    )
+
+                x_tensor_F = torch.tensor(np.stack([x_leg_fl, x_leg_fr], axis=-1), device=device, dtype=torch.float32)
+                z_tensor_F = torch.tensor(np.stack([z_leg_fl, z_leg_fr], axis=-1), device=device, dtype=torch.float32)
+                shoulder_angles, elbow_angles = inverse_kinematics(x_tensor_F, z_tensor_F, is_front=True)
+                front_pos_table[mode, height_idx, :, _ACT_FL_LEG_IDS] = torch.stack([shoulder_angles[:, 0], elbow_angles[:, 0]], dim=-1)
+                front_pos_table[mode, height_idx, :, _ACT_FR_LEG_IDS] = torch.stack([shoulder_angles[:, 1], elbow_angles[:, 1]], dim=-1)
 
             # 后肢参考轨迹
             if mode == MODE_FRONT_LOW:
@@ -326,7 +352,7 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
                 hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
             elif mode in (MODE_HIND_LOW, MODE_BOTH_LOW):
                 height = torch.tensor(current_height, device=device, dtype=hind_pos_table.dtype)
-                hold = torch.stack(inverse_kinematics(torch.zeros_like(height), -height, is_front=False))
+                hold = get_low_leg_reference(height, is_front=False)
                 hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = hold
                 hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = hold
             else:
@@ -346,10 +372,12 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
 
             # 脊柱参考轨迹: 整行按执行器列写入, 与表列序一致, 无需再散射
             if mode != MODE_BOTH_HIGH:
-                # 低高度模式: 固定后脊柱俯仰, 其余列保持 0
-                spine_angles = np.zeros((TABLE_RESOLUTION, _ACT_NUM))
-                spine_angles[:, _ACT_SPN_H_PITCH_ID] = -0.65
-                spine_tensor = torch.tensor(spine_angles, device=device, dtype=torch.float32)
+                # 表内双低按同高保存；实际前后高度差在查询时更新。
+                front_height = BASE_HEIGHT if mode == MODE_HIND_LOW else current_height
+                hind_height = BASE_HEIGHT if mode == MODE_FRONT_LOW else current_height
+                spine_tensor = torch.zeros((TABLE_RESOLUTION, _ACT_NUM), device=device, dtype=torch.float32)
+                spine_tensor[:, _ACT_SPN_H_PITCH_ID] = get_spine_pitch_reference(
+                    spine_tensor.new_tensor(front_height), spine_tensor.new_tensor(hind_height))
             elif USE_SPINE_CSV and xoy_spine_data is not None and yoz_spine_data is not None:
                 # 正常模式: CSV 脊柱数据按执行器列写入 (前侧摆/前扭转/后俯仰/后扭转)
                 spine_angles = np.zeros((TABLE_RESOLUTION, _ACT_NUM))
@@ -438,14 +466,19 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     joint_vel[:, _ACT_SPN_IDS] = tables["spine_vel"][mode, height_indices_min, phase_indices][:, _ACT_SPN_IDS]
     joint_vel = joint_vel * (frequency / BASE_FREQ).unsqueeze(1)
 
-    # 受限侧按连续高度直接求 IK，足端固定且相位速度为零。
+    # 受限侧使用标定固定角插值，相位速度为零。
     for height, leg_ids, is_front in (
         (desired_height_F, _ACT_LEG_F_IDS, True),
         (desired_height_H, _ACT_LEG_H_IDS, False),
     ):
         low = (height < THRESHOLD_HEIGHT).unsqueeze(1)
-        angles = torch.stack(inverse_kinematics(torch.zeros_like(height), -height, is_front), dim=1).repeat(1, 2)
+        angles = get_low_leg_reference(height, is_front).repeat(1, 2)
         joint_pos[:, leg_ids] = torch.where(low, angles, joint_pos[:, leg_ids])
         joint_vel[:, leg_ids] = torch.where(low, 0.0, joint_vel[:, leg_ids])
+
+    # 双低非同高也按实际命令高度差更新，双高保留原参考。
+    joint_pos[:, _ACT_SPN_H_PITCH_ID] = torch.where(
+        mode != MODE_BOTH_HIGH, get_spine_pitch_reference(desired_height_F, desired_height_H),
+        joint_pos[:, _ACT_SPN_H_PITCH_ID])
 
     return joint_pos, joint_vel
