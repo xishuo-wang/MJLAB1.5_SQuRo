@@ -22,6 +22,7 @@ from .config import (
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
     FULL_HEIGHT_VALUES,
+    LOW_POSE_CALIBRATION,
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
@@ -72,13 +73,14 @@ def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tens
 
 
 
-# 根据高度命令生成前向速度：v = BASE_SPEED × min(h_F,h_H)/BASE_HEIGHT × (2 − 低侧数)/2
+# 前后高度分别缩放，取平均后生成前向速度。
 def compute_cmd_vel_x(height_f, height_h):
-    lower = torch.minimum(height_f, height_h)
-    height_scale = lower / BASE_HEIGHT
-    n_low = (height_f < THRESHOLD_HEIGHT).long() + (height_h < THRESHOLD_HEIGHT).long()
-    speed_scale = (2.0 - n_low.float()) / 2.0
-    return BASE_SPEED * height_scale * speed_scale
+    heights = torch.stack(torch.broadcast_tensors(height_f, height_h), dim=-1)
+    low_min = LOW_POSE_CALIBRATION[0][0]
+    low_max = LOW_POSE_CALIBRATION[-2][0]
+    low_scale = ((heights - low_min) / (low_max - low_min)).clamp(min=0.0) * (low_max / BASE_HEIGHT)
+    scale = torch.where(heights < low_max, low_scale, heights / BASE_HEIGHT)
+    return BASE_SPEED * scale.mean(dim=-1)
 
 
 

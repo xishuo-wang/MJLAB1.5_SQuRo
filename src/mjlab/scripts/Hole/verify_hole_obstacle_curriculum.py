@@ -20,6 +20,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     COMMAND_DIM,
     BASE_FREQ,
     BASE_HEIGHT,
+    BASE_SPEED,
     FULL_HEIGHT_VALUES,
     RANDOM_HEIGHT_VALUES,
     HEIGHT_LIST,
@@ -59,7 +60,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _MODEL_INDICES,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Hole.mdp.command import get_height_mode
+from mjlab.tasks.SQuRo_Hole.mdp.command import get_height_mode, compute_cmd_vel_x
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
@@ -142,6 +143,19 @@ def verify_shared_rule() -> None:
                   torch.allclose(torch.as_tensor(preview["height_f"]), front)
                   and torch.allclose(torch.as_tensor(current["height_h"]), hind)
                   and bool((torch.as_tensor(current["velocity_x"]) > 0).all()))
+
+
+# 验证八档独立缩放的速度平均、前后对称与停步边界。
+def verify_velocity_commands() -> None:
+    for device in ("cpu", "cuda:0") if torch.cuda.is_available() else ("cpu",):
+        heights = torch.tensor([0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050, 0.055], device=device)
+        factors = heights.new_tensor([0.0, 7 / 33, 14 / 33, 7 / 11, 8 / 11, 9 / 11, 10 / 11, 1.0])
+        front, hind = torch.meshgrid(heights, heights, indexing="ij")
+        velocity = compute_cmd_vel_x(front, hind)
+        expected = BASE_SPEED * (factors[:, None] + factors[None, :]) / 2
+        check(f"{device}全部64种高度组合的速度符合独立缩放平均", torch.allclose(velocity, expected, atol=3e-8, rtol=0))
+        check("速度前后交换对称，只有20／20毫米停步", torch.equal(velocity, velocity.T) and int((velocity == 0).sum()) == 1)
+        check("任一端高度增加时速度不下降", bool((velocity.diff(dim=0) >= 0).all() and (velocity.diff(dim=1) >= 0).all()))
 
 
 # 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
@@ -562,6 +576,7 @@ def verify_real_env() -> None:
 def main() -> None:
     print("单板受限空间高度课程验收")
     verify_shared_rule()
+    verify_velocity_commands()
     verify_curriculum_state()
     verify_fine_height_steps()
     verify_real_env()
