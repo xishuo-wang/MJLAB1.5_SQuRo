@@ -118,10 +118,10 @@ def check_command() -> None:
     cmd2 = env.command_manager.get_command("hole_cmd")
     torch.testing.assert_close(
         cmd2[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]],
-        torch.tensor([[0.055, 0.020]]).expand(env.num_envs, -1), atol=1e-6, rtol=0,
+        torch.tensor([[0.055, 0.035]]).expand(env.num_envs, -1), atol=1e-6, rtol=0,
     )
     print(f"     x=0.25 m 时命令: h_F {float(cmd2[0, CMD_HEIGHT_F_IDS]) * 1000:.0f} mm, "
-          f"h_H {float(cmd2[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (低板后半段 55/20)")
+          f"h_H {float(cmd2[0, CMD_HEIGHT_H_IDS]) * 1000:.0f} mm (64毫米低板后半段 55/35)")
     env.close()
 
 
@@ -130,7 +130,7 @@ def check_curriculum() -> None:
     # 阶段阈值 = iter 边界 × 每 iter 步数
     thresholds = [0, STAGE1_STEP, STAGE2_STEP, STAGE3_STEP]
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
-    keys = ["corridor", "height", "mimic_pos", "height_sigma"]
+    keys = ["corridor", "weight_height", "weight_mimic_pos", "sigma_height"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
     for step in thresholds:
@@ -139,8 +139,8 @@ def check_curriculum() -> None:
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
               f"{str(reward_weight_curriculum.should_enable_obstacle(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
-    print(f"     末段生效权重: mimic_pos={eff['mimic_pos']}, height={eff['height']}, "
-          f"vel={eff['vel']}, corridor={eff['corridor']}, "
+    print(f"     末段生效权重: mimic_pos={eff['weight_mimic_pos']}, height={eff['weight_height']}, "
+          f"vel={eff['weight_vel']}, corridor={eff['corridor']}, "
           f"enable_holes={reward_weight_curriculum.should_enable_obstacle(STAGE3_STEP)}")
 
 

@@ -476,15 +476,18 @@ def verify_continuous_reference(env: ManagerBasedRlEnv) -> None:
             key = "front_pos" if is_front else "hind_pos"
             check(f"{label}腿{height_value * 1000:g}毫米预计算与标定插值一致",
                   torch.allclose(pos[rows][:, leg_ids], tables[key][mode, index, 0][:, leg_ids], atol=1e-6))
-    low_mode = (heights < THRESHOLD_HEIGHT).any(dim=1)
     difference = (heights[:, 0] - heights[:, 1]).abs()
     expected_pitch = LOW_SPINE_PITCH * (difference / (BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0])).clamp(max=1.0)
-    expected_pitch = torch.where(low_mode, expected_pitch, 0.0)
     check("四种模式均按实际前后高度差计算脊柱俯仰",
           torch.allclose(pos[:, _ACT_SPN_H_PITCH_ID], expected_pitch, atol=1e-7, rtol=0))
     equal_heights = heights[:, 0] == heights[:, 1]
-    check("双高与同高双低的脊柱俯仰均为零",
-          bool((pos[equal_heights | ~low_mode, _ACT_SPN_H_PITCH_ID] == 0).all()))
+    check("所有同高组合的脊柱俯仰均为零",
+          bool((pos[equal_heights, _ACT_SPN_H_PITCH_ID] == 0).all()))
+    for front, hind in ((0.040, 0.050), (0.050, 0.040), (0.045, 0.055), (0.055, 0.045)):
+        row = torch.isclose(heights[:, 0], heights.new_tensor(front)) & torch.isclose(heights[:, 1], heights.new_tensor(hind))
+        check(f"双高{front * 1000:g}／{hind * 1000:g}毫米也使用高度差俯仰且相位速度为零",
+              torch.allclose(pos[row, _ACT_SPN_H_PITCH_ID], pos.new_full((int(row.sum()),), -0.65 * 0.010 / 0.035), atol=2e-7)
+              and bool((vel[row, _ACT_SPN_H_PITCH_ID] == 0).all()))
     for height_value in (0.020, 0.025, 0.030, 0.035):
         expected_value = LOW_SPINE_PITCH * (BASE_HEIGHT - height_value) / (BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0])
         mask = torch.isclose(heights.min(dim=1).values, heights.new_tensor(height_value)) & (heights.max(dim=1).values == BASE_HEIGHT)

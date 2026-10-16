@@ -261,12 +261,11 @@ def get_low_leg_reference(height: torch.Tensor, is_front: bool) -> torch.Tensor:
 
 
 
-# 按前后高度差插值脊柱俯仰，同高与双高均保持零。
+# 所有高度模式均按前后高度差插值脊柱俯仰，同高为零。
 def get_spine_pitch_reference(height_f: torch.Tensor, height_h: torch.Tensor) -> torch.Tensor:
     full_difference = BASE_HEIGHT - LOW_POSE_CALIBRATION[0][0]
     fraction = ((height_f - height_h).abs() / full_difference).clamp(max=1.0)
-    low = (height_f < THRESHOLD_HEIGHT) | (height_h < THRESHOLD_HEIGHT)
-    return torch.where(low, LOW_SPINE_PITCH * fraction, 0.0)
+    return LOW_SPINE_PITCH * fraction
 
 
 
@@ -476,9 +475,7 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
         joint_pos[:, leg_ids] = torch.where(low, angles, joint_pos[:, leg_ids])
         joint_vel[:, leg_ids] = torch.where(low, 0.0, joint_vel[:, leg_ids])
 
-    # 双低非同高也按实际命令高度差更新，双高保留原参考。
-    joint_pos[:, _ACT_SPN_H_PITCH_ID] = torch.where(
-        mode != MODE_BOTH_HIGH, get_spine_pitch_reference(desired_height_F, desired_height_H),
-        joint_pos[:, _ACT_SPN_H_PITCH_ID])
+    # 脊柱俯仰使用实际两端高度差，包含双高不同高的组合。
+    joint_pos[:, _ACT_SPN_H_PITCH_ID] = get_spine_pitch_reference(desired_height_F, desired_height_H)
 
     return joint_pos, joint_vel
