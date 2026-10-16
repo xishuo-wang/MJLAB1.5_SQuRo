@@ -104,6 +104,7 @@ class HoleCommand(CommandTerm):
         self.obstacle = env.scene.entities.get("obstacle")
         self.obstacle_sampled_bottom_z = torch.full((self.num_envs,), self.height_curriculum_state.z_min, device=self.device)
         self.obstacle_height_sampled = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.course_episode_eligible = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         self._allow_obstacle_resample = True
         self.start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -254,6 +255,7 @@ class HoleCommand(CommandTerm):
         monitor = getattr(self._env, "_hole_passage_monitor", None)
         if monitor is not None:
             monitor.reset(env_ids)
+        self.course_episode_eligible[env_ids if env_ids is not None else slice(None)] = True
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
             self._update_start_positions(env_ids)
         return extras

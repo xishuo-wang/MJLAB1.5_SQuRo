@@ -288,6 +288,53 @@ def verify_dynamic_sources(env: ManagerBasedRlEnv) -> None:
     check("周期命令重采样不改变回合板高", torch.equal(read_obstacle_bottom_z(obstacle), previous))
 
 
+# 随机计时的首回合无论成败均排除，完整回合恢复正常统计。
+def verify_partial_episode_filter(env: ManagerBasedRlEnv) -> None:
+    command = env.command_manager.get_term("hole_cmd")
+    command.height_curriculum_state = HeightCurriculumState()
+    command.enable_course_progress = True
+    env.reset()
+    obstacle = env.scene.entities["obstacle"]
+    write_obstacle_mocap(obstacle, HEIGHT_INITIAL_MIN)
+    command.course_episode_eligible[:] = torch.tensor([False, False, True, True], device=env.device)
+    monitor = env._hole_passage_monitor
+    monitor.consume()
+    x1 = obstacle.cfg.position[0] - obstacle.cfg.size[0]
+    x2 = obstacle.cfg.position[0] + obstacle.cfg.size[0]
+    passed_ids = torch.tensor([1, 3], device=env.device)
+    set_sites(env, x1 - 0.01)
+    monitor.compute()
+    set_sites(env, x1 + 0.005, env_ids=passed_ids)
+    monitor.compute()
+    set_sites(env, x2 + 0.01, env_ids=passed_ids)
+    env.episode_length_buf[:] = env.max_episode_length
+    monitor.compute()
+    rows = {row["env_id"]: row for row in monitor.consume()}
+    state = command.height_curriculum_state
+    check("截短首回合成功和失败均不计课程分母",
+          not rows[0]["valid"] and not rows[1]["valid"] and rows[1]["success"]
+          and state.all_height_episode_count == 2 and state.all_height_success_count == 1
+          and state.level_episode_count == 2 and state.level_success_count == 1)
+    env.reset(env_ids=torch.tensor([0], device=env.device))
+    check("首次自然复位恢复当前环境资格且不影响其他截短回合",
+          command.course_episode_eligible.tolist() == [True, False, True, True])
+    env.reset()
+    write_obstacle_mocap(obstacle, HEIGHT_INITIAL_MIN)
+    set_sites(env, x1 - 0.01)
+    monitor.compute()
+    set_sites(env, x1 + 0.005)
+    monitor.compute()
+    set_sites(env, x2 + 0.01)
+    env.episode_length_buf[:] = env.max_episode_length
+    monitor.compute()
+    monitor.consume()
+    check("后续完整回合全部恢复课程统计",
+          command.course_episode_eligible.all()
+          and state.all_height_episode_count == 6 and state.all_height_success_count == 5)
+    command.enable_course_progress = False
+    env.reset()
+
+
 # 从独立的碰撞几何与编译尺寸读取实际板底。
 def read_geom_bottom_z(env: ManagerBasedRlEnv) -> torch.Tensor:
     obstacle = env.scene.entities["obstacle"]
@@ -371,6 +418,7 @@ def verify_real_env() -> None:
     verify_base_height_commands(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
+    verify_partial_episode_filter(env)
     command = env.command_manager.get_term("hole_cmd")
     command.height_curriculum_state.z_min = HEIGHT_MIN
     command.height_curriculum_state.z_max = HEIGHT_MIN

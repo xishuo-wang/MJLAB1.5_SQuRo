@@ -61,6 +61,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         self._obstacle_command = env.unwrapped.command_manager._terms.get("hole_cmd")  # type: ignore
         self._obstacle_height_course_enabled = bool(self._obstacle_command is not None and self._obstacle_command.enable_height_course)
         self._height_curriculum_state = (self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None)
+        self._episode_lengths_randomized = False
 
 
     # 当前实际编译进仿真的碰撞开关
@@ -101,6 +102,14 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 buf.zero_()
 
 
+    # 错开首次超时，截短的首回合不进入高度课程统计。
+    def _randomize_episode_lengths(self) -> None:
+        self.env.episode_length_buf.random_(0, int(self.env.max_episode_length))
+        if self._obstacle_command is not None:
+            self._obstacle_command.course_episode_eligible[:] = self.env.episode_length_buf == 0  # type: ignore
+        self._episode_lengths_randomized = True
+
+
     # 重建环境, 并按需重新取观测
     def _apply_obstacle_rebuild(self, refresh_obs: bool):
         step_counter = int(self.env.unwrapped.common_step_counter)
@@ -125,6 +134,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             if self._obstacle_command is not None else None
         )
         self._clear_logger_episode_state()
+        self._randomize_episode_lengths()
         try:
             old.close()
         except Exception as exc:
@@ -137,12 +147,10 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 训练循环: 复制 rsl_rl 主循环, 在每轮采样前插入碰撞开关重建
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
-        if init_at_random_ep_len:
-            self.env.episode_length_buf = torch.randint_like(
-                self.env.episode_length_buf, high=int(self.env.max_episode_length))
-
         if self._obstacle_change_needed():
             self._apply_obstacle_rebuild(refresh_obs=False)
+        if init_at_random_ep_len and not self._episode_lengths_randomized:
+            self._randomize_episode_lengths()
 
         obs = self.env.get_observations().to(self.device)
         self.alg.train_mode()
