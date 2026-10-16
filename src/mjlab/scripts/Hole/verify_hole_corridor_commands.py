@@ -8,6 +8,8 @@ import torch
 
 import mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.utils.lab_api.math import matrix_from_quat, quat_from_matrix, quat_from_euler_xyz
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
 from mjlab.scripts.Hole.verify_hole_obstacle_curriculum import make_env, read_geom_bottom_z
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Hole.mdp.config import (
@@ -48,6 +50,13 @@ def verify_stages() -> None:
     assert heights_for_stage(2) == heights_for_stage(3)
     physical = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     assert physical["corridor"] == 5.0
+    for iteration, margin in ((0, 0.030), (1999, 0.030), (2000, 0.030),
+                              (2250, 0.02875), (2500, 0.0275), (2750, 0.02625),
+                              (3000, 0.025), (6000, 0.025)):
+        value = reward_weight_curriculum.get_reward_weights(iteration * STEPS_PER_ITER)["corridor_height_offset"]
+        assert math.isclose(value, margin, abs_tol=1e-12)
+    half_step = reward_weight_curriculum.get_reward_weights(STAGE2_STEP + 24)["corridor_height_offset"]
+    assert math.isclose(half_step, 0.0299975, abs_tol=1e-12)
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
 
@@ -122,8 +131,14 @@ def verify_corridor() -> None:
         torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
         env.common_step_counter = STAGE2_STEP - 1
         assert not bool(compute_corridor_reward(env).any())
-        env.common_step_counter = STAGE3_STEP
-        torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
+        for iteration, front_excess, hind_excess in (
+            (2500, [0.0, 0.0035, 0.0125, 0.0025], [0.0, 0.0, 0.0, 0.0045]),
+            (3000, [0.0, 0.006, 0.015, 0.005], [0.0, 0.0, 0.0, 0.007]),
+        ):
+            env.common_step_counter = iteration * STEPS_PER_ITER
+            expected = -2.5 * (2.0 - torch.exp(-2000.0 * torch.tensor(front_excess).square())
+                              - torch.exp(-2000.0 * torch.tensor(hind_excess).square()))
+            torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
         print("[通过] 两段分别读取最高site，无位置门控，低于上限不罚，2k启用且3k后保留")
 
         env.common_step_counter = STAGE2_STEP
@@ -176,12 +191,12 @@ def verify_angle_independence() -> None:
         [0.020, 0.055], [0.055, 0.020], [0.055, 0.055], [0.020, 0.020],
     ])
     roll = torch.tensor([[0.2, 0.3], [0.2, 0.3], [0.08, 0.12], [0.2, 0.3]])
-    roll += torch.tensor([-math.pi / 2, math.pi / 2])
-    quat = torch.zeros(4, 2, 4)
-    quat[:, :, 0] = torch.cos(roll / 2)
-    quat[:, :, 1] = torch.sin(roll / 2)
+    zero = torch.zeros_like(roll).flatten()
+    physical = matrix_from_quat(quat_from_euler_xyz(roll.flatten(), zero, zero)).reshape(4, 2, 3, 3)
+    frames = physical.new_tensor((SPINE_FRONT_FRAME, SPINE_HIND_FRAME))
+    quat = quat_from_matrix(physical @ frames.transpose(-1, -2))
     expected = torch.exp(-torch.tensor([50.0, 50.0, 100.0, 50.0])
-                         * torch.tensor([0.2, 0.3, 0.2, 0.3]).square())
+                         * torch.tensor([0.2, 0.3, 0.2, 0.5]).square())
 
     # 仅用进程内状态验证奖励，不修改真实模型索引。
     def evaluate(ids: torch.Tensor, step: int) -> torch.Tensor:

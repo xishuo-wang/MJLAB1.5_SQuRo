@@ -143,7 +143,7 @@ class HolePassageMonitor:
             else:
                 failure_code = 0
             self.seq[env_id] += 1
-            valid = bool(valid_course and command.obstacle_height_sampled[env_id]
+            valid = bool(valid_course and command.obstacle_height_sampled[env_id] # type: ignore
                          and command.course_episode_eligible[env_id]) # type: ignore
             course_result = {"advanced": False}
             if command is not None and command.enable_course_progress:  # type: ignore

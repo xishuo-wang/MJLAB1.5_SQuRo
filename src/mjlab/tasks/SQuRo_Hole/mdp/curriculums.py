@@ -67,6 +67,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     "sigma_orientation":        (5.0, 5.0, 5.0, 5.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
+    "corridor_height_offset":   (0.030, 0.030, 0.030, BODY_HEIGHT_OFFSET),
 }
 
 
@@ -123,6 +124,10 @@ class RewardWeightCurriculum:
                     idx = i
             safe_idx = idx if idx < len(values) else len(values) - 1
             result[name] = values[safe_idx]
+        # 走廊余量在2000～3000轮从30毫米线性减至最终值。
+        progress = min(1.0, max(0.0, (current_step - STAGE2_STEP) / (STAGE3_STEP - STAGE2_STEP)))
+        start, end = _CURVES["corridor_height_offset"][-2:]
+        result["corridor_height_offset"] = start + (end - start) * progress
         return result
 
 
@@ -169,7 +174,7 @@ def compute_base_heights(
     high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
-    high_target = bottom - BODY_HEIGHT_OFFSET
+    high_target = (bottom - BODY_HEIGHT_OFFSET).clamp(max=BASE_HEIGHT)
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)

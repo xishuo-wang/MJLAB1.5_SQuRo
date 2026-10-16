@@ -248,7 +248,8 @@ def add_rule_controls(fig, ax, case: ScheduleCase, artists, start_x: float,
         current = sample_base_commands(np.array([position]), case.board, bottom, start_x)
         front, hind = float(current["height_f"][0]), float(current["height_h"][0])
         mode = MODE_LABELS[get_height_mode(front, hind)]
-        rule = "高板：基座进入区间后前后同取 h−30 mm" if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：按基座 X 在板中点切换前低／后低"
+        rule = (f"高板：区间内前后同取 min(h−{BODY_HEIGHT_OFFSET * 1000:g} mm, {BASE_HEIGHT * 1000:g} mm)"
+                if bottom >= OBSTACLE_HEIGHT_SPLIT else "低板：按基座 X 在板中点切换前低／后低")
         interval = (
             f"基座区间：[{left - start_x:.3f}, {right - start_x:.3f}] m"
             if bottom >= OBSTACLE_HEIGHT_SPLIT
@@ -294,7 +295,7 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
             "front_low_end_inclusive": False,
             "hind_low_start_inclusive": True,
             "right_endpoint_inclusive": True,
-            "high_target_capped": False,
+            "high_target_capped": True,
         },
         "cases": [{"label": case.label, "board": case.board, "x_min": case.x_min,
                    "x_max": case.x_max, "preview_bottom_z": height,
@@ -307,7 +308,7 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
 
 # 预览短板与长板随板高变化的当前规则。
 def main() -> None:
-    parser = argparse.ArgumentParser(description="预览以 70 mm 为分界的障碍物高度—位置表联动规则")
+    parser = argparse.ArgumentParser(description=f"预览以 {OBSTACLE_HEIGHT_SPLIT * 1000:g} mm 为分界的障碍物高度—位置表联动规则")
     parser.add_argument("--no-show", action="store_true", help="仅导出图片，不打开交互窗口")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="图片和数据的输出目录")
     parser.add_argument("--start-x", type=float, default=0.0, help="复位起点的世界 X 坐标（m）")

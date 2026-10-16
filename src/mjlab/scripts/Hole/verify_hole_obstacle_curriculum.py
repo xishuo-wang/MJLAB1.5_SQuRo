@@ -91,18 +91,18 @@ def verify_shared_rule() -> None:
                 left - 1e-6, left, middle - 1e-6, middle,
                 middle + 1e-6, right, right + 1e-6,
             ], dtype=dtype)
-            for height in (HEIGHT_MIN, 0.048, 0.064, 0.069999, 0.070, 0.090):
+            for height in (HEIGHT_MIN, 0.048, 0.064, 0.064999, 0.065, 0.070, 0.075, 0.079999, 0.080, 0.090):
                 front, hind = compute_base_heights(positions, center, half_length, height)
-                if height < 0.070:
+                if height < 0.065:
                     expected_f = positions.new_tensor([0.055, 0.020, 0.020, 0.055, 0.055, 0.055, 0.055])
                     expected_h = positions.new_tensor([0.055, 0.055, 0.055, 0.020, 0.020, 0.020, 0.055])
                 else:
-                    expected_f = positions.new_tensor([0.055, *([height - 0.030] * 5), 0.055])
+                    expected_f = positions.new_tensor([0.055, *([min(height - 0.025, 0.055)] * 5), 0.055])
                     expected_h = expected_f
                 check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
-        for height in (HEIGHT_MIN, 0.048, 0.064, 0.068, 0.070, 0.090):
+        for height in (HEIGHT_MIN, 0.048, 0.064, 0.065, 0.068, 0.070, 0.080, 0.090):
             front, hind = compute_base_heights(query, center, half_length, height)
             check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
                   not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
@@ -372,11 +372,19 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.020, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
-    write_obstacle_mocap(obstacle, 0.090)
+    for height, target in ((0.065, 0.040), (0.070, 0.045), (0.075, 0.050), (0.080, 0.055), (0.090, 0.055)):
+        write_obstacle_mocap(obstacle, height)
+        read_geom_bottom_z(env)
+        command._update_command_by_height_rule()
+        expected = values.new_tensor([0.055, target, target, 0.055])
+        check(f"{height * 1000:g}毫米板底对应两段{target * 1000:g}毫米目标，区间外仍55毫米",
+              torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
+              and torch.allclose(values[:, CMD_HEIGHT_H_IDS], expected))
+    write_obstacle_mocap(obstacle, values.new_tensor([0.065, 0.070, 0.075, 0.090]))
     read_geom_bottom_z(env)
     command._update_command_by_height_rule()
-    expected = values.new_tensor([0.055, 0.060, 0.060, 0.055])
-    check("高板前后端同步进入和离开基座区间",
+    expected = values.new_tensor([0.055, 0.045, 0.050, 0.055])
+    check("不同环境板高独立决定命令，高板目标不超过基准55毫米",
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], expected))
     env.reset()

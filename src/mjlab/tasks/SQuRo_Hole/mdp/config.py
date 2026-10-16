@@ -37,10 +37,10 @@ HIND_HOLD_POS = (0.80, -0.15)                       # 当前基线的后腿收�
 
 # 受限空间高度课程相关配置
 WARMUP_OBSTACLE_HEIGHT = 0.100                      # 无实体时的 100 毫米板高占位
-OBSTACLE_HEIGHT_SPLIT = 0.070
+OBSTACLE_HEIGHT_SPLIT = 0.065
 ENTRY_MARGIN = 0.150
 EXIT_MARGIN = 0.100
-BODY_HEIGHT_OFFSET = 0.030
+BODY_HEIGHT_OFFSET = 0.025
 LOW_TARGET_HEIGHT = 0.020
 HEIGHT_MIN = 0.046                                  # 受限空间高度最小值
 HEIGHT_MAX = 0.090                                  # 受限空间高度最大值

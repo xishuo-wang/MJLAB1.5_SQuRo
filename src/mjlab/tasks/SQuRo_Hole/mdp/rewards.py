@@ -13,7 +13,6 @@ from .config import (
     THRESHOLD_HEIGHT,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
-    BODY_HEIGHT_OFFSET,
 )
 from .indices import (
     _ACT_LEG_IDS,
@@ -254,7 +253,8 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
         asset.data.site_pos_w[:, _MODEL_INDICES.f_body_site_ids, 2].max(dim=1).values,
         asset.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids, 2].max(dim=1).values,
     ), dim=1)
-    ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + BODY_HEIGHT_OFFSET  # type: ignore
+    offset = get_curriculum_reward_weight(env, "corridor_height_offset")
+    ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + offset  # type: ignore
     excess = (surface_z - ceiling).clamp_min(0.0)
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     return -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
