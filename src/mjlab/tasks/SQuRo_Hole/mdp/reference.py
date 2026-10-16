@@ -11,7 +11,6 @@ from .config import (
     BASE_HEIGHT,
     HEIGHT_LIST,
     NECK_REF_POS,
-    HIND_HOLD_POS,
     MODE_HIND_LOW,
     MODE_BOTH_LOW,
     USE_SPINE_CSV,
@@ -22,7 +21,6 @@ from .config import (
     THRESHOLD_HEIGHT,
     TABLE_RESOLUTION,
     CMD_GAIT_FREQ_IDS,
-    LOW_TARGET_HEIGHT,
 )
 from .indices import (
     _ACT_NUM,
@@ -140,8 +138,7 @@ def csv_leg_trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: 
                                   current_height: float = BASE_HEIGHT,
                                   is_front: bool = True) -> tuple[np.ndarray, np.ndarray]:
     if current_height < THRESHOLD_HEIGHT:
-        x_val = 0.005 if is_front else 0.002
-        return np.full_like(phases, x_val), np.full_like(phases, -0.02)
+        return np.zeros_like(phases), np.full_like(phases, -current_height)
     
     t_time = ((phases + phase_lag) % 1.0) * csv_data["T"]
     
@@ -274,11 +271,11 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
         height_scale = get_height_scale_factor(target_height, BASE_HEIGHT)
         
         for mode in range(NUM_MODES):
-            current_height = LOW_TARGET_HEIGHT if mode == MODE_BOTH_LOW else target_height
+            current_height = target_height
             # 前肢参考轨迹
-            if mode == MODE_FRONT_LOW:
-                x_leg_fl, z_leg_fl = np.full(TABLE_RESOLUTION, 0.005), np.full(TABLE_RESOLUTION, -0.02)
-                x_leg_fr, z_leg_fr = np.full(TABLE_RESOLUTION, 0.005), np.full(TABLE_RESOLUTION, -0.02)
+            if mode in (MODE_FRONT_LOW, MODE_BOTH_LOW):
+                x_leg_fl, z_leg_fl = np.zeros(TABLE_RESOLUTION), np.full(TABLE_RESOLUTION, -current_height)
+                x_leg_fr, z_leg_fr = np.zeros(TABLE_RESOLUTION), np.full(TABLE_RESOLUTION, -current_height)
             elif mode == MODE_HIND_LOW:
                 freq = cycloid_hind_low["freq"]
                 T, T_sw = 1.0 / freq, (1.0 / freq) * cycloid_hind_low["swing_ratio"]
@@ -327,8 +324,9 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
                 hip_angles, knee_angles = inverse_kinematics(x_tensor_H, z_tensor_H, is_front=False)
                 hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = torch.stack([hip_angles[:, 0], knee_angles[:, 0]], dim=-1)
                 hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = torch.stack([hip_angles[:, 1], knee_angles[:, 1]], dim=-1)
-            elif mode == MODE_HIND_LOW:
-                hold = torch.tensor(HIND_HOLD_POS, device=device, dtype=hind_pos_table.dtype)
+            elif mode in (MODE_HIND_LOW, MODE_BOTH_LOW):
+                height = torch.tensor(current_height, device=device, dtype=hind_pos_table.dtype)
+                hold = torch.stack(inverse_kinematics(torch.zeros_like(height), -height, is_front=False))
                 hind_pos_table[mode, height_idx, :, _ACT_HL_LEG_IDS] = hold
                 hind_pos_table[mode, height_idx, :, _ACT_HR_LEG_IDS] = hold
             else:
@@ -439,5 +437,15 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     joint_vel[:, _ACT_LEG_H_IDS] = tables["hind_vel"][mode, height_indices_H, phase_indices][:, _ACT_LEG_H_IDS]
     joint_vel[:, _ACT_SPN_IDS] = tables["spine_vel"][mode, height_indices_min, phase_indices][:, _ACT_SPN_IDS]
     joint_vel = joint_vel * (frequency / BASE_FREQ).unsqueeze(1)
+
+    # 受限侧按连续高度直接求 IK，足端固定且相位速度为零。
+    for height, leg_ids, is_front in (
+        (desired_height_F, _ACT_LEG_F_IDS, True),
+        (desired_height_H, _ACT_LEG_H_IDS, False),
+    ):
+        low = (height < THRESHOLD_HEIGHT).unsqueeze(1)
+        angles = torch.stack(inverse_kinematics(torch.zeros_like(height), -height, is_front), dim=1).repeat(1, 2)
+        joint_pos[:, leg_ids] = torch.where(low, angles, joint_pos[:, leg_ids])
+        joint_vel[:, leg_ids] = torch.where(low, 0.0, joint_vel[:, leg_ids])
 
     return joint_pos, joint_vel

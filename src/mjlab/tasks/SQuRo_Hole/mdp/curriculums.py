@@ -9,7 +9,6 @@ from .config import (
     EXIT_MARGIN,
     ENTRY_MARGIN,
     HEIGHT_FINE_STEP,
-    LOW_TARGET_HEIGHT,
     BODY_HEIGHT_OFFSET,
     FULL_HEIGHT_VALUES,
     HEIGHT_INITIAL_MIN,
@@ -174,14 +173,14 @@ def compute_base_heights(
     high_obstacle = bottom >= OBSTACLE_HEIGHT_SPLIT
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
-    high_target = (bottom - BODY_HEIGHT_OFFSET).clamp(max=BASE_HEIGHT)
+    target = (bottom - BODY_HEIGHT_OFFSET).clamp(max=BASE_HEIGHT)
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)
-    front = torch.where(high_obstacle & in_range, high_target, front)
-    hind = torch.where(high_obstacle & in_range, high_target, hind)
-    front = torch.where((~high_obstacle) & front_low, LOW_TARGET_HEIGHT, front)
-    hind = torch.where((~high_obstacle) & hind_low, LOW_TARGET_HEIGHT, hind)
+    front = torch.where(high_obstacle & in_range, target, front)
+    hind = torch.where(high_obstacle & in_range, target, hind)
+    front = torch.where((~high_obstacle) & front_low, target, front)
+    hind = torch.where((~high_obstacle) & hind_low, target, hind)
     return front, hind
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 
 import mjlab.tasks  # noqa: F401
@@ -13,6 +15,13 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
+    CMD_GAIT_FREQ_IDS,
+    COMMAND_DIM,
+    BASE_FREQ,
+    BASE_HEIGHT,
+    FULL_HEIGHT_VALUES,
+    RANDOM_HEIGHT_VALUES,
+    HEIGHT_LIST,
     THRESHOLD_HEIGHT,
     HEIGHT_INITIAL_MIN,
     HEIGHT_MAX,
@@ -41,9 +50,13 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     _ACT_SPN_IDS,
+    _ACT_LEG_F_IDS,
+    _ACT_LEG_H_IDS,
     _MODEL_INDICES,
     resolve_model_indices,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.command import get_height_mode
+from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
     monitor_restricted_passage,
@@ -91,16 +104,20 @@ def verify_shared_rule() -> None:
                 left - 1e-6, left, middle - 1e-6, middle,
                 middle + 1e-6, right, right + 1e-6,
             ], dtype=dtype)
-            for height in (HEIGHT_MIN, 0.048, 0.064, 0.064999, 0.065, 0.070, 0.075, 0.079999, 0.080, 0.090):
+            for height in (HEIGHT_MIN, 0.047, 0.048, 0.064, 0.0648, 0.064999, 0.065, 0.070, 0.075, 0.079999, 0.080, 0.090):
                 front, hind = compute_base_heights(positions, center, half_length, height)
                 if height < 0.065:
-                    expected_f = positions.new_tensor([0.055, 0.020, 0.020, 0.055, 0.055, 0.055, 0.055])
-                    expected_h = positions.new_tensor([0.055, 0.055, 0.055, 0.020, 0.020, 0.020, 0.055])
+                    target = height - 0.025
+                    expected_f = positions.new_tensor([0.055, target, target, 0.055, 0.055, 0.055, 0.055])
+                    expected_h = positions.new_tensor([0.055, 0.055, 0.055, target, target, target, 0.055])
                 else:
                     expected_f = positions.new_tensor([0.055, *([min(height - 0.025, 0.055)] * 5), 0.055])
                     expected_h = expected_f
                 check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm、{dtype} 边界正确",
                       torch.allclose(front, expected_f) and torch.allclose(hind, expected_h))
+                expected_modes = [0, 1, 1, 2, 2, 2, 0] if height < 0.065 else [0] * 7
+                check("65毫米分界两侧的连续目标与模式判定一致",
+                      get_height_mode(front, hind).tolist() == expected_modes)
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
         for height in (HEIGHT_MIN, 0.048, 0.064, 0.065, 0.068, 0.070, 0.080, 0.090):
             front, hind = compute_base_heights(query, center, half_length, height)
@@ -369,8 +386,8 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
     command._update_command_by_height_rule()
     values = command.command
     check("脊柱侧摆和俯仰变化时，低板仍按基座 X 在中点互斥切换",
-          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.020, 0.055, 0.055]))
-          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.020, 0.055]))
+          torch.allclose(values[:, CMD_HEIGHT_F_IDS], values.new_tensor([0.055, 0.039, 0.055, 0.055]))
+          and torch.allclose(values[:, CMD_HEIGHT_H_IDS], values.new_tensor([0.055, 0.055, 0.039, 0.055]))
           and bool((values[:, CMD_VEL_X_IDS] > 0).all()))
     for height, target in ((0.065, 0.040), (0.070, 0.045), (0.075, 0.050), (0.080, 0.055), (0.090, 0.055)):
         write_obstacle_mocap(obstacle, height)
@@ -388,6 +405,65 @@ def verify_base_height_commands(env: ManagerBasedRlEnv) -> None:
           torch.allclose(values[:, CMD_HEIGHT_F_IDS], expected)
           and torch.allclose(values[:, CMD_HEIGHT_H_IDS], expected))
     env.reset()
+
+
+# 用足端正运动学复核连续IK、双低独立性、相位速度及表格一致性。
+def verify_continuous_reference(env: ManagerBasedRlEnv) -> None:
+    check("前1000轮高度池保持不变", RANDOM_HEIGHT_VALUES == [0.04, 0.045, 0.05, 0.055])
+    check("1000至3000轮扩展为八档", FULL_HEIGHT_VALUES == [0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055])
+    pairs = torch.cartesian_prod(torch.tensor(FULL_HEIGHT_VALUES), torch.tensor(FULL_HEIGHT_VALUES))
+    counts = torch.bincount(get_height_mode(pairs[:, 0], pairs[:, 1]), minlength=4)
+    check("前后独立均匀采样的64种组合中四种模式各占四分之一", counts.tolist() == [16] * 4)
+    extra = torch.tensor([[0.021, 0.055], [0.055, 0.022], [0.0273, 0.0317],
+                          [0.0398, 0.055], [0.055, 0.039999]])
+    heights = torch.cat((pairs, extra)).to(env.device)
+    command = torch.zeros(len(heights), COMMAND_DIM, device=env.device)
+    command[:, CMD_HEIGHT_F_IDS] = heights[:, 0]
+    command[:, CMD_HEIGHT_H_IDS] = heights[:, 1]
+    command[:, CMD_GAIT_FREQ_IDS] = BASE_FREQ
+    probe = SimpleNamespace(device=env.device, step_dt=env.step_dt,
+        episode_length_buf=torch.arange(len(heights), device=env.device),
+        command_manager=SimpleNamespace(_terms={"hole_cmd": SimpleNamespace(command=command)}))
+    tables = initialize_tables(env.device)
+    pos, vel = get_reference_joint_state(probe)
+    original = pos.clone()
+    check("连续参考与速度均为有限值", bool(torch.isfinite(pos).all() and torch.isfinite(vel).all()))
+    for height, leg_ids, is_front in ((heights[:, 0], _ACT_LEG_F_IDS, True), (heights[:, 1], _ACT_LEG_H_IDS, False)):
+        low = height < THRESHOLD_HEIGHT
+        angles = pos[low][:, leg_ids].reshape(-1, 2, 2)
+        first, second = angles[..., 0], angles[..., 1]
+        if is_front:
+            a1, a2 = first + 0.868, -second - 2.643
+            x = -0.040 * a1.cos() - 0.040 * a2.cos()
+            z = -0.040 * a1.sin() + 0.040 * a2.sin()
+        else:
+            a1, a2 = first - 4.35, -second - 1.75
+            x = 0.036 * a2.sin() - 0.040 * a1.cos()
+            z = 0.036 * a2.cos() - 0.040 * a1.sin()
+        label = "前" if is_front else "后"
+        check(f"{label}腿各连续高度的足端均为(0,-h)",
+              torch.allclose(x, torch.zeros_like(x), atol=2e-8, rtol=0)
+              and torch.allclose(z, -height[low, None].expand_as(z), atol=2e-8, rtol=0))
+        check(f"{label}受限侧参考速度严格为零", bool((vel[low][:, leg_ids] == 0).all()))
+        for index, height_value in enumerate(HEIGHT_LIST):
+            if height_value >= THRESHOLD_HEIGHT:
+                continue
+            rows = low & torch.isclose(height, height.new_tensor(height_value), atol=1e-8, rtol=0)
+            mode = get_height_mode(heights[:, 0], heights[:, 1])[rows]
+            key = "front_pos" if is_front else "hind_pos"
+            check(f"{label}腿{height_value * 1000:g}毫米预计算与直接IK一致",
+                  torch.allclose(pos[rows][:, leg_ids], tables[key][mode, index, 0][:, leg_ids], atol=1e-6))
+    probe.episode_length_buf += 37
+    shifted, _ = get_reference_joint_state(probe)
+    for column, leg_ids in ((0, _ACT_LEG_F_IDS), (1, _ACT_LEG_H_IDS)):
+        low = heights[:, column] < THRESHOLD_HEIGHT
+        check("固定足端参考不受步态相位影响", torch.equal(original[low][:, leg_ids], shifted[low][:, leg_ids]))
+    permutation = torch.arange(len(heights) - 1, -1, -1, device=env.device)
+    command[:] = command[permutation].clone()
+    probe.episode_length_buf[:] = probe.episode_length_buf[permutation].clone()
+    reordered, _ = get_reference_joint_state(probe)
+    check("批量参考不受其他环境或排列影响", torch.equal(reordered, shifted[permutation]))
+    check("高低阈值与65毫米减25毫米目标衔接", THRESHOLD_HEIGHT == 0.040 and BASE_HEIGHT == 0.055)
 
 
 # 验收真实碰撞几何、逐环境复位和动态奖励阈值。
@@ -424,6 +500,7 @@ def verify_real_env() -> None:
           and torch.equal(actual[[1, 3]], keep))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
     verify_base_height_commands(env)
+    verify_continuous_reference(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
     verify_partial_episode_filter(env)

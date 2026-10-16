@@ -29,7 +29,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     BODY_HEIGHT_OFFSET,
     ENTRY_MARGIN,
     EXIT_MARGIN,
-    LOW_TARGET_HEIGHT,
     OBSTACLE_HEIGHT_SPLIT,
     HEIGHT_MAX as PREVIEW_HEIGHT_MAX,
     HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
@@ -148,8 +147,10 @@ def sample_base_commands(
         "height_f": front,
         "height_h": hind,
         "velocity_x": compute_cmd_vel_x(front_tensor, hind_tensor).numpy(),
-        "reference_height_f": heights[(front_tensor[:, None] - heights).abs().argmin(dim=1)].numpy(),
-        "reference_height_h": heights[(hind_tensor[:, None] - heights).abs().argmin(dim=1)].numpy(),
+        "reference_height_f": torch.where(front_tensor < THRESHOLD_HEIGHT, front_tensor,
+            heights[(front_tensor[:, None] - heights).abs().argmin(dim=1)]).numpy(),
+        "reference_height_h": torch.where(hind_tensor < THRESHOLD_HEIGHT, hind_tensor,
+            heights[(hind_tensor[:, None] - heights).abs().argmin(dim=1)]).numpy(),
     }
 
 
@@ -289,7 +290,7 @@ def save_source_data(output_dir: Path, cases: list[ScheduleCase], start_x: float
             "entry_margin": ENTRY_MARGIN,
             "exit_margin": EXIT_MARGIN,
             "body_height_offset": BODY_HEIGHT_OFFSET,
-            "low_target_height": LOW_TARGET_HEIGHT,
+            "low_target_rule": "板底高度减躯干余量，受限侧使用连续高度IK",
             "default_height": BASE_HEIGHT,
             "position_source": "base_Link_world_x",
             "front_low_end_inclusive": False,
