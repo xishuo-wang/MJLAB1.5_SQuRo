@@ -40,6 +40,24 @@ def rectangle(center, heading, length=0.03, width=0.02):
 
 
 class TestSlalomCurveCorridor(unittest.TestCase):
+    # 分块、尾块补齐及跨块曲率混排必须与原几何查询一致。
+    def test_block_projection_preserves_geometry(self):
+        tables = torch.tensor(get_spatial_slalom_tables(), dtype=torch.float64)
+        rows = torch.arange(129) % len(tables)
+        spacing = tables[rows, -1, 0] / 5
+        generator = torch.Generator().manual_seed(42)
+        points = torch.rand(129, 11, 2, generator=generator, dtype=torch.float64) * 0.2
+        expected = corridor._project_slalom_points_block(points, tables, rows, spacing)
+        for count in (0, 1, 63, 64, 65, 129):
+            with patch.object(corridor, "_project_slalom_points_block", wraps=corridor._project_slalom_points_block) as project:
+                actual = corridor.project_slalom_points(points[:count], tables, rows[:count], spacing[:count])
+            for call in project.call_args_list:
+                size = call.args[0].shape[0]
+                self.assertLessEqual(size, corridor._PROJECTION_ENV_BLOCK)
+                self.assertEqual(size & (size - 1), 0)
+            for value, reference in zip(actual, expected, strict=True):
+                torch.testing.assert_close(value, reference[:count])
+
     # 正负曲率的内外侧分别随最近轨迹点判定，不沿用基座所在处的转向。
     def test_local_turn_side(self):
         geometry = get_slalom_geometry(15)

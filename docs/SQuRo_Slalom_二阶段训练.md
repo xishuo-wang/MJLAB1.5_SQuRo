@@ -73,17 +73,37 @@ PPO、网络、观测归一化、每轮步数与 100 Hz 策略频率保持和 Ho
 
 本次约束覆盖前后躯干，不包含腿部或真实杆间隙，不能作为全身无碰撞通过的证明。
 实际杆位净空奖励仍需单独验证。旧检查点动作／观测维度兼容，但不会因奖励修改自动学会新行为。
-建议新开完整训练，分别保留约 2900 轮转圈和二阶段检查点进行固定条件比较。
+首次启用曲线约束建议新开完整训练，分别保留约 2900 轮转圈和二阶段检查点进行固定条件比较。
+仅应用下述显存分块修复时，可以从已使用曲线约束的检查点继续训练。
 
-本机 RTX 5070 Ti Laptop、1024 环境、每段躯干 340 个边界点的独立查询基准约 15 ms／次，
-该查询基准峰值显存约 1.2 GiB；不代表完整仿真的耗时或显存，实际训练吞吐会有所下降。
-验证记录统一位于 `logs/diagnostics/SQuRo_Slalom/curve_corridor_20261017/`。
+首版 `6ced1ee` 只验证了固定批量，遗漏阶段切换时绕杆环境数量不断变化的显存问题。
+独立复现中，环境数逐步增加到 280 时实际峰值分配约 351 MiB，但 Torch 预留已达 5236 MiB。
+不同大批量形状导致缓存分配器累积预留，可能挤占 Warp 的 CUDA 图启动所需显存。
+因此曲线查询改为最多 64 环境的固定形状分块，尾块补齐；小批量采用二次幂形状，
+结果裁回原环境数。几何分辨率、采样、内外侧判断和奖励公式均保持不变。
+
+修复后同类动态批量测试完整覆盖到 1024 环境，206 次查询的峰值预留约 156 MiB。
+本机 RTX 5070 Ti Laptop、1024 环境、每段躯干 340 个边界点，独立查询约 24 ms／次，
+峰值实际分配约 99 MiB；分块稍增查询耗时，以限制显存需求。
+真实 1024 环境读取 `2026-10-17_03-11-13/model_3000.pt`，经过混合阶段并执行两轮 PPO，
+采样约 3.0～3.1 秒／轮，Torch 峰值预留约 420 MiB，测试结束设备总占用约 3.1 GiB。
+以上为短检查，不代表完整长训练吞吐、显存峰值或策略收敛。
+几何初次验证在 `logs/diagnostics/SQuRo_Slalom/curve_corridor_20261017/`，显存修复验证在
+`logs/diagnostics/SQuRo_Slalom/curve_memory_fix_20261017/`。
 
 ## 回放和训练入口
 
 ```powershell
 uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard
 ```
+
+显存修复后保留 2026-10-17 这一轮的一阶段进度，从 3000 轮检查点追加 5000 轮：
+
+```powershell
+uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard --agent.resume True --agent.load-run 2026-10-17_03-11-13 --agent.load-checkpoint model_3000.pt --agent.max-iterations 5000
+```
+
+`max-iterations` 在续训时表示追加轮数；此命令创建新日志目录，保留原检查点与原始训练日志。
 
 曲率十五的转圈回放使用 `--command-source 转圈 --fixed-curvature -15`。
 二阶段固定条件使用 `--command-source 绕杆 --fixed-slalom-curvature 15`。

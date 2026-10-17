@@ -19,6 +19,7 @@ _BOX_SIGNS = tuple(product((-1.0, 1.0), repeat=3))
 _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
                    if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
 _ENVELOPE_SAMPLE_STEP = 0.002
+_PROJECTION_ENV_BLOCK = 64
 
 
 # 将完整三维包围盒随躯干实际姿态投影到水平面。
@@ -108,8 +109,31 @@ def compute_phase0_corridor_excess(
     return inner.reshape(batch_size, 2), outer.reshape(batch_size, 2)
 
 
-# 粗定位后在线段上细化投影，接近段起点向后延伸为切线射线。
+# 以固定形状分块查询，避免阶段切换时不同大批量形状累积显存预留。
 def project_slalom_points(
+    points: torch.Tensor, tables: torch.Tensor, rows: torch.Tensor, spacing: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    count = points.shape[0]
+    outputs = tuple(points.new_empty(points.shape[:2]) for _ in range(3))
+    if count == 0:
+        return outputs
+    block_size = min(_PROJECTION_ENV_BLOCK, 1 << (count - 1).bit_length())
+    for start in range(0, count, block_size):
+        stop = min(start + block_size, count)
+        block_points, block_rows, block_spacing = points[start:stop], rows[start:stop], spacing[start:stop]
+        padding = block_size - (stop - start)
+        if padding:
+            block_points = torch.cat((block_points, block_points[-1:].expand(padding, -1, -1)))
+            block_rows = torch.cat((block_rows, block_rows[-1:].expand(padding)))
+            block_spacing = torch.cat((block_spacing, block_spacing[-1:].expand(padding)))
+        values = _project_slalom_points_block(block_points, tables, block_rows, block_spacing)
+        for output, value in zip(outputs, values, strict=True):
+            output[start:stop].copy_(value[:stop - start])
+    return outputs
+
+
+# 粗定位后在线段上细化投影，接近段起点向后延伸为切线射线。
+def _project_slalom_points_block(
     points: torch.Tensor, tables: torch.Tensor, rows: torch.Tensor, spacing: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     points = points.clone()
