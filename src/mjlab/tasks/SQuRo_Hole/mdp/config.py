@@ -66,5 +66,5 @@ HEIGHT_MIN_SUCCESS_RATE = 0.60                      # 推进课程要求成功�
 HEIGHT_REQUIRED_BATCHES = 2                         # 推进课程要求连续成功批次
 HEIGHT_MIN_DWELL_ITERATIONS = 100
 OBSTACLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)  # 真实课程的初始板底位置
-OBSTACLE_SIZE = (0.015, 0.1, 0.005)                 # 单板半长、半宽、半厚
+OBSTACLE_SIZE = (0.015, 0.3, 0.005)                 # 单板半长、半宽、半厚, 总宽60厘米阻断绕侧
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                   # 板底净空余量
