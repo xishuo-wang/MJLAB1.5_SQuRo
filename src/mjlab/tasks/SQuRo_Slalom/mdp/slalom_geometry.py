@@ -88,8 +88,8 @@ def get_spatial_slalom_tables() -> np.ndarray:
 
 # 将空间路径重采样到等名义时间网格，运行时只需按行插值。
 def timed_samples(path: dict[str, np.ndarray], base_velocity: float, count: int) -> tuple[np.ndarray, float]:
-    velocity = base_velocity * get_velocity_scale(path["kappa"])
-    time = np.concatenate(([0.0], np.cumsum(np.diff(path["arc"]) / ((velocity[:-1] + velocity[1:]) / 2))))
+    velocity = base_velocity * get_velocity_scale(float(np.abs(path["kappa"]).max()))
+    time = path["arc"] / velocity
     samples = np.stack([np.interp(np.linspace(0, time[-1], count), time, path[name])
                         for name in ("x", "y", "heading", "kappa")], axis=-1)
     return samples, float(time[-1])

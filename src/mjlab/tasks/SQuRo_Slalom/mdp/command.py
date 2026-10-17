@@ -131,7 +131,8 @@ class SlalomCommand(CommandTerm):
             else:
                 self.curvature_command[env_ids] = self.fixed_curvature
             ax, ay, ah = get_phase0_approach(self.curvature_command[env_ids])
-        self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] * get_velocity_scale(self.curvature_command[env_ids])
+        speed_curvature = self.slalom_peak_curvature[env_ids] if phase1 else self.curvature_command[env_ids]
+        self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] * get_velocity_scale(speed_curvature)
         root = torch.zeros(n, 13, device=self.device)
         root[:, 0], root[:, 1], root[:, 2] = ax, ay, 0.06
         origins = getattr(env.scene, "env_origins", None)
@@ -153,14 +154,14 @@ class SlalomCommand(CommandTerm):
         invalidate_reference_cache(self._env)
         return extras
 
-    # 按逐环境阶段更新动态曲率和共用速度曲线。
+    # 按逐环境阶段更新曲率，绕杆速度按本回合峰值保持稳定。
     def _update_command(self) -> None:
         compute_path_ref(self._env)
         kappa = self._env._path_kappa
         base_velocity = BASE_VEL if self.fixed_velocity is None else float(self.fixed_velocity)
         phase1 = self.phase1_mask
         self.curvature_command.copy_(torch.where(phase1, kappa, self.curvature_command))
-        velocity = base_velocity * self.gait_freq_command * get_velocity_scale(kappa)
+        velocity = base_velocity * self.gait_freq_command * get_velocity_scale(self.slalom_peak_curvature)
         self.vel_command.copy_(torch.where(phase1, velocity, self.vel_command))
 
     # 在训练日志中标记绕杆比例和当前几何分布。

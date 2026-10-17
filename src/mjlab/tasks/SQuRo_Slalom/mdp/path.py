@@ -271,7 +271,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     origins = getattr(getattr(env, "scene", None), "env_origins", None)
     if origins is not None:
         x, y = x + origins[:, 0], y + origins[:, 1]
-    velocity = base_velocity * cmd.command[:, 3] * get_velocity_scale(kappa)
+    velocity = base_velocity * cmd.command[:, 3] * get_velocity_scale(cmd.slalom_peak_curvature)
     env._path_kappa = kappa
     return x, y, velocity * heading.cos(), velocity * heading.sin(), heading
 

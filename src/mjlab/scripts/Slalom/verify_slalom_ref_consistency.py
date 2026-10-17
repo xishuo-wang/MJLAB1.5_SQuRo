@@ -389,7 +389,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         # 新阶段的命令与本步路径及共用速度曲线一致。
         self.assertAlmostEqual(cmd.command_tensor[1, 4].item(), float(env._path_kappa[1]), places=5)
         self.assertAlmostEqual(cmd.command_tensor[1, 0].item(),
-                               BASE_VEL * get_velocity_scale(float(env._path_kappa[1])), places=6)
+                               BASE_VEL * get_velocity_scale(float(env.command_manager._terms["slalom_cmd"].slalom_peak_curvature[1])), places=6)
 
     # 重置后同一控制步内的首帧观测必须用新回合的参考 (框架顺序: 奖励 → 重置 → 观测)
     def test_reset_first_frame_uses_new_episode_reference(self):
