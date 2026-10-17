@@ -34,6 +34,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
+    HEIGHT_STEP,
     VIRTUAL_CLEARANCE_MARGIN,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
@@ -43,10 +44,14 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     HEIGHT_RULE_STAGE,
     STAGE2_ITER,
     STEPS_PER_ITER,
+    HEIGHT_EVALUATION_INTERVAL,
+    HEIGHT_EVALUATION_MIN_SAMPLES,
+    HEIGHT_EVALUATION_PRETRAIN_ITERATIONS,
     HeightCurriculumState,
     get_current_stage,
     obstacle_rule_bounds,
     compute_base_heights,
+    stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
@@ -375,6 +380,64 @@ def verify_curriculum_state() -> None:
             "previous_z_min", "z_min", "success_rate", "sample_count"
         )),
     )
+
+
+# 构造一批考核结果, 最低档与较易档混合
+def _evaluation_results(z_min: float, min_count: int, min_success: int, other_count: int = 0) -> list[dict]:
+    results = [
+        {"env_id": i, "height": z_min, "success": i < min_success, "valid": True,
+         "failure_code": 0 if i < min_success else 3}
+        for i in range(min_count)
+    ]
+    results.extend(
+        {"env_id": min_count + i, "height": z_min + 0.010, "success": True, "valid": True,
+         "failure_code": 0}
+        for i in range(other_count)
+    )
+    return results
+
+
+# 验证独立考核的调度、最低档样本门槛、两批降档与最终档标记。
+def verify_evaluation_curriculum() -> None:
+    check("训练阶段不再要求实体碰撞", all(not stage_requires_collision(stage) for stage in (1, 2, 3, 4)))
+    state = HeightCurriculumState()
+    first_iteration = STAGE3_ITER + HEIGHT_EVALUATION_PRETRAIN_ITERATIONS
+    check("考核在预训练轮数之前不触发", not state.should_evaluate(first_iteration - HEIGHT_EVALUATION_INTERVAL))
+    check("考核按 100 轮间隔触发", state.should_evaluate(first_iteration)
+          and state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
+    check("考核间隔之外不触发", not state.should_evaluate(first_iteration + 1))
+
+    shortage = state.record_evaluation(
+        _evaluation_results(state.z_min, 100, 100, other_count=300), first_iteration)
+    check("最低档样本不足 256 时该批不达标",
+          not shortage["passed"] and state.consecutive_success_batches == 0
+          and state.z_min == HEIGHT_INITIAL_MIN)
+
+    batch_results = _evaluation_results(state.z_min, HEIGHT_EVALUATION_MIN_SAMPLES, 200, other_count=768)
+    first = state.record_evaluation(batch_results, first_iteration)
+    check("首批达标只累计连续批数",
+          first["passed"] and state.consecutive_success_batches == 1 and state.z_min == HEIGHT_INITIAL_MIN)
+    second = state.record_evaluation(batch_results, first_iteration)
+    check("两批最低档达标后降档 2 毫米",
+          second["advanced"] and state.z_min == HEIGHT_INITIAL_MIN - HEIGHT_STEP)
+
+    boundary = HeightCurriculumState()
+    below = boundary.record_evaluation(_evaluation_results(0.070, 256, 153), first_iteration)
+    check("最低档通过率 59.8% 不达标", not below["passed"])
+    above = boundary.record_evaluation(_evaluation_results(0.070, 256, 154), first_iteration)
+    check("最低档通过率 60.2% 达标", above["passed"])
+
+    final_state = HeightCurriculumState()
+    final_state.z_min = HEIGHT_MIN
+    final_state.record_evaluation(_evaluation_results(HEIGHT_MIN, 256, 256), first_iteration)
+    final_batch = final_state.record_evaluation(_evaluation_results(HEIGHT_MIN, 256, 256), first_iteration)
+    check("到达下限后两批达标标记最终档且不再降档",
+          final_state.z_min == HEIGHT_MIN and final_state.final_level_passed and not final_batch["advanced"])
+    check("最终档达标后停止考核", not final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
+
+    restored = HeightCurriculumState()
+    restored.load_state_dict(final_state.state_dict())
+    check("考核课程状态包含最终档标记", restored.state_dict() == final_state.state_dict())
 
 
 # 验证50毫米边界的细步长、46毫米下限和旧检查点续训。
@@ -759,6 +822,7 @@ def main() -> None:
     verify_virtual_contact()
     verify_high_obstacle_modes()
     verify_curriculum_state()
+    verify_evaluation_curriculum()
     verify_fine_height_steps()
     verify_real_env()
     if FAILURES:

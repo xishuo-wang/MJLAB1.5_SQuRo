@@ -12,6 +12,7 @@ from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import SQuRo_Hole_Env_Cfg
 from mjlab.tasks.SQuRo_Hole.config.rl_cfg import SQuRo_Hole_PPO_Runner_Cfg
 from mjlab.tasks.SQuRo_Hole.rl.runner import SQuRoHoleOnPolicyRunner
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import STAGE3_ITER, STAGE3_STEP, STEPS_PER_ITER
+from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_collision_enabled
 
 
 OUT = HOLE_DIAGNOSTICS_ROOT / "rebuild_timing"
@@ -24,7 +25,7 @@ def main():
     torch.manual_seed(197)
     cfg = SQuRo_Hole_Env_Cfg()
     cfg.scene.num_envs = 16
-    cfg.commands["hole_cmd"].enable_course_progress = True
+    cfg.commands["hole_cmd"].enable_course_progress = False
     env = ManagerBasedRlEnv(cfg, device="cuda:0")
     settings = asdict(SQuRo_Hole_PPO_Runner_Cfg())
     settings["logger"] = "tensorboard"
@@ -47,7 +48,8 @@ def main():
         assert torch.equal(command.course_episode_eligible, clock == 0)
         calls.append({"step": runner.env.unwrapped.common_step_counter,
                       "episode_steps": clock.cpu().tolist(),
-                      "has_obstacle": "obstacle" in runner.env.unwrapped.scene.entities})
+                      "has_obstacle": "obstacle" in runner.env.unwrapped.scene.entities,
+                      "collision": obstacle_collision_enabled(runner.env.unwrapped)})
 
     # 保存课程回合快照后交还原消费函数，不改变训练统计。
     def observe_results(extras):
@@ -63,12 +65,13 @@ def main():
             runner.learn(3, init_at_random_ep_len=True)
             assert len(calls) == 2 and calls[-1]["step"] == STAGE3_STEP
             assert calls[0]["has_obstacle"] is False and calls[1]["has_obstacle"] is True
+            assert calls[1]["collision"] is False
             assert runner.env.unwrapped.common_step_counter == (STAGE3_ITER + 2) * STEPS_PER_ITER
             command = runner._obstacle_command
-            assert command.height_curriculum_state.all_height_episode_count == sum(row["valid"] for row in episodes)
+            assert len(episodes) > 0 and command.height_curriculum_state.all_height_episode_count == 0
             runner.learn(1, init_at_random_ep_len=True)
             assert len(calls) == 2
-            assert command.height_curriculum_state.all_height_episode_count == sum(row["valid"] for row in episodes)
+            assert command.height_curriculum_state.all_height_episode_count == 0
         first_episodes = {}
         for row in episodes:
             first_episodes.setdefault(row["env_id"], row)
@@ -76,6 +79,7 @@ def main():
             assert row["valid"] == (calls[-1]["episode_steps"][env_id] == 0)
         result = {"randomization_calls": calls, "final_step": runner.env.unwrapped.common_step_counter,
                   "curriculum_count": command.height_curriculum_state.all_height_episode_count,
+                  "training_collision": obstacle_collision_enabled(runner.env.unwrapped),
                   "completed_episodes": episodes,
                   "repeat_learn_randomized_again": False}
         (OUT / "实际重建随机计时.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

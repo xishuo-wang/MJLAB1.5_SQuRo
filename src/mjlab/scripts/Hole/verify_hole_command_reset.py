@@ -1,4 +1,4 @@
-﻿# 用法：uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
+# 用法：uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
 # 验证真实环境的复位起点、部分复位及基座高度规则边界。
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_STEP,
     HeightCurriculumState,
+    compute_base_heights,
     obstacle_rule_bounds,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity
@@ -87,19 +88,21 @@ def check_partial_reset(env: ManagerBasedRlEnv) -> None:
 def check_schedule_boundaries(env: ManagerBasedRlEnv) -> None:
     obstacle = env.scene["obstacle"].cfg
     left, middle, right = obstacle_rule_bounds(obstacle.position[0], obstacle.size[0])
+    board_bottom = torch.tensor(0.064)
     cases = (
-        ((left - 1e-6, left + 1e-6, middle - 1e-6, middle + 1e-6),
-         [[0.055, 0.055], [0.02, 0.055], [0.02, 0.055], [0.055, 0.02]]),
-        ((right - 1e-6, right + 1e-6, -0.01, 0.4),
-         [[0.055, 0.02], [0.055, 0.055], [0.055, 0.055], [0.055, 0.055]]),
+        (left - 1e-6, left + 1e-6, middle - 1e-6, middle + 1e-6),
+        (right - 1e-6, right + 1e-6, -0.01, 0.4),
     )
-    for positions, expected in cases:
+    for positions in cases:
         env.reset()
         write_positions(env, positions)
         env.command_manager.compute(dt=0.0)
         command = env.command_manager.get_command("hole_cmd")
+        front, hind = compute_base_heights(
+            torch.tensor(positions), obstacle.position[0], obstacle.size[0], board_bottom, True)
+        expected = torch.stack((front, hind), dim=-1)
         torch.testing.assert_close(
-            command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]], torch.tensor(expected),
+            command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]], expected,
             atol=1e-6, rtol=0, msg="基座高度规则边界在复位后发生偏移",
         )
     print("[通过] 连续复位后仍按基座世界 X 查表，覆盖进入、中点及离开边界")
@@ -144,12 +147,17 @@ def check_nonzero_reset_pose() -> None:
         write_positions(env, (0.7, -0.2, 1.4, 0.32))
         env.reset()
         check_origins(env, "非零复位位置没有成为起点")
-        write_positions(env, (0.034, 0.125, 0.201, 0.316))
+        positions = (0.034, 0.125, 0.201, 0.316)
+        write_positions(env, positions)
         env.command_manager.compute(dt=0.0)
         command = env.command_manager.get_command("hole_cmd")
+        obstacle = env.scene["obstacle"].cfg
+        front, hind = compute_base_heights(
+            torch.tensor(positions), obstacle.position[0], obstacle.size[0],
+            torch.tensor(0.064), True)
         torch.testing.assert_close(
             command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]],
-            torch.tensor([[0.055, 0.055], [0.02, 0.055], [0.055, 0.02], [0.055, 0.055]]),
+            torch.stack((front, hind), dim=-1),
             atol=1e-6, rtol=0,
         )
     finally:

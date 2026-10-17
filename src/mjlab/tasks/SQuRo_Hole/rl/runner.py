@@ -1,6 +1,11 @@
 import os
 import copy
+import json
 import time
+import random
+from pathlib import Path
+
+import numpy as np
 import torch
 import wandb
 from rsl_rl.utils import check_nan
@@ -10,6 +15,8 @@ from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
+    HEIGHT_EVALUATION_ENVS,
+    HEIGHT_REQUIRED_BATCHES,
     get_current_stage,
     stage_requires_collision,
     stage_uses_height_course,
@@ -62,6 +69,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         self._obstacle_height_course_enabled = bool(self._obstacle_command is not None and self._obstacle_command.enable_height_course)
         self._height_curriculum_state = (self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None)
         self._episode_lengths_randomized = False
+        self._evaluation_env = None
 
 
     # 当前实际编译进仿真的碰撞开关
@@ -145,12 +153,144 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         return self.env.get_observations().to(self.device) if refresh_obs else None
 
 
+    # 当前是否由独立真实碰撞考核推进高度课程
+    def _course_enabled(self) -> bool:
+        command = self._obstacle_command
+        if command is None or not command.enable_height_course:
+            return False
+        cfg = command.cfg
+        if cfg.fixed_velocity is not None or cfg.fixed_height_f is not None or cfg.fixed_height_h is not None:
+            return False
+        step = int(self.env.unwrapped.common_step_counter)
+        return stage_uses_height_course(get_current_stage(step))
+
+
+    # 独立考核环境: 复制训练配置, 只打开板体碰撞
+    def _get_evaluation_env(self):
+        if self._evaluation_env is None:
+            cfg = copy.deepcopy(self._obstacle_env_cfg)
+            cfg.scene.num_envs = HEIGHT_EVALUATION_ENVS
+            cmd_cfg = cfg.commands["hole_cmd"]
+            cmd_cfg.enable_height_course = True
+            cmd_cfg.enable_course_progress = False
+            cmd_cfg.debug_vis = False
+            cmd_cfg.fixed_velocity = None
+            cmd_cfg.fixed_height_f = None
+            cmd_cfg.fixed_height_h = None
+            cmd_cfg.height_curriculum_state = {}
+            if self._obstacle_command is not None:
+                cmd_cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
+            configure_obstacle_entity(cfg, enable_collision=True)
+            raw = ManagerBasedRlEnv(cfg=cfg, device=self._obstacle_device, render_mode=None)
+            raw.common_step_counter = int(self.env.unwrapped.common_step_counter)
+            self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self._obstacle_clip_actions)
+            if not obstacle_collision_enabled(raw):
+                raise RuntimeError("考核环境未真正开启板体碰撞")
+            print(f"[INFO] 独立真实碰撞考核环境已创建: num_envs={HEIGHT_EVALUATION_ENVS}", flush=True)
+        return self._evaluation_env
+
+
+    # 考核环境沿用训练当前的高度范围与高板策略
+    def _sync_evaluation_course(self) -> None:
+        env = self._evaluation_env.unwrapped
+        command = env.command_manager._terms["hole_cmd"]
+        state = command.height_curriculum_state
+        state.z_min = float(self._height_curriculum_state.z_min)
+        state.z_max = float(self._height_curriculum_state.z_max)
+        if self._obstacle_command is not None:
+            command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
+        env.common_step_counter = int(self.env.unwrapped.common_step_counter)
+
+
+    # 冻结策略在接触环境中跑一批完整回合, 每环境只计首个完成回合
+    def _run_evaluation_sweep(self, seed: int) -> list[dict]:
+        evaluation = self._get_evaluation_env()
+        env = evaluation.unwrapped
+        self._sync_evaluation_course()
+        torch.manual_seed(int(seed))
+        policy = self.get_inference_policy(device=str(evaluation.device))
+        results: list[dict] = []
+        seen: set[int] = set()
+        obs, _ = evaluation.reset()
+        monitor = getattr(env, "_hole_passage_monitor", None)
+        if monitor is not None:
+            monitor.consume()
+        for _ in range(env.max_episode_length + 1):
+            actions = policy(obs.to(self.device)).to(evaluation.device)
+            obs, _, _, _ = evaluation.step(actions)
+            monitor = getattr(env, "_hole_passage_monitor", None)
+            for item in monitor.consume() if monitor is not None else []:
+                if item["env_id"] not in seen:
+                    seen.add(item["env_id"])
+                    results.append(item)
+            if len(seen) == env.num_envs:
+                break
+        if len(seen) != env.num_envs:
+            raise RuntimeError("独立真实碰撞考核缺少完整回合, 拒绝推进课程")
+        return results
+
+
+    # 每 100 iter 做两批独立考核, 两批最低档都达标才推进课程
+    def _maybe_evaluate_curriculum(self, iteration: int) -> None:
+        course = self._height_curriculum_state
+        if course is None or not self._course_enabled() or not course.should_evaluate(iteration):
+            return
+        if self.is_distributed:
+            raise RuntimeError("独立真实碰撞考核仅支持单卡训练")
+        numpy_state, python_state = np.random.get_state(), random.getstate()
+        devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
+        started = time.perf_counter()
+        batches: list[dict] = []
+        try:
+            with torch.random.fork_rng(devices=devices), torch.no_grad():
+                for sweep in range(HEIGHT_REQUIRED_BATCHES):
+                    results = self._run_evaluation_sweep(int(self.cfg.get("seed", 42)) + iteration + sweep)
+                    batches.append(course.record_evaluation(results, iteration))
+        finally:
+            np.random.set_state(numpy_state)
+            random.setstate(python_state)
+            self.alg.train_mode()
+        seconds = time.perf_counter() - started
+        for index, batch in enumerate(batches):
+            print(f"[高度考核] iter {iteration} 第{index + 1}批: 最低档 {batch['sample_count']} 回合, "
+                  f"通过率 {batch['success_rate']:.1%}, Zmin {course.z_min:.3f} m", flush=True)
+        if batches[-1]["advanced"]:
+            print(f"[高度考核] 课程降档: Zmin {batches[-1]['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
+        if self.logger.writer is not None:
+            values = {
+                "Curriculum/考核通过率": batches[-1]["success_rate"],
+                "Curriculum/考核样本数": batches[-1]["sample_count"],
+                "Curriculum/最低板高米": course.z_min,
+                "Curriculum/连续达标批次": course.consecutive_success_batches,
+                "Curriculum/考核耗时秒": seconds,
+                "Curriculum/最终档达标": int(course.final_level_passed),
+            }
+            for name, value in values.items():
+                self.logger.writer.add_scalar(name, value, iteration)
+        if self.logger.log_dir is not None:
+            directory = Path(self.logger.log_dir) / "collision_evaluations"
+            directory.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "iteration": int(iteration),
+                "z_min": float(course.z_min),
+                "batches": batches,
+                "seconds": seconds,
+                "collision": True,
+            }
+            (directory / f"evaluation_{iteration:05d}.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
     # 训练循环: 复制 rsl_rl 主循环, 在每轮采样前插入碰撞开关重建
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
         if self._obstacle_change_needed():
             self._apply_obstacle_rebuild(refresh_obs=False)
         if init_at_random_ep_len and not self._episode_lengths_randomized:
             self._randomize_episode_lengths()
+        if self._course_enabled() and self.is_distributed:
+            raise ValueError("独立真实碰撞考核仅支持单卡训练")
+        if self._course_enabled() and self._obstacle_compiled_collision():
+            raise ValueError("高度课程要求训练环境关闭板碰撞, 仅独立考核开启")
 
         obs = self.env.get_observations().to(self.device)
         self.alg.train_mode()
@@ -163,51 +303,56 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
-        for it in range(start_it, total_it):
-            if self._obstacle_change_needed():
-                obs = self._apply_obstacle_rebuild(refresh_obs=True)
-            start = time.time()
-            with torch.inference_mode():
-                for _ in range(self.cfg["num_steps_per_env"]):
-                    actions = self.alg.act(obs) # type: ignore
-                    obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
-                    self._consume_obstacle_results(extras)
-                    if self.cfg.get("check_for_nan", True):
-                        check_nan(obs, rewards, dones)
-                    obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
-                    self.alg.process_env_step(obs, rewards, dones, extras)
-                    intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
-                    self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+        try:
+            for it in range(start_it, total_it):
+                if self._obstacle_change_needed():
+                    obs = self._apply_obstacle_rebuild(refresh_obs=True)
+                start = time.time()
+                with torch.inference_mode():
+                    for _ in range(self.cfg["num_steps_per_env"]):
+                        actions = self.alg.act(obs) # type: ignore
+                        obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
+                        self._consume_obstacle_results(extras)
+                        if self.cfg.get("check_for_nan", True):
+                            check_nan(obs, rewards, dones)
+                        obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+                        self.alg.process_env_step(obs, rewards, dones, extras)
+                        intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
+                        self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+
+                    stop = time.time()
+                    collect_time = stop - start
+                    start = stop
+                    self.alg.compute_returns(obs) # type: ignore
+
+                loss_dict = self.alg.update()
 
                 stop = time.time()
-                collect_time = stop - start
-                start = stop
-                self.alg.compute_returns(obs) # type: ignore
+                learn_time = stop - start
+                self.current_learning_iteration = it
 
-            loss_dict = self.alg.update()
+                self.logger.log(
+                    it=it,
+                    start_it=start_it,
+                    total_it=total_it,
+                    collect_time=collect_time,
+                    learn_time=learn_time,
+                    loss_dict=loss_dict,
+                    learning_rate=self.alg.learning_rate,
+                    action_std=self.alg.get_policy().output_std,
+                    rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
+                )
+                self._maybe_evaluate_curriculum(it)
 
-            stop = time.time()
-            learn_time = stop - start
-            self.current_learning_iteration = it
-
-            self.logger.log(
-                it=it,
-                start_it=start_it,
-                total_it=total_it,
-                collect_time=collect_time,
-                learn_time=learn_time,
-                loss_dict=loss_dict,
-                learning_rate=self.alg.learning_rate,
-                action_std=self.alg.get_policy().output_std,
-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
-            )
-
-            if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
-                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
-
-        if self.logger.writer is not None:
-            self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
-            self.logger.stop_logging_writer()
+                if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
+                    self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
+        finally:
+            if self._evaluation_env is not None:
+                self._evaluation_env.close()
+                self._evaluation_env = None
+            if self.logger.writer is not None:
+                self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
+                self.logger.stop_logging_writer()
 
 
     # 续训: 恢复环境状态, 首次采样前把碰撞开关对齐到课程目标
@@ -279,6 +424,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         extra = {
             "stage": get_current_stage(step),
             "collision": self._obstacle_compiled_collision(),
+            "training_collision": self._obstacle_compiled_collision(),
+            "evaluation_envs": HEIGHT_EVALUATION_ENVS,
             "layout": self._obstacle_scene_state(),
             "high_obstacle_equal_height": (
                 self._obstacle_command.cfg.high_obstacle_equal_height
@@ -315,7 +462,11 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             or not stage_uses_height_course(get_current_stage(env.common_step_counter))
         ):
             return
-        del results
+        if results:
+            log["Metrics/训练无碰撞几何通过率"] = torch.tensor(
+                sum(int(item["success"]) for item in results) / len(results), device=env.device)
+            log["Metrics/训练无碰撞通过高度均值"] = torch.tensor(
+                sum(float(item["height"]) for item in results) / len(results), device=env.device)
         stats = command.height_curriculum_state.metrics()  # type: ignore
         log["Metrics/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
         log["Metrics/success_rate"] = torch.tensor(stats["success_rate"], device=env.device)

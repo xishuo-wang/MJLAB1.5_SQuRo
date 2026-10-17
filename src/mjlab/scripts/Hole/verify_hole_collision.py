@@ -12,6 +12,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
+    HEIGHT_EVALUATION_ENVS,
     STAGE3_STEP,
     get_current_stage,
 )
@@ -123,13 +124,25 @@ def check_rebuild() -> None:
     check("进入高度课程需重建", runner._obstacle_change_needed())
     n_before = runner.env.unwrapped.scene.num_envs
     obs = runner._apply_obstacle_rebuild(refresh_obs=True)
-    check("重建后碰撞 = 开", obstacle_collision_enabled(runner.env.unwrapped))
+    check("重建后创建单板实体", "obstacle" in runner.env.unwrapped.scene.entities)
+    check("训练环境碰撞 = 关", not obstacle_collision_enabled(runner.env.unwrapped))
     check("num_envs 保持", runner.env.unwrapped.scene.num_envs == n_before,
           f"{runner.env.unwrapped.scene.num_envs}")
     check("common_step_counter 保持",
           int(runner.env.unwrapped.common_step_counter) == STAGE3_STEP)
     check("观测形状保持", tuple(obs.shape) == (n_before,), f"{tuple(obs.shape)}")
     check("不反复重建", not runner._obstacle_change_needed())
+    # 独立考核环境必须开启碰撞, 环境数按常量创建
+    from unittest.mock import patch as mock_patch
+
+    from mjlab.tasks.SQuRo_Hole.rl import runner as hole_runner_module
+    with mock_patch.object(hole_runner_module, "HEIGHT_EVALUATION_ENVS", 4):
+        evaluation = runner._get_evaluation_env()
+        check("独立考核环境碰撞 = 开", obstacle_collision_enabled(evaluation.unwrapped))
+        check("独立考核环境数按常量创建", evaluation.unwrapped.scene.num_envs == 4,
+              f"{evaluation.unwrapped.scene.num_envs}")
+        evaluation.close()
+        runner._evaluation_env = None
     try:
         runner.env.close()
     except Exception:
@@ -175,7 +188,9 @@ def check_state_roundtrip() -> None:
     saved = read_hole_state(path)
     check("hole_state 已写入", bool(saved))
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_STEP))
-    check("collision 记录为实际编译值 (开)", saved.get("collision") is True)
+    check("collision 记录为训练实际编译值 (关)", saved.get("collision") is False)
+    check("training_collision 记录为关", saved.get("training_collision") is False)
+    check("evaluation_envs 记录考核环境数", saved.get("evaluation_envs") == HEIGHT_EVALUATION_ENVS)
     layout = saved.get("layout") or []
     from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN
     check("课程阶段 layout 仅保留单板", len(layout) == 1 and layout[0]["name"].lower() == "obstacle", f"{len(layout)}")
@@ -302,7 +317,8 @@ def main() -> None:
         print(f"[结论] 失败 {len(_FAILURES)} 项: {_FAILURES}")
         sys.exit(1)
     print("[结论] 全部通过: 几何单一来源且与实际一致; 碰撞掩码按开关编译生效; "
-          "开碰撞时机器人被板挡住; Runner 在课程起点重建一次且保留计数器; "
+          "开碰撞时机器人被板挡住; Runner 在课程起点重建一次且保留计数器, "
+          "训练环境保持无碰撞、独立考核环境开启碰撞; "
           "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现; "
           "可见性开关只改外观不改碰撞")
 

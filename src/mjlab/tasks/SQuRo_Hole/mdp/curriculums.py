@@ -40,6 +40,13 @@ STAGE3_STEP = STAGE3_ITER * STEPS_PER_ITER
 _STAGES = (0, STAGE1_ITER, STAGE2_ITER, STAGE3_ITER)
 
 
+# 独立真实碰撞考核的课程推进配置
+HEIGHT_EVALUATION_INTERVAL = 100          # 每 100 iter 评估一次
+HEIGHT_EVALUATION_ENVS = 1024             # 考核环境数量, 与训练环境数一致
+HEIGHT_EVALUATION_PRETRAIN_ITERATIONS = 500
+HEIGHT_EVALUATION_MIN_SAMPLES = 256       # 每批最低档有效回合下限
+
+
 
 # 奖励权重与 σ 课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
@@ -77,7 +84,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 
 SPN_AXIS_SCALE: tuple[float, float, float, float] = (1.5, 0.7, 1.5, 0.7)    # 脊柱误差缩放 (F_spine1, F_body, H_spine1, H_body)
-STAGE_COLLISION_ENABLED = (False, False, False, True)       # 受限空间碰撞课程
+STAGE_COLLISION_ENABLED = (False, False, False, False)      # 训练关闭实体碰撞, 仅独立考核开启
 
 
 
@@ -209,6 +216,16 @@ class HeightCurriculumState:
         self.all_height_success_count = 0
         self.failure_counts = {"未过板": 0, "侧绕": 0, "高度超限": 0, "跌倒": 0, "超时": 0}
         self.history: list[dict] = []
+        self.final_level_passed = False
+
+
+    # 判断本轮是否执行独立真实碰撞考核
+    def should_evaluate(self, iteration: int) -> bool:
+        if self.final_level_passed:
+            return False
+        if int(iteration) < STAGE3_ITER + HEIGHT_EVALUATION_PRETRAIN_ITERATIONS:
+            return False
+        return (int(iteration) - STAGE3_ITER) % HEIGHT_EVALUATION_INTERVAL == 0
 
 
     # 记录一条真实碰撞回合并判断是否推进课程
@@ -275,6 +292,75 @@ class HeightCurriculumState:
         return result
 
 
+    # 记录一批独立考核结果, 两批最低档均达标后推进课程
+    def record_evaluation(self, results: list, iteration: int) -> dict:
+        eligible = [item for item in results if item.get("valid", True)]
+        minimum = [item for item in eligible if abs(float(item["height"]) - self.z_min) <= 1e-6]
+        min_count = len(minimum)
+        min_success = sum(int(item["success"]) for item in minimum)
+        rate = min_success / max(1, min_count)
+
+        # 全体回合统计与失败原因
+        self.all_height_episode_count += len(eligible)
+        self.all_height_success_count += sum(int(item["success"]) for item in eligible)
+        failure_names = {1: "未过板", 2: "侧绕", 3: "高度超限", 4: "跌倒", 5: "超时"}
+        for item in eligible:
+            if not item["success"]:
+                name = failure_names.get(item.get("failure_code"))
+                if name is not None:
+                    self.failure_counts[name] += 1
+
+        # 当前档批次统计
+        self.level_episode_count = min_count
+        self.level_success_count = min_success
+        self.batch_count = min_count
+        self.batch_success_count = min_success
+        passed = min_count >= HEIGHT_EVALUATION_MIN_SAMPLES and rate >= HEIGHT_MIN_SUCCESS_RATE
+        self.consecutive_success_batches = (self.consecutive_success_batches + 1 if passed else 0)
+        self.history.append({
+            "z_min": self.z_min,
+            "iteration": int(iteration),
+            "count": min_count,
+            "successes": min_success,
+            "success_rate": rate,
+            "consecutive_batches": self.consecutive_success_batches,
+            "evaluation": True,
+        })
+
+        result = {
+            "counted": True,
+            "batch_closed": True,
+            "advanced": False,
+            "passed": passed,
+            "success_rate": rate,
+            "sample_count": min_count,
+            "previous_z_min": self.z_min,
+        }
+        # 最低档连续两批达标且驻留满足后降档, 到达下限后标记最终档
+        if (
+            passed
+            and self.consecutive_success_batches >= HEIGHT_REQUIRED_BATCHES
+            and int(iteration) - self.level_start_iteration >= HEIGHT_MIN_DWELL_ITERATIONS
+        ):
+            if self.z_min > HEIGHT_MIN:
+                step = HEIGHT_FINE_STEP if self.z_min <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
+                previous_z_min = self.z_min
+                self.z_min = max(HEIGHT_MIN, round(self.z_min - step, 6))
+                self.level_start_iteration = int(iteration)
+                self.consecutive_success_batches = 0
+                self.level_episode_count = 0
+                self.level_success_count = 0
+                result.update({
+                    "advanced": True,
+                    "z_min": self.z_min,
+                    "previous_z_min": previous_z_min,
+                })
+            else:
+                self.final_level_passed = True
+        return result
+
+
+
     # 为所有降档路径填充统一日志数据
     def _set_advance_result(self, result: dict) -> None:
         previous_z_min = self.history[-1]["z_min"]
@@ -324,6 +410,7 @@ class HeightCurriculumState:
             "all_height_success_count": self.all_height_success_count,
             "failure_counts": dict(self.failure_counts),
             "history": list(self.history),
+            "final_level_passed": self.final_level_passed,
         }
 
 
@@ -339,6 +426,8 @@ class HeightCurriculumState:
                 setattr(self, name, state[name])
         self.history = list(state.get("history", []))
         self.failure_counts = dict(state.get("failure_counts", self.failure_counts))
+        if "final_level_passed" in state:
+            self.final_level_passed = bool(state["final_level_passed"])
 
 
     # 汇总当前档日志: 最低档成功率/失败率与挡位推进进度

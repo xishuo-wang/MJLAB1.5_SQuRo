@@ -291,3 +291,15 @@ uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule --short-height 0.
 ```
 
 通用冻结评估工具同样支持 `--high-obstacle-mode saved|equal|segmented|mixed`，默认按检查点配置解释；每个环境首次回合的实际策略随评估结果保存。已验收混合采样、周期重采样保持、部分复位隔离、强制等高／分段、低板忽略开关，以及真实主回放入口的五种配置和连续复位。旧检查点配合新参考与新速度规则仅用于功能验证，不据此证明新策略的穿板能力。
+
+## 无碰撞训练与独立真实碰撞考核课程（2026-10-17）
+
+训练与接触物理彻底分离：所有阶段 `STAGE_COLLISION_ENABLED` 均为 False，3000 轮 runner 重建只创建单板实体（`contype=conaffinity=0`），用于板高采样、高度规则与监测；接触只出现在独立考核环境。约束由新增虚拟碰撞惩罚提供：板体 X 区间内，前后躯干各 9 个 site 的最高点相对"实际板底 − `VIRTUAL_CLEARANCE_MARGIN`(2.5 mm)"的超出量 `e`，惩罚为 `-w·mean(1−exp(−σe²))`；`w=5`、`σ=2000`，曲线 `virtual_contact=(0,0,0,5)`，仅第四阶段生效。高度序列、速度公式、腿部/脊柱参考、走廊奖励与命令维度均未改变。
+
+独立考核环境复制训练配置并开启板体碰撞（`HEIGHT_EVALUATION_ENVS=1024`），使用冻结确定性策略；每 `HEIGHT_EVALUATION_INTERVAL=100` 轮在 PPO 更新后执行，自课程开始 `HEIGHT_EVALUATION_PRETRAIN_ITERATIONS=500` 轮后首次触发。每次考核连续两批，每批每个环境只计首个完整回合；高度采样与训练一致（30% 固定当前 `Zmin`、其余在 `[Zmin, Zmax]` 均匀）。两批各自要求最低档有效回合不少于 `HEIGHT_EVALUATION_MIN_SAMPLES=256`、最低档通过率不低于 60%，且驻留不少于 100 轮，才把 `Zmin` 降一档（高于 50 mm 降 2 mm，否则降 1 mm，下限 46 mm）；到达 46 mm 后两批达标即标记最终档并停止后续考核。任一批未达标则保持当前难度。考核轨迹不进入 PPO，考核前后恢复 Python/NumPy/Torch 随机数状态，训练策略与观测归一化不受影响；训练侧 `HolePassageMonitor` 继续输出无碰撞几何通过率，仅作诊断。
+
+课程状态新增 `final_level_passed`；检查点 `hole_state` 增加 `training_collision`(False) 与 `evaluation_envs`(1024)，`collision` 字段记录训练侧实际编译值（新检查点为 False）。主回放默认沿用检查点碰撞配置，即新检查点回放不再有板体接触；需要物理考核时显式 `--collision True`。训练预算保持 6000 轮，`rl_cfg` 未改。
+
+验收（`logs/diagnostics/SQuRo_Hole/evaluation_course_20261017/`）：课程验收新增考核调度、最低档样本门槛、两批降档、最终档停止等检查；Hole 的课程、碰撞、重建计时、走廊命令、命令复位、基线六个入口全部通过，Backup 阶段奖励 88 项回归通过。64 环境短训从 3499 轮起 102 轮触发 3500／3600 两次考核（随机初始化策略未达标，保持 70 mm）；1024 环境两批考核实测约 106 秒（含首次建环境），最低档样本 289／317 个。按 100 轮间隔估计全程墙钟增加约 20%（前 3000 轮不考核，最终档达标后停止考核）。
+
+考核参数集中在 `mdp/curriculums.py`，可在不改训练预算的情况下调整考核间隔、环境数、样本下限与成功率门槛；后续若出现课程卡死，可在独立考核诊断基础上增加训练侧反馈（采样/奖励调制或可行性预测器），当前版本不包含该反馈。

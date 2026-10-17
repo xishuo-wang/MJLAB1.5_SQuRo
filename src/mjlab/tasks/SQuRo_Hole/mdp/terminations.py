@@ -60,9 +60,9 @@ class HolePassageMonitor:
     def compute(self) -> torch.Tensor:
         env = self.env
         command = env.command_manager._terms.get("hole_cmd")
+        # 训练环境无碰撞时仍按几何判据统计, 课程只由独立真实碰撞考核推进
         valid_course = (
             stage_uses_height_course(get_current_stage(env.common_step_counter))
-            and obstacle_collision_enabled(env)
             and command is not None
             and command.enable_height_course  # type: ignore
         )
