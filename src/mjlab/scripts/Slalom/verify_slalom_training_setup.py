@@ -18,6 +18,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, get_curvature_ra
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     CURVATURE_TARGET, CURVATURE_TARGET_MAX, Rmin,
     _STEPS_PER_ITER, get_curriculum_reward_weight, reward_weight_curriculum,
+    SlalomSpacingCurriculum,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_corridor_side_excess
 
@@ -34,11 +35,16 @@ def side_excess(offsets, kappas, heading=0.0, body_delta=0.0):
 
 
 class TestSlalomTrainingSetup(unittest.TestCase):
-    # 二阶段采样覆盖全部整数条件，并拒绝互相冲突的固定参数。
+    # 训练从五至十起步，回放仍覆盖完整整数条件。
     def test_integer_slalom_sampling(self):
         cmd = object.__new__(SlalomCommand)
         cmd._env = NS(device=torch.device("cpu"))
         cmd.cfg = SQuRo_Slalom_Env_Cfg().commands["slalom_cmd"]
+        cmd.spacing_curriculum = SlalomSpacingCurriculum()
+        peaks = cmd._sample_slalom_indices(4096) + 5
+        self.assertEqual(set(peaks.tolist()), set(range(5, 11)))
+        self.assertAlmostEqual(float((peaks == 10).float().mean()), 0.30, delta=0.04)
+        cmd.cfg.enable_spacing_curriculum = False
         peaks = cmd._sample_slalom_indices(4096) + 5
         self.assertEqual(set(peaks.tolist()), set(range(5, 16)))
         cmd.cfg.fixed_slalom_curvature = 12

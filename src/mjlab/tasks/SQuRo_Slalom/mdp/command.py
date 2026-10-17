@@ -12,6 +12,7 @@ from mjlab.managers.command_manager import CommandTerm
 from .curriculums import (
     BASE_VEL, CURVATURE_TARGET_MAX, GAIT_FREQ_MIN, GAIT_FREQ_MAX,
     PHASE1_MID_ITER, SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, _STEPS_PER_ITER,
+    SlalomSpacingCurriculum, SPACING_HARDEST_PROBABILITY,
     get_training_phase, get_training_phase_batch, get_velocity_scale,
 )
 from .path import _INIT_DIST, compute_path_ref, get_phase0_approach, get_slalom_tables
@@ -42,6 +43,9 @@ class SlalomCommand(CommandTerm):
     # 初始化命令视图和逐环境几何状态。
     def __init__(self, cfg: SlalomCommandCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)
+        self.spacing_curriculum = SlalomSpacingCurriculum()
+        if cfg.spacing_curriculum_state is not None:
+            self.spacing_curriculum.load_state_dict(cfg.spacing_curriculum_state)
         self.robot = env.scene[cfg.asset_name]
         self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
         self.vel_command = self.command_tensor[:, 0]
@@ -105,6 +109,11 @@ class SlalomCommand(CommandTerm):
         if fixed is not None:
             get_slalom_geometry(fixed)
             return torch.full((n,), fixed - SLALOM_CURVATURE_MIN, device=self.device, dtype=torch.long)
+        if self.cfg.enable_spacing_curriculum:
+            highest = self.spacing_curriculum.max_curvature - SLALOM_CURVATURE_MIN
+            sampled = torch.randint(0, highest, (n,), device=self.device)
+            hardest = torch.rand(n, device=self.device) < SPACING_HARDEST_PROBABILITY
+            return torch.where(hardest, highest, sampled)
         return torch.randint(0, SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN + 1, (n,), device=self.device)
 
     # 重置曲率、机器人起点和实体杆，只作用于本次重置环境。
@@ -152,6 +161,9 @@ class SlalomCommand(CommandTerm):
         extras = super().reset(env_ids)
         self._resample_curvature(env_ids)
         invalidate_reference_cache(self._env)
+        monitor = getattr(self._env, "_slalom_passage_monitor", None)
+        if monitor is not None:
+            monitor.reset(env_ids)
         return extras
 
     # 按逐环境阶段更新曲率，绕杆速度按本回合峰值保持稳定。
@@ -199,6 +211,8 @@ class SlalomCommand(CommandTerm):
 class SlalomCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
     phase0_only: bool = False
+    enable_spacing_curriculum: bool = True
+    spacing_curriculum_state: dict | None = None
     resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
     debug_vis: bool = False
     fixed_velocity: float | None = None

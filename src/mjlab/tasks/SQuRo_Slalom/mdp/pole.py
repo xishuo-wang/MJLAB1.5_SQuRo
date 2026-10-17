@@ -1,7 +1,7 @@
 from __future__ import annotations
 import torch
 import mujoco
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 from .curriculums import SLALOM_CURVATURE_MAX
 from .slalom_geometry import get_slalom_geometry
@@ -19,6 +19,29 @@ def _smooth_pole_y() -> float:
 
 
 POLE_Y = _smooth_pole_y()   # 编译占位和默认绘图使用，运行时逐环境更新
+
+
+# 仅改变独立考核场景的杆碰撞掩码，保留 mocap 与实际尺寸。
+def configure_pole_collision(env_cfg, enabled: bool) -> None:
+    mask = int(enabled)
+    env_cfg.scene.entities = {
+        name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, PoleEntityCfg) else entity
+        for name, entity in env_cfg.scene.entities.items()
+    }
+
+
+# 从编译模型核对整排杆的实际碰撞开关。
+def pole_collision_enabled(env) -> bool:
+    model = env.sim.mj_model
+    states = []
+    for index in range(POLE_NUM):
+        entity = env.scene.entities[f"pole{index}"]
+        local, _ = entity.find_geoms([f"pole{index}_geom"], preserve_order=True)
+        geom_id = int(entity.indexing.geom_ids[local[0]])
+        states.append(bool(model.geom_contype[geom_id] and model.geom_conaffinity[geom_id]))
+    if any(states) and not all(states):
+        raise ValueError("整排杆的实际碰撞开关不一致")
+    return all(states)
 
 
 @dataclass

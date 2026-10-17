@@ -10,3 +10,4 @@ from .pole import *
 from .reference import *
 from .rewards import *
 from .terminations import *
+from .passage import track_slalom_passage

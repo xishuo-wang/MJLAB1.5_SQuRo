@@ -81,8 +81,9 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 终止条件
     terminations = {
-        "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
+        "timeout": TerminationTermCfg(func=mdp.check_episode_timeout, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
+        "slalom_passage": TerminationTermCfg(func=mdp.track_slalom_passage, time_out=False),
     }
 
     # 足端接触传感器
@@ -100,6 +101,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
             phase0_only=False,
+            enable_spacing_curriculum=not play,
             debug_vis=play,
             viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
         )
@@ -148,5 +150,5 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ),
         ),
         decimation=5,
-        episode_length_s=20.0,
+        episode_length_s=mdp.SLALOM_EPISODE_SECONDS,
     )
