@@ -6,7 +6,7 @@ import torch
 from mjlab.tasks.SQuRo_Slalom.mdp.passage import SlalomPassageMonitor
 from mjlab.tasks.SQuRo_Slalom.mdp.terminations import check_episode_timeout
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-    SlalomSpacingCurriculum, SPACING_SUCCESS_BATCH,
+    SLALOM_BIN_COUNT, SlalomSpacingCurriculum,
 )
 
 
@@ -72,60 +72,103 @@ class TestSlalomPassage(unittest.TestCase):
         self.assertTrue(bool(check_episode_timeout(env).all()))
 
 
-# 用完整考核批次检查推进边界，避免用无碰撞训练结果冒充成绩。
-class TestSpacingCurriculum(unittest.TestCase):
-    # 制造指定档位的一批完整碰撞考核结果。
-    def batch(self, curvature, successes=SPACING_SUCCESS_BATCH):
-        return [{"curvature": curvature, "success": index < successes,
-                 "failure": "" if index < successes else "跌倒"}
-                for index in range(SPACING_SUCCESS_BATCH)]
+# 制造各档位指定成功数的完整考核结果。
+def make_results(plan: dict, count: int = 1024) -> list[dict]:
+    results = []
+    for curvature, successes in plan.items():
+        results.extend({"curvature": curvature, "success": index < successes,
+                        "failure": "" if index < successes else "跌倒"}
+                       for index in range(count))
+    return results
 
-    # 无碰撞预训练至少五百轮，之后才开始考核。
-    def test_pretraining_and_two_batches(self):
+
+# 用完整考核批次检查推进、最终验收与分档权重。
+class TestSpacingCurriculum(unittest.TestCase):
+    # 无碰撞预训练至少五百轮，两批最低档都达标才推进一档。
+    def test_pretraining_and_advance(self):
         course = SlalomSpacingCurriculum()
         self.assertFalse(course.should_evaluate(3499))
         self.assertTrue(course.should_evaluate(3500))
-        self.assertFalse(course.record_evaluation(self.batch(10, 154), 3500, True))
-        self.assertFalse(course.should_evaluate(3599))
-        self.assertTrue(course.record_evaluation(self.batch(10, 154), 3600, True))
+        batches = [course.measure_batch(make_results({10: 700})) for _ in range(2)]
+        result = course.record_evaluation(batches, 3500, True)
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["advanced"])
         self.assertEqual(course.max_curvature, 11)
-        self.assertFalse(course.should_evaluate(3699))
+        self.assertFalse(course.should_evaluate(3599))
 
-    # 失败批次清空连续达标数，不会跳档。
-    def test_failure_breaks_streak(self):
+    # 任一批未达最低档 60% 就不推进，连续达标数清零。
+    def test_failure_keeps_level(self):
         course = SlalomSpacingCurriculum()
-        course.record_evaluation(self.batch(10), 3500, True)
-        course.record_evaluation(self.batch(10, 153), 3600, True)
-        self.assertEqual(course.consecutive_success_batches, 0)
+        batches = [course.measure_batch(make_results({10: 700})),
+                   course.measure_batch(make_results({10: 500}))]
+        result = course.record_evaluation(batches, 3500, True)
+        self.assertFalse(result["passed"])
         self.assertEqual(course.max_curvature, 10)
+        self.assertEqual(course.consecutive_success_batches, 0)
 
-    # 无碰撞结果、旧档位与不完整批次均被拒绝。
+    # 无碰撞结果、批数不足被拒绝，未到考核间隔的重复提交不计分。
     def test_invalid_results_rejected(self):
         course = SlalomSpacingCurriculum()
-        for results, collision in ((self.batch(10), False), (self.batch(9), True),
-                                   (self.batch(10)[:-1], True)):
-            with self.assertRaises(ValueError):
-                course.record_evaluation(results, 3500, collision)
-        self.assertEqual(course.history, [])
+        with self.assertRaises(ValueError):
+            course.record_evaluation([], 3500, False)
+        with self.assertRaises(ValueError):
+            course.record_evaluation([course.measure_batch(make_results({10: 700}))], 3500, True)
+        course.record_evaluation(
+            [course.measure_batch(make_results({10: 700})) for _ in range(2)], 3500, True)
+        duplicate = course.record_evaluation(
+            [course.measure_batch(make_results({11: 700})) for _ in range(2)], 3500, True)
+        self.assertFalse(duplicate["counted"])
 
-    # 同一轮不能重复计分，保存恢复后保留连续批次。
-    def test_resume_and_duplicate(self):
+    # 保存恢复后保留档位与分档权重，续训不会重新起课。
+    def test_resume(self):
         course = SlalomSpacingCurriculum()
-        course.record_evaluation(self.batch(10), 3500, True)
-        course.record_evaluation(self.batch(10), 3500, True)
-        self.assertEqual(len(course.history), 1)
+        course.record_evaluation(
+            [course.measure_batch(make_results({10: 700})) for _ in range(2)], 3500, True)
         restored = SlalomSpacingCurriculum()
         restored.load_state_dict(course.state_dict())
-        self.assertTrue(restored.record_evaluation(self.batch(10), 3600, True))
+        self.assertEqual(restored.max_curvature, 11)
+        restored.record_evaluation(
+            [restored.measure_batch(make_results({11: 700})) for _ in range(2)], 3600, True)
+        self.assertEqual(restored.max_curvature, 12)
 
-    # 曲率十五仍须通过考核才标记最终档达标，不能继续增长。
-    def test_final_level(self):
+    # 分档权重按普通模式目标通过率补齐缺口，无样本档位保持 1.0。
+    def test_bin_weights_from_gap(self):
+        course = SlalomSpacingCurriculum()
+        plan = {10: 1024, 9: 400, 8: 300}
+        batches = [course.measure_batch(make_results(plan)) for _ in range(2)]
+        course.record_evaluation(batches, 3500, True)
+        weights = course.bin_weights
+        self.assertAlmostEqual(weights[5], 1.0)
+        self.assertAlmostEqual(weights[4], 1.0 + 2.0 * (0.60 - 400 / 1024), places=4)
+        self.assertAlmostEqual(weights[3], 1.0 + 2.0 * (0.60 - 300 / 1024), places=4)
+        self.assertEqual(weights[0], 1.0)
+
+    # 曲率十五档通过后进入最终档，档位权重重置为等概率。
+    def test_final_level_entry(self):
         course = SlalomSpacingCurriculum()
         course.max_curvature = 15
-        course.record_evaluation(self.batch(15), 3500, True)
-        course.record_evaluation(self.batch(15), 3600, True)
+        batches = [course.measure_batch(make_results({15: 700})) for _ in range(2)]
+        result = course.record_evaluation(batches, 3500, True)
+        self.assertTrue(result["entered_final_mode"])
         self.assertTrue(course.final_level_passed)
-        self.assertEqual(course.max_curvature, 15)
+        self.assertEqual(course.bin_weights, [1.0] * SLALOM_BIN_COUNT)
+
+    # 最终档两批整体通过率都达到 80% 才算最终验收，并按缺口更新训练权重。
+    def test_final_acceptance(self):
+        course = SlalomSpacingCurriculum()
+        course.max_curvature = 15
+        course.final_level_passed = True
+        failing = {curvature: 700 for curvature in range(5, 16)}
+        passing = {curvature: 900 for curvature in range(5, 16)}
+        result = course.record_evaluation(
+            [course.measure_final_batch(make_results(failing)) for _ in range(2)], 3500, True)
+        self.assertFalse(result["passed"])
+        self.assertFalse(course.final_accepted)
+        self.assertGreater(course.bin_weights[0], 1.0)
+        result = course.record_evaluation(
+            [course.measure_final_batch(make_results(passing)) for _ in range(2)], 3600, True)
+        self.assertTrue(result["passed"])
+        self.assertTrue(course.final_accepted)
 
 
 if __name__ == "__main__":

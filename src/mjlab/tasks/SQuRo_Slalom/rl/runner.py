@@ -18,8 +18,8 @@ from mjlab.rl.exporter_utils import (
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-  SLALOM_CURVATURE_MIN, SPACING_EVALUATION_ENVS, SPACING_SUCCESS_BATCH,
-  SPACING_REQUIRED_BATCHES, PHASE0_EPISODE_SECONDS,
+  PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT, SLALOM_CURVATURE_MIN,
+  SPACING_EVALUATION_ENVS, SPACING_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import configure_pole_collision, pole_collision_enabled
 from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry
@@ -40,91 +40,130 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     return (cfg.enable_spacing_curriculum and not cfg.phase0_only
             and cfg.fixed_slalom_curvature is None and cfg.fixed_pole_spacing is None)
 
-  # 独立场景保留当前机器人和命令参数，只打开杆碰撞并固定考核档位。
+  # 独立场景保留当前机器人和命令参数，只打开杆碰撞并按课程档位采样。
   def _get_evaluation_env(self):
     if self._evaluation_env is None:
       cfg = copy.deepcopy(self.env.unwrapped.cfg)
       cfg.scene.num_envs = SPACING_EVALUATION_ENVS
-      cfg.commands["slalom_cmd"].enable_spacing_curriculum = False
-      cfg.commands["slalom_cmd"].phase0_only = False
-      cfg.commands["slalom_cmd"].debug_vis = False
+      command_cfg = cfg.commands["slalom_cmd"]
+      command_cfg.enable_spacing_curriculum = True
+      command_cfg.phase0_only = False
+      command_cfg.debug_vis = False
+      command_cfg.fixed_slalom_curvature = None
+      command_cfg.fixed_pole_spacing = None
+      command_cfg.spacing_curriculum_state = None
       configure_pole_collision(cfg, True)
       raw = ManagerBasedRlEnv(cfg, device=str(self.env.device), render_mode=None)
       raw.common_step_counter = self.env.unwrapped.common_step_counter
       self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self.env.clip_actions)
       if not pole_collision_enabled(raw):
         raise RuntimeError("碰撞考核场景未真正开启杆碰撞")
+      print(f"[INFO] 独立真实碰撞考核环境已创建: num_envs={SPACING_EVALUATION_ENVS}", flush=True)
     return self._evaluation_env
 
-  # 每个环境每轮只计第一个完整回合，避免快速跌倒者被重复计分。
-  def _run_collision_evaluation(self) -> tuple[list[dict], float]:
-    started = time.perf_counter()
-    numpy_state, python_state = np.random.get_state(), random.getstate()
-    devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
-    try:
-      with torch.random.fork_rng(devices=devices), torch.no_grad():
-        evaluation = self._get_evaluation_env()
-        env = evaluation.unwrapped
-        command = env.command_manager._terms["slalom_cmd"]
-        command.cfg.fixed_slalom_curvature = self._command.spacing_curriculum.max_curvature
-        torch.manual_seed(int(self.cfg.get("seed", 42)) + self.current_learning_iteration)
-        policy = self.get_inference_policy(device=str(evaluation.device))
-        results: list[dict] = []
-        while len(results) < SPACING_SUCCESS_BATCH:
-          env.common_step_counter = self.env.unwrapped.common_step_counter
-          obs, _ = evaluation.reset()
-          seen: set[int] = set()
-          monitor = getattr(env, "_slalom_passage_monitor", None)
-          if monitor is not None:
-            monitor.consume()
-          for _ in range(env.max_episode_length + 1):
-            obs, _, _, _ = evaluation.step(policy(obs.to(self.device)).to(evaluation.device))
-            monitor = getattr(env, "_slalom_passage_monitor", None)
-            for item in monitor.consume() if monitor is not None else []:
-              if item["env_id"] not in seen:
-                seen.add(item["env_id"])
-                if len(results) < SPACING_SUCCESS_BATCH:
-                  results.append(item)
-            if len(seen) == evaluation.num_envs:
-              break
-          if len(seen) != evaluation.num_envs:
-            raise RuntimeError("真实碰撞考核缺少完整回合，拒绝推进课程")
-          print(f"[绕杆考核] 已完成 {len(results)}/{SPACING_SUCCESS_BATCH} 个真实碰撞回合", flush=True)
-        return results, time.perf_counter() - started
-    finally:
-      np.random.set_state(numpy_state)
-      random.setstate(python_state)
-      self.alg.train_mode()
+  # 考核沿用训练侧课程档位，但按挡位等概率采样且不继承训练权重。
+  def _sync_evaluation_course(self) -> None:
+    env = self._evaluation_env.unwrapped
+    command = env.command_manager._terms["slalom_cmd"]
+    course = command.spacing_curriculum
+    train = self._command.spacing_curriculum
+    course.max_curvature = int(train.max_curvature)
+    course.final_level_passed = bool(train.final_level_passed)
+    course.bin_weights = [1.0] * SLALOM_BIN_COUNT
+    command.adaptive_sampling = False
+    env.common_step_counter = int(self.env.unwrapped.common_step_counter)
 
-  # 把真实碰撞成绩用于课程；考核轨迹不会送入 PPO 的 rollout 缓冲。
+  # 冻结策略在接触环境中跑一整轮，每环境只计第一个完整回合。
+  def _run_evaluation_batch(self) -> list[dict]:
+    evaluation = self._get_evaluation_env()
+    env = evaluation.unwrapped
+    self._sync_evaluation_course()
+    policy = self.get_inference_policy(device=str(evaluation.device))
+    results: list[dict] = []
+    seen: set[int] = set()
+    obs, _ = evaluation.reset()
+    monitor = getattr(env, "_slalom_passage_monitor", None)
+    if monitor is not None:
+      monitor.consume()
+    for _ in range(env.max_episode_length + 1):
+      obs, _, _, _ = evaluation.step(policy(obs.to(self.device)).to(evaluation.device))
+      monitor = getattr(env, "_slalom_passage_monitor", None)
+      for item in monitor.consume() if monitor is not None else []:
+        if item["env_id"] not in seen:
+          seen.add(item["env_id"])
+          results.append(item)
+      if len(seen) == env.num_envs:
+        break
+    if len(seen) != env.num_envs:
+      raise RuntimeError("真实碰撞考核缺少完整回合，拒绝推进课程")
+    return results
+
+  # 每 100 轮做两批独立考核：普通模式推进/进入最终档，最终模式全挡位验收。
   def _maybe_evaluate_curriculum(self, iteration: int) -> None:
     course = self._command.spacing_curriculum
     if not self._course_enabled() or not course.should_evaluate(iteration):
       return
     if self.is_distributed:
       raise RuntimeError("当前 Slalom 独立碰撞考核仅支持单卡训练")
-    peak = course.max_curvature
-    print(f"[绕杆考核] iter {iteration}，峰值曲率 {peak}，训练无碰撞／考核有碰撞", flush=True)
-    results, seconds = self._run_collision_evaluation()
-    advanced = course.record_evaluation(results, iteration, pole_collision_enabled(self._evaluation_env.unwrapped))
-    rate = course.history[-1]["success_rate"]
-    print(f"[绕杆考核] 通过率 {rate:.1%}，连续达标 {course.history[-1]['consecutive_batches']}/"
-          f"{SPACING_REQUIRED_BATCHES}，耗时 {seconds:.1f}s，课程上限 {peak}→{course.max_curvature}", flush=True)
+    final_mode = bool(course.final_level_passed)
+    measure = course.measure_final_batch if final_mode else course.measure_batch
+    numpy_state, python_state = np.random.get_state(), random.getstate()
+    devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
+    started = time.perf_counter()
+    batch_stats: list[dict] = []
+    result: dict | None = None
+    try:
+      with torch.random.fork_rng(devices=devices), torch.no_grad():
+        for sweep in range(SPACING_REQUIRED_BATCHES):
+          torch.manual_seed(int(self.cfg.get("seed", 42)) + iteration + sweep)
+          batch_stats.append(measure(self._run_evaluation_batch()))
+        collision = pole_collision_enabled(self._evaluation_env.unwrapped)
+        result = course.record_evaluation(batch_stats, iteration, collision)
+    finally:
+      np.random.set_state(numpy_state)
+      random.setstate(python_state)
+      self.alg.train_mode()
+    seconds = time.perf_counter() - started
+    for index, batch in enumerate(batch_stats):
+      label = "全档位" if final_mode else "最低档"
+      print(f"[绕杆考核] iter {iteration} 第{index + 1}批: {label} {batch['count']} 回合, "
+            f"通过率 {batch['success_rate']:.1%}, 达标={batch['passed']}", flush=True)
+    print(f"[绕杆考核] iter {iteration} 本次考核({result['mode']}): 达标={result['passed']}, "
+          f"合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, "
+          f"上限峰值 {course.max_curvature}", flush=True)
+    if result["advanced"]:
+      print(f"[绕杆考核] 课程推进: 峰值曲率 {result['previous_curvature']}->{course.max_curvature}", flush=True)
+    if result["entered_final_mode"]:
+      print("[绕杆考核] 峰值十五档通过, 进入最终档全挡位等概率采样", flush=True)
+    if result.get("accepted"):
+      print("[绕杆考核] 最终验收通过: 全挡位两批整体通过率均不低于 80%", flush=True)
     if self.logger.writer is not None:
       metrics = {
-        "考核通过率": rate, "考核耗时秒": seconds, "峰值曲率上限": course.max_curvature,
+        "考核通过率": result["success_rate"], "考核样本数": result["sample_count"],
+        "本次考核达标": int(result["passed"]), "峰值曲率上限": course.max_curvature,
         "最小杆心距米": get_slalom_geometry(course.max_curvature)["spacing"],
         "最大杆心距米": get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"],
-        "连续达标批次": course.consecutive_success_batches, "最终档达标": int(course.final_level_passed),
+        "连续达标批次": course.consecutive_success_batches,
+        "最终模式": int(final_mode), "最终验收": int(course.final_accepted),
+        "各挡位最低通过率": course.metrics()["min_bin_rate"], "考核耗时秒": seconds,
       }
+      if result.get("bin_rate"):
+        for index, rate in enumerate(result["bin_rate"]):
+          metrics[f"挡位{index}_通过率"] = rate
       for name, value in metrics.items():
         self.logger.writer.add_scalar(f"Curriculum/{name}", value, iteration)
     if self.logger.log_dir is not None:
       directory = Path(self.logger.log_dir) / "collision_evaluations"
       directory.mkdir(parents=True, exist_ok=True)
-      payload = {"iteration": iteration, "curvature": peak, "collision": True,
-                 "success_rate": rate, "advanced": advanced, "seconds": seconds, "episodes": results}
-      (directory / f"evaluation_{iteration:05d}_k{peak}.json").write_text(
+      payload = {"iteration": iteration, "mode": result["mode"], "collision": True,
+                 "passed": bool(result["passed"]), "advanced": bool(result["advanced"]),
+                 "entered_final_mode": bool(result["entered_final_mode"]),
+                 "final_accepted": bool(course.final_accepted),
+                 "max_curvature": course.max_curvature,
+                 "bin_rate": result.get("bin_rate", []), "bin_count": result.get("bin_count", []),
+                 "bin_weights": result.get("bin_weights", []),
+                 "batches": batch_stats, "seconds": seconds}
+      (directory / f"evaluation_{iteration:05d}_k{course.max_curvature}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
   # 消费训练回合仅用于诊断，训练成绩不能推进真实碰撞课程。

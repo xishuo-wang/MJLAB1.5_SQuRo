@@ -11,9 +11,10 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import (
     BASE_VEL, CURVATURE_TARGET_MAX, GAIT_FREQ_MIN, GAIT_FREQ_MAX,
-    PHASE1_MID_ITER, SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, _STEPS_PER_ITER,
-    SlalomSpacingCurriculum, SPACING_HARDEST_PROBABILITY,
+    PHASE1_MID_ITER, SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, SLALOM_BIN_COUNT,
+    _STEPS_PER_ITER, SlalomSpacingCurriculum, SPACING_HARDEST_PROBABILITY,
     get_training_phase, get_training_phase_batch, get_velocity_scale,
+    sample_curvature_indices,
 )
 from .path import _INIT_DIST, compute_path_ref, get_phase0_approach, get_slalom_tables
 from .pole import write_pole_mocap
@@ -46,6 +47,7 @@ class SlalomCommand(CommandTerm):
         self.spacing_curriculum = SlalomSpacingCurriculum()
         if cfg.spacing_curriculum_state is not None:
             self.spacing_curriculum.load_state_dict(cfg.spacing_curriculum_state)
+        self.adaptive_sampling = True   # 训练按考核缺口加权；考核环境置 False 走等概率
         self.robot = env.scene[cfg.asset_name]
         self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
         self.vel_command = self.command_tensor[:, 0]
@@ -110,10 +112,16 @@ class SlalomCommand(CommandTerm):
             get_slalom_geometry(fixed)
             return torch.full((n,), fixed - SLALOM_CURVATURE_MIN, device=self.device, dtype=torch.long)
         if self.cfg.enable_spacing_curriculum:
-            highest = self.spacing_curriculum.max_curvature - SLALOM_CURVATURE_MIN
-            sampled = torch.randint(0, highest, (n,), device=self.device)
+            course = self.spacing_curriculum
+            highest = course.max_curvature - SLALOM_CURVATURE_MIN
+            # 训练按上批考核缺口加权，考核环境 adaptive_sampling=False 时等概率
+            weights = (course.bin_weights if self.adaptive_sampling
+                       else [1.0] * SLALOM_BIN_COUNT)
+            if course.final_level_passed:
+                return sample_curvature_indices(n, weights, SLALOM_BIN_COUNT - 1, self.device)
+            sampled = sample_curvature_indices(n, weights, highest, self.device)
             hardest = torch.rand(n, device=self.device) < SPACING_HARDEST_PROBABILITY
-            return torch.where(hardest, highest, sampled)
+            return torch.where(hardest, torch.full_like(sampled, highest), sampled)
         return torch.randint(0, SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN + 1, (n,), device=self.device)
 
     # 重置曲率、机器人起点和实体杆，只作用于本次重置环境。

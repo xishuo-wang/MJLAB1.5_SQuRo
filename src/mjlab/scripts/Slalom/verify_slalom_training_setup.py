@@ -35,15 +35,30 @@ def side_excess(offsets, kappas, heading=0.0, body_delta=0.0):
 
 
 class TestSlalomTrainingSetup(unittest.TestCase):
-    # 训练从五至十起步，回放仍覆盖完整整数条件。
+    # 训练从五至十起步：最低档固定 30%，其余档按考核缺口加权。
     def test_integer_slalom_sampling(self):
+        torch.manual_seed(42)
         cmd = object.__new__(SlalomCommand)
         cmd._env = NS(device=torch.device("cpu"))
         cmd.cfg = SQuRo_Slalom_Env_Cfg().commands["slalom_cmd"]
         cmd.spacing_curriculum = SlalomSpacingCurriculum()
+        cmd.adaptive_sampling = True
         peaks = cmd._sample_slalom_indices(4096) + 5
         self.assertEqual(set(peaks.tolist()), set(range(5, 11)))
-        self.assertAlmostEqual(float((peaks == 10).float().mean()), 0.30, delta=0.04)
+        self.assertAlmostEqual(float((peaks == 10).float().mean()), 0.30 + 0.70 / 6, delta=0.03)
+        self.assertAlmostEqual(float((peaks == 5).float().mean()), 0.70 / 6, delta=0.03)
+        # 考核缺口加权后该档采样概率升高
+        cmd.spacing_curriculum.bin_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 3.0]
+        peaks = cmd._sample_slalom_indices(8192) + 5
+        self.assertAlmostEqual(float((peaks == 10).float().mean()), 0.30 + 0.70 * 3 / 8, delta=0.02)
+        # 最终档: 考核环境 adaptive_sampling=False 时十一档等概率
+        cmd.spacing_curriculum.final_level_passed = True
+        cmd.adaptive_sampling = False
+        peaks = cmd._sample_slalom_indices(8192) + 5
+        self.assertEqual(set(peaks.tolist()), set(range(5, 16)))
+        counts = [(peaks == peak).float().mean().item() for peak in range(5, 16)]
+        self.assertLess(max(counts) - min(counts), 0.02)
+        # 关闭课程后回放覆盖全部整数条件
         cmd.cfg.enable_spacing_curriculum = False
         peaks = cmd._sample_slalom_indices(4096) + 5
         self.assertEqual(set(peaks.tolist()), set(range(5, 16)))
