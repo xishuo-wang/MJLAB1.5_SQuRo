@@ -261,3 +261,22 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     env.extras["log"]["Data/走廊误差尺度"] = sigma ** -0.5
     return reward * weight
 
+
+# 腿部执行器饱和软惩罚：接近力矩上限的持续占用才计罚, 详见 docs/SQuRo_Slalom_碰撞课程.md
+def compute_leg_saturation_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    force = asset.data.actuator_force
+    limit = getattr(env, "_leg_saturation_limit", None)
+    if limit is None:
+        ctrl = asset.indexing.ctrl_ids.cpu().numpy()
+        values = env.sim.mj_model.actuator_forcerange[ctrl, 1]
+        limit = torch.tensor(values, device=env.device, dtype=torch.float32)
+        env._leg_saturation_limit = limit
+    ratio = (force.abs() / limit.clamp_min(1e-6)).clamp(max=1.0)
+    threshold = get_curriculum_reward_weight(env, "leg_saturation_threshold")
+    excess = ((ratio - threshold) / max(1.0 - threshold, 1e-6)).clamp(0.0, 1.0)
+    worst = excess[:, _ACT_LEG_IDS].max(dim=1).values
+    weight = get_curriculum_reward_weight(env, "weight_leg_saturation")
+    env.extras["log"]["Data/腿部饱和占比"] = worst.mean().item()
+    return -weight * worst
+
