@@ -4,6 +4,7 @@ BASE_FREQ = 2.0                                     # 基准速度：正常行�
 BASE_SPEED = 0.2                                    # 基准速度：基准步频和基准高度下的期望速度
 BASE_CURVATURE = 0.0                                # 基准曲率
 THRESHOLD_HEIGHT = 0.040                            # 高度阈值: 低于该值视为低高度
+LOW_POSE_SPEED_RATIO = 0.75                        # 最低姿态的速度附加缩放，40毫米时恢复为1
 RANDOM_HEIGHT_VALUES = [0.04, 0.045, 0.05, 0.055]       # 0-1k 轮采样的高度值
 FULL_HEIGHT_VALUES = [0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.055]  # 1-3k 轮前后独立均匀采样
 

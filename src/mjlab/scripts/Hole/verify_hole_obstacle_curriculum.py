@@ -53,6 +53,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     write_obstacle_mocap,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.indices import (
+    _ACT_NUM,
     _ACT_SPN_IDS,
     _ACT_LEG_F_IDS,
     _ACT_LEG_H_IDS,
@@ -61,6 +62,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
     resolve_model_indices,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.command import HoleCommand, get_height_mode, compute_cmd_vel_x
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_low_leg_hold_penalty
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
@@ -146,17 +148,68 @@ def verify_shared_rule() -> None:
                   and bool((torch.as_tensor(current["velocity_x"]) > 0).all()))
 
 
-# 验证八档独立缩放的速度平均、前后对称与停步边界。
+# 验证八档速度的连续减速、前后对称与停步边界。
 def verify_velocity_commands() -> None:
     for device in ("cpu", "cuda:0") if torch.cuda.is_available() else ("cpu",):
         heights = torch.tensor([0.020, 0.025, 0.030, 0.035, 0.040, 0.045, 0.050, 0.055], device=device)
         factors = heights.new_tensor([0.0, 7 / 33, 14 / 33, 7 / 11, 8 / 11, 9 / 11, 10 / 11, 1.0])
+        ratios = heights.new_tensor([0.75, 0.8125, 0.875, 0.9375, 1.0, 1.0, 1.0, 1.0])
         front, hind = torch.meshgrid(heights, heights, indexing="ij")
         velocity = compute_cmd_vel_x(front, hind)
-        expected = BASE_SPEED * (factors[:, None] + factors[None, :]) / 2
-        check(f"{device}全部64种高度组合的速度符合独立缩放平均", torch.allclose(velocity, expected, atol=3e-8, rtol=0))
+        expected = BASE_SPEED * (factors[:, None] + factors[None, :]) / 2 * torch.minimum(ratios[:, None], ratios[None, :])
+        check(f"{device}全部64种高度组合的速度符合低姿态连续减速", torch.allclose(velocity, expected, atol=3e-8, rtol=0))
         check("速度前后交换对称，只有20／20毫米停步", torch.equal(velocity, velocity.T) and int((velocity == 0).sum()) == 1)
         check("任一端高度增加时速度不下降", bool((velocity.diff(dim=0) >= 0).all() and (velocity.diff(dim=1) >= 0).all()))
+        check("47毫米两段姿态均为0.075米每秒", torch.allclose(velocity[[0, -1], [-1, 0]], heights.new_full((2,), 0.075), atol=1e-8, rtol=0))
+        old_high = BASE_SPEED * (torch.stack((front[4:, 4:], hind[4:, 4:]), dim=-1) / BASE_HEIGHT).mean(dim=-1)
+        check("所有双高组合速度保持原值", torch.equal(velocity[4:, 4:], old_high))
+        points = heights.new_tensor([0.020, 0.035, 0.040])
+        left = compute_cmd_vel_x(points - 1e-6, heights.new_tensor(0.055))
+        right = compute_cmd_vel_x(points + 1e-6, heights.new_tensor(0.055))
+        check("20、35及40毫米分界连续", bool(((right - left).abs() < 2e-5).all()))
+
+
+# 用错序模型关节验收四种模式、低侧选择、静止目标及逐环境隔离。
+def verify_low_leg_hold() -> None:
+    height_mm = [20, 25, 30, 35, 40, 45, 50, 55]
+    strengths = [1.0, 0.75, 0.5, 0.25, 0.0, 0.0, 0.0, 0.0]
+    joint_ids = tuple(range(_ACT_NUM, 0, -1))
+    front_ids = [joint_ids[i] for i in _ACT_LEG_F_IDS]
+    hind_ids = [joint_ids[i] for i in _ACT_LEG_H_IDS]
+    expected = [
+        -0.2 * strengths[i] * 7.5 if f < 40 <= h else
+        -0.2 * strengths[j] * 30.0 if h < 40 <= f else 0.0
+        for i, f in enumerate(height_mm) for j, h in enumerate(height_mm)
+    ]
+    for device in ("cpu", "cuda:0") if torch.cuda.is_available() else ("cpu",):
+        heights = torch.tensor(height_mm, device=device) / 1000
+        front, hind = torch.meshgrid(heights, heights, indexing="ij")
+        command = torch.zeros(front.numel(), COMMAND_DIM, device=device)
+        command[:, CMD_HEIGHT_F_IDS] = front.flatten()
+        command[:, CMD_HEIGHT_H_IDS] = hind.flatten()
+        velocity = torch.full((front.numel(), _ACT_NUM + 1), 99.0, device=device)
+        velocity[:, front_ids] = velocity.new_tensor([1.0, -2.0, 3.0, -4.0])
+        velocity[:, hind_ids] = velocity.new_tensor([2.0, -4.0, 6.0, -8.0])
+        asset = SimpleNamespace(data=SimpleNamespace(joint_vel=velocity))
+        probe = SimpleNamespace(scene={"robot": asset}, common_step_counter=STAGE3_STEP,
+            command_manager=SimpleNamespace(_terms={"hole_cmd": SimpleNamespace(command=command)}))
+        with patch.object(_MODEL_INDICES, "joint_ids", joint_ids), \
+             patch.object(_MODEL_INDICES, "f_body_id", 0), \
+             patch.object(_MODEL_INDICES, "linkage_joint_ids", (_ACT_NUM + 1,)):
+            reward = compute_low_leg_hold_penalty(probe)
+            check(f"{device}静止惩罚覆盖64种组合且仅选中低侧四关节",
+                  torch.allclose(reward, velocity.new_tensor(expected), atol=1e-6, rtol=0))
+            single_front_low = (front.flatten() < THRESHOLD_HEIGHT) & (hind.flatten() >= THRESHOLD_HEIGHT)
+            velocity[:, hind_ids] *= 100
+            changed = compute_low_leg_hold_penalty(probe)
+            check("前低时运动侧后腿速度不影响静止惩罚", torch.equal(changed[single_front_low], reward[single_front_low]))
+            velocity[:, hind_ids] /= 100
+            permutation = torch.arange(front.numel() - 1, -1, -1, device=device)
+            command[:] = command[permutation].clone()
+            reordered = compute_low_leg_hold_penalty(probe)
+            check("其他环境及批量排列不改变单环境静止惩罚", torch.allclose(reordered, reward[permutation], atol=1e-6, rtol=0))
+            velocity.zero_()
+            check("低侧四关节静止时惩罚为零", bool((compute_low_leg_hold_penalty(probe) == 0).all()))
 
 
 # 验证高板两种策略等概率采样，且不会改变低板规则。
@@ -633,6 +686,7 @@ def main() -> None:
     print("单板受限空间高度课程验收")
     verify_shared_rule()
     verify_velocity_commands()
+    verify_low_leg_hold()
     verify_high_obstacle_modes()
     verify_curriculum_state()
     verify_fine_height_steps()

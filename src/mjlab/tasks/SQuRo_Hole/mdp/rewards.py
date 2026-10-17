@@ -19,6 +19,7 @@ from .indices import (
     _ACT_SPN_IDS,
     _ACT_NECK_IDS,
     _ACT_LEG_F_IDS,
+    _ACT_LEG_H_IDS,
     _MODEL_INDICES,
     resolve_actuator_joint_ids,
 )
@@ -27,6 +28,7 @@ from .curriculums import (
     get_curriculum_reward_weight,
 )
 from .reference import get_reference_joint_state
+from .command import get_low_height_factor
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -88,6 +90,23 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = (reward_leg + reward_spn + reward_neck)/2 * weight
     return reward
+
+
+
+# 单高单低时按高度强度抑制低侧四个驱动关节的运动。
+def compute_low_leg_hold_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    command = env.command_manager._terms["hole_cmd"].command
+    height_f = command[:, CMD_HEIGHT_F_IDS]
+    height_h = command[:, CMD_HEIGHT_H_IDS]
+    front_low = height_f < THRESHOLD_HEIGHT
+    hind_low = height_h < THRESHOLD_HEIGHT
+    front_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
+    hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
+    low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
+    strength = get_low_height_factor(torch.minimum(height_f, height_h))
+    weight = get_curriculum_reward_weight(env, "weight_low_leg_hold")
+    return -weight * strength * low_mse * (front_low ^ hind_low)
 
 
 

@@ -53,6 +53,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "angle":                    (1.0, 1.0, 1.0, 1.0),
     "smoothness":               (0.1, 0.2, 0.2, 1.0),
     "weight_action_L2":         (0.1, 0.2, 0.2, 1.0),
+    "weight_low_leg_hold":      (0.2, 0.2, 0.2, 0.2),
     "corridor":                 (0.0, 0.0, 5.0, 5.0),
     # 非奖励项
     "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),

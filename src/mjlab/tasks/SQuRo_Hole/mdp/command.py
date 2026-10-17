@@ -23,6 +23,7 @@ from .config import (
     CMD_GAIT_FREQ_IDS,
     FULL_HEIGHT_VALUES,
     LOW_POSE_CALIBRATION,
+    LOW_POSE_SPEED_RATIO,
     WARMUP_OBSTACLE_HEIGHT,
     CMD_OBSTACLE_HEIGHT_IDS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
@@ -74,14 +75,23 @@ def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tens
 
 
 
-# 前后高度分别缩放，取平均后生成前向速度。
+# 计算从40毫米的零到最低标定高度的满强度。
+def get_low_height_factor(height: torch.Tensor) -> torch.Tensor:
+    low_min = LOW_POSE_CALIBRATION[0][0]
+    return ((THRESHOLD_HEIGHT - height) / (THRESHOLD_HEIGHT - low_min)).clamp(0.0, 1.0)
+
+
+
+# 前后高度分别缩放取平均，并按最低高度连续减速。
 def compute_cmd_vel_x(height_f, height_h):
     heights = torch.stack(torch.broadcast_tensors(height_f, height_h), dim=-1)
     low_min = LOW_POSE_CALIBRATION[0][0]
     low_max = LOW_POSE_CALIBRATION[-2][0]
     low_scale = ((heights - low_min) / (low_max - low_min)).clamp(min=0.0) * (low_max / BASE_HEIGHT)
     scale = torch.where(heights < low_max, low_scale, heights / BASE_HEIGHT)
-    return BASE_SPEED * scale.mean(dim=-1)
+    low_factor = get_low_height_factor(heights.amin(dim=-1))
+    speed_ratio = 1.0 - (1.0 - LOW_POSE_SPEED_RATIO) * low_factor
+    return BASE_SPEED * scale.mean(dim=-1) * speed_ratio
 
 
 
