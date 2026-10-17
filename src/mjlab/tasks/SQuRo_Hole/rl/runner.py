@@ -240,26 +240,32 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         numpy_state, python_state = np.random.get_state(), random.getstate()
         devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
         started = time.perf_counter()
-        batches: list[dict] = []
+        batch_stats: list[dict] = []
+        result: dict | None = None
         try:
             with torch.random.fork_rng(devices=devices), torch.no_grad():
                 for sweep in range(HEIGHT_REQUIRED_BATCHES):
                     results = self._run_evaluation_sweep(int(self.cfg.get("seed", 42)) + iteration + sweep)
-                    batches.append(course.record_evaluation(results, iteration))
+                    batch_stats.append(course.measure_batch(results))
+                result = course.record_evaluation(batch_stats, iteration)
         finally:
             np.random.set_state(numpy_state)
             random.setstate(python_state)
             self.alg.train_mode()
         seconds = time.perf_counter() - started
-        for index, batch in enumerate(batches):
-            print(f"[高度考核] iter {iteration} 第{index + 1}批: 最低档 {batch['sample_count']} 回合, "
-                  f"通过率 {batch['success_rate']:.1%}, Zmin {course.z_min:.3f} m", flush=True)
-        if batches[-1]["advanced"]:
-            print(f"[高度考核] 课程降档: Zmin {batches[-1]['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
+        for index, batch in enumerate(batch_stats):
+            print(f"[高度考核] iter {iteration} 第{index + 1}批: 最低档 {batch['count']} 回合, "
+                  f"通过率 {batch['success_rate']:.1%}, 达标={batch['passed']}", flush=True)
+        print(f"[高度考核] iter {iteration} 本次考核: 达标={result['passed']}, "
+              f"最低档合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, "
+              f"Zmin {course.z_min:.3f} m", flush=True)
+        if result["advanced"]:
+            print(f"[高度考核] 课程降档: Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
         if self.logger.writer is not None:
             values = {
-                "Curriculum/考核通过率": batches[-1]["success_rate"],
-                "Curriculum/考核样本数": batches[-1]["sample_count"],
+                "Curriculum/考核通过率": result["success_rate"],
+                "Curriculum/考核样本数": result["sample_count"],
+                "Curriculum/本次考核达标": int(result["passed"]),
                 "Curriculum/最低板高米": course.z_min,
                 "Curriculum/连续达标批次": course.consecutive_success_batches,
                 "Curriculum/考核耗时秒": seconds,
@@ -273,7 +279,9 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             payload = {
                 "iteration": int(iteration),
                 "z_min": float(course.z_min),
-                "batches": batches,
+                "passed": bool(result["passed"]),
+                "advanced": bool(result["advanced"]),
+                "batches": batch_stats,
                 "seconds": seconds,
                 "collision": True,
             }
@@ -347,12 +355,21 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
                     self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
         finally:
-            if self._evaluation_env is not None:
-                self._evaluation_env.close()
-                self._evaluation_env = None
-            if self.logger.writer is not None:
-                self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
-                self.logger.stop_logging_writer()
+            try:
+                if self._evaluation_env is not None:
+                    try:
+                        self._evaluation_env.close()
+                    except Exception as exc:
+                        print(f"[WARN] 考核环境关闭失败: {exc}")
+                    self._evaluation_env = None
+            finally:
+                if self.logger.writer is not None:
+                    try:
+                        self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
+                    except Exception as exc:
+                        print(f"[WARN] 最终检查点保存失败: {exc}")
+                    finally:
+                        self.logger.stop_logging_writer()
 
 
     # 续训: 恢复环境状态, 首次采样前把碰撞开关对齐到课程目标

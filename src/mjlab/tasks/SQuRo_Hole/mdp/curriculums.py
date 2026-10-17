@@ -45,6 +45,7 @@ HEIGHT_EVALUATION_INTERVAL = 100          # 每 100 iter 评估一次
 HEIGHT_EVALUATION_ENVS = 1024             # 考核环境数量, 与训练环境数一致
 HEIGHT_EVALUATION_PRETRAIN_ITERATIONS = 500
 HEIGHT_EVALUATION_MIN_SAMPLES = 256       # 每批最低档有效回合下限
+HEIGHT_EVALUATION_FINAL_INTERVAL = 500    # 到达最终档后降低考核频率, 不停止考核
 
 
 
@@ -219,13 +220,13 @@ class HeightCurriculumState:
         self.final_level_passed = False
 
 
-    # 判断本轮是否执行独立真实碰撞考核
+    # 判断本轮是否执行独立真实碰撞考核, 最终档降低频率但不停止
     def should_evaluate(self, iteration: int) -> bool:
-        if self.final_level_passed:
-            return False
         if int(iteration) < STAGE3_ITER + HEIGHT_EVALUATION_PRETRAIN_ITERATIONS:
             return False
-        return (int(iteration) - STAGE3_ITER) % HEIGHT_EVALUATION_INTERVAL == 0
+        interval = (HEIGHT_EVALUATION_FINAL_INTERVAL if self.final_level_passed
+                    else HEIGHT_EVALUATION_INTERVAL)
+        return (int(iteration) - STAGE3_ITER) % interval == 0
 
 
     # 记录一条真实碰撞回合并判断是否推进课程
@@ -292,39 +293,61 @@ class HeightCurriculumState:
         return result
 
 
-    # 记录一批独立考核结果, 两批最低档均达标后推进课程
-    def record_evaluation(self, results: list, iteration: int) -> dict:
+    # 统计一批考核的最低档回合数、通过率与失败原因
+    def measure_batch(self, results: list) -> dict:
         eligible = [item for item in results if item.get("valid", True)]
         minimum = [item for item in eligible if abs(float(item["height"]) - self.z_min) <= 1e-6]
-        min_count = len(minimum)
-        min_success = sum(int(item["success"]) for item in minimum)
-        rate = min_success / max(1, min_count)
-
-        # 全体回合统计与失败原因
-        self.all_height_episode_count += len(eligible)
-        self.all_height_success_count += sum(int(item["success"]) for item in eligible)
+        count = len(minimum)
+        successes = sum(int(item["success"]) for item in minimum)
         failure_names = {1: "未过板", 2: "侧绕", 3: "高度超限", 4: "跌倒", 5: "超时"}
+        failure_counts: dict[str, int] = {}
         for item in eligible:
             if not item["success"]:
                 name = failure_names.get(item.get("failure_code"))
                 if name is not None:
-                    self.failure_counts[name] += 1
+                    failure_counts[name] = failure_counts.get(name, 0) + 1
+        rate = successes / max(1, count)
+        return {
+            "count": count,
+            "successes": successes,
+            "success_rate": rate,
+            "passed": count >= HEIGHT_EVALUATION_MIN_SAMPLES and rate >= HEIGHT_MIN_SUCCESS_RATE,
+            "eligible": len(eligible),
+            "eligible_successes": sum(int(item["success"]) for item in eligible),
+            "failure_counts": failure_counts,
+        }
 
-        # 当前档批次统计
-        self.level_episode_count = min_count
-        self.level_success_count = min_success
-        self.batch_count = min_count
-        self.batch_success_count = min_success
-        passed = min_count >= HEIGHT_EVALUATION_MIN_SAMPLES and rate >= HEIGHT_MIN_SUCCESS_RATE
+
+    # 记录一次完整考核的多批结果, 同一考核内全部批次达标才推进课程
+    def record_evaluation(self, batch_stats: list, iteration: int) -> dict:
+        passed = bool(batch_stats) and all(batch["passed"] for batch in batch_stats)
+        sample_count = sum(int(batch["count"]) for batch in batch_stats)
+        sample_successes = sum(int(batch["successes"]) for batch in batch_stats)
+        rate = sample_successes / max(1, sample_count)
+
+        # 全体回合统计与失败原因
+        self.all_height_episode_count += sum(int(batch["eligible"]) for batch in batch_stats)
+        self.all_height_success_count += sum(int(batch["eligible_successes"]) for batch in batch_stats)
+        for batch in batch_stats:
+            for name, count in batch.get("failure_counts", {}).items():
+                self.failure_counts[name] = self.failure_counts.get(name, 0) + int(count)
+
+        # 当前档统计保留到下一次考核, 供日志显示最近一次考核结果
+        self.level_episode_count = sample_count
+        self.level_success_count = sample_successes
+        self.batch_count = sample_count
+        self.batch_success_count = sample_successes
         self.consecutive_success_batches = (self.consecutive_success_batches + 1 if passed else 0)
         self.history.append({
             "z_min": self.z_min,
             "iteration": int(iteration),
-            "count": min_count,
-            "successes": min_success,
+            "count": sample_count,
+            "successes": sample_successes,
             "success_rate": rate,
             "consecutive_batches": self.consecutive_success_batches,
             "evaluation": True,
+            "passed": passed,
+            "batch_passed": [bool(batch["passed"]) for batch in batch_stats],
         })
 
         result = {
@@ -333,23 +356,17 @@ class HeightCurriculumState:
             "advanced": False,
             "passed": passed,
             "success_rate": rate,
-            "sample_count": min_count,
+            "sample_count": sample_count,
             "previous_z_min": self.z_min,
         }
-        # 最低档连续两批达标且驻留满足后降档, 到达下限后标记最终档
-        if (
-            passed
-            and self.consecutive_success_batches >= HEIGHT_REQUIRED_BATCHES
-            and int(iteration) - self.level_start_iteration >= HEIGHT_MIN_DWELL_ITERATIONS
-        ):
+        # 同一次考核内两批全部达标且驻留满足才降档; 到达下限只标记最终档
+        if passed and int(iteration) - self.level_start_iteration >= HEIGHT_MIN_DWELL_ITERATIONS:
             if self.z_min > HEIGHT_MIN:
                 step = HEIGHT_FINE_STEP if self.z_min <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
                 previous_z_min = self.z_min
                 self.z_min = max(HEIGHT_MIN, round(self.z_min - step, 6))
                 self.level_start_iteration = int(iteration)
                 self.consecutive_success_batches = 0
-                self.level_episode_count = 0
-                self.level_success_count = 0
                 result.update({
                     "advanced": True,
                     "z_min": self.z_min,
@@ -430,12 +447,18 @@ class HeightCurriculumState:
             self.final_level_passed = bool(state["final_level_passed"])
 
 
-    # 汇总当前档日志: 最低档成功率/失败率与挡位推进进度
+    # 汇总最近一次考核结果, 避免降档后计数清零造成日志失真
     def metrics(self) -> dict[str, Any]:
-        success_rate = self.level_success_count / max(1, self.level_episode_count)
+        if self.history:
+            last = self.history[-1]
+            success_rate = float(last.get("success_rate", 0.0))
+            passed = bool(last.get("passed", False))
+        else:
+            success_rate = self.level_success_count / max(1, self.level_episode_count)
+            passed = False
         return {
             "z_min": self.z_min,
             "success_rate": success_rate,
             "failure_rate": 1.0 - success_rate,
-            "level_progress": self.consecutive_success_batches / max(1, HEIGHT_REQUIRED_BATCHES),
+            "level_progress": 1.0 if passed else 0.0,
         }

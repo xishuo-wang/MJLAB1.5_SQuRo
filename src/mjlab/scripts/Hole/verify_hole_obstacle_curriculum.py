@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -45,7 +46,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE2_ITER,
     STEPS_PER_ITER,
     HEIGHT_EVALUATION_INTERVAL,
-    HEIGHT_EVALUATION_MIN_SAMPLES,
+    HEIGHT_EVALUATION_FINAL_INTERVAL,
     HEIGHT_EVALUATION_PRETRAIN_ITERATIONS,
     HeightCurriculumState,
     get_current_stage,
@@ -397,7 +398,7 @@ def _evaluation_results(z_min: float, min_count: int, min_success: int, other_co
     return results
 
 
-# 验证独立考核的调度、最低档样本门槛、两批降档与最终档标记。
+# 验证独立考核的调度、最低档样本门槛、整次考核达标降档与最终档行为。
 def verify_evaluation_curriculum() -> None:
     check("训练阶段不再要求实体碰撞", all(not stage_requires_collision(stage) for stage in (1, 2, 3, 4)))
     state = HeightCurriculumState()
@@ -407,33 +408,47 @@ def verify_evaluation_curriculum() -> None:
           and state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
     check("考核间隔之外不触发", not state.should_evaluate(first_iteration + 1))
 
-    shortage = state.record_evaluation(
-        _evaluation_results(state.z_min, 100, 100, other_count=300), first_iteration)
-    check("最低档样本不足 256 时该批不达标",
-          not shortage["passed"] and state.consecutive_success_batches == 0
-          and state.z_min == HEIGHT_INITIAL_MIN)
+    # 同一考核内一批失败、一批成功: 整次考核不达标; 反向顺序同样不达标
+    fail_then_pass = [state.measure_batch(_evaluation_results(state.z_min, 256, 100)),
+                      state.measure_batch(_evaluation_results(state.z_min, 256, 256))]
+    first = state.record_evaluation(fail_then_pass, first_iteration)
+    pass_then_fail = [state.measure_batch(_evaluation_results(state.z_min, 256, 256)),
+                      state.measure_batch(_evaluation_results(state.z_min, 256, 100))]
+    second = state.record_evaluation(pass_then_fail, first_iteration + HEIGHT_EVALUATION_INTERVAL)
+    check("单批失败的成功组合跨考核也不降档",
+          not first["advanced"] and not second["advanced"]
+          and state.z_min == HEIGHT_INITIAL_MIN and state.consecutive_success_batches == 0)
 
-    batch_results = _evaluation_results(state.z_min, HEIGHT_EVALUATION_MIN_SAMPLES, 200, other_count=768)
-    first = state.record_evaluation(batch_results, first_iteration)
-    check("首批达标只累计连续批数",
-          first["passed"] and state.consecutive_success_batches == 1 and state.z_min == HEIGHT_INITIAL_MIN)
-    second = state.record_evaluation(batch_results, first_iteration)
-    check("两批最低档达标后降档 2 毫米",
-          second["advanced"] and state.z_min == HEIGHT_INITIAL_MIN - HEIGHT_STEP)
+    shortage = state.measure_batch(_evaluation_results(state.z_min, 100, 100, other_count=300))
+    check("最低档样本不足 256 时该批不达标", not shortage["passed"])
 
     boundary = HeightCurriculumState()
-    below = boundary.record_evaluation(_evaluation_results(0.070, 256, 153), first_iteration)
-    check("最低档通过率 59.8% 不达标", not below["passed"])
-    above = boundary.record_evaluation(_evaluation_results(0.070, 256, 154), first_iteration)
-    check("最低档通过率 60.2% 达标", above["passed"])
+    check("最低档通过率 59.8% 不达标",
+          not boundary.measure_batch(_evaluation_results(0.070, 256, 153))["passed"])
+    check("最低档通过率 60.2% 达标",
+          boundary.measure_batch(_evaluation_results(0.070, 256, 154))["passed"])
 
+    # 同一次考核两批都达标: 降档, 且日志沿用本次考核通过率
+    passing = [state.measure_batch(_evaluation_results(state.z_min, 256, 200)),
+               state.measure_batch(_evaluation_results(state.z_min, 256, 200))]
+    advanced = state.record_evaluation(passing, first_iteration + 2 * HEIGHT_EVALUATION_INTERVAL)
+    metrics = state.metrics()
+    check("同一考核两批达标后降档 2 毫米",
+          advanced["advanced"] and state.z_min == HEIGHT_INITIAL_MIN - HEIGHT_STEP)
+    check("降档后日志沿用最近一次考核成功率",
+          math.isclose(metrics["success_rate"], 200 / 256, rel_tol=0, abs_tol=1e-9)
+          and math.isclose(metrics["failure_rate"], 1 - 200 / 256, rel_tol=0, abs_tol=1e-9))
+
+    # 到达下限: 标记最终档, 但继续按更长间隔考核
     final_state = HeightCurriculumState()
     final_state.z_min = HEIGHT_MIN
-    final_state.record_evaluation(_evaluation_results(HEIGHT_MIN, 256, 256), first_iteration)
-    final_batch = final_state.record_evaluation(_evaluation_results(HEIGHT_MIN, 256, 256), first_iteration)
-    check("到达下限后两批达标标记最终档且不再降档",
-          final_state.z_min == HEIGHT_MIN and final_state.final_level_passed and not final_batch["advanced"])
-    check("最终档达标后停止考核", not final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
+    final_result = final_state.record_evaluation(passing, first_iteration)
+    check("最低档两批达标标记最终档且不再降档",
+          final_state.final_level_passed and final_state.z_min == HEIGHT_MIN
+          and not final_result["advanced"])
+    check("最终档仍继续考核且间隔为 500 轮",
+          final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_FINAL_INTERVAL)
+          and not final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
 
     restored = HeightCurriculumState()
     restored.load_state_dict(final_state.state_dict())
