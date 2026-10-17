@@ -93,3 +93,14 @@ uv run --no-sync python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards  
 | P3 关闭异常阻断保存：考核环境关闭抛错时最终检查点与日志关闭被跳过 | `learn()` 的 finally 分层处理：考核环境关闭异常只告警并清空句柄；最终 `save()` 异常只告警；无论哪种异常都执行 `logger.stop_logging_writer()` | 短训 smoke 用抛错的假考核环境调用 `learn(0)`，验证最终检查点仍生成、句柄清空 |
 
 修复后请复跑第五节全部命令，并核对 `logs/diagnostics/SQuRo_Hole/evaluation_course_20261017/smoke_result_round2.json`（考核 JSON 字段、`close_failure_keeps_save=true`、`close_failure_env_cleared=true`）。
+
+## 八、v3.1 变更（2026-10-18，第二轮修复后的协议升级）
+
+`2026-10-17_21-15-13` 训练评估显示：47 mm 在无碰撞协议下可达（5300 检查点 31/32），46 mm 不可达（0/32），且 600 轮 46 mm 训练使 47 mm 退化到 5/32。据此修改，审查重点相应更新：
+
+- **E6 被取代**：高度下限 46→47 mm；47 mm 档通过一次考核后进入最终模式，训练与考核改按 8 个命令挡位等概率采样；两批整体通过率均 ≥80% 才置 `final_accepted`；未达标挡位按 `1+2·max(0,0.8-rate)` 提高训练采样权重（评估反馈到采样）。
+- **退档保护**：普通模式连续 5 次考核失败退一档，退档后恢复推进需连续 2 轮达标；新增 `consecutive_failures`/`retreats`/`retreat_pending_advance` 状态并入 checkpoint。
+- **迁移**：旧检查点 `Zmin=46` 加载时迁到 47；缺新字段用默认值；`rl_cfg` 恢复从零训练 6000 轮。
+- **几何**：单板半宽 0.1→0.3 m（总宽 60 cm），Y 向绕侧不可行；侧绕 lane 判据随实际板宽变化，验收中侧绕注入点已改为 y=0.35。
+- **日志**：新增 `Curriculum/挡位{i}_通过率`、`Curriculum/各挡位最低通过率`、`Curriculum/连续失败次数`、`Curriculum/退档次数`、`Curriculum/最终模式`、`Curriculum/最终验收`；考核 JSON 增加 `mode/passed/retreated/entered_final_mode/final_accepted/bin_rate/bin_weights`。
+- **验收**：`verify_hole_obstacle_curriculum` 新增最终档采样、80% 验收、挡位权重、退档保护、旧检查点迁移与命令采样检查；其余 Hole 入口与 Backup 88 项通过。

@@ -111,7 +111,7 @@ h_body_physical = get_body_heading(env, h_body_id) + torch.pi / 2
 常用入口：
 
 ```powershell
-uv run train Mjlab-SQuRo-Backup --agent.logger tensorboard --agent.max-iterations 3000
+uv run train Mjlab-SQuRo-Backup --agent.logger wandb --agent.max-iterations 3000
 uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards      # 主回归 (21 项)
 uv run python -B -m mjlab.scripts.Backup.verify_backup_config             # 配置一致性
 uv run python -B -m mjlab.scripts.SQuRo_Backup_Replay --visualize none    # 手调参考回放
@@ -384,7 +384,7 @@ CSV 记录关节角度、速度、动作空间输出等信息，并保存视频�
 ## 常用入口
 
 ```powershell
-uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger tensorboard --env.commands.slalom-cmd.phase0-only True
+uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger wandb --env.commands.slalom-cmd.phase0-only True
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_ref_consistency   # 参考层回归 (20 项, 桩环境不建 env)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_env_smoke         # 端到端自检 (真实 env, 含重置边界)
 uv run python -B -m mjlab.scripts.Slalom.verify_slalom_training_setup    # 索引、课程、PPO 与内侧约束 (11 项)
@@ -414,7 +414,7 @@ uv run python -B -m mjlab.scripts.Backup.dump_training_scalars <run_dir> --list 
 常用入口：
 
 ```powershell
-uv run train Mjlab-SQuRo-Tunnel --agent.logger tensorboard --agent.max-iterations 4000
+uv run train Mjlab-SQuRo-Tunnel --agent.logger wandb --agent.max-iterations 4000
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --checkpoint_file <ckpt>   # 回放
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --agent zero --smoke_steps 50 --no-video   # 无窗自检
 uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 期望高度轨迹图

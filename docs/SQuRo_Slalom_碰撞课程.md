@@ -68,7 +68,7 @@ TensorBoard 使用 `Curriculum/考核通过率`、`峰值曲率上限`、`最小
 这些考核率只覆盖当前最小杆距及默认命令分布，不代表跨模型扰动或其他地面条件的成功率。
 
 ```powershell
-uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard --agent.resume False --agent.max-iterations 8000
+uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agent.max-iterations 8000
 ```
 
 完整训练由用户手动启动。考核会增加实际耗时；终端 PPO 的采样／学习耗时不包含独立考核，

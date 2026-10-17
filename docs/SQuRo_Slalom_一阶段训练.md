@@ -156,7 +156,7 @@ Slalom 默认训练预算为 3000 轮，回合长度为 20 秒；最大轮数在
 在项目根目录执行，默认从当前模型开始新训练：
 
 ```powershell
-uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger tensorboard --env.commands.slalom-cmd.phase0-only True
+uv run python -B -m mjlab.scripts.train Mjlab-SQuRo-Slalom --agent.logger wandb --env.commands.slalom-cmd.phase0-only True
 ```
 
 训练的默认预算为 3000 轮。本次未启动训练。

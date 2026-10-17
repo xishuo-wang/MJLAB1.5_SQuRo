@@ -193,8 +193,8 @@ Phase 1（iter ≥ 3000，有洞）：`_update_command` 每步用实际 x 查方
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --checkpoint_file logs/rsl_rl/SQuRo_Tunnel/<run>/model_3999.pt
 # 无 checkpoint 自检 (不启动 viewer, 跑 N 步打印高度/期望/奖励)
 uv run python -B -m mjlab.scripts.SQuRo_Tunnel_play --agent zero --smoke_steps 50 --no-video
-# 训练 (必须显式指定 tensorboard; 一阶段 0~3k, 二阶段 3k~6k)
-uv run train Mjlab-SQuRo-Tunnel --agent.logger tensorboard
+# 训练 (默认 wandb; 一阶段 0~3k, 二阶段 3k~6k)
+uv run train Mjlab-SQuRo-Tunnel --agent.logger wandb
 # Phase0 基线验证 (参考表结构 / 命令配对约束 / 速度公式 / 实测躯干高度)
 uv run python -B -m mjlab.scripts.Tunnel.verify_phase0_baseline
 # 期望高度轨迹图 (常量直接取自 path.py)

@@ -96,13 +96,13 @@ PPO、网络、观测归一化、每轮步数与 100 Hz 策略频率保持和 Ho
 ## 回放和训练入口
 
 ```powershell
-uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard --agent.resume False --agent.max-iterations 8000
+uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agent.max-iterations 8000
 ```
 
 历史显存修复验收采用保留一阶段进度的续训入口，以下命令只用于复现该历史验证：
 
 ```powershell
-uv run train Mjlab-SQuRo-Slalom --agent.logger tensorboard --agent.resume True --agent.load-run 2026-10-17_03-11-13 --agent.load-checkpoint model_3000.pt --agent.max-iterations 5000
+uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume True --agent.load-run 2026-10-17_03-11-13 --agent.load-checkpoint model_3000.pt --agent.max-iterations 5000
 ```
 
 `max-iterations` 在续训时表示追加轮数；此命令创建新日志目录，保留原检查点与原始训练日志。

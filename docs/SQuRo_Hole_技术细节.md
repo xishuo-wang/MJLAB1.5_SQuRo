@@ -395,8 +395,8 @@ foot_clearance / angle / orientation / smoothness / body_contact / stop / reache
 ## 8. 回放与验证
 
 ```powershell
-# 训练 (100 Hz 控制, 48 步/iter, 4000 iter; 必须显式 tensorboard)
-uv run train Mjlab-SQuRo-Hole --agent.logger tensorboard
+# 训练 (100 Hz 控制, 48 步/iter, 6000 iter; 默认 wandb)
+uv run train Mjlab-SQuRo-Hole --agent.logger wandb
 # 回放 (默认即录视频 + CSV, 输出到 <run>/videos/)
 uv run python -B -m mjlab.scripts.SQuRo_Hole_play --checkpoint_file <ckpt>
 # 旧备份检查点不可直接回放 (它是 obs 193 / action 12; 当前是 113 / 14), 需重训
