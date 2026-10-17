@@ -199,7 +199,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         state.z_min = float(self._height_curriculum_state.z_min)
         state.z_max = float(self._height_curriculum_state.z_max)
         state.final_level_passed = bool(self._height_curriculum_state.final_level_passed)
-        state.bin_weights = list(self._height_curriculum_state.bin_weights)
+        # 考核始终按挡位等概率采样, 不继承训练侧的加权采样
+        state.bin_weights = [1.0] * len(self._height_curriculum_state.bin_weights)
         if self._obstacle_command is not None:
             command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
         env.common_step_counter = int(self.env.unwrapped.common_step_counter)
@@ -285,7 +286,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 "Curriculum/最终验收": int(course.final_accepted),
                 "Curriculum/各挡位最低通过率": course.metrics()["min_bin_rate"],
             }
-            if result["bin_rate"]:
+            if result.get("bin_rate"):
                 for index, rate in enumerate(result["bin_rate"]):
                     values[f"Curriculum/挡位{index}_通过率"] = rate
             for name, value in values.items():
@@ -302,9 +303,9 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 "retreated": bool(result["retreated"]),
                 "entered_final_mode": bool(result["entered_final_mode"]),
                 "final_accepted": bool(course.final_accepted),
-                "bin_rate": result["bin_rate"],
-                "bin_count": result["bin_count"],
-                "bin_weights": result["bin_weights"],
+                "bin_rate": result.get("bin_rate", []),
+                "bin_count": result.get("bin_count", []),
+                "bin_weights": result.get("bin_weights", []),
                 "batches": batch_stats,
                 "seconds": seconds,
                 "collision": True,
