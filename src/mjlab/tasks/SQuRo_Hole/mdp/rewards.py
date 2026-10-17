@@ -13,6 +13,7 @@ from .config import (
     THRESHOLD_HEIGHT,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
+    VIRTUAL_CLEARANCE_MARGIN,
 )
 from .indices import (
     _ACT_LEG_IDS,
@@ -22,7 +23,9 @@ from .indices import (
     _ACT_LEG_H_IDS,
     _MODEL_INDICES,
     resolve_actuator_joint_ids,
+    resolve_model_indices,
 )
+from .entity import read_obstacle_bottom_z
 from .curriculums import (
     SPN_AXIS_SCALE,
     get_curriculum_reward_weight,
@@ -277,6 +280,43 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     excess = (surface_z - ceiling).clamp_min(0.0)
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     return -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
+
+
+
+# 板体 X 区间内按实际板底与躯干采样点高度给出虚拟碰撞惩罚
+def compute_virtual_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    weight = get_curriculum_reward_weight(env, "virtual_contact")
+    if weight == 0.0:
+        return torch.zeros(env.num_envs, device=env.device)
+
+    asset: Entity = env.scene["robot"]
+    resolve_model_indices(asset)
+    obstacle = env.scene.entities.get("obstacle")
+    if obstacle is None:
+        return torch.zeros(env.num_envs, device=env.device)
+
+    # 实际板底高度与板体 X 覆盖区间
+    threshold = read_obstacle_bottom_z(obstacle) - VIRTUAL_CLEARANCE_MARGIN
+    center_x = float(obstacle.cfg.position[0])
+    half_length = float(obstacle.cfg.size[0])
+    x_min, x_max = center_x - half_length, center_x + half_length
+    body_x = asset.data.body_link_pos_w[:, (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id), 0]
+    inside = (body_x >= x_min) & (body_x <= x_max)
+
+    # 前后段各取躯干采样点最高值, 板外的段不受约束
+    front_ids = list(_MODEL_INDICES.f_body_site_ids)
+    hind_ids = list(_MODEL_INDICES.h_body_site_ids)
+    assert len(front_ids) == len(hind_ids), "前后段躯干采样点数量必须一致"
+    surface_z = asset.data.site_pos_w[:, front_ids + hind_ids, 2].view(env.num_envs, 2, -1).max(dim=-1).values
+    active_threshold = torch.where(inside, threshold.unsqueeze(1), torch.full_like(surface_z, float("inf")))
+    excess = (surface_z - active_threshold).clamp_min(0.0)
+
+    sigma = get_curriculum_reward_weight(env, "sigma_virtual_contact")
+    penalty = -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
+    log = env.extras["log"]
+    log["Metrics/虚拟碰撞/前段超限均值"] = excess[:, 0].mean().detach()
+    log["Metrics/虚拟碰撞/后段超限均值"] = excess[:, 1].mean().detach()
+    return penalty
 
 
 

@@ -55,6 +55,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_action_L2":         (0.1, 0.2, 0.2, 1.0),
     "weight_low_leg_hold":      (0.2, 0.2, 0.2, 0.2),
     "corridor":                 (0.0, 0.0, 5.0, 5.0),
+    "virtual_contact":          (0.0, 0.0, 0.0, 5.0),
     # 非奖励项
     "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
@@ -69,6 +70,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     "sigma_orientation":        (5.0, 5.0, 5.0, 5.0),
     "sigma_corridor":           (2000.0, 2000.0, 2000.0, 2000.0),
+    "sigma_virtual_contact":    (2000.0, 2000.0, 2000.0, 2000.0),
     "corridor_height_offset":   (0.030, 0.030, 0.030, BODY_HEIGHT_OFFSET),
 }
 
