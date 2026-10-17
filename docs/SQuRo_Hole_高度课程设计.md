@@ -310,8 +310,9 @@ uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule --short-height 0.
 
 - **高度下限改为 47 mm**。46 mm 档在无碰撞训练协议下无法通过（冻结评估 0/32；旧有碰撞训练策略可 32/32，说明 46 mm 需要接触支撑/头部空间），训练在 46 mm 累计 600 轮无效并造成 47 mm 能力退化（31/32→5/32）。课程序列改为 70→68→…→50→49→48→47（13 档），`rl_cfg` 恢复从零训练 6000 轮。
 - **最终档全挡位采样**：47 mm 档通过一次独立考核后置 `final_level_passed=True`；此后训练板高按 8 个命令挡位等概率采样（挡内均匀），考核也按 8 档均匀分配环境（每批 1024 环境、每档约 128）。`sample_bin_heights` 为采样唯一实现，显式固定板高（`z_min==z_max`）时仍取固定值；考核采样固定等概率，不继承训练侧加权。
+- **普通模式分挡位反馈采样**：保留 30% 固定最低档采样不变，其余 70% 不再均匀，改按各挡位通过率缺口加权（目标 `NORMAL_BIN_TARGET_RATE=60%`）：`bin_weights[i]=1+2·max(0,0.6-rate_i)`，每次考核后更新；独立考核环境保持 30% 固定 + 均匀采样（`HoleCommand.adaptive_sampling=False`），不受训练权重影响。
 - **最终验收**：每次最终考核按两批计算；两批整体通过率均 ≥ `FINAL_ACCEPT_RATE=80%` 时置 `final_accepted=True`。各挡通过率同时写入日志与 JSON。
-- **评估反馈到训练采样**：最终考核后按挡位缺口更新训练采样权重 `bin_weights[i]=1+2·max(0,0.8-rate_i)`，未达标挡位在下个训练段获得更高采样概率，下一次考核后重新计算。
+- **评估反馈到训练采样**：普通模式按 60% 目标、最终模式按 80% 目标更新 `bin_weights`；未达标挡位在下个训练段获得更高采样概率，下一次考核后重新计算。
 - **退档保护**：普通模式连续 `RETREAT_FAILURE_LIMIT=5` 次考核失败则 `Zmin` 回退一档（≤50 mm 加 1 mm，否则加 2 mm，最高回退到 70 mm），记录 `retreats`；退档后重新推进需连续 `RETREAT_REQUIRED_PASSES=2` 轮考核达标，避免 47/48 mm 来回横跳。
 - **检查点**：新增 `final_level_passed`/`final_accepted`/`consecutive_failures`/`retreats`/`retreat_pending_advance`/`bin_weights`；加载旧检查点时把 `Zmin` 迁移到 ≥47 mm，缺字段填默认值。
 - **板体加宽**：半宽 0.1→0.3 m（总宽 60 cm），Y 方向绕侧在时限内不可行；侧绕判据仍取实际板宽，回放与评估同步生效。

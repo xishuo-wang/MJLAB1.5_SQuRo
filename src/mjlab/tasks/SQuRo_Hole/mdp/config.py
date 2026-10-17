@@ -66,6 +66,7 @@ HEIGHT_MIN_SUCCESS_RATE = 0.60                      # 推进课程要求成功�
 HEIGHT_REQUIRED_BATCHES = 2                         # 推进课程要求连续成功批次
 HEIGHT_MIN_DWELL_ITERATIONS = 100
 FINAL_ACCEPT_RATE = 0.80                            # 最终档全挡位验收的整体通过率门槛
+NORMAL_BIN_TARGET_RATE = 0.60                       # 普通模式非最低挡位加权的目标通过率
 FINAL_BIN_WEIGHT_GAIN = 2.0                         # 未达标挡位的训练采样权重增益
 RETREAT_FAILURE_LIMIT = 5                           # 连续失败考核次数达到该值后退一档
 RETREAT_REQUIRED_PASSES = 2                         # 退档后重新推进所需的连续达标考核次数

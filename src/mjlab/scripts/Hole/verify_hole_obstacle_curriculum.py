@@ -38,6 +38,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_STEP,
     HEIGHT_FINE_STEP,
     FINAL_ACCEPT_RATE,
+    NORMAL_BIN_TARGET_RATE,
     RETREAT_FAILURE_LIMIT,
     RETREAT_REQUIRED_PASSES,
     VIRTUAL_CLEARANCE_MARGIN,
@@ -59,6 +60,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     obstacle_rule_bounds,
     compute_base_heights,
     sample_bin_heights,
+    sample_range_bin_heights,
     stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -581,6 +583,7 @@ def verify_final_mode_command_sampling() -> None:
     probe.cfg = SimpleNamespace(high_obstacle_equal_height=True)
     probe.obstacle_equal_height = torch.zeros(64, dtype=torch.bool)
     probe.obstacle_height_command = torch.zeros(64)
+    probe.adaptive_sampling = True
     probe._update_obstacle_height_command = lambda: None
     with patch("mjlab.tasks.SQuRo_Hole.mdp.command.write_obstacle_mocap",
                lambda *args, **kwargs: None), torch.random.fork_rng(devices=[]):
@@ -597,6 +600,79 @@ def verify_final_mode_command_sampling() -> None:
         HoleCommand._sample_obstacle_height(probe, env_ids)
     check("显式固定板高时仍按固定值采样",
           bool(torch.allclose(probe.obstacle_sampled_bottom_z, torch.full((64,), 0.05))))
+
+
+# 验证普通模式 70% 部分按挡位加权, 评估环境保持固定 30% + 均匀采样
+def verify_normal_adaptive_sampling() -> None:
+    class _CommandProbe(HoleCommand):
+        @property
+        def device(self):
+            return "cpu"
+
+    def sample_heights(weights, adaptive: bool, count: int = 20000) -> torch.Tensor:
+        state = HeightCurriculumState()
+        state.z_min = 0.060
+        state.z_max = HEIGHT_MAX
+        state.bin_weights = list(weights)
+        probe = _CommandProbe.__new__(_CommandProbe)
+        probe.obstacle = SimpleNamespace()
+        probe.height_curriculum_state = state
+        probe.obstacle_sampled_bottom_z = torch.zeros(count)
+        probe.obstacle_height_sampled = torch.zeros(count, dtype=torch.bool)
+        probe.cfg = SimpleNamespace(high_obstacle_equal_height=True)
+        probe.obstacle_equal_height = torch.zeros(count, dtype=torch.bool)
+        probe.obstacle_height_command = torch.zeros(count)
+        probe.adaptive_sampling = adaptive
+        probe._update_obstacle_height_command = lambda: None
+        with patch("mjlab.tasks.SQuRo_Hole.mdp.command.write_obstacle_mocap",
+                   lambda *args, **kwargs: None), torch.random.fork_rng(devices=[]):
+            torch.manual_seed(41)
+            HoleCommand._sample_obstacle_height(probe, torch.arange(count))
+        return probe.obstacle_sampled_bottom_z.clone()
+
+    biased = [1.0] * HEIGHT_BIN_COUNT
+    biased[3] = 6.0
+    weighted = sample_heights(biased, True)
+    uniform = sample_heights([1.0] * HEIGHT_BIN_COUNT, True)
+    minimum_fraction = float((weighted == 0.060).float().mean())
+    check("普通模式最低档固定采样保持 30%", 0.28 < minimum_fraction < 0.32)
+    check("普通模式加权采样不越界",
+          float(weighted.min()) >= 0.060 - 1e-6 and float(weighted.max()) <= HEIGHT_MAX + 1e-6)
+
+    edges = torch.tensor(HEIGHT_BIN_EDGES, dtype=torch.float64)
+    def bin_fraction(values: torch.Tensor) -> torch.Tensor:
+        index = torch.bucketize(values.to(torch.float64), edges[1:-1], right=True)
+        return torch.bincount(index, minlength=HEIGHT_BIN_COUNT).float() / len(values)
+
+    weighted_fraction = bin_fraction(weighted)
+    uniform_fraction = bin_fraction(uniform)
+    check("普通模式加权只改变 70% 部分的比例",
+          float(weighted_fraction[3] - uniform_fraction[3]) > 0.02)
+
+    eval_weighted = sample_heights(biased, False, count=12000)
+    eval_uniform = sample_heights([1.0] * HEIGHT_BIN_COUNT, False, count=12000)
+    check("评估采样与挡位权重无关", torch.equal(eval_weighted, eval_uniform))
+    range_samples = sample_range_bin_heights(10000, biased, 0.060, HEIGHT_MAX, "cpu")
+    check("普通模式 70% 加权采样范围正确",
+          float(range_samples.min()) >= 0.060 and float(range_samples.max()) <= HEIGHT_MAX)
+
+    state = HeightCurriculumState()
+    state.z_min = 0.048
+    state.level_start_iteration = 0
+    results = _evaluation_results(0.048, 256, 256)
+    results += [{"env_id": 300 + index, "height": 0.052, "success": index < 20,
+                 "valid": True, "failure_code": 0 if index < 20 else 5} for index in range(100)]
+    results += [{"env_id": 400 + index, "height": 0.072, "success": True,
+                 "valid": True, "failure_code": 0} for index in range(100)]
+    batch = state.measure_batch(results)
+    check("普通考核返回分挡位统计",
+          len(batch["bin_rate"]) == HEIGHT_BIN_COUNT and batch["bin_count"][1] == 100
+          and abs(batch["bin_rate"][1] - 0.2) < 1e-9)
+    outcome = state.record_evaluation([batch], 500)
+    check("普通模式按挡位缺口更新 70% 采样权重",
+          abs(state.bin_weights[1] - 1.8) < 1e-9 and abs(state.bin_weights[4] - 1.0) < 1e-9
+          and abs(outcome["bin_rate"][1] - 0.2) < 1e-9)
+    check("普通模式加权目标与推进成功率一致", NORMAL_BIN_TARGET_RATE == HEIGHT_MIN_SUCCESS_RATE)
 
 
 # 验证50毫米边界的细步长、47毫米下限和旧检查点续训。
@@ -983,6 +1059,7 @@ def main() -> None:
     verify_curriculum_state()
     verify_evaluation_curriculum()
     verify_final_mode_command_sampling()
+    verify_normal_adaptive_sampling()
     verify_fine_height_steps()
     verify_real_env()
     if FAILURES:

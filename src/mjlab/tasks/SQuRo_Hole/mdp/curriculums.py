@@ -23,6 +23,7 @@ from .config import (
     HEIGHT_MIN_DWELL_ITERATIONS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
     FINAL_ACCEPT_RATE,
+    NORMAL_BIN_TARGET_RATE,
     FINAL_BIN_WEIGHT_GAIN,
     RETREAT_FAILURE_LIMIT,
     RETREAT_REQUIRED_PASSES,
@@ -65,6 +66,20 @@ def sample_bin_heights(count: int, weights, device) -> torch.Tensor:
     lower = edges[indices]
     upper = edges[indices + 1]
     return lower + torch.rand(int(count), device=device) * (upper - lower)
+
+
+# 在 [lower,upper] 范围内按挡位权重采样板底高度, 用于普通模式 70% 部分
+def sample_range_bin_heights(count: int, weights, lower: float, upper: float, device) -> torch.Tensor:
+    edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
+    bin_weights = [
+        float(weights[index]) if (edges[index + 1] > lower and edges[index] < upper) else 0.0
+        for index in range(HEIGHT_BIN_COUNT)
+    ]
+    weight_tensor = torch.as_tensor(bin_weights, device=device, dtype=torch.float32)
+    indices = torch.multinomial(weight_tensor, int(count), replacement=True)
+    low = torch.maximum(edges[indices], torch.full((len(indices),), lower, device=device))
+    high = torch.minimum(edges[indices + 1], torch.full((len(indices),), upper, device=device))
+    return low + torch.rand(int(count), device=device) * (high - low).clamp_min(0.0)
 
 
 
@@ -317,7 +332,7 @@ class HeightCurriculumState:
         return result
 
 
-    # 统计一批考核的最低档回合数、通过率与失败原因
+    # 统计一批考核的最低档回合数、通过率、失败原因与分挡位统计
     def measure_batch(self, results: list) -> dict:
         eligible = [item for item in results if item.get("valid", True)]
         minimum = [item for item in eligible if abs(float(item["height"]) - self.z_min) <= 1e-6]
@@ -339,12 +354,12 @@ class HeightCurriculumState:
             "eligible": len(eligible),
             "eligible_successes": sum(int(item["success"]) for item in eligible),
             "failure_counts": failure_counts,
+            **self._bin_statistics(eligible),
         }
 
 
-    # 统计 final 模式一批考核的各挡位通过率与整体通过率
-    def measure_final_batch(self, results: list) -> dict:
-        eligible = [item for item in results if item.get("valid", True)]
+    # 按命令挡位统计回合数与通过率
+    def _bin_statistics(self, eligible: list) -> dict:
         heights = torch.tensor([float(item["height"]) for item in eligible], dtype=torch.float64)
         edges = torch.tensor(HEIGHT_BIN_EDGES[1:-1], dtype=torch.float64)
         indices = torch.bucketize(heights, edges, right=True).tolist() if len(eligible) else []
@@ -353,6 +368,27 @@ class HeightCurriculumState:
         for index, item in zip(indices, eligible, strict=True):
             bin_count[index] += 1
             bin_successes[index] += int(item["success"])
+        return {
+            "bin_count": bin_count,
+            "bin_successes": bin_successes,
+            "bin_rate": [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
+                         for i in range(HEIGHT_BIN_COUNT)],
+        }
+
+
+    # 按挡位通过率缺口更新训练采样权重, 无样本挡位保持 1.0
+    def _update_bin_weights(self, bin_count: list, bin_successes: list, target: float) -> list[float]:
+        return [
+            1.0 + FINAL_BIN_WEIGHT_GAIN * max(0.0, target - bin_successes[i] / bin_count[i])
+            if bin_count[i] else 1.0
+            for i in range(HEIGHT_BIN_COUNT)
+        ]
+
+
+    # 统计 final 模式一批考核的各挡位通过率与整体通过率
+    def measure_final_batch(self, results: list) -> dict:
+        eligible = [item for item in results if item.get("valid", True)]
+        stats = self._bin_statistics(eligible)
         failure_names = {1: "未过板", 2: "侧绕", 3: "高度超限", 4: "跌倒", 5: "超时"}
         failure_counts: dict[str, int] = {}
         for item in eligible:
@@ -360,18 +396,15 @@ class HeightCurriculumState:
                 name = failure_names.get(item.get("failure_code"))
                 if name is not None:
                     failure_counts[name] = failure_counts.get(name, 0) + 1
-        count = sum(bin_count)
-        successes = sum(bin_successes)
+        count = sum(stats["bin_count"])
+        successes = sum(stats["bin_successes"])
         rate = successes / max(1, count)
         return {
             "count": count,
             "successes": successes,
             "success_rate": rate,
             "passed": rate >= FINAL_ACCEPT_RATE,
-            "bin_count": bin_count,
-            "bin_successes": bin_successes,
-            "bin_rate": [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
-                         for i in range(HEIGHT_BIN_COUNT)],
+            **stats,
             "eligible": len(eligible),
             "eligible_successes": successes,
             "failure_counts": failure_counts,
@@ -388,6 +421,15 @@ class HeightCurriculumState:
         sample_successes = sum(int(batch["successes"]) for batch in batch_stats)
         rate = sample_successes / max(1, sample_count)
         self._add_episode_totals(batch_stats)
+
+        # 普通模式: 按各挡位通过率更新 70% 部分的采样权重
+        bin_count = [sum(int(batch["bin_count"][i]) for batch in batch_stats)
+                     for i in range(HEIGHT_BIN_COUNT)]
+        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batch_stats)
+                         for i in range(HEIGHT_BIN_COUNT)]
+        bin_rate = [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
+                    for i in range(HEIGHT_BIN_COUNT)]
+        self.bin_weights = self._update_bin_weights(bin_count, bin_successes, NORMAL_BIN_TARGET_RATE)
 
         self.level_episode_count = sample_count
         self.level_success_count = sample_successes
@@ -407,13 +449,17 @@ class HeightCurriculumState:
             "evaluation": True,
             "passed": passed,
             "mode": "normal",
+            "bin_count": bin_count,
+            "bin_rate": bin_rate,
+            "bin_weights": list(self.bin_weights),
             "batch_passed": [bool(batch["passed"]) for batch in batch_stats],
         })
         result = {
             "counted": True, "batch_closed": True, "advanced": False, "passed": passed,
             "success_rate": rate, "sample_count": sample_count,
             "previous_z_min": self.z_min, "mode": "normal", "retreated": False,
-            "entered_final_mode": False,
+            "entered_final_mode": False, "bin_count": bin_count, "bin_rate": bin_rate,
+            "bin_weights": list(self.bin_weights),
         }
         # 连续失败达到上限: 退一档, 之后重新推进需要连续达标
         if (not passed and self.consecutive_failures >= RETREAT_FAILURE_LIMIT
@@ -474,11 +520,7 @@ class HeightCurriculumState:
         self.batch_success_count = sample_successes
         if passed:
             self.final_accepted = True
-        self.bin_weights = [
-            1.0 + FINAL_BIN_WEIGHT_GAIN * max(0.0, FINAL_ACCEPT_RATE - bin_rate[i])
-            if bin_count[i] else 1.0
-            for i in range(HEIGHT_BIN_COUNT)
-        ]
+        self.bin_weights = self._update_bin_weights(bin_count, bin_successes, FINAL_ACCEPT_RATE)
         self.history.append({
             "z_min": self.z_min,
             "iteration": int(iteration),
@@ -614,7 +656,7 @@ class HeightCurriculumState:
             success_rate = self.level_success_count / max(1, self.level_episode_count)
             passed = False
         min_bin_rate = 0.0
-        if self.final_level_passed and self.history:
+        if self.history:
             bin_rate = self.history[-1].get("bin_rate")
             bin_count = self.history[-1].get("bin_count")
             if bin_rate and bin_count:

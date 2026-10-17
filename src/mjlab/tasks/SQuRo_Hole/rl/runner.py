@@ -201,6 +201,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         state.final_level_passed = bool(self._height_curriculum_state.final_level_passed)
         # 考核始终按挡位等概率采样, 不继承训练侧的加权采样
         state.bin_weights = [1.0] * len(self._height_curriculum_state.bin_weights)
+        command.adaptive_sampling = False
         if self._obstacle_command is not None:
             command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
         env.common_step_counter = int(self.env.unwrapped.common_step_counter)

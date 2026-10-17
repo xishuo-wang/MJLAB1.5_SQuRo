@@ -34,6 +34,7 @@ from .curriculums import (
     heights_for_stage,
     compute_base_heights,
     sample_bin_heights,
+    sample_range_bin_heights,
     HeightCurriculumState,
     stage_uses_height_course,
 )
@@ -112,6 +113,8 @@ class HoleCommand(CommandTerm):
         self.command_curvature.fill_(BASE_CURVATURE)
         self.enable_height_course = cfg.enable_height_course
         self.enable_course_progress = cfg.enable_course_progress
+        # 训练环境按挡位成功率加权采样, 独立考核环境保持固定 30% + 均匀采样
+        self.adaptive_sampling = True
         self.height_curriculum_state = HeightCurriculumState()
         if cfg.height_curriculum_state:
             self.height_curriculum_state.load_state_dict(cfg.height_curriculum_state)
@@ -207,13 +210,19 @@ class HoleCommand(CommandTerm):
         state = self.height_curriculum_state
         lower = state.z_min
         upper = state.z_max
-        if state.final_level_passed and lower < upper - 1e-9:
+        count = len(env_ids)
+        if lower >= upper - 1e-9:
+            heights = torch.full((count,), lower, device=self.device)
+        elif state.final_level_passed:
             # 最终档: 按挡位权重在全部高度挡位内采样
-            heights = sample_bin_heights(len(env_ids), state.bin_weights, self.device)
+            heights = sample_bin_heights(count, state.bin_weights, self.device)
         else:
-            uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
-            at_minimum = torch.rand(len(env_ids), device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
-            heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
+            # 普通模式: 30% 固定最低档, 其余 70% 按挡位成功率加权
+            uniform = lower + torch.rand(count, device=self.device) * (upper - lower)
+            at_minimum = torch.rand(count, device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
+            adaptive = (sample_range_bin_heights(count, state.bin_weights, lower, upper, self.device)
+                        if self.adaptive_sampling else uniform)
+            heights = torch.where(at_minimum, torch.full_like(uniform, lower), adaptive)
         self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
         self._sample_high_obstacle_mode(env_ids)
