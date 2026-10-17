@@ -58,6 +58,33 @@ HEIGHT_BIN_EDGES = (HEIGHT_MIN,) + OBSTACLE_HEIGHT_EDGES + (HEIGHT_MAX,)
 HEIGHT_BIN_COUNT = len(HEIGHT_BIN_EDGES) - 1
 
 
+# 命令与分挡位统计共用的索引, 统一按 float32 分桶避免边界错位
+def height_bin_indices(heights: torch.Tensor) -> torch.Tensor:
+    values = torch.as_tensor(heights).to(torch.float32)
+    edges = torch.tensor(OBSTACLE_HEIGHT_EDGES, device=values.device, dtype=torch.float32)
+    return torch.bucketize(values.contiguous(), edges, right=True)
+
+
+# 课程高度序列: 退档时回到上一档而不是按当前挡位步长外推
+def _build_course_levels() -> tuple[float, ...]:
+    levels = [HEIGHT_INITIAL_MIN]
+    while levels[-1] > HEIGHT_MIN + 1e-9:
+        step = HEIGHT_FINE_STEP if levels[-1] <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
+        levels.append(max(HEIGHT_MIN, round(levels[-1] - step, 6)))
+    return tuple(levels)
+
+
+HEIGHT_COURSE_LEVELS = _build_course_levels()
+
+
+# 返回课程序列中比当前高度高一档的档位, 已在最高档返回 None
+def previous_course_height(z_min: float) -> float | None:
+    for level in reversed(HEIGHT_COURSE_LEVELS):
+        if level > float(z_min) + 1e-9:
+            return level
+    return None
+
+
 # 按挡位权重采样板底高度: 先选挡位再在挡内均匀取值
 def sample_bin_heights(count: int, weights, device) -> torch.Tensor:
     edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
@@ -222,9 +249,8 @@ def compute_base_heights(
     use_equal = high_obstacle & torch.as_tensor(equal_height, device=base_x.device, dtype=torch.bool)
     front = torch.full_like(base_x, BASE_HEIGHT)
     hind = torch.full_like(base_x, BASE_HEIGHT)
-    edges = bottom.new_tensor(OBSTACLE_HEIGHT_EDGES)
     heights = bottom.new_tensor(HEIGHT_LIST)
-    target = heights[torch.bucketize(bottom.contiguous(), edges, right=True)]
+    target = heights[height_bin_indices(bottom)]
     in_range = (base_x >= left) & (base_x <= right)
     front_low = in_range & (base_x < middle)
     hind_low = in_range & (base_x >= middle)
@@ -360,9 +386,8 @@ class HeightCurriculumState:
 
     # 按命令挡位统计回合数与通过率
     def _bin_statistics(self, eligible: list) -> dict:
-        heights = torch.tensor([float(item["height"]) for item in eligible], dtype=torch.float64)
-        edges = torch.tensor(HEIGHT_BIN_EDGES[1:-1], dtype=torch.float64)
-        indices = torch.bucketize(heights, edges, right=True).tolist() if len(eligible) else []
+        heights = torch.tensor([float(item["height"]) for item in eligible], dtype=torch.float32)
+        indices = height_bin_indices(heights).tolist() if len(eligible) else []
         bin_count = [0] * HEIGHT_BIN_COUNT
         bin_successes = [0] * HEIGHT_BIN_COUNT
         for index, item in zip(indices, eligible, strict=True):
@@ -461,12 +486,11 @@ class HeightCurriculumState:
             "entered_final_mode": False, "bin_count": bin_count, "bin_rate": bin_rate,
             "bin_weights": list(self.bin_weights),
         }
-        # 连续失败达到上限: 退一档, 之后重新推进需要连续达标
-        if (not passed and self.consecutive_failures >= RETREAT_FAILURE_LIMIT
-                and self.z_min < HEIGHT_INITIAL_MIN):
+        # 连续失败达到上限: 回到课程上一档, 之后重新推进需要连续达标
+        previous_level = previous_course_height(self.z_min) if self.z_min < HEIGHT_INITIAL_MIN else None
+        if not passed and self.consecutive_failures >= RETREAT_FAILURE_LIMIT and previous_level is not None:
             previous_z_min = self.z_min
-            step = HEIGHT_FINE_STEP if self.z_min <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
-            self.z_min = min(HEIGHT_INITIAL_MIN, round(self.z_min + step, 6))
+            self.z_min = max(HEIGHT_MIN, min(HEIGHT_INITIAL_MIN, previous_level))
             self.retreats += 1
             self.consecutive_failures = 0
             self.consecutive_success_batches = 0
@@ -642,8 +666,10 @@ class HeightCurriculumState:
         weights = list(state.get("bin_weights", [1.0] * HEIGHT_BIN_COUNT))
         self.bin_weights = ([float(value) for value in weights]
                             if len(weights) == HEIGHT_BIN_COUNT else [1.0] * HEIGHT_BIN_COUNT)
-        # 旧检查点 46mm 下限迁移到当前下限
-        self.z_min = max(HEIGHT_MIN, min(float(self.z_min), float(self.z_max)))
+        # 旧检查点范围下限迁移到当前下限; 显式固定高度工况不改写
+        if self.z_min < HEIGHT_MIN and self.z_min < self.z_max - 1e-9:
+            self.z_min = HEIGHT_MIN
+        self.z_min = min(float(self.z_min), float(self.z_max))
 
 
     # 汇总最近一次考核结果, 避免降档后计数清零造成日志失真

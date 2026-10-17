@@ -313,7 +313,9 @@ uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule --short-height 0.
 - **普通模式分挡位反馈采样**：保留 30% 固定最低档采样不变，其余 70% 不再均匀，改按各挡位通过率缺口加权（目标 `NORMAL_BIN_TARGET_RATE=60%`）：`bin_weights[i]=1+2·max(0,0.6-rate_i)`，每次考核后更新；独立考核环境保持 30% 固定 + 均匀采样（`HoleCommand.adaptive_sampling=False`），不受训练权重影响。
 - **最终验收**：每次最终考核按两批计算；两批整体通过率均 ≥ `FINAL_ACCEPT_RATE=80%` 时置 `final_accepted=True`。各挡通过率同时写入日志与 JSON。
 - **评估反馈到训练采样**：普通模式按 60% 目标、最终模式按 80% 目标更新 `bin_weights`；未达标挡位在下个训练段获得更高采样概率，下一次考核后重新计算。
-- **退档保护**：普通模式连续 `RETREAT_FAILURE_LIMIT=5` 次考核失败则 `Zmin` 回退一档（≤50 mm 加 1 mm，否则加 2 mm，最高回退到 70 mm），记录 `retreats`；退档后重新推进需连续 `RETREAT_REQUIRED_PASSES=2` 轮考核达标，避免 47/48 mm 来回横跳。
-- **检查点**：新增 `final_level_passed`/`final_accepted`/`consecutive_failures`/`retreats`/`retreat_pending_advance`/`bin_weights`；加载旧检查点时把 `Zmin` 迁移到 ≥47 mm，缺字段填默认值。
+- **退档保护**：普通模式连续 `RETREAT_FAILURE_LIMIT=5` 次考核失败则回到课程序列上一档（`previous_course_height`：50→52→50，不再按当前挡位步长外推成 50→51→49），记录 `retreats`；退档后重新推进需连续 `RETREAT_REQUIRED_PASSES=2` 轮考核达标，避免 47/48 mm 来回横跳。
+- **检查点**：新增 `final_level_passed`/`final_accepted`/`consecutive_failures`/`retreats`/`retreat_pending_advance`/`bin_weights`；加载旧检查点时把范围工况的 `Zmin` 迁移到 ≥47 mm，缺字段填默认值；`z_min==z_max` 的显式回放/测试工况不改写（46 mm 回放实际几何仍为 46 mm）。
+- **分挡位统计**：统计与命令共用 `height_bin_indices`，统一按 float32 分桶（60 mm 归 35 mm 挡，不再被统计到 30 mm 挡）保证训练权重加在正确挡位。
+- **显式工况保护**：课程下限迁移只作用于 `z_min<z_max` 的范围工况；固定高度回放入口的板高、几何与标签保持一致。
 - **板体加宽**：半宽 0.1→0.3 m（总宽 60 cm），Y 方向绕侧在时限内不可行；侧绕判据仍取实际板宽，回放与评估同步生效。
 - 验收：课程验收新增最终档采样/80% 验收/挡位权重/退档保护/迁移检查；Hole 课程、碰撞、重建、走廊命令、命令复位、基线六个入口与 Backup 88 项回归全部通过。

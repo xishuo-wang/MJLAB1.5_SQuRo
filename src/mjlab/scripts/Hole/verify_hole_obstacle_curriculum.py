@@ -61,6 +61,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     compute_base_heights,
     sample_bin_heights,
     sample_range_bin_heights,
+    height_bin_indices,
     stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -532,6 +533,34 @@ def verify_evaluation_curriculum() -> None:
     check("恢复 47mm 后再次通过进入最终模式",
           re_enter["entered_final_mode"] and retreat.final_level_passed)
 
+    # float32 分桶一致性: 60mm 命令对应 35mm 挡, 统计必须落在同一挡
+    aligned_state = HeightCurriculumState()
+    aligned_state.z_min = 0.060
+    aligned_batch = aligned_state.measure_batch(
+        [{"env_id": 0, "height": 0.060, "success": True, "valid": True, "failure_code": 0}])
+    check("分挡位统计与命令按 float32 同精度分桶",
+          int(height_bin_indices(torch.tensor([0.060]))[0]) == 3
+          and int(height_bin_indices(torch.tensor([0.050]))[0]) == 1
+          and aligned_batch["bin_count"][3] == 1 and aligned_batch["bin_count"][2] == 0)
+
+    # 50mm 连续失败: 返回上一档 52mm, 恢复推进回到 50mm 而不是跳到 49mm
+    fifty = HeightCurriculumState()
+    fifty.z_min = 0.050
+    fifty_fail = [fifty.measure_batch(_evaluation_results(0.050, 256, 100)),
+                  fifty.measure_batch(_evaluation_results(0.050, 256, 100))]
+    fifty_outcome = None
+    for index in range(RETREAT_FAILURE_LIMIT):
+        fifty_outcome = fifty.record_evaluation(
+            fifty_fail, first_iteration + index * HEIGHT_EVALUATION_INTERVAL)
+    check("50毫米连续失败退回上一档52毫米",
+          fifty_outcome["retreated"] and fifty.z_min == 0.052)
+    fifty_passing = [fifty.measure_batch(_evaluation_results(fifty.z_min, 256, 256)),
+                     fifty.measure_batch(_evaluation_results(fifty.z_min, 256, 256))]
+    fifty_first = fifty.record_evaluation(fifty_passing, first_iteration + 600)
+    fifty_second = fifty.record_evaluation(fifty_passing, first_iteration + 700)
+    check("退档后从52毫米恢复推进到50毫米",
+          not fifty_first["advanced"] and fifty_second["advanced"] and fifty.z_min == 0.050)
+
     # 最终档全挡位均匀采样与权重
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(2026)
@@ -562,6 +591,14 @@ def verify_evaluation_curriculum() -> None:
     check("旧 46mm 检查点加载时迁移到 47mm 并补齐新增字段",
           migrated.z_min == HEIGHT_MIN and migrated.final_accepted is False
           and migrated.consecutive_failures == 0 and len(migrated.bin_weights) == HEIGHT_BIN_COUNT)
+    pinned = HeightCurriculumState()
+    pinned_state = pinned.state_dict()
+    pinned_state["z_min"] = 0.046
+    pinned_state["z_max"] = 0.046
+    pinned_loaded = HeightCurriculumState()
+    pinned_loaded.load_state_dict(pinned_state)
+    check("显式固定46毫米回放工况不被下限迁移改写",
+          pinned_loaded.z_min == 0.046 and pinned_loaded.z_max == 0.046)
 
 
 # 验证最终档命令采样: 全挡位随机与显式固定板高

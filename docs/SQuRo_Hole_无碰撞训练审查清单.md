@@ -105,3 +105,4 @@ uv run --no-sync python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards  
 - **几何**：单板半宽 0.1→0.3 m（总宽 60 cm），Y 向绕侧不可行；侧绕 lane 判据随实际板宽变化，验收中侧绕注入点已改为 y=0.35。
 - **日志**：新增 `Curriculum/挡位{i}_通过率`、`Curriculum/各挡位最低通过率`、`Curriculum/连续失败次数`、`Curriculum/退档次数`、`Curriculum/最终模式`、`Curriculum/最终验收`；考核 JSON 增加 `mode/passed/retreated/entered_final_mode/final_accepted/bin_rate/bin_weights`。
 - **验收**：`verify_hole_obstacle_curriculum` 新增最终档采样、80% 验收、挡位权重、退档保护、旧检查点迁移与命令采样检查；其余 Hole 入口与 Backup 88 项通过。
+- **第三轮审查修复（2026-10-18）**：① 分挡位统计与命令共用 `height_bin_indices`（float32 分桶），修复 60 mm 被统计到 30 mm 挡的错位；② 退档改为回到课程序列上一档（50→52→50），不再 50→51→49；③ 下限迁移只作用于范围工况，`z_min==z_max` 显式回放/测试工况不改写（46 mm 回放实际几何为 46 mm，CSV 核实 `obstacle_height_command=0.046`）。
