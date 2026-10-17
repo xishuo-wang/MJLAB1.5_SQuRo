@@ -17,6 +17,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     HEIGHT_EVALUATION_ENVS,
     HEIGHT_REQUIRED_BATCHES,
+    RETREAT_FAILURE_LIMIT,
     get_current_stage,
     stage_requires_collision,
     stage_uses_height_course,
@@ -197,6 +198,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         state = command.height_curriculum_state
         state.z_min = float(self._height_curriculum_state.z_min)
         state.z_max = float(self._height_curriculum_state.z_max)
+        state.final_level_passed = bool(self._height_curriculum_state.final_level_passed)
+        state.bin_weights = list(self._height_curriculum_state.bin_weights)
         if self._obstacle_command is not None:
             command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
         env.common_step_counter = int(self.env.unwrapped.common_step_counter)
@@ -230,13 +233,15 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         return results
 
 
-    # 每 100 iter 做两批独立考核, 两批最低档都达标才推进课程
+    # 每 100 iter 做两批独立考核: 普通模式推进/退档, 最终模式全挡位验收
     def _maybe_evaluate_curriculum(self, iteration: int) -> None:
         course = self._height_curriculum_state
         if course is None or not self._course_enabled() or not course.should_evaluate(iteration):
             return
         if self.is_distributed:
             raise RuntimeError("独立真实碰撞考核仅支持单卡训练")
+        final_mode = bool(course.final_level_passed)
+        measure = course.measure_final_batch if final_mode else course.measure_batch
         numpy_state, python_state = np.random.get_state(), random.getstate()
         devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
         started = time.perf_counter()
@@ -246,7 +251,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             with torch.random.fork_rng(devices=devices), torch.no_grad():
                 for sweep in range(HEIGHT_REQUIRED_BATCHES):
                     results = self._run_evaluation_sweep(int(self.cfg.get("seed", 42)) + iteration + sweep)
-                    batch_stats.append(course.measure_batch(results))
+                    batch_stats.append(measure(results))
                 result = course.record_evaluation(batch_stats, iteration)
         finally:
             np.random.set_state(numpy_state)
@@ -254,13 +259,18 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             self.alg.train_mode()
         seconds = time.perf_counter() - started
         for index, batch in enumerate(batch_stats):
-            print(f"[高度考核] iter {iteration} 第{index + 1}批: 最低档 {batch['count']} 回合, "
+            print(f"[高度考核] iter {iteration} 第{index + 1}批: {batch['count']} 回合, "
                   f"通过率 {batch['success_rate']:.1%}, 达标={batch['passed']}", flush=True)
-        print(f"[高度考核] iter {iteration} 本次考核: 达标={result['passed']}, "
-              f"最低档合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, "
+        print(f"[高度考核] iter {iteration} 本次考核({result['mode']}): 达标={result['passed']}, "
+              f"合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, "
               f"Zmin {course.z_min:.3f} m", flush=True)
         if result["advanced"]:
             print(f"[高度考核] 课程降档: Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
+        if result["retreated"]:
+            print(f"[高度考核] 连续 {RETREAT_FAILURE_LIMIT} 次失败退档: "
+                  f"Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
+        if result["entered_final_mode"]:
+            print("[高度考核] 47mm 档通过, 进入最终档全挡位均匀采样", flush=True)
         if self.logger.writer is not None:
             values = {
                 "Curriculum/考核通过率": result["success_rate"],
@@ -268,9 +278,16 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 "Curriculum/本次考核达标": int(result["passed"]),
                 "Curriculum/最低板高米": course.z_min,
                 "Curriculum/连续达标批次": course.consecutive_success_batches,
+                "Curriculum/连续失败次数": course.consecutive_failures,
+                "Curriculum/退档次数": course.retreats,
                 "Curriculum/考核耗时秒": seconds,
-                "Curriculum/最终档达标": int(course.final_level_passed),
+                "Curriculum/最终模式": int(final_mode),
+                "Curriculum/最终验收": int(course.final_accepted),
+                "Curriculum/各挡位最低通过率": course.metrics()["min_bin_rate"],
             }
+            if result["bin_rate"]:
+                for index, rate in enumerate(result["bin_rate"]):
+                    values[f"Curriculum/挡位{index}_通过率"] = rate
             for name, value in values.items():
                 self.logger.writer.add_scalar(name, value, iteration)
         if self.logger.log_dir is not None:
@@ -279,8 +296,15 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             payload = {
                 "iteration": int(iteration),
                 "z_min": float(course.z_min),
+                "mode": result["mode"],
                 "passed": bool(result["passed"]),
                 "advanced": bool(result["advanced"]),
+                "retreated": bool(result["retreated"]),
+                "entered_final_mode": bool(result["entered_final_mode"]),
+                "final_accepted": bool(course.final_accepted),
+                "bin_rate": result["bin_rate"],
+                "bin_count": result["bin_count"],
+                "bin_weights": result["bin_weights"],
                 "batches": batch_stats,
                 "seconds": seconds,
                 "collision": True,

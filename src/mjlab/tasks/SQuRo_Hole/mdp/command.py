@@ -33,6 +33,7 @@ from .curriculums import (
     get_current_stage,
     heights_for_stage,
     compute_base_heights,
+    sample_bin_heights,
     HeightCurriculumState,
     stage_uses_height_course,
 )
@@ -203,11 +204,16 @@ class HoleCommand(CommandTerm):
     def _sample_obstacle_height(self, env_ids: torch.Tensor) -> None:
         if self.obstacle is None:
             raise RuntimeError("高度课程需要受限空间实体")
-        lower = self.height_curriculum_state.z_min
-        upper = self.height_curriculum_state.z_max
-        uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
-        at_minimum = torch.rand(len(env_ids), device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
-        heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
+        state = self.height_curriculum_state
+        lower = state.z_min
+        upper = state.z_max
+        if state.final_level_passed and lower < upper - 1e-9:
+            # 最终档: 按挡位权重在全部高度挡位内采样
+            heights = sample_bin_heights(len(env_ids), state.bin_weights, self.device)
+        else:
+            uniform = lower + torch.rand(len(env_ids), device=self.device) * (upper - lower)
+            at_minimum = torch.rand(len(env_ids), device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
+            heights = torch.where(at_minimum, torch.full_like(uniform, lower), uniform)
         self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True
         self._sample_high_obstacle_mode(env_ids)

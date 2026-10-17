@@ -36,6 +36,10 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
     HEIGHT_STEP,
+    HEIGHT_FINE_STEP,
+    FINAL_ACCEPT_RATE,
+    RETREAT_FAILURE_LIMIT,
+    RETREAT_REQUIRED_PASSES,
     VIRTUAL_CLEARANCE_MARGIN,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
@@ -48,10 +52,13 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     HEIGHT_EVALUATION_INTERVAL,
     HEIGHT_EVALUATION_FINAL_INTERVAL,
     HEIGHT_EVALUATION_PRETRAIN_ITERATIONS,
+    HEIGHT_BIN_COUNT,
+    HEIGHT_BIN_EDGES,
     HeightCurriculumState,
     get_current_stage,
     obstacle_rule_bounds,
     compute_base_heights,
+    sample_bin_heights,
     stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -398,7 +405,21 @@ def _evaluation_results(z_min: float, min_count: int, min_success: int, other_co
     return results
 
 
-# 验证独立考核的调度、最低档样本门槛、整次考核达标降档与最终档行为。
+# 构造最终档全挡位考核结果: 每挡 rounds 回合, successes_per_bin 指定各挡成功数
+def _final_results(rounds_per_bin: int, successes_per_bin: list[int]) -> list[dict]:
+    results = []
+    env_id = 0
+    for index in range(HEIGHT_BIN_COUNT):
+        height = (HEIGHT_BIN_EDGES[index] + HEIGHT_BIN_EDGES[index + 1]) / 2
+        for item in range(rounds_per_bin):
+            success = item < successes_per_bin[index]
+            results.append({"env_id": env_id, "height": height, "success": success,
+                            "valid": True, "failure_code": 0 if success else 5})
+            env_id += 1
+    return results
+
+
+# 验证独立考核的调度、最低档样本门槛、最终档均匀采样、验收与退档保护。
 def verify_evaluation_curriculum() -> None:
     check("训练阶段不再要求实体碰撞", all(not stage_requires_collision(stage) for stage in (1, 2, 3, 4)))
     state = HeightCurriculumState()
@@ -428,7 +449,6 @@ def verify_evaluation_curriculum() -> None:
     check("最低档通过率 60.2% 达标",
           boundary.measure_batch(_evaluation_results(0.070, 256, 154))["passed"])
 
-    # 同一次考核两批都达标: 降档, 且日志沿用本次考核通过率
     passing = [state.measure_batch(_evaluation_results(state.z_min, 256, 200)),
                state.measure_batch(_evaluation_results(state.z_min, 256, 200))]
     advanced = state.record_evaluation(passing, first_iteration + 2 * HEIGHT_EVALUATION_INTERVAL)
@@ -439,25 +459,149 @@ def verify_evaluation_curriculum() -> None:
           math.isclose(metrics["success_rate"], 200 / 256, rel_tol=0, abs_tol=1e-9)
           and math.isclose(metrics["failure_rate"], 1 - 200 / 256, rel_tol=0, abs_tol=1e-9))
 
-    # 到达下限: 标记最终档, 但继续按更长间隔考核
+    # 47mm 档通过一次考核后进入最终模式
     final_state = HeightCurriculumState()
     final_state.z_min = HEIGHT_MIN
-    final_result = final_state.record_evaluation(passing, first_iteration)
-    check("最低档两批达标标记最终档且不再降档",
-          final_state.final_level_passed and final_state.z_min == HEIGHT_MIN
-          and not final_result["advanced"])
+    final_state.level_start_iteration = first_iteration - HEIGHT_MIN_DWELL_ITERATIONS
+    min_passing = [final_state.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 256)),
+                   final_state.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 256))]
+    final_result = final_state.record_evaluation(min_passing, first_iteration)
+    check("47毫米档通过一次考核后进入最终模式",
+          final_result["entered_final_mode"] and final_state.final_level_passed
+          and final_state.z_min == HEIGHT_MIN)
+    check("最终档验收门槛为 80%, 退档后需连续两轮达标恢复",
+          FINAL_ACCEPT_RATE == 0.80 and RETREAT_REQUIRED_PASSES == 2
+          and RETREAT_FAILURE_LIMIT == 5)
+    check("最终模式初始化均匀挡位权重",
+          all(abs(value - 1.0) < 1e-9 for value in final_state.bin_weights))
     check("最终档仍继续考核且间隔为 500 轮",
           final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_FINAL_INTERVAL)
           and not final_state.should_evaluate(first_iteration + HEIGHT_EVALUATION_INTERVAL))
 
-    restored = HeightCurriculumState()
-    restored.load_state_dict(final_state.state_dict())
-    check("考核课程状态包含最终档标记", restored.state_dict() == final_state.state_dict())
+    # 全挡位 100% 通过时完成验收
+    accepted_batches = [final_state.measure_final_batch(_final_results(64, [64] * HEIGHT_BIN_COUNT)),
+                        final_state.measure_final_batch(_final_results(64, [64] * HEIGHT_BIN_COUNT))]
+    accepted = final_state.record_evaluation(
+        accepted_batches, first_iteration + HEIGHT_EVALUATION_FINAL_INTERVAL)
+    check("最终档全挡位 100% 通过即完成验收", final_state.final_accepted and accepted["mode"] == "final")
+    check("最终档记录各挡位通过率",
+          len(accepted["bin_rate"]) == HEIGHT_BIN_COUNT and all(rate == 1.0 for rate in accepted["bin_rate"]))
+
+    # 80% 门槛: 50% 不验收, 81.25% 验收; 未达标挡位提高训练采样权重
+    low_state = HeightCurriculumState()
+    low_state.z_min = HEIGHT_MIN
+    low_state._enter_final_mode()
+    low_batches = [low_state.measure_final_batch(_final_results(64, [32] * HEIGHT_BIN_COUNT)),
+                   low_state.measure_final_batch(_final_results(64, [32] * HEIGHT_BIN_COUNT))]
+    low_result = low_state.record_evaluation(low_batches, first_iteration + HEIGHT_EVALUATION_FINAL_INTERVAL)
+    check("最终档整体通过率 50% 不验收", not low_state.final_accepted and not low_result["passed"])
+    check("最终档按挡位缺口提高训练采样权重",
+          all(weight > 1.0 for weight in low_state.bin_weights))
+    near_state = HeightCurriculumState()
+    near_state.z_min = HEIGHT_MIN
+    near_state._enter_final_mode()
+    near_batches = [near_state.measure_final_batch(_final_results(64, [52] * HEIGHT_BIN_COUNT)),
+                    near_state.measure_final_batch(_final_results(64, [52] * HEIGHT_BIN_COUNT))]
+    near_state.record_evaluation(near_batches, first_iteration + HEIGHT_EVALUATION_FINAL_INTERVAL)
+    check("最终档整体通过率 81.25% 完成验收", near_state.final_accepted
+          and abs(near_state.metrics()["success_rate"] - 52 / 64) < 1e-9)
+
+    # 退档保护: 连续 5 次失败退一档, 恢复需要连续两轮达标
+    retreat = HeightCurriculumState()
+    retreat.z_min = HEIGHT_MIN
+    retreat_fail = [retreat.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 100)),
+                    retreat.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 100))]
+    outcome = None
+    for index in range(RETREAT_FAILURE_LIMIT):
+        outcome = retreat.record_evaluation(retreat_fail, first_iteration + index * HEIGHT_EVALUATION_INTERVAL)
+    check(f"连续 {RETREAT_FAILURE_LIMIT} 次失败后退一档",
+          outcome["retreated"] and retreat.z_min == HEIGHT_MIN + HEIGHT_FINE_STEP
+          and retreat.retreats == 1 and retreat.retreat_pending_advance)
+    level = retreat.z_min
+    level_passing = [retreat.measure_batch(_evaluation_results(level, 256, 256)),
+                     retreat.measure_batch(_evaluation_results(level, 256, 256))]
+    first_pass = retreat.record_evaluation(level_passing, first_iteration + 600)
+    check("退档后首次达标不立即推进", not first_pass["advanced"])
+    second_pass = retreat.record_evaluation(level_passing, first_iteration + 700)
+    check("退档后连续两轮达标恢复上一档", second_pass["advanced"] and retreat.z_min == HEIGHT_MIN)
+    min_passing = [retreat.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 256)),
+                   retreat.measure_batch(_evaluation_results(HEIGHT_MIN, 256, 256))]
+    re_enter = retreat.record_evaluation(min_passing, first_iteration + 800)
+    check("恢复 47mm 后再次通过进入最终模式",
+          re_enter["entered_final_mode"] and retreat.final_level_passed)
+
+    # 最终档全挡位均匀采样与权重
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(2026)
+        uniform = sample_bin_heights(8192, [1.0] * HEIGHT_BIN_COUNT, "cpu")
+        torch.manual_seed(2027)
+        biased = sample_bin_heights(8192, [4.0] + [1.0] * (HEIGHT_BIN_COUNT - 1), "cpu")
+    edges = torch.tensor(HEIGHT_BIN_EDGES, dtype=torch.float64)
+    uniform_index = torch.bucketize(uniform.to(torch.float64), edges[1:-1], right=True)
+    biased_index = torch.bucketize(biased.to(torch.float64), edges[1:-1], right=True)
+    uniform_fraction = torch.bincount(uniform_index, minlength=HEIGHT_BIN_COUNT).float() / len(uniform)
+    biased_fraction = torch.bincount(biased_index, minlength=HEIGHT_BIN_COUNT).float() / len(biased)
+    check("最终档均匀采样覆盖全部挡位",
+          bool((uniform_fraction > 0.08).all()) and bool((uniform_fraction < 0.17).all()))
+    check("挡位权重提高对应挡位采样比例",
+          float(biased_fraction[0]) > float(uniform_fraction[0]) * 2.0)
+    check("最终档采样范围正确",
+          float(uniform.min()) >= HEIGHT_MIN and float(uniform.max()) <= HEIGHT_MAX)
+
+    # 旧检查点 46mm 下限迁移与新增字段默认值
+    legacy = HeightCurriculumState()
+    legacy_state = legacy.state_dict()
+    legacy_state["z_min"] = 0.046
+    for name in ("final_accepted", "consecutive_failures", "retreats",
+                 "retreat_pending_advance", "bin_weights"):
+        legacy_state.pop(name, None)
+    migrated = HeightCurriculumState()
+    migrated.load_state_dict(legacy_state)
+    check("旧 46mm 检查点加载时迁移到 47mm 并补齐新增字段",
+          migrated.z_min == HEIGHT_MIN and migrated.final_accepted is False
+          and migrated.consecutive_failures == 0 and len(migrated.bin_weights) == HEIGHT_BIN_COUNT)
 
 
-# 验证50毫米边界的细步长、46毫米下限和旧检查点续训。
+# 验证最终档命令采样: 全挡位随机与显式固定板高
+def verify_final_mode_command_sampling() -> None:
+    env_ids = torch.arange(64)
+    state = HeightCurriculumState()
+    state.final_level_passed = True
+    state.z_min = HEIGHT_MIN
+    class _CommandProbe(HoleCommand):
+        @property
+        def device(self):
+            return "cpu"
+
+    probe = _CommandProbe.__new__(_CommandProbe)
+    probe.obstacle = SimpleNamespace()
+    probe.height_curriculum_state = state
+    probe.obstacle_sampled_bottom_z = torch.zeros(64)
+    probe.obstacle_height_sampled = torch.zeros(64, dtype=torch.bool)
+    probe.cfg = SimpleNamespace(high_obstacle_equal_height=True)
+    probe.obstacle_equal_height = torch.zeros(64, dtype=torch.bool)
+    probe.obstacle_height_command = torch.zeros(64)
+    probe._update_obstacle_height_command = lambda: None
+    with patch("mjlab.tasks.SQuRo_Hole.mdp.command.write_obstacle_mocap",
+               lambda *args, **kwargs: None), torch.random.fork_rng(devices=[]):
+        torch.manual_seed(31)
+        HoleCommand._sample_obstacle_height(probe, env_ids)
+    heights = probe.obstacle_sampled_bottom_z
+    check("最终档训练命令按挡位均匀采样板底",
+          float(heights.min()) >= HEIGHT_MIN and float(heights.max()) <= HEIGHT_MAX
+          and torch.unique(heights).numel() > 8)
+    state.z_min = 0.05
+    state.z_max = 0.05
+    with patch("mjlab.tasks.SQuRo_Hole.mdp.command.write_obstacle_mocap",
+               lambda *args, **kwargs: None), torch.random.fork_rng(devices=[]):
+        HoleCommand._sample_obstacle_height(probe, env_ids)
+    check("显式固定板高时仍按固定值采样",
+          bool(torch.allclose(probe.obstacle_sampled_bottom_z, torch.full((64,), 0.05))))
+
+
+# 验证50毫米边界的细步长、47毫米下限和旧检查点续训。
 def verify_fine_height_steps() -> None:
-    expected_mm = (70, 68, 66, 64, 62, 60, 58, 56, 54, 52, 50, 49, 48, 47, 46)
+    expected_mm = (70, 68, 66, 64, 62, 60, 58, 56, 54, 52, 50, 49, 48, 47)
     state = HeightCurriculumState()
     for index, height_mm in enumerate(expected_mm[1:], start=1):
         previous_height = state.z_min
@@ -466,10 +610,10 @@ def verify_fine_height_steps() -> None:
             state.record_episode(previous_height, True, iteration, HEIGHT_RULE_STAGE, True)
         check(f"课程由 {previous_height * 1000:g} 降到 {height_mm} mm",
               state.z_min == height_mm / 1000 and state.consecutive_success_batches == 0)
-    check("46毫米下限与完整降档序列一致", HEIGHT_MIN == expected_mm[-1] / 1000)
+    check("47毫米下限与完整降档序列一致", HEIGHT_MIN == expected_mm[-1] / 1000)
     for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
         state.record_episode(state.z_min, True, iteration + HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
-    check("46毫米达标后保持下限", state.z_min == HEIGHT_MIN)
+    check("47毫米达标后保持下限", state.z_min == HEIGHT_MIN)
 
     fine = HeightCurriculumState(level_start_iteration=0)
     fine.z_min = 0.050
@@ -549,7 +693,7 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
     set_sites(env, x1 - 0.01)
     monitor.compute()
     set_sites(env, x1 + 0.005, z=bottom)
-    set_sites(env, x1 + 0.005, y=0.15, z=bottom + 0.02, env_ids=torch.tensor([1], device=env.device))
+    set_sites(env, x1 + 0.005, y=0.35, z=bottom + 0.02, env_ids=torch.tensor([1], device=env.device))
     set_sites(env, x1 + 0.005, z=bottom + 0.02, env_ids=torch.tensor([2], device=env.device))
     monitor.compute()
     set_sites(env, x2 + 0.01, y=0.0, z=bottom)
@@ -838,6 +982,7 @@ def main() -> None:
     verify_high_obstacle_modes()
     verify_curriculum_state()
     verify_evaluation_curriculum()
+    verify_final_mode_command_sampling()
     verify_fine_height_steps()
     verify_real_env()
     if FAILURES:
