@@ -30,6 +30,7 @@ GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
 BASE_VEL = 0.1                      # 基础速度 (m/s, 1Hz 时)
 VELOCITY_CURVATURE_POWER = 1.5
 VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯低速)
+REFERENCE_CURVATURE_BLEND = 2.0     # 二阶段后脊柱在零曲率附近的平滑范围
 
 
 # 奖励权重阶段

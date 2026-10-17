@@ -24,7 +24,7 @@ from .indices import (
     _ACT_HR_HIP_ID,
     _ACT_HR_KNEE_ID,
 )
-from .curriculums import CURVATURE_TARGET_MAX
+from .curriculums import CURVATURE_TARGET_MAX, REFERENCE_CURVATURE_BLEND
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -59,6 +59,15 @@ _table_device: str | None = None
 _k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
 _pos_table: torch.Tensor | None = None     # [2, _NUM_CURV, 50, 14] (内侧, 曲率, 相位, 关节)
 _vel_table: torch.Tensor | None = None     # 同上
+
+
+# 平滑后脊柱曲率幅值及其导数，零点保留微小弯曲以避免速度翻转。
+def smooth_curvature_magnitude(curvature: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    magnitude = curvature.abs()
+    ratio = (magnitude / REFERENCE_CURVATURE_BLEND).clamp(max=1.0)
+    rounded = REFERENCE_CURVATURE_BLEND * (3.0 + 6.0 * ratio.square() - ratio.pow(4)) / 8.0
+    slope = (1.5 * ratio - 0.5 * ratio.pow(3)) * curvature.sign()
+    return torch.where(magnitude < REFERENCE_CURVATURE_BLEND, rounded, magnitude), slope
 
 
 
@@ -273,7 +282,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     k_norm = curvature_cmd / kappa_norm          # 归一化曲率，范围 [-1, 1]
-    abs_k_norm = curvature_cmd.abs() / kappa_norm
+    smooth_magnitude, smooth_slope = smooth_curvature_magnitude(curvature_cmd)
+    phase1 = env.command_manager._terms["slalom_cmd"].phase1_mask
+    hind_magnitude = torch.where(phase1, smooth_magnitude, abs_k)
+    hind_slope = torch.where(phase1, smooth_slope, curvature_cmd.sign())
+    abs_k_norm = hind_magnitude / kappa_norm
 
     # 各脊柱关节目标角度（弧度），超出限位的部分被截住
     f_spine1_raw = -0.65 * k_norm
@@ -296,7 +309,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_vel[:, _ACT_NECK_YAW_ID] = torch.where(unclamped_yaw, 0.8 * kappa_dot / kappa_norm, zero_dot)
     ref_vel[:, _ACT_NECK_PITCH_ID] = 0.0
     ref_vel[:, _ACT_H_SPINE1_ID] = torch.where(unclamped_h,
-                                -0.65 * torch.sign(curvature_cmd) * kappa_dot / kappa_norm,
+                                -0.65 * hind_slope * kappa_dot / kappa_norm,
                                 zero_dot)
     ref_vel[:, _ACT_H_BODY_ID] = -0.7 * kappa_dot / kappa_norm
     # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
