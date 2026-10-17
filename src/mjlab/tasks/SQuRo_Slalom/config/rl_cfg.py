@@ -45,7 +45,5 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     clip_actions=None,
     seed=42,
     
-    resume=True,
-    load_run="2026-10-17_03-11-13",
-    load_checkpoint="model_2900.pt",
+    resume=False,
   )
