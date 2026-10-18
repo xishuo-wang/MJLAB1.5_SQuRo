@@ -162,18 +162,23 @@ def sample_phase0_schedule(iteration: int, count: int, device) -> dict:
             "peak": segments.abs().amax(dim=1)}
 
 
-# 按日程求 t 时刻的一阶段目标曲率, 段间用 smootherstep 过渡。
+# 按日程求 t 时刻的一阶段目标曲率, 段间用 smootherstep 过渡 (支持逐环境时间网格)
 def phase0_kappa_at(t: torch.Tensor, schedule: dict) -> torch.Tensor:
     segments = schedule["segments"]
     bounds = schedule["bounds"]
+    expand = t.dim() > 1
     kappa = segments[:, 0]
+    if expand:
+        kappa = kappa[:, None].expand_as(t)
     for index in range(1, segments.shape[1]):
-        boundary = bounds[:, index - 1]
-        start = boundary - 0.5 * PHASE0_TRANSITION_SECONDS
-        ratio = ((t - start) / PHASE0_TRANSITION_SECONDS).clamp(0.0, 1.0)
-        blend = ratio * ratio * (3.0 - 2.0 * ratio)
+        start = bounds[:, index - 1] - 0.5 * PHASE0_TRANSITION_SECONDS
         previous = segments[:, index - 1]
         target = segments[:, index]
+        if expand:
+            start, previous = start[:, None], previous[:, None]
+            target = target[:, None]
+        ratio = ((t - start) / PHASE0_TRANSITION_SECONDS).clamp(0.0, 1.0)
+        blend = ratio * ratio * (3.0 - 2.0 * ratio)
         kappa = torch.where(t >= start, previous + (target - previous) * blend, kappa)
     return kappa
 

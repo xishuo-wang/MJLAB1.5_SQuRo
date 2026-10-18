@@ -7,7 +7,6 @@ from .indices import _MODEL_INDICES
 from .curriculums import (
     BASE_VEL,
     CURVATURE_TARGET, Rmin,
-    PHASE0_EPISODE_SECONDS, PHASE0_TRANSITION_SECONDS,
     get_velocity_scale,
     phase0_kappa_at,
 )
@@ -100,7 +99,7 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
 
 
 
-# 预计算一阶段回合路径: 按曲率日程把逐控制步位置/朝向展开成数组
+# 预计算一阶段回合路径: 按曲率日程积分成逐控制步位置/朝向数组
 def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_y, start_heading,
                               schedule, velocity) -> None:
     n = len(env_ids)
@@ -111,68 +110,26 @@ def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_
     if getattr(env, "_phase0_path_xy", None) is None:
         env._phase0_path_xy = torch.zeros(env.num_envs, steps + 1, 2, device=env.device)
         env._phase0_path_heading = torch.zeros(env.num_envs, steps + 1, device=env.device)
-    vel = velocity
     env._phase0_schedule = schedule
-    t_grid = torch.arange(steps + 1, device=env.device).float() * dt
-    rows = env_ids
-    x, y, heading = start_x.clone(), start_y.clone(), start_heading.clone()
-    pending = torch.ones(n, steps + 1, dtype=torch.bool, device=env.device)
-    part_dt = PHASE0_TRANSITION_SECONDS / 5.0
-    for index in range(segments.shape[1]):
-        if index == 0:
-            lo = torch.zeros(n, device=env.device)
-        else:
-            lo = bounds[:, index - 1] + 0.5 * PHASE0_TRANSITION_SECONDS
-        over = bounds[:, index] > PHASE0_EPISODE_SECONDS
-        hi = torch.where(over, torch.full_like(lo, PHASE0_EPISODE_SECONDS + 1.0),
-                         bounds[:, index] - 0.5 * PHASE0_TRANSITION_SECONDS)
-        kappa = segments[:, index]
-        # 用 pending 保证每个控制步只写一次, 同时消除浮点边界上的缝隙
-        mask = pending & (t_grid[None, :] < hi[:, None])
-        _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading)
-        pending = pending & (~mask)
-        x, y, heading = _arc_pose(x, y, heading, kappa, vel, hi - lo)
-        if index + 1 >= segments.shape[1]:
-            continue
-        # 段间过渡: 5 个子弧逼近 smootherstep, 保证路径连续
-        part_lo = bounds[:, index] - 0.5 * PHASE0_TRANSITION_SECONDS
-        for part in range(5):
-            lo = part_lo + part * part_dt
-            hi = lo + part_dt
-            kappa = phase0_kappa_at(0.5 * (lo + hi), {"segments": segments, "bounds": bounds})
-            mask = pending & (t_grid[None, :] < hi[:, None])
-            _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading)
-            pending = pending & (~mask)
-            x, y, heading = _arc_pose(x, y, heading, kappa, vel, hi - lo)
-
-
-# 把一段常数曲率弧的逐控制步位姿写入本回合路径数组
-def _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading) -> None:
-    local = (t_grid[None, :] - lo[:, None]).clamp_min(0.0)
-    turning = kappa.abs() > 1e-6
-    safe = torch.where(turning, kappa, torch.ones_like(kappa))[:, None]
-    sin_theta = torch.sin(heading)[:, None]
-    cos_theta = torch.cos(heading)[:, None]
-    theta = heading[:, None] + kappa[:, None] * vel[:, None] * local
-    px = torch.where(turning[:, None], x[:, None] + (torch.sin(theta) - sin_theta) / safe,
-                     x[:, None] + vel[:, None] * local * cos_theta)
-    py = torch.where(turning[:, None], y[:, None] - (torch.cos(theta) - cos_theta) / safe,
-                     y[:, None] + vel[:, None] * local * torch.sin(heading)[:, None])
-    env._phase0_path_xy[rows, :, 0] = torch.where(mask, px, env._phase0_path_xy[rows, :, 0])
-    env._phase0_path_xy[rows, :, 1] = torch.where(mask, py, env._phase0_path_xy[rows, :, 1])
-    env._phase0_path_heading[rows, :] = torch.where(mask, theta, env._phase0_path_heading[rows, :])
-
-
-# 弧段端点位姿 (与 _write_arc 同一公式)
-def _arc_pose(x, y, heading, kappa, vel, duration):
-    theta = heading + kappa * vel * duration
+    # 逐控制步中点曲率, 用圆弧弦增量累积: 常数曲率下与解析圆弧一致
+    mid_t = (torch.arange(steps, device=env.device).float() + 0.5) * dt
+    kappa = phase0_kappa_at(mid_t[None, :].expand(n, -1),
+                            {"segments": segments, "bounds": bounds})
+    delta_theta = kappa * velocity[:, None] * dt
+    heading = torch.cat((start_heading[:, None],
+                         start_heading[:, None] + torch.cumsum(delta_theta, dim=1)), dim=1)
+    previous, following = heading[:, :-1], heading[:, 1:]
     turning = kappa.abs() > 1e-6
     safe = torch.where(turning, kappa, torch.ones_like(kappa))
-    nx = torch.where(turning, x + (torch.sin(theta) - torch.sin(heading)) / safe,
-                     x + vel * duration * torch.cos(heading))
-    ny = torch.where(turning, y - (torch.cos(theta) - torch.cos(heading)) / safe,
-                     y + vel * duration * torch.sin(heading))
-    return nx, ny, theta
+    chord_x = torch.where(turning, (torch.sin(following) - torch.sin(previous)) / safe,
+                          velocity[:, None] * dt * torch.cos(previous))
+    chord_y = torch.where(turning, -(torch.cos(following) - torch.cos(previous)) / safe,
+                          velocity[:, None] * dt * torch.sin(previous))
+    env._phase0_path_xy[env_ids, :, 0] = torch.cat(
+        (start_x[:, None], start_x[:, None] + torch.cumsum(chord_x, dim=1)), dim=1)
+    env._phase0_path_xy[env_ids, :, 1] = torch.cat(
+        (start_y[:, None], start_y[:, None] + torch.cumsum(chord_y, dim=1)), dim=1)
+    env._phase0_path_heading[env_ids, :] = heading
 
 
 # 路径参考计算 — 基元阶段: 查本回合预计算路径, 动态切换时路径保持连续
