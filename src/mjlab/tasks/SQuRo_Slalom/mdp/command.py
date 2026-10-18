@@ -16,7 +16,7 @@ from .curriculums import (
     get_phase0_curvature_range, get_training_phase, get_training_phase_batch,
     get_velocity_scale, phase0_kappa_at, sample_curvature_indices, sample_phase0_schedule,
 )
-from .path import _INIT_DIST, compute_path_ref, get_phase0_approach, get_slalom_tables
+from .path import _INIT_DIST, build_phase0_episode_path, compute_path_ref, get_phase0_approach, get_slalom_tables
 from .pole import write_pole_mocap
 from .reference import invalidate_reference_cache
 from .slalom_geometry import curvature_from_spacing, get_slalom_geometry
@@ -96,19 +96,11 @@ class SlalomCommand(CommandTerm):
     def curvature_peak_command(self) -> torch.Tensor:
         return self.curvature_peak
 
-    # 一阶段路径状态: 位置/朝向/已推进步数, 逐环境维护
-    def _sync_path_state(self, env_ids: torch.Tensor, ax: torch.Tensor, ay: torch.Tensor,
-                         ah: torch.Tensor) -> None:
-        state = getattr(self._env, "_phase0_path_state", None)
-        if state is None:
-            state = {"xy": torch.zeros(self.num_envs, 2, device=self.device),
-                     "heading": torch.zeros(self.num_envs, device=self.device),
-                     "step": torch.full((self.num_envs,), -1.0, device=self.device)}
-            self._env._phase0_path_state = state
-        state["xy"][env_ids, 0] = ax
-        state["xy"][env_ids, 1] = ay
-        state["heading"][env_ids] = ah
-        state["step"][env_ids] = 0.0
+    # 一阶段路径按本回合日程预计算 (位置/朝向逐控制步数组)
+    def _build_path(self, env_ids: torch.Tensor, ax: torch.Tensor, ay: torch.Tensor,
+                    ah: torch.Tensor) -> None:
+        build_phase0_episode_path(self._env, env_ids, ax, ay, ah,
+                                  self.phase0_schedule, self.vel_command[env_ids])
 
     # 仅在回合开始时采样高度和自身步频。
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -188,7 +180,7 @@ class SlalomCommand(CommandTerm):
         self.robot.write_root_state_to_sim(root, env_ids=env_ids)
         write_pole_mocap(env, env_ids, self.pole_spacing[env_ids], self.pole_y[env_ids], phase1)
         if not phase1:
-            self._sync_path_state(env_ids, ax, ay, ah)
+            self._build_path(env_ids, ax, ay, ah)
         self._start_recorded[env_ids] = False
 
     # 命令管理器完成重采样后同步几何，并使参考缓存失效。
@@ -229,7 +221,9 @@ class SlalomCommand(CommandTerm):
         self.metrics["pole_spacing"].copy_(self.pole_spacing)
         schedule = getattr(self, "phase0_schedule", None)
         if schedule is not None and "phase0_dynamic" in self.metrics:
-            self.metrics["phase0_dynamic"].copy_(schedule["dynamic"].float())
+            # 只标记一阶段环境, 二阶段不更新旧日程
+            phase0 = (~self.phase1_mask).float()
+            self.metrics["phase0_dynamic"].copy_(phase0 * schedule["dynamic"].float())
 
     # 绘制选中环境本回合的真实参考几何。
     def _debug_vis_impl(self, visualizer: DebugVisualizer) -> None:
@@ -247,13 +241,21 @@ class SlalomCommand(CommandTerm):
                     visualizer.add_sphere(center=np.array([x + offset[0], path["y"][i] + offset[1], z]),
                                           radius=0.004, color=(0.2, 0.7, 1.0, 0.5), label=f"{part_name}_{i}")
         else:
-            k, velocity = float(self.curvature_command[batch]), float(self.vel_command[batch])
-            for i, t in enumerate(np.linspace(0, self._env.cfg.episode_length_s, 60)):
-                distance = velocity * t - _INIT_DIST
-                x = distance if abs(k) < 1e-6 else math.sin(k * distance) / k
-                y = 0.0 if abs(k) < 1e-6 else (1 - math.cos(k * distance)) / k
-                visualizer.add_sphere(center=np.array([x + offset[0], y + offset[1], z]), radius=0.004,
-                                      color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
+            # 按本回合预计算轨迹画线, 动态日程与恒定圆弧都能如实显示
+            path_xy = getattr(self._env, "_phase0_path_xy", None)
+            if path_xy is not None:
+                for i in np.linspace(0, path_xy.shape[1] - 1, 60).astype(int):
+                    point = path_xy[batch, i].detach().cpu().numpy()
+                    visualizer.add_sphere(center=np.array([point[0] + offset[0], point[1] + offset[1], z]),
+                                          radius=0.004, color=(1.0, 0.6, 0.0, 0.6), label=f"path_{i}")
+            else:
+                k, velocity = float(self.curvature_command[batch]), float(self.vel_command[batch])
+                for i, t in enumerate(np.linspace(0, self._env.cfg.episode_length_s, 60)):
+                    distance = velocity * t - _INIT_DIST
+                    x = distance if abs(k) < 1e-6 else math.sin(k * distance) / k
+                    y = 0.0 if abs(k) < 1e-6 else (1 - math.cos(k * distance)) / k
+                    visualizer.add_sphere(center=np.array([x + offset[0], y + offset[1], z]), radius=0.004,
+                                          color=(1.0, 0.6, 0.0, 0.6), label=f"arc_{i}")
 
 
 @dataclass(kw_only=True)

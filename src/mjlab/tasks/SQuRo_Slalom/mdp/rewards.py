@@ -14,7 +14,10 @@ from .path import (
 )
 from .reference import get_reference_joint_state
 from .curriculums import get_curriculum_reward_weight
-from .corridor import compute_phase0_corridor_excess, compute_phase1_corridor_excess
+from .corridor import (
+    compute_phase0_corridor_excess, compute_phase0_dynamic_corridor_excess,
+    compute_phase1_corridor_excess,
+)
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -243,6 +246,13 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     phase1_ids = cmd.phase1_mask.nonzero(as_tuple=False).flatten()
     if phase1_ids.numel():
         inner[phase1_ids], outer[phase1_ids] = compute_phase1_corridor_excess(env, phase1_ids)
+    # 动态一阶段回合按本回合实际路径投影, 恒定一阶段保留真实圆环
+    schedule = getattr(cmd, "phase0_schedule", None)
+    if schedule is not None:
+        dynamic_ids = ((~cmd.phase1_mask) & schedule["dynamic"]).nonzero(as_tuple=False).flatten()
+        if dynamic_ids.numel():
+            inner[dynamic_ids], outer[dynamic_ids] = compute_phase0_dynamic_corridor_excess(
+                env, dynamic_ids)
     inner_f, inner_h = inner.unbind(dim=1)
     outer_f, outer_h = outer.unbind(dim=1)
     v_f, v_h = torch.maximum(inner, outer).unbind(dim=1)

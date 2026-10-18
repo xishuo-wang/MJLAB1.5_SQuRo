@@ -361,17 +361,30 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     d_pos_d_abs_k = (pos_hi - pos_lo) / (k1 - k0).unsqueeze(1)  # [N,14]
     ref_vel = ref_vel + d_pos_d_abs_k * (kappa_dot * torch.sign(curvature_cmd)).unsqueeze(1)
 
-    # 峰值轴: 一阶段的峰值随转弯命令变化, 该方向的变化同样计入速度
-    peak_dot = torch.where(phase1, torch.zeros_like(kappa_dot), kappa_dot * torch.sign(curvature_cmd))
+    # 峰值轴: 回合峰值在回合内固定, 用历史差分; 旧桩环境无峰值字段时退回瞬时曲率语义
     d_pos_d_peak = ((1 - t.unsqueeze(1)) * (pos10 - pos00) + t.unsqueeze(1) * (pos11 - pos01)) \
         / (pk1 - pk0).unsqueeze(1)
+    if peak_attr is not None:
+        peak_prev = getattr(env, "_ref_peak_prev", None)
+        if peak_prev is None:
+            peak_dot = torch.zeros_like(kappa_dot)
+        else:
+            peak_dot = (peak_k - peak_prev) / dt
+            peak_dot = torch.where(env.episode_length_buf <= 1, torch.zeros_like(peak_dot), peak_dot)
+    else:
+        peak_dot = torch.where(phase1, torch.zeros_like(kappa_dot), kappa_dot * torch.sign(curvature_cmd))
     ref_vel = ref_vel + d_pos_d_peak * peak_dot.unsqueeze(1)
 
     # 动态覆盖脊柱侧摆参考（四关节线性映射，依据 ω_cmd）
     k_norm = curvature_cmd / kappa_norm          # 归一化曲率，范围 [-1, 1]
     smooth_magnitude, smooth_slope = smooth_curvature_magnitude(curvature_cmd)
-    hind_magnitude = torch.where(phase1, smooth_magnitude, abs_k)
-    hind_slope = torch.where(phase1, smooth_slope, curvature_cmd.sign())
+    # 二阶段与动态一阶段都经过零点: 幅值、斜率与四脊柱滤波统一用同源平滑, 恒定一阶段保持原状
+    schedule = getattr(command_term, "phase0_schedule", None)
+    dynamic_phase0 = (schedule["dynamic"] & ~phase1) if schedule is not None \
+        else torch.zeros_like(phase1)
+    smooth_mask = phase1 | dynamic_phase0
+    hind_magnitude = torch.where(smooth_mask, smooth_magnitude, abs_k)
+    hind_slope = torch.where(smooth_mask, smooth_slope, curvature_cmd.sign())
     abs_k_norm = hind_magnitude / kappa_norm
 
     # 各脊柱关节目标角度（弧度），超出限位的部分被截住
@@ -398,10 +411,11 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
                                 -0.65 * hind_slope * kappa_dot / kappa_norm,
                                 zero_dot)
     ref_vel[:, _ACT_H_BODY_ID] = -0.7 * kappa_dot / kappa_norm
-    _smooth_spine_reference(env, ref_pos, ref_vel, phase1)
+    _smooth_spine_reference(env, ref_pos, ref_vel, smooth_mask)
     # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
     if getattr(env, "_ref_phase_step", None) != current_step:
         env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]
+        env._ref_peak_prev = peak_k.clone()  # type: ignore[attr-defined]
         env._ref_phase = (phase + gait_freq * dt) % 1.0  # type: ignore[attr-defined]
         # 重置环境 (含超时, reset_buf = 终止 | 超时) 的步态相位清零, 保证每个回合从同一相位起步
         reset_buf = getattr(env, "reset_buf", None)

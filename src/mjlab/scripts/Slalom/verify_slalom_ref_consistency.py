@@ -554,9 +554,9 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         jump = float(torch.diff(kappa).abs().max())
         self.assertLess(jump, 0.6, msg=f"曲率切换单步跳变 {jump:.3f}")
 
-    # 动态曲率路径连续: 单步位移有界, 恒定曲率段落在精确圆弧上。
+    # 动态曲率路径连续: 预计算轨迹逐步连续, 恒定曲率段落在精确圆弧上。
     def test_dynamic_path_is_continuous(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_arc_path_ref
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path, compute_arc_path_ref
         segments = torch.zeros(2, 6)
         segments[0, :2] = torch.tensor([8.0, -8.0])
         bounds = torch.full((2, 6), 1e9)
@@ -567,13 +567,13 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
                  phase0_schedule={"dynamic": torch.tensor([True, False]),
                                   "segments": segments, "bounds": bounds,
                                   "peak": torch.tensor([8.0, 8.0])})
-        env = NS(device=torch.device("cpu"), num_envs=2, step_dt=0.01,
+        env = NS(device=torch.device("cpu"), num_envs=2, step_dt=0.01, max_episode_length=2000,
                  episode_length_buf=torch.zeros(2, dtype=torch.long),
                  command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
-        env._phase0_path_state = {"xy": torch.zeros(2, 2), "heading": torch.zeros(2),
-                                  "step": torch.zeros(2)}
+        build_phase0_episode_path(env, torch.arange(2), torch.zeros(2), torch.zeros(2), torch.zeros(2),
+                                  cmd.phase0_schedule, command[:, 0])
         previous = None
-        for step in range(1, 1001):
+        for step in range(1, 2001):
             env.episode_length_buf.fill_(step)
             x, y, _, _, heading = compute_arc_path_ref(env)
             if previous is not None:
@@ -582,14 +582,10 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
                 self.assertTrue(bool(torch.isfinite(heading).all()))
             previous = (x.clone(), y.clone())
         # 前 5 s 恒定曲率 8: 位置落在半径 0.125 m 的圆弧上
-        radius = 1.0 / 8.0
         env.episode_length_buf.fill_(100)  # 1 s
-        env._phase0_path_state = {"xy": torch.zeros(2, 2), "heading": torch.zeros(2),
-                                  "step": torch.zeros(2)}
-        env._phase0_path_cache = None
         x, y, _, _, _ = compute_arc_path_ref(env)
         theta = 8.0 * 0.1 * 1.0
-        expected = 2.0 * radius * math.sin(theta / 2.0)
+        expected = 2.0 * (1.0 / 8.0) * math.sin(theta / 2.0)
         self.assertAlmostEqual(float(torch.hypot(x[0], y[0])), expected, places=4)
 
     # 一阶段动态回合的参考步幅按回程峰值缩放, 而不是瞬时曲率。
@@ -610,5 +606,91 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
                            msg="参考步幅没有按回程峰值缩放")
 
 
+    # 回合峰值固定时, 速度参考必须等于位置差分 (峰值轴不产生虚构运动)
+    def test_fixed_peak_velocity_matches_position_difference(self):
+        env = make_ref_state_env([-0.8 * CURVATURE_TARGET_MAX], phases=[0.3], gait=0.0)
+        cmd = env.command_manager._terms["slalom_cmd"]
+        cmd.curvature_peak = torch.tensor([15.0])   # 生产命令: 回合峰值在回合内固定
+        pos_a, _ = ref_mod.get_reference_joint_state(env)
+        cmd.command_tensor[:, 4] = -0.816 * CURVATURE_TARGET_MAX
+        env.common_step_counter = 1
+        env.episode_length_buf = torch.tensor([6])
+        pos_b, vel_b = ref_mod.get_reference_joint_state(env)
+        expected = (pos_b - pos_a) / STEP_DT
+        diff = (vel_b - expected).abs().max()
+        self.assertLess(float(diff), 1e-2,
+                        msg=f"固定峰值下速度参考与位置差分不符 {float(diff):.4f} rad/s")
+
+    # 动态一阶段的脊柱参考必须经过滤波, 过零不产生速度反向尖峰
+    def test_dynamic_phase0_spine_reference_smooth(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_H_SPINE1_ID
+        env = make_ref_state_env([14.9, 14.9], phases=[0.3, 0.3], gait=0.0)
+        cmd = env.command_manager._terms["slalom_cmd"]
+        cmd.curvature_peak = torch.tensor([15.0, 15.0])
+        cmd.phase0_schedule = {
+            "dynamic": torch.tensor([False, True]),
+            "segments": torch.full((2, 6), 14.9), "bounds": torch.full((2, 6), 1e9),
+        }
+        ref_mod.get_reference_joint_state(env)
+        # 调度峰值仍是 15, 但瞬时曲率越过零点; 恒定回合保留原始 |κ| 映射
+        cmd.phase0_schedule["segments"][:, :] = -0.1
+        env.common_step_counter = 1
+        env.episode_length_buf = torch.tensor([6, 6])
+        _, vel = ref_mod.get_reference_joint_state(env)
+        raw = abs(float(vel[0, _ACT_H_SPINE1_ID]))
+        smooth = abs(float(vel[1, _ACT_H_SPINE1_ID]))
+        self.assertGreater(raw, smooth * 1.5,
+                           msg=f"动态一阶段脊柱速度未平滑: 恒定 {raw:.3f} 动态 {smooth:.3f} rad/s")
+
+
+    # 后脊柱限位 ±20 附近: 位置不越限, 速度有限
+    def test_spine_reference_clamp_continuity(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_H_SPINE1_ID
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import H_SPINE1_LIMIT
+        env = make_ref_state_env([18.0, 18.4, 18.6, 19.0, 20.0], gait=0.0)
+        pos, vel = ref_mod.get_reference_joint_state(env)
+        hind = pos[:, _ACT_H_SPINE1_ID]
+        self.assertTrue(bool(torch.all(hind.abs() <= H_SPINE1_LIMIT + 1e-6)))
+        self.assertTrue(bool(torch.isfinite(vel).all()))
+        self.assertLess(float((hind - hind[0]).abs().max()), 0.05,
+                        msg="限幅处的后脊柱参考位置不连续")
+
+    # 动态回合走廊按实际路径投影: 中心线上相距 80 mm 的点不再被误罚
+    def test_dynamic_corridor_projects_to_actual_path(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_velocity_scale
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        segments = torch.zeros(1, 6)
+        segments[0, :2] = torch.tensor([15.0, -15.0])
+        bounds = torch.full((1, 6), 1e9)
+        bounds[0, 0] = 5.0
+        command = torch.zeros(1, 5)
+        command[0, 0] = 0.1 * 2.0 * float(get_velocity_scale(15.0))
+        cmd = NS(command=command, phase1_mask=torch.zeros(1, dtype=torch.bool),
+                 phase0_schedule={"dynamic": torch.tensor([True]), "segments": segments,
+                                  "bounds": bounds, "peak": torch.tensor([15.0])})
+        env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=2000,
+                 episode_length_buf=torch.zeros(1, dtype=torch.long),
+                 command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+                                  cmd.phase0_schedule, command[:, 0])
+        path = env._phase0_path_xy
+        heading = env._phase0_path_heading
+        # 沿实际路径取 4.75 s 处及其向前 80 mm、5.25 s 处及向后 80 mm 的点
+        offset = int(round(0.080 / float(command[0, 0]) / 0.01))
+        points = torch.stack((path[0, 475], path[0, 475 + offset],
+                              path[0, 525], path[0, 525 - offset]))[None]
+        distance, _, _ = project_phase0_path_points(points, path, heading)
+        self.assertLess(float(distance.max()), 1e-3, msg="实际路径上的点被判离开走廊")
+        # 横向偏 50 mm 的点应测得约 50 mm
+        local = path[0, 600]
+        angle = float(heading[0, 600])
+        side = (local + 0.05 * torch.tensor([-math.sin(angle), math.cos(angle)]))[None, None]
+        distance, _, _ = project_phase0_path_points(side, path, heading)
+        self.assertAlmostEqual(float(distance[0, 0]), 0.05, delta=2e-3,
+                               msg="横向偏置的距离测量不正确")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

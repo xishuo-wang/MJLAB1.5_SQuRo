@@ -7,6 +7,7 @@ from .indices import _MODEL_INDICES
 from .curriculums import (
     BASE_VEL,
     CURVATURE_TARGET, Rmin,
+    PHASE0_EPISODE_SECONDS, PHASE0_TRANSITION_SECONDS,
     get_velocity_scale,
     phase0_kappa_at,
 )
@@ -99,51 +100,104 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
 
 
 
-# 路径参考计算 — 基元阶段: 按曲率日程积分圆弧, 动态切换时路径保持连续
+# 预计算一阶段回合路径: 按曲率日程把逐控制步位置/朝向展开成数组
+def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_y, start_heading,
+                              schedule, velocity) -> None:
+    n = len(env_ids)
+    steps = int(env.max_episode_length)
+    dt = float(env.step_dt)
+    segments = schedule["segments"][env_ids]
+    bounds = schedule["bounds"][env_ids]
+    if getattr(env, "_phase0_path_xy", None) is None:
+        env._phase0_path_xy = torch.zeros(env.num_envs, steps + 1, 2, device=env.device)
+        env._phase0_path_heading = torch.zeros(env.num_envs, steps + 1, device=env.device)
+    vel = velocity
+    env._phase0_schedule = schedule
+    t_grid = torch.arange(steps + 1, device=env.device).float() * dt
+    rows = env_ids
+    x, y, heading = start_x.clone(), start_y.clone(), start_heading.clone()
+    pending = torch.ones(n, steps + 1, dtype=torch.bool, device=env.device)
+    part_dt = PHASE0_TRANSITION_SECONDS / 5.0
+    for index in range(segments.shape[1]):
+        if index == 0:
+            lo = torch.zeros(n, device=env.device)
+        else:
+            lo = bounds[:, index - 1] + 0.5 * PHASE0_TRANSITION_SECONDS
+        over = bounds[:, index] > PHASE0_EPISODE_SECONDS
+        hi = torch.where(over, torch.full_like(lo, PHASE0_EPISODE_SECONDS + 1.0),
+                         bounds[:, index] - 0.5 * PHASE0_TRANSITION_SECONDS)
+        kappa = segments[:, index]
+        # 用 pending 保证每个控制步只写一次, 同时消除浮点边界上的缝隙
+        mask = pending & (t_grid[None, :] < hi[:, None])
+        _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading)
+        pending = pending & (~mask)
+        x, y, heading = _arc_pose(x, y, heading, kappa, vel, hi - lo)
+        if index + 1 >= segments.shape[1]:
+            continue
+        # 段间过渡: 5 个子弧逼近 smootherstep, 保证路径连续
+        part_lo = bounds[:, index] - 0.5 * PHASE0_TRANSITION_SECONDS
+        for part in range(5):
+            lo = part_lo + part * part_dt
+            hi = lo + part_dt
+            kappa = phase0_kappa_at(0.5 * (lo + hi), {"segments": segments, "bounds": bounds})
+            mask = pending & (t_grid[None, :] < hi[:, None])
+            _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading)
+            pending = pending & (~mask)
+            x, y, heading = _arc_pose(x, y, heading, kappa, vel, hi - lo)
+
+
+# 把一段常数曲率弧的逐控制步位姿写入本回合路径数组
+def _write_arc(env, rows, mask, t_grid, lo, kappa, vel, x, y, heading) -> None:
+    local = (t_grid[None, :] - lo[:, None]).clamp_min(0.0)
+    turning = kappa.abs() > 1e-6
+    safe = torch.where(turning, kappa, torch.ones_like(kappa))[:, None]
+    sin_theta = torch.sin(heading)[:, None]
+    cos_theta = torch.cos(heading)[:, None]
+    theta = heading[:, None] + kappa[:, None] * vel[:, None] * local
+    px = torch.where(turning[:, None], x[:, None] + (torch.sin(theta) - sin_theta) / safe,
+                     x[:, None] + vel[:, None] * local * cos_theta)
+    py = torch.where(turning[:, None], y[:, None] - (torch.cos(theta) - cos_theta) / safe,
+                     y[:, None] + vel[:, None] * local * torch.sin(heading)[:, None])
+    env._phase0_path_xy[rows, :, 0] = torch.where(mask, px, env._phase0_path_xy[rows, :, 0])
+    env._phase0_path_xy[rows, :, 1] = torch.where(mask, py, env._phase0_path_xy[rows, :, 1])
+    env._phase0_path_heading[rows, :] = torch.where(mask, theta, env._phase0_path_heading[rows, :])
+
+
+# 弧段端点位姿 (与 _write_arc 同一公式)
+def _arc_pose(x, y, heading, kappa, vel, duration):
+    theta = heading + kappa * vel * duration
+    turning = kappa.abs() > 1e-6
+    safe = torch.where(turning, kappa, torch.ones_like(kappa))
+    nx = torch.where(turning, x + (torch.sin(theta) - torch.sin(heading)) / safe,
+                     x + vel * duration * torch.cos(heading))
+    ny = torch.where(turning, y - (torch.cos(theta) - torch.cos(heading)) / safe,
+                     y + vel * duration * torch.sin(heading))
+    return nx, ny, theta
+
+
+# 路径参考计算 — 基元阶段: 查本回合预计算路径, 动态切换时路径保持连续
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    command = cmd_term.command
-    vel_cmd = command[:, 0]                 # [N]
-    step = env.episode_length_buf.float()   # [N]
-    t = step * env.step_dt                  # [N]
-    phase1 = cmd_term.phase1_mask
-    schedule = getattr(cmd_term, "phase0_schedule", None)
+    device = env.device
+    path_xy = getattr(env, "_phase0_path_xy", None)
+    if path_xy is None:
+        env._phase0_path_xy = torch.zeros(env.num_envs, 1, 2, device=device)
+        env._phase0_path_heading = torch.zeros(env.num_envs, 1, device=device)
+        path_xy = env._phase0_path_xy
+    steps = path_xy.shape[1] - 1
+    idx = env.episode_length_buf.long().clamp(0, steps)
+    rows = torch.arange(env.num_envs, device=device)
+    xy = path_xy[rows, idx]
+    path_heading = env._phase0_path_heading[rows, idx]
+    schedule = getattr(env, "_phase0_schedule", None)
     if schedule is None:
-        schedule = {"segments": command[:, 4:5],
-                    "bounds": torch.full_like(command[:, :1], 1e9),
-                    "peak": command[:, 4].abs()}
-
-    # 逐环境路径状态: 位置、朝向、已推进到的步数 (每控制步只推进一次)
-    state = getattr(env, "_phase0_path_state", None)
-    if state is None:
-        state = {"xy": torch.zeros(env.num_envs, 2, device=env.device),
-                 "heading": torch.zeros(env.num_envs, device=env.device),
-                 "step": torch.full((env.num_envs,), -1.0, device=env.device)}
-        env._phase0_path_state = state
-    xy, heading, last_step = state["xy"], state["heading"], state["step"]
-    # 新回合起点由命令重置写入; 同一控制步内的重复调用不重复推进
-    advance = (step > last_step) & (last_step >= 0) & (~phase1)
-    if bool(advance.any()):
-        steps = (step - last_step).clamp(min=1.0)
-        mid = ((last_step + step) * 0.5) * env.step_dt
-        kappa_mid = phase0_kappa_at(mid, schedule)
-        delta_theta = kappa_mid * vel_cmd * env.step_dt * steps
-        theta = heading + delta_theta
-        turning = kappa_mid.abs() > 1e-6
-        safe_kappa = torch.where(turning, kappa_mid, torch.ones_like(kappa_mid))
-        # 圆弧精确弦增量: 常数曲率下与解析圆弧一致
-        chord_x = torch.where(turning, (torch.sin(theta) - torch.sin(heading)) / safe_kappa,
-                              vel_cmd * env.step_dt * steps * torch.cos(heading))
-        chord_y = torch.where(turning, -(torch.cos(theta) - torch.cos(heading)) / safe_kappa,
-                              vel_cmd * env.step_dt * steps * torch.sin(heading))
-        xy[:, 0] = torch.where(advance, xy[:, 0] + chord_x, xy[:, 0])
-        xy[:, 1] = torch.where(advance, xy[:, 1] + chord_y, xy[:, 1])
-        heading = torch.where(advance, theta, heading)
-        last_step = torch.where(advance, step, last_step)
-        state["heading"], state["step"] = heading, last_step
-
-    env._phase0_path_kappa = phase0_kappa_at(t, schedule)  # type: ignore[attr-defined]
-    path_heading = heading
+        schedule = getattr(cmd_term, "phase0_schedule", None)
+    if schedule is None:
+        schedule = {"segments": cmd_term.command[:, 4:5],
+                    "bounds": torch.full_like(cmd_term.command[:, :1], 1e9),
+                    "peak": cmd_term.command[:, 4].abs()}
+    env._phase0_path_kappa = phase0_kappa_at(idx.float() * env.step_dt, schedule)  # type: ignore[attr-defined]
+    vel_cmd = cmd_term.command[:, 0]
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
     origins = getattr(getattr(env, "scene", None), "env_origins", None)

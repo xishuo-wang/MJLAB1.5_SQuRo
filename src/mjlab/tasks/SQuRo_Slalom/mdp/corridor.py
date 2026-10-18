@@ -20,6 +20,7 @@ _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
                    if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
 _ENVELOPE_SAMPLE_STEP = 0.002
 _PROJECTION_ENV_BLOCK = 64
+_PHASE0_PROJECTION_STRIDE = 8
 
 
 # 将完整三维包围盒随躯干实际姿态投影到水平面。
@@ -209,4 +210,51 @@ def compute_phase1_corridor_excess(
     inner_side = curvature * lateral > 0
     inner = torch.where(inner_side, excess, 0.0).reshape(points.shape[:-1]).amax(-1)
     outer = torch.where(inner_side, 0.0, excess).reshape(points.shape[:-1]).amax(-1)
+    return inner, outer
+
+# 一阶段路径投影: 返回包络点到本回合实际路径的距离、侧向叉积与局部曲率
+def project_phase0_path_points(points: torch.Tensor, path_xy: torch.Tensor,
+                               path_heading: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    stride = _PHASE0_PROJECTION_STRIDE
+    coarse = path_xy[:, ::stride]
+    distance_sq = (points.square().sum(-1, keepdim=True) + coarse.square().sum(-1)[:, None]
+                   - 2.0 * torch.bmm(points, coarse.transpose(1, 2)))
+    nearest = distance_sq.argmin(dim=-1) * stride
+    offsets = torch.arange(-stride, stride, device=points.device)
+    indices = (nearest[..., None] + offsets).clamp(0, path_xy.shape[1] - 2)
+    rows = torch.arange(points.shape[0], device=points.device)[:, None, None]
+    start = path_xy[rows, indices]
+    end = path_xy[rows, indices + 1]
+    edges = end - start
+    delta = points[:, :, None] - start
+    fraction = ((delta * edges).sum(-1) / edges.square().sum(-1).clamp_min(1e-20)).clamp(0.0, 1.0)
+    residual = delta - fraction[..., None] * edges
+    best = residual.square().sum(-1).argmin(-1, keepdim=True)
+    chosen_residual = residual.gather(2, best[..., None].expand(-1, -1, -1, 2)).squeeze(2)
+    chosen_edge = edges.gather(2, best[..., None].expand(-1, -1, -1, 2)).squeeze(2)
+    distance = torch.linalg.vector_norm(chosen_residual, dim=-1)
+    lateral = chosen_edge[..., 0] * chosen_residual[..., 1] - chosen_edge[..., 1] * chosen_residual[..., 0]
+    head_start = path_heading[rows, indices]
+    head_end = path_heading[rows, indices + 1]
+    segment_length = torch.linalg.vector_norm(chosen_edge, dim=-1).clamp_min(1e-9)
+    curvature = (head_end - head_start).gather(2, best).squeeze(2) / segment_length
+    return distance, lateral, curvature
+
+
+# 一阶段动态回合: 按各包络点到本回合实际路径的最近距离计算内外越界
+def compute_phase0_dynamic_corridor_excess(
+    env: ManagerBasedRlEnv, env_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    vertices = project_body_envelopes(env)[env_ids]
+    points = sample_body_envelopes(env, vertices)
+    origins = getattr(env.scene, "env_origins", None)
+    if origins is not None:
+        points = points - origins[env_ids, None, None, :2]
+    path_xy = getattr(env, "_phase0_path_xy")[env_ids]
+    path_heading = getattr(env, "_phase0_path_heading")[env_ids]
+    distance, lateral, curvature = project_phase0_path_points(points.flatten(1, 2), path_xy, path_heading)
+    excess = (distance - CORRIDOR_HALF_WIDTH).clamp_min(0.0)
+    inner_side = curvature * lateral > 0.0
+    inner = torch.where(inner_side, excess, torch.zeros_like(excess)).reshape(points.shape[:-1]).amax(-1)
+    outer = torch.where(inner_side, torch.zeros_like(excess), excess).reshape(points.shape[:-1]).amax(-1)
     return inner, outer
