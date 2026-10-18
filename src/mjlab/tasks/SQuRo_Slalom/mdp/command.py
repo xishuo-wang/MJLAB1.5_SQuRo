@@ -166,7 +166,7 @@ class SlalomCommand(CommandTerm):
                 self.phase0_schedule["peak"][env_ids] = abs(self.fixed_curvature)
                 self.phase0_schedule["dynamic"][env_ids] = False
             ax, ay, ah = get_phase0_approach(self.curvature_command[env_ids])
-        self.curvature_peak[env_ids] = (self.slalom_peak_curvature[env_ids] if phase1
+        self.curvature_peak[env_ids] = (self.slalom_peak_curvature[env_ids].float() if phase1
                                         else self.phase0_schedule["peak"][env_ids])
         self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] \
             * get_velocity_scale(self.curvature_peak[env_ids])
@@ -210,7 +210,7 @@ class SlalomCommand(CommandTerm):
                                        schedule)
         self.curvature_command.copy_(torch.where(phase1, kappa, phase0_kappa))
         peak = getattr(self, "curvature_peak", None)
-        peak = self.slalom_peak_curvature if peak is None else peak
+        peak = self.slalom_peak_curvature.float() if peak is None else peak
         velocity = base_velocity * self.gait_freq_command * get_velocity_scale(peak)
         self.vel_command.copy_(torch.where(phase1, velocity, self.vel_command))
 
