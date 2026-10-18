@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from typing import Any
 
 import torch
@@ -9,7 +9,7 @@ _STEPS_PER_ITER = 48                # 与 Hole 的每轮策略步数一致
 PHASE1_MID_ITER = 2000              # iter 0-2000: 转弯曲率增大
 PHASE1_END_ITER = 3000              # 转圈结束后，新回合进入绕杆
 PHASE2_MID_ITER = 6000              # 绕杆奖励课程的后段边界
-PHASE2_END_ITER = 8000              # 完整训练预算
+PHASE2_END_ITER = 6000              # 完整训练预算
 
 CURVATURE_TARGET_MAX = 20.0         # 最大曲率同时用于命令采样与最大形变归一化
 SLALOM_CURVATURE_MIN = 5
@@ -54,6 +54,7 @@ SPACING_MIN_DWELL_ITERATIONS = 100
 SPACING_PRETRAIN_ITERATIONS = 500
 SPACING_EVALUATION_INTERVAL = 100
 SPACING_EVALUATION_ENVS = 1024           # 独立考核环境数，每批取一整轮
+SPACING_EVALUATION_EPISODE_SECONDS = 20.0  # 考核回合时长, 比训练短以降低考核耗时
 FINAL_ACCEPT_RATE = 0.80                 # 最终档全挡位验收的整体通过率门槛
 NORMAL_BIN_TARGET_RATE = 0.60            # 普通模式非最低档加权的目标通过率
 FINAL_BIN_WEIGHT_GAIN = 2.0              # 未达标档位的训练采样权重增益
@@ -478,5 +479,6 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(
         env.common_step_counter, command.cfg.phase0_only
     )[reward_name]
+
 
 

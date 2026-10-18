@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import json
 import os
 import random
@@ -19,7 +19,7 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
   PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT, SLALOM_CURVATURE_MIN,
-  SPACING_EVALUATION_ENVS, SPACING_REQUIRED_BATCHES,
+  SPACING_EVALUATION_ENVS, SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.pole import configure_pole_collision, pole_collision_enabled
 from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry
@@ -45,6 +45,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     if self._evaluation_env is None:
       cfg = copy.deepcopy(self.env.unwrapped.cfg)
       cfg.scene.num_envs = SPACING_EVALUATION_ENVS
+      cfg.episode_length_s = SPACING_EVALUATION_EPISODE_SECONDS
       command_cfg = cfg.commands["slalom_cmd"]
       command_cfg.enable_spacing_curriculum = True
       command_cfg.phase0_only = False
@@ -259,4 +260,5 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
         wandb.save(str(onnx_path), base_path=str(policy_dir))
     except Exception as e:
       print(f"[警告] ONNX 导出失败，训练继续：{e}")
+
 

@@ -1,4 +1,4 @@
-# SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
+﻿# SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
 # 覆盖: 局部重置隔离、参考推进与自身步频一致、gait=1 几何不变、命令计时器、
 #       固定间距的单一真源、一阶段预算与最大形变、腿部参考过零连续。
 import math
@@ -255,7 +255,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         from mjlab.tasks.SQuRo_Slalom.config.rl_cfg import SQuRo_Slalom_PPO_Runner_Cfg
         self.assertEqual(PHASE1_END_ITER, 3000)
         self.assertEqual(PHASE1_END_ITER - PHASE1_MID_ITER, 1000)
-        self.assertEqual(SQuRo_Slalom_PPO_Runner_Cfg().max_iterations, 8000)
+        self.assertEqual(SQuRo_Slalom_PPO_Runner_Cfg().max_iterations, PHASE2_END_ITER)
 
     # 曲率过零时腿部参考必须连续 (不允许整条腿的相位被换掉)
     def test_leg_ref_continuous_across_zero_curvature(self):
@@ -774,4 +774,5 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
