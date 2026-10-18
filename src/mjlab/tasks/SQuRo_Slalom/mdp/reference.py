@@ -39,6 +39,19 @@ STRIDE_MIN = 0.0                                            # 最小步幅
 F_SPINE1_LIMIT = 0.6
 H_SPINE1_LIMIT = 0.6
 NECK_YAW_LIMIT = 0.8
+# 腿部参考限位 (rad): 关节 range 与执行器 ctrlrange 的交集
+_LEG_LIMITS: dict[int, tuple[float, float]] = {
+    _ACT_FL_SHOULDER_ID: (-1.5, 1.9),
+    _ACT_FL_ELBOW_ID: (-1.2, 2.5),
+    _ACT_FR_SHOULDER_ID: (-1.5, 1.9),
+    _ACT_FR_ELBOW_ID: (-1.2, 2.5),
+    _ACT_HL_HIP_ID: (-1.5, 0.8),
+    _ACT_HL_KNEE_ID: (-0.5, 1.9),
+    _ACT_HR_HIP_ID: (-1.5, 0.8),
+    _ACT_HR_KNEE_ID: (-0.5, 1.9),
+}
+# 步幅放大上限: 参考不超过生物数据原幅值, 更快的命令由策略吸收
+MAX_STRIDE_SCALE = 1.0
 
 
 # 离散曲率绝对值表
@@ -56,6 +69,7 @@ _NUM_CURV = len(_CURVATURE_BINS)
 _TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
 _table_device: str | None = None
+_table_base_vel: float = BASE_VEL
 _k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
 _pos_table: torch.Tensor | None = None     # [峰值档, 内侧, 瞬时档, 相位, 关节]
 _vel_table: torch.Tensor | None = None     # 同上
@@ -102,11 +116,19 @@ def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True)
 
 
 
-# 加载 CSV + IK 预计算（步幅按本回合目标速度缩放，瞬时曲率只负责左右差速）
-def _init_tables(device: torch.device | str) -> None:
-    global _tables_initialized, _pos_table, _vel_table, _k_bins, _table_device
+# 把 IK 输出折回关节范围附近并夹到机械限位, 防止不可达目标产生非法参考
+def _clamp_leg_angle(angle: torch.Tensor, joint_id: int) -> torch.Tensor:
+    low, high = _LEG_LIMITS[joint_id]
+    wrapped = (angle - low) % (2.0 * math.pi) + low
+    return torch.where(wrapped > high, wrapped - 2.0 * math.pi, wrapped).clamp(low, high)
 
-    if _tables_initialized and _table_device == str(device):
+
+# 加载 CSV + IK 预计算（步幅按本回合目标速度缩放，瞬时曲率只负责左右差速）
+def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) -> None:
+    global _tables_initialized, _pos_table, _vel_table, _k_bins, _table_device, _table_base_vel
+
+    base_velocity = float(base_velocity)
+    if _tables_initialized and _table_device == str(device) and _table_base_vel == base_velocity:
         return
 
     # 加载 CSV
@@ -143,11 +165,11 @@ def _init_tables(device: torch.device | str) -> None:
 
     # 对每个峰值档与瞬时曲率生成参考：平均步幅 = 本回合每周前进距离
     for p, peak_k in enumerate(_CURVATURE_BINS):
-        advance = BASE_VEL * float(get_velocity_scale(peak_k))
+        advance = base_velocity * float(get_velocity_scale(peak_k))
         for i, abs_k in enumerate(_CURVATURE_BINS):
             scale_inner = 1.0 - (1.0 - STRIDE_MIN) * abs_k / CURVATURE_TARGET_MAX
             mean_factor = 0.5 * (1.0 + scale_inner)
-            row_scale = advance / max(stride_mean * mean_factor, 1e-6)
+            row_scale = min(advance / max(stride_mean * mean_factor, 1e-6), MAX_STRIDE_SCALE)
 
             for side in (0, 1):
                 # 内侧腿缩放其 Y_mean (side=0: FL/HL, side=1: FR/HR), 外侧腿保持 1.0
@@ -156,30 +178,30 @@ def _init_tables(device: torch.device | str) -> None:
                 scale_hL = scale_inner if side == 0 else 1.0
                 scale_hR = 1.0 if side == 0 else scale_inner
 
-                # 分别计算每条腿的关节角（应用相位差）
+                # 分别计算每条腿的关节角（应用相位差并夹到关节限位）
                 shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
                 sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift),
                                              torch.roll(z_f_t, shifts=shift), True)
-                pos[p, side, i, :, _ACT_FL_SHOULDER_ID] = sh
-                pos[p, side, i, :, _ACT_FL_ELBOW_ID] = el
+                pos[p, side, i, :, _ACT_FL_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FL_SHOULDER_ID)
+                pos[p, side, i, :, _ACT_FL_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FL_ELBOW_ID)
 
                 shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
                 sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift),
                                              torch.roll(z_f_t, shifts=shift), True)
-                pos[p, side, i, :, _ACT_FR_SHOULDER_ID] = sh
-                pos[p, side, i, :, _ACT_FR_ELBOW_ID] = el
+                pos[p, side, i, :, _ACT_FR_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FR_SHOULDER_ID)
+                pos[p, side, i, :, _ACT_FR_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FR_ELBOW_ID)
 
                 shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
                 hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift),
                                              torch.roll(z_h_t, shifts=shift), False)
-                pos[p, side, i, :, _ACT_HL_HIP_ID] = hp
-                pos[p, side, i, :, _ACT_HL_KNEE_ID] = kn
+                pos[p, side, i, :, _ACT_HL_HIP_ID] = _clamp_leg_angle(hp, _ACT_HL_HIP_ID)
+                pos[p, side, i, :, _ACT_HL_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HL_KNEE_ID)
 
                 shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
                 hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift),
                                              torch.roll(z_h_t, shifts=shift), False)
-                pos[p, side, i, :, _ACT_HR_HIP_ID] = hp
-                pos[p, side, i, :, _ACT_HR_KNEE_ID] = kn
+                pos[p, side, i, :, _ACT_HR_HIP_ID] = _clamp_leg_angle(hp, _ACT_HR_HIP_ID)
+                pos[p, side, i, :, _ACT_HR_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HR_KNEE_ID)
 
                 # 脊柱四列保持零位（由 κ 解析驱动, 见 get_reference_joint_state）
                 pos[p, side, i, :, _ACT_F_SPINE1_ID] = 0.0   # F_spine1
@@ -198,10 +220,11 @@ def _init_tables(device: torch.device | str) -> None:
     _vel_table = vel.contiguous()
     _k_bins = torch.tensor(_CURVATURE_BINS, device=dev, dtype=torch.float32)
     _table_device = str(device)
+    _table_base_vel = base_velocity
     _tables_initialized = True
 
     print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 峰值 × 2 内侧 × {_NUM_CURV} 瞬时 × "
-          f"{_TABLE_RESOLUTION} bins × {len(_ACT_JOINT_NAMES)} joints")
+          f"{_TABLE_RESOLUTION} bins × {len(_ACT_JOINT_NAMES)} joints, 基础速度 {base_velocity:.3f} m/s")
 
 
 
@@ -224,13 +247,10 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
         env._ref_phase = torch.zeros(env.num_envs, device=env.device)  # type: ignore[attr-defined]
         resolve_model_indices(env.scene["robot"])
 
-    # 首次: 预计算查找表
-    if not _tables_initialized:
-        _init_tables(env.device)
-
-    # 确保表在正确设备上
-    if _table_device != str(env.device):
-        _init_tables(env.device)
+    # 预计算查找表: 设备或实际基础速度变化时重建 (回放可指定固定速度)
+    base_vel = float(getattr(env, "_slalom_base_vel_scalar", BASE_VEL))
+    if not _tables_initialized or _table_device != str(env.device) or _table_base_vel != base_vel:
+        _init_tables(env.device, base_vel)
 
     assert _pos_table is not None and _vel_table is not None
 

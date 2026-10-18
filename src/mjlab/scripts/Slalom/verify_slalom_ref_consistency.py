@@ -285,6 +285,57 @@ class TestSlalomRefConsistency(unittest.TestCase):
             self.assertLess(float(travel_right_neg[i]), float(travel_left_neg[i]) * 0.95,
                             msg="右转时右腿 (内侧) 行程未被压缩")
 
+    # 腿部参考必须落在关节范围与执行器范围的交集内
+    def test_leg_reference_within_mechanical_limits(self):
+        from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_spec
+        from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
+        model = get_spec().compile()
+        limits = []
+        for name in _ACT_JOINT_NAMES:
+            joint = model.joint(name)
+            actuator = model.actuator(name.removesuffix("_joint"))
+            low = max(model.actuator_ctrlrange[actuator.id, 0], model.jnt_range[joint.id, 0])
+            high = min(model.actuator_ctrlrange[actuator.id, 1], model.jnt_range[joint.id, 1])
+            limits.append((float(low), float(high)))
+        limits = torch.tensor(limits)
+        ref_mod._init_tables("cpu")
+        table = ref_mod._pos_table
+        bins = ref_mod._CURVATURE_BINS
+        index = torch.arange(len(bins))
+        rows = {
+            "绕杆": torch.cat([table[p, :, :p + 1] for p, peak in enumerate(bins) if peak >= 5], dim=1),
+            "转圈": table[index, :, index],
+        }
+        for name, values in rows.items():
+            excess = (values - limits[:, 1]).clamp(min=0.0) + (limits[:, 0] - values).clamp(min=0.0)
+            self.assertLess(float(excess.max()), 1e-4,
+                            msg=f"{name}参考超出机械限位 {float(torch.rad2deg(excess.max())):.2f}°")
+
+    # 腿部参考角度沿相位连续, 速度有界
+    def test_leg_reference_continuous_and_bounded(self):
+        ref_mod._init_tables("cpu")
+        table, vel_table = ref_mod._pos_table, ref_mod._vel_table
+        bins = ref_mod._CURVATURE_BINS
+        slalom = torch.cat([table[p, :, :p + 1] for p, peak in enumerate(bins) if peak >= 5], dim=1)
+        slalom_vel = torch.cat([vel_table[p, :, :p + 1] for p, peak in enumerate(bins) if peak >= 5], dim=1)
+        jump = torch.diff(slalom[..., _ACT_LEG_IDS], dim=-2).abs().max()
+        self.assertLess(float(jump), 1.0, msg=f"腿部参考相位跳变 {float(jump):.3f} rad")
+        self.assertLess(float(slalom_vel[..., _ACT_LEG_IDS].abs().max() * 2.0), 40.0,
+                        msg="腿部参考速度超过 40 rad/s (2 Hz)")
+
+    # 基础速度必须进入参考表: 同一峰值不同基础速度对应不同步幅
+    def test_reference_tracks_base_velocity(self):
+        def leg_travel(base):
+            ref_mod._init_tables("cpu", base)
+            row = ref_mod._pos_table[ref_mod._CURVATURE_BINS.index(15.0), :, 0]
+            leg = row[:, :, _ACT_LEG_IDS]
+            return float((leg.max(dim=1).values - leg.min(dim=1).values).abs().max())
+
+        low, high = leg_travel(0.05), leg_travel(0.15)
+        ref_mod._init_tables("cpu", BASE_VEL)
+        # 关节角行程对足端步幅是非线性的, 只要求明显随基础速度变化
+        self.assertGreater(high / max(low, 1e-6), 1.5, msg="基础速度未进入参考步幅")
+
     # 脊柱/颈参考不得超过模型关节与执行器限位
     def test_spine_ref_within_joint_limits(self):
         kappas = torch.linspace(-CURVATURE_TARGET_MAX, CURVATURE_TARGET_MAX, 21).tolist()
