@@ -280,3 +280,13 @@ def compute_leg_saturation_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     env.extras["log"]["Data/腿部饱和占比"] = worst.mean().item()
     return -weight * worst
 
+
+# 动作越界软惩罚：原始动作超出软限的部分计罚, 详见 docs/SQuRo_Slalom_碰撞课程.md
+def compute_action_soft_limit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    actions = env.action_manager.action
+    soft = get_curriculum_reward_weight(env, "action_soft_limit")
+    excess = (actions.abs() - soft).clamp(min=0.0).mean(dim=-1)
+    weight = get_curriculum_reward_weight(env, "weight_action_soft_limit")
+    env.extras["log"]["Data/动作越界均值"] = excess.mean().item()
+    return -weight * excess
+

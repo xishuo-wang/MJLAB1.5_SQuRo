@@ -42,8 +42,8 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     num_steps_per_env=_STEPS_PER_ITER,
     max_iterations=PHASE2_END_ITER,
     
-    # 动作裁剪约束换向极端姿态, 取值与依据见 docs/SQuRo_Slalom_碰撞课程.md
-    clip_actions=3.0,
+    # 恢复无裁剪: 极端姿态由参考步幅与速度对应治本, 越界由动作软惩罚约束
+    clip_actions=None,
     seed=42,
     
     resume=False,

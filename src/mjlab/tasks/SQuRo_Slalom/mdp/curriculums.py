@@ -83,6 +83,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "corridor_inner_multiplier": (2.0,),
     "sigma_track_head":         (20,),
     "leg_saturation_threshold": (0.9,),
+    "action_soft_limit":        (3.0,),
+    "weight_action_soft_limit": (10.0, 10.0, 10.0),
 }
 
 

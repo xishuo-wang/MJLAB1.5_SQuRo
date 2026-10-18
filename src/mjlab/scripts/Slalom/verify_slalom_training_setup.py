@@ -78,7 +78,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertAlmostEqual(0.1 * 2 * get_velocity_scale(15.0), 0.05125)
         torch.testing.assert_close(get_velocity_scale(torch.tensor([-15.0])), values[3:4])
 
-    # PPO 算法、网络、采样步数与 Hole 对拍；动作裁剪是 Slalom 有意保留的差异。
+    # PPO 算法、网络、采样步数和动作裁剪与 Hole 对拍。
     def test_ppo_matches_hole(self):
         hole = SQuRo_Hole_PPO_Runner_Cfg()
         slalom = SQuRo_Slalom_PPO_Runner_Cfg()
@@ -86,7 +86,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
             self.assertEqual(asdict(getattr(hole, name)), asdict(getattr(slalom, name)))
         self.assertEqual(slalom.num_steps_per_env, hole.num_steps_per_env)
         self.assertEqual(slalom.num_steps_per_env, _STEPS_PER_ITER)
-        self.assertEqual(slalom.clip_actions, 3.0)
+        self.assertEqual(slalom.clip_actions, hole.clip_actions)
 
     # 控制周期与物理步长均对齐 Hole，训练允许自动进入绕杆。
     def test_policy_frequency_matches_hole(self):
