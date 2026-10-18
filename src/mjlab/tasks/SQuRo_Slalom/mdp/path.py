@@ -8,6 +8,7 @@ from .curriculums import (
     BASE_VEL,
     CURVATURE_TARGET, Rmin,
     get_velocity_scale,
+    phase0_kappa_at,
 )
 from .slalom_geometry import APPROACH_LENGTH, curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
 
@@ -86,7 +87,8 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
     sx, sy, svx, svy, sh = compute_slalom_path_ref(env)
     kappa_slalom = env._path_kappa  # type: ignore[attr-defined]
     ax, ay, avx, avy, ah = compute_arc_path_ref(env)
-    env._path_kappa = torch.where(phase1, kappa_slalom, cmd_term.command[:, 4])  # type: ignore[union-attr,attr-defined]
+    env._path_kappa = torch.where(phase1, kappa_slalom,  # type: ignore[attr-defined]
+                                  getattr(env, "_phase0_path_kappa", cmd_term.command[:, 4]))  # type: ignore[union-attr]
     return (
         torch.where(phase1, sx, ax),
         torch.where(phase1, sy, ay),
@@ -97,43 +99,55 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
 
 
 
-# 路径参考计算 — 基元阶段：恒定曲率圆弧
+# 路径参考计算 — 基元阶段: 按曲率日程积分圆弧, 动态切换时路径保持连续
 def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    curvature = cmd_term.command[:, 4]      # [N]
-    vel_cmd = cmd_term.command[:, 0]        # [N]
-    t = env.episode_length_buf.float() * env.step_dt  # [N]
+    command = cmd_term.command
+    vel_cmd = command[:, 0]                 # [N]
+    step = env.episode_length_buf.float()   # [N]
+    t = step * env.step_dt                  # [N]
+    phase1 = cmd_term.phase1_mask
+    schedule = getattr(cmd_term, "phase0_schedule", None)
+    if schedule is None:
+        schedule = {"segments": command[:, 4:5],
+                    "bounds": torch.full_like(command[:, :1], 1e9),
+                    "peak": command[:, 4].abs()}
 
-    # 接近段: 圆弧 (κ=curvature 反推), 距 (0,0) 弧长 u = _INIT_DIST - total_dist, 之后圆弧从原点出发
-    total_dist = vel_cmd * t
-    in_approach = total_dist < _INIT_DIST
-    u = (_INIT_DIST - total_dist).clamp(min=0.0)
-    mask = torch.abs(curvature) > 1e-6
-    k_s = torch.where(mask, curvature, torch.ones_like(curvature))
-    approach_x = torch.where(mask, -torch.sin(curvature * u) / k_s, -u)
-    approach_y = torch.where(mask, (1.0 - torch.cos(curvature * u)) / k_s, torch.zeros_like(u))
-    approach_heading = torch.where(mask, -curvature * u, torch.zeros_like(u))
+    # 逐环境路径状态: 位置、朝向、已推进到的步数 (每控制步只推进一次)
+    state = getattr(env, "_phase0_path_state", None)
+    if state is None:
+        state = {"xy": torch.zeros(env.num_envs, 2, device=env.device),
+                 "heading": torch.zeros(env.num_envs, device=env.device),
+                 "step": torch.full((env.num_envs,), -1.0, device=env.device)}
+        env._phase0_path_state = state
+    xy, heading, last_step = state["xy"], state["heading"], state["step"]
+    # 新回合起点由命令重置写入; 同一控制步内的重复调用不重复推进
+    advance = (step > last_step) & (last_step >= 0) & (~phase1)
+    if bool(advance.any()):
+        steps = (step - last_step).clamp(min=1.0)
+        mid = ((last_step + step) * 0.5) * env.step_dt
+        kappa_mid = phase0_kappa_at(mid, schedule)
+        delta_theta = kappa_mid * vel_cmd * env.step_dt * steps
+        theta = heading + delta_theta
+        turning = kappa_mid.abs() > 1e-6
+        safe_kappa = torch.where(turning, kappa_mid, torch.ones_like(kappa_mid))
+        # 圆弧精确弦增量: 常数曲率下与解析圆弧一致
+        chord_x = torch.where(turning, (torch.sin(theta) - torch.sin(heading)) / safe_kappa,
+                              vel_cmd * env.step_dt * steps * torch.cos(heading))
+        chord_y = torch.where(turning, -(torch.cos(theta) - torch.cos(heading)) / safe_kappa,
+                              vel_cmd * env.step_dt * steps * torch.sin(heading))
+        xy[:, 0] = torch.where(advance, xy[:, 0] + chord_x, xy[:, 0])
+        xy[:, 1] = torch.where(advance, xy[:, 1] + chord_y, xy[:, 1])
+        heading = torch.where(advance, theta, heading)
+        last_step = torch.where(advance, step, last_step)
+        state["heading"], state["step"] = heading, last_step
 
-    arc_t = torch.clamp(t - _INIT_DIST / vel_cmd.clamp(min=1e-6), min=0.0)
-    start_heading = 0.0  # 物理前向 = world +X
-    omega = curvature * vel_cmd
-    dtheta = omega * arc_t
-    arc_heading = start_heading + dtheta
-
-    # 弦长公式：chord = v·t·sinc(dθ/2π)
-    chord = vel_cmd * arc_t * torch.sinc(dtheta / (2 * torch.pi))
-    arc_x = chord * torch.cos(start_heading + dtheta / 2)   # start_x = 0
-    arc_y = chord * torch.sin(start_heading + dtheta / 2)   # start_y = 0
-
-    x_ref = torch.where(in_approach, approach_x, arc_x)
-    y_ref = torch.where(in_approach, approach_y, arc_y)
-    path_heading = torch.where(in_approach, approach_heading, arc_heading)
-
-    # 世界系期望速度（路径切线方向）
+    env._phase0_path_kappa = phase0_kappa_at(t, schedule)  # type: ignore[attr-defined]
+    path_heading = heading
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
-
     origins = getattr(getattr(env, "scene", None), "env_origins", None)
+    x_ref, y_ref = xy[:, 0], xy[:, 1]
     if origins is not None:
         x_ref, y_ref = x_ref + origins[:, 0], y_ref + origins[:, 1]
     return x_ref, y_ref, vx_des, vy_des, path_heading

@@ -307,10 +307,12 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     abs_k = curvature_cmd.abs()  # [N]
     assert _k_bins is not None
 
-    # 本回合目标峰值: 二阶段取采样档位, 一阶段取恒定转弯命令
+    # 本回合目标峰值: 二阶段取采样档位, 一阶段取日程峰值 (动态回合同样按速度缩放)
     command_term = env.command_manager._terms["slalom_cmd"]  # type: ignore[union-attr]
     phase1 = command_term.phase1_mask
-    peak_k = torch.where(phase1, command_term.slalom_peak_curvature, abs_k)
+    peak_attr = getattr(command_term, "curvature_peak_command", None)
+    peak_k = peak_attr if peak_attr is not None else torch.where(
+        phase1, command_term.slalom_peak_curvature, abs_k)
 
     # 峰值轴插值: 表按平均步幅对应本回合每周前进距离, 一阶段曲率连续需要插值
     pidx = torch.searchsorted(_k_bins, peak_k) - 1

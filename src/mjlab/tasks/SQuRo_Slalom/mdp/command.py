@@ -10,11 +10,11 @@ import torch
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .curriculums import (
-    BASE_VEL, CURVATURE_TARGET_MAX, GAIT_FREQ_MIN, GAIT_FREQ_MAX,
-    PHASE1_MID_ITER, SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, SLALOM_BIN_COUNT,
+    BASE_VEL, GAIT_FREQ_MIN, GAIT_FREQ_MAX,
+    SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, SLALOM_BIN_COUNT,
     _STEPS_PER_ITER, SlalomSpacingCurriculum, SPACING_HARDEST_PROBABILITY,
-    get_training_phase, get_training_phase_batch, get_velocity_scale,
-    sample_curvature_indices,
+    get_phase0_curvature_range, get_training_phase, get_training_phase_batch,
+    get_velocity_scale, phase0_kappa_at, sample_curvature_indices, sample_phase0_schedule,
 )
 from .path import _INIT_DIST, compute_path_ref, get_phase0_approach, get_slalom_tables
 from .pole import write_pole_mocap
@@ -30,11 +30,9 @@ FIXED_HEIGHT_F = 0.055
 FIXED_HEIGHT_H = 0.055
 
 
-# 一阶段在前两千轮扩展曲率，随后保持完整范围。
+# 一阶段在前两千轮扩展曲率，之后保持完整范围。
 def get_curvature_range(step_counter: int) -> tuple[float, float]:
-    progress = min((step_counter // _STEPS_PER_ITER) / PHASE1_MID_ITER, 1.0)
-    upper = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
-    return -upper, upper
+    return get_phase0_curvature_range(step_counter)
 
 
 # 管理逐回合命令、整数绕杆曲率及其对应的实体杆阵列。
@@ -48,6 +46,8 @@ class SlalomCommand(CommandTerm):
         if cfg.spacing_curriculum_state is not None:
             self.spacing_curriculum.load_state_dict(cfg.spacing_curriculum_state)
         self.adaptive_sampling = True   # 训练按考核缺口加权；考核环境置 False 走等概率
+        self.phase0_schedule = sample_phase0_schedule(0, self.num_envs, self.device)
+        self.curvature_peak = torch.zeros(self.num_envs, device=self.device)
         self.robot = env.scene[cfg.asset_name]
         self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
         self.vel_command = self.command_tensor[:, 0]
@@ -62,7 +62,8 @@ class SlalomCommand(CommandTerm):
         self.pole_spacing = torch.zeros(self.num_envs, device=self.device)
         self.pole_y = torch.zeros_like(self.pole_spacing)
         self.metrics = {name: torch.zeros(self.num_envs, device=self.device)
-                        for name in ("slalom_fraction", "slalom_peak_curvature", "pole_spacing")}
+                        for name in ("slalom_fraction", "slalom_peak_curvature", "pole_spacing",
+                                     "phase0_dynamic")}
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -90,6 +91,24 @@ class SlalomCommand(CommandTerm):
     @property
     def slalom_peak_curvature(self) -> torch.Tensor:
         return self.slalom_curvature_index + SLALOM_CURVATURE_MIN
+
+    @property
+    def curvature_peak_command(self) -> torch.Tensor:
+        return self.curvature_peak
+
+    # 一阶段路径状态: 位置/朝向/已推进步数, 逐环境维护
+    def _sync_path_state(self, env_ids: torch.Tensor, ax: torch.Tensor, ay: torch.Tensor,
+                         ah: torch.Tensor) -> None:
+        state = getattr(self._env, "_phase0_path_state", None)
+        if state is None:
+            state = {"xy": torch.zeros(self.num_envs, 2, device=self.device),
+                     "heading": torch.zeros(self.num_envs, device=self.device),
+                     "step": torch.full((self.num_envs,), -1.0, device=self.device)}
+            self._env._phase0_path_state = state
+        state["xy"][env_ids, 0] = ax
+        state["xy"][env_ids, 1] = ay
+        state["heading"][env_ids] = ah
+        state["step"][env_ids] = 0.0
 
     # 仅在回合开始时采样高度和自身步频。
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -142,14 +161,23 @@ class SlalomCommand(CommandTerm):
             self.curvature_command[env_ids] = 0.0
             ax, ay, ah = tables["start"][rows].unbind(dim=-1)
         else:
+            # 一阶段: 恒定曲率或动态切换日程, 起点取首段目标
+            schedule = sample_phase0_schedule(env.common_step_counter // _STEPS_PER_ITER, n, self.device)
+            for name in ("dynamic", "segments", "bounds", "peak"):
+                self.phase0_schedule[name][env_ids] = schedule[name]
             if self.fixed_curvature is None:
-                lower, upper = get_curvature_range(env.common_step_counter)
-                self.curvature_command[env_ids] = torch.empty(n, device=self.device).uniform_(lower, upper)
+                self.curvature_command[env_ids] = schedule["segments"][:, 0]
             else:
                 self.curvature_command[env_ids] = self.fixed_curvature
+                self.phase0_schedule["segments"][env_ids] = self.fixed_curvature
+                self.phase0_schedule["bounds"][env_ids] = 1e9
+                self.phase0_schedule["peak"][env_ids] = abs(self.fixed_curvature)
+                self.phase0_schedule["dynamic"][env_ids] = False
             ax, ay, ah = get_phase0_approach(self.curvature_command[env_ids])
-        speed_curvature = self.slalom_peak_curvature[env_ids] if phase1 else self.curvature_command[env_ids]
-        self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] * get_velocity_scale(speed_curvature)
+        self.curvature_peak[env_ids] = (self.slalom_peak_curvature[env_ids] if phase1
+                                        else self.phase0_schedule["peak"][env_ids])
+        self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] \
+            * get_velocity_scale(self.curvature_peak[env_ids])
         root = torch.zeros(n, 13, device=self.device)
         root[:, 0], root[:, 1], root[:, 2] = ax, ay, 0.06
         origins = getattr(env.scene, "env_origins", None)
@@ -159,6 +187,8 @@ class SlalomCommand(CommandTerm):
         root[:, 4], root[:, 5] = 0.70710678 * (s - c), -0.70710678 * (c + s)
         self.robot.write_root_state_to_sim(root, env_ids=env_ids)
         write_pole_mocap(env, env_ids, self.pole_spacing[env_ids], self.pole_y[env_ids], phase1)
+        if not phase1:
+            self._sync_path_state(env_ids, ax, ay, ah)
         self._start_recorded[env_ids] = False
 
     # 命令管理器完成重采样后同步几何，并使参考缓存失效。
@@ -174,14 +204,22 @@ class SlalomCommand(CommandTerm):
             monitor.reset(env_ids)
         return extras
 
-    # 按逐环境阶段更新曲率，绕杆速度按本回合峰值保持稳定。
+    # 按逐环境阶段更新曲率: 一阶段取日程瞬时值, 二阶段取绕杆路径曲率。
     def _update_command(self) -> None:
         compute_path_ref(self._env)
         kappa = self._env._path_kappa
         base_velocity = BASE_VEL if self.fixed_velocity is None else float(self.fixed_velocity)
         phase1 = self.phase1_mask
-        self.curvature_command.copy_(torch.where(phase1, kappa, self.curvature_command))
-        velocity = base_velocity * self.gait_freq_command * get_velocity_scale(self.slalom_peak_curvature)
+        schedule = getattr(self, "phase0_schedule", None)
+        if schedule is None:
+            schedule = {"segments": self.command_tensor[:, 4:5],
+                        "bounds": torch.full_like(self.command_tensor[:, :1], 1e9)}
+        phase0_kappa = phase0_kappa_at(self._env.episode_length_buf.float() * self._env.step_dt,
+                                       schedule)
+        self.curvature_command.copy_(torch.where(phase1, kappa, phase0_kappa))
+        peak = getattr(self, "curvature_peak", None)
+        peak = self.slalom_peak_curvature if peak is None else peak
+        velocity = base_velocity * self.gait_freq_command * get_velocity_scale(peak)
         self.vel_command.copy_(torch.where(phase1, velocity, self.vel_command))
 
     # 在训练日志中标记绕杆比例和当前几何分布。
@@ -189,6 +227,9 @@ class SlalomCommand(CommandTerm):
         self.metrics["slalom_fraction"].copy_(self.phase1_mask)
         self.metrics["slalom_peak_curvature"].copy_(self.slalom_peak_curvature)
         self.metrics["pole_spacing"].copy_(self.pole_spacing)
+        schedule = getattr(self, "phase0_schedule", None)
+        if schedule is not None and "phase0_dynamic" in self.metrics:
+            self.metrics["phase0_dynamic"].copy_(schedule["dynamic"].float())
 
     # 绘制选中环境本回合的真实参考几何。
     def _debug_vis_impl(self, visualizer: DebugVisualizer) -> None:

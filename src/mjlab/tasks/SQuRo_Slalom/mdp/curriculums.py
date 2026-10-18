@@ -34,6 +34,13 @@ VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯�
 REFERENCE_CURVATURE_BLEND = 2.0     # 二阶段后脊柱在零曲率附近的平滑范围
 SPINE_REFERENCE_TIME_CONSTANT = 0.03  # 二阶段四脊柱位置参考的响应时间（秒）
 PHASE0_EPISODE_SECONDS = 20.0
+# 一阶段动态曲率: 前若干轮只学恒定曲率, 之后按概率混入动态切换回合
+PHASE0_DYNAMIC_START_ITER = 1000
+PHASE0_DYNAMIC_PROBABILITY = 0.5
+PHASE0_MIN_SEGMENTS = 4
+PHASE0_MAX_SEGMENTS = 6
+PHASE0_SEGMENT_JITTER = 0.5          # 段时长抖动 (秒), 使切换时机与步态相位独立
+PHASE0_TRANSITION_SECONDS = 0.5      # 曲率切换过渡时长 (秒)
 SLALOM_EPISODE_SECONDS = 30.0
 PASSAGE_REQUIRED_POLES = 3
 
@@ -121,6 +128,54 @@ def get_pole_spacing_bounds() -> tuple[float, float]:
 def get_curriculum_pole_spacing(step_counter: int) -> float:
     del step_counter
     return get_pole_spacing_bounds()[0]
+
+
+# 一阶段曲率范围: 前两千轮从 0.5 扩到 20, 之后保持完整范围。
+def get_phase0_curvature_range(step_counter: int) -> tuple[float, float]:
+    progress = min((step_counter // _STEPS_PER_ITER) / PHASE1_MID_ITER, 1.0)
+    upper = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
+    return -upper, upper
+
+
+# 采样一阶段曲率日程: 恒定回合单段, 动态回合 4~6 段并在段间平滑过渡。
+def sample_phase0_schedule(iteration: int, count: int, device) -> dict:
+    lower, upper = get_phase0_curvature_range(iteration * _STEPS_PER_ITER)
+    dynamic = torch.rand(count, device=device) < (
+        PHASE0_DYNAMIC_PROBABILITY if iteration >= PHASE0_DYNAMIC_START_ITER else 0.0)
+    positions = torch.arange(PHASE0_MAX_SEGMENTS, device=device)
+    segments = torch.empty(count, PHASE0_MAX_SEGMENTS, device=device).uniform_(lower, upper)
+    counts = torch.randint(PHASE0_MIN_SEGMENTS, PHASE0_MAX_SEGMENTS + 1, (count,), device=device)
+    counts = torch.where(dynamic, counts, torch.ones_like(counts))
+    valid = positions[None, :] < counts[:, None]
+    # 段时长 = 回合时长/段数 + 抖动, 归一后累积成段边界时间
+    base = PHASE0_EPISODE_SECONDS / counts.float()
+    durations = base[:, None] + (torch.rand(count, PHASE0_MAX_SEGMENTS, device=device) - 0.5) \
+        * 2.0 * PHASE0_SEGMENT_JITTER
+    durations = torch.where(valid, durations.clamp(min=PHASE0_TRANSITION_SECONDS * 1.5),
+                            torch.zeros_like(durations))
+    durations = durations * (PHASE0_EPISODE_SECONDS / durations.sum(dim=1, keepdim=True).clamp_min(1e-6))
+    bounds = durations.cumsum(dim=1)
+    bounds = torch.where(valid & (positions[None, :] < counts[:, None] - 1), bounds,
+                         torch.full_like(bounds, PHASE0_EPISODE_SECONDS + 1.0))
+    segments = torch.where(valid, segments, segments[:, :1])
+    return {"dynamic": dynamic, "segments": segments, "bounds": bounds,
+            "peak": segments.abs().amax(dim=1)}
+
+
+# 按日程求 t 时刻的一阶段目标曲率, 段间用 smootherstep 过渡。
+def phase0_kappa_at(t: torch.Tensor, schedule: dict) -> torch.Tensor:
+    segments = schedule["segments"]
+    bounds = schedule["bounds"]
+    kappa = segments[:, 0]
+    for index in range(1, segments.shape[1]):
+        boundary = bounds[:, index - 1]
+        start = boundary - 0.5 * PHASE0_TRANSITION_SECONDS
+        ratio = ((t - start) / PHASE0_TRANSITION_SECONDS).clamp(0.0, 1.0)
+        blend = ratio * ratio * (3.0 - 2.0 * ratio)
+        previous = segments[:, index - 1]
+        target = segments[:, index]
+        kappa = torch.where(t >= start, previous + (target - previous) * blend, kappa)
+    return kappa
 
 
 # 峰值曲率对应的整数档位索引，越界时夹到端点。
@@ -418,3 +473,5 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(
         env.common_step_counter, command.cfg.phase0_only
     )[reward_name]
+
+

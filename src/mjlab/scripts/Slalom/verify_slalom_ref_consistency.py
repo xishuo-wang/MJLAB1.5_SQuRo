@@ -1,6 +1,7 @@
 # SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
 # 覆盖: 局部重置隔离、参考推进与自身步频一致、gait=1 几何不变、命令计时器、
 #       固定间距的单一真源、一阶段预算与最大形变、腿部参考过零连续。
+import math
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace as NS
@@ -507,6 +508,106 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertTrue(all(a > b for a, b in zip(spacings, spacings[1:])))
         tables = get_timed_slalom_tables(BASE_VEL)
         self.assertLess(float((tables["period_time"] + tables["approach_time"]).max()), 20.0)
+
+
+# 一阶段动态曲率日程与连续路径回归。
+class TestPhase0DynamicSchedule(unittest.TestCase):
+
+    # 动态起始前只采恒定曲率; 起始后按概率混入动态回合, 曲率在当前范围内。
+    def test_schedule_mix_and_range(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
+            PHASE0_DYNAMIC_PROBABILITY, PHASE0_DYNAMIC_START_ITER, PHASE0_MAX_SEGMENTS,
+            PHASE0_MIN_SEGMENTS, get_phase0_curvature_range, sample_phase0_schedule,
+        )
+        torch.manual_seed(0)
+        before = sample_phase0_schedule(PHASE0_DYNAMIC_START_ITER - 1, 256, torch.device("cpu"))
+        self.assertFalse(bool(before["dynamic"].any()), msg="动态起始前出现了动态回合")
+        self.assertTrue(bool((before["bounds"] > 20.0).all()), msg="恒定回合存在段边界")
+
+        iteration = PHASE0_DYNAMIC_START_ITER + 500
+        after = sample_phase0_schedule(iteration, 512, torch.device("cpu"))
+        ratio = float(after["dynamic"].float().mean())
+        self.assertAlmostEqual(ratio, PHASE0_DYNAMIC_PROBABILITY, delta=0.08,
+                               msg=f"动态回合占比 {ratio:.2f} 偏离目标")
+        dynamic = after["dynamic"]
+        segments = after["segments"][dynamic]
+        lower, upper = get_phase0_curvature_range(iteration * _STEPS_PER_ITER)
+        self.assertGreaterEqual(float(segments.min()), lower - 1e-6)
+        self.assertLessEqual(float(segments.max()), upper + 1e-6)
+        counts = (after["bounds"][dynamic] < 20.0).sum(dim=1)
+        self.assertGreaterEqual(int(counts.min()), PHASE0_MIN_SEGMENTS - 1)
+        self.assertLessEqual(int(counts.max()), PHASE0_MAX_SEGMENTS - 1)
+        peak = after["peak"][dynamic]
+        self.assertTrue(torch.allclose(peak, segments.abs().amax(dim=1)))
+
+    # 段间过渡连续: 两端到达目标曲率, 单步变化有界。
+    def test_kappa_transition_is_smooth(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import phase0_kappa_at
+        segments = torch.zeros(1, 6)
+        segments[0, :2] = torch.tensor([8.0, -6.0])
+        bounds = torch.full((1, 6), 1e9)
+        bounds[0, 0] = 6.0
+        t = torch.linspace(0.0, 10.0, 1001)
+        kappa = phase0_kappa_at(t, {"segments": segments, "bounds": bounds})
+        self.assertAlmostEqual(float(kappa[0]), 8.0, places=5)
+        self.assertAlmostEqual(float(kappa[-1]), -6.0, places=5)
+        jump = float(torch.diff(kappa).abs().max())
+        self.assertLess(jump, 0.6, msg=f"曲率切换单步跳变 {jump:.3f}")
+
+    # 动态曲率路径连续: 单步位移有界, 恒定曲率段落在精确圆弧上。
+    def test_dynamic_path_is_continuous(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_arc_path_ref
+        segments = torch.zeros(2, 6)
+        segments[0, :2] = torch.tensor([8.0, -8.0])
+        bounds = torch.full((2, 6), 1e9)
+        bounds[0, 0] = 5.0
+        command = torch.zeros(2, 5)
+        command[:, 0] = 0.1
+        cmd = NS(command=command, phase1_mask=torch.zeros(2, dtype=torch.bool),
+                 phase0_schedule={"dynamic": torch.tensor([True, False]),
+                                  "segments": segments, "bounds": bounds,
+                                  "peak": torch.tensor([8.0, 8.0])})
+        env = NS(device=torch.device("cpu"), num_envs=2, step_dt=0.01,
+                 episode_length_buf=torch.zeros(2, dtype=torch.long),
+                 command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
+        env._phase0_path_state = {"xy": torch.zeros(2, 2), "heading": torch.zeros(2),
+                                  "step": torch.zeros(2)}
+        previous = None
+        for step in range(1, 1001):
+            env.episode_length_buf.fill_(step)
+            x, y, _, _, heading = compute_arc_path_ref(env)
+            if previous is not None:
+                move = float(torch.maximum((x - previous[0]).abs(), (y - previous[1]).abs()).max())
+                self.assertLess(move, 2e-3, msg=f"第 {step} 步路径跳变 {move:.5f} m")
+                self.assertTrue(bool(torch.isfinite(heading).all()))
+            previous = (x.clone(), y.clone())
+        # 前 5 s 恒定曲率 8: 位置落在半径 0.125 m 的圆弧上
+        radius = 1.0 / 8.0
+        env.episode_length_buf.fill_(100)  # 1 s
+        env._phase0_path_state = {"xy": torch.zeros(2, 2), "heading": torch.zeros(2),
+                                  "step": torch.zeros(2)}
+        env._phase0_path_cache = None
+        x, y, _, _, _ = compute_arc_path_ref(env)
+        theta = 8.0 * 0.1 * 1.0
+        expected = 2.0 * radius * math.sin(theta / 2.0)
+        self.assertAlmostEqual(float(torch.hypot(x[0], y[0])), expected, places=4)
+
+    # 一阶段动态回合的参考步幅按回程峰值缩放, 而不是瞬时曲率。
+    def test_reference_strides_follow_episode_peak(self):
+        count = 50
+        phases = [index / (count - 1) for index in range(count)]
+        env = make_ref_state_env([0.0] * count, phases=phases, gait=0.0)
+        cmd = env.command_manager._terms["slalom_cmd"]
+        cmd.curvature_peak = torch.full((count,), 15.0)
+        peak_pos, _ = ref_mod.get_reference_joint_state(env)
+        ref_mod.invalidate_reference_cache(env)
+        del cmd.curvature_peak
+        inst_pos, _ = ref_mod.get_reference_joint_state(env)
+        leg = _ACT_LEG_IDS
+        peak_travel = float((peak_pos[:, leg].max(dim=0).values - peak_pos[:, leg].min(dim=0).values).abs().max())
+        inst_travel = float((inst_pos[:, leg].max(dim=0).values - inst_pos[:, leg].min(dim=0).values).abs().max())
+        self.assertGreater(inst_travel, peak_travel * 1.5,
+                           msg="参考步幅没有按回程峰值缩放")
 
 
 if __name__ == "__main__":

@@ -189,3 +189,26 @@ uv run python -B -m mjlab.scripts.SQuRo_Slalom_play --checkpoint-file "日志目
 - `verify_backup_stage_rewards`：仓库要求的 Backup 奖励回归。
 
 这些检查验证实现和数值稳定性，不证明未经新训练的策略已经达到曲率 20。
+
+## 动态曲率采样（2026-10-19）
+
+一阶段改为"恒定曲率 + 动态切换"混合课程，参考 Hole 一阶段的 3～4 秒重采样思路：
+
+- 前 1000 轮只训练恒定曲率回合（与原课程一致）；之后每回合按 `PHASE0_DYNAMIC_PROBABILITY = 0.5`
+  独立决定是否动态，动态回合约占一半。
+- 动态回合把 20 秒拆成 4～6 段，每段目标曲率在当期采样范围内随机；段时长 20/n 秒 ±0.5 秒抖动，
+  因此切换时机与步态相位相互独立，可覆盖不同支撑相下的脊-腿协调。段间用 0.5 秒 smootherstep
+  过渡，曲率连续变化；回合内既会出现同号变幅，也会出现正负过零。
+- 速度按**本回合峰值曲率**固定：`v = 基础速度 × 步频 × 速度曲线(max|κ|)`，与二阶段按峰值曲率
+  定速一致；腿部参考表同样按"峰值档"缩放平均步幅，因此动态回合中瞬时曲率只负责左右差速，
+  参考步幅始终与本回合前进速度对应。
+- 路径不再假设整回合恒定曲率：按日程逐控制步积分圆弧（常数曲率段用精确弦增量，与解析圆弧一致），
+  路径位置/朝向连续；走廊仍用当前瞬时曲率的局部圆环包络；观测仍为路径参考的
+  `[dx, dy, vx_des, vy_des]` 与朝向。
+- 步态相位不因曲率切换重置（`_ref_phase` 只在回合起点清零），切换过程相位连续。
+- 日志新增 `Metrics/slalom_cmd/phase0_dynamic`（动态回合占比）。
+- 常量集中在 `mdp/curriculums.py`：`PHASE0_DYNAMIC_START_ITER`、`PHASE0_DYNAMIC_PROBABILITY`、
+  `PHASE0_MIN/MAX_SEGMENTS`、`PHASE0_SEGMENT_JITTER`、`PHASE0_TRANSITION_SECONDS`。
+- 回归：`verify_slalom_ref_consistency` 新增 4 项（恒定/动态采样比例与范围、过渡平滑、
+  动态路径连续与恒定曲率圆弧一致、参考步幅按回程峰值缩放），Slalom 四组回归共 57 项通过；
+  从 `model_1500.pt` 续训 3 轮的冒烟验证中动态回合占比约 0.47～0.64，无 NaN。
