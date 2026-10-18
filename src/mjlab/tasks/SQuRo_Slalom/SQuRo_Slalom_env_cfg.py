@@ -79,6 +79,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
         "leg_saturation": RewardTermCfg(func=mdp.compute_leg_saturation_penalty, weight=1.0),
         "action_soft": RewardTermCfg(func=mdp.compute_action_soft_limit_penalty, weight=1.0),
+        "abnormal_leg_pose": RewardTermCfg(func=mdp.compute_abnormal_leg_pose_penalty, weight=1.0),
     }
 
     # 终止条件

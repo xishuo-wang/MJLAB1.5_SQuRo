@@ -168,7 +168,7 @@ class SlalomCommand(CommandTerm):
             env_ids = ids if env_ids is None else ids[env_ids]
         extras = super().reset(env_ids)
         self._resample_curvature(env_ids)
-        invalidate_reference_cache(self._env)
+        invalidate_reference_cache(self._env, env_ids)
         monitor = getattr(self._env, "_slalom_passage_monitor", None)
         if monitor is not None:
             monitor.reset(env_ids)

@@ -23,8 +23,12 @@ from .indices import (
     _ACT_HL_KNEE_ID,
     _ACT_HR_HIP_ID,
     _ACT_HR_KNEE_ID,
+    _ACT_SPN_IDS,
 )
-from .curriculums import BASE_VEL, CURVATURE_TARGET_MAX, REFERENCE_CURVATURE_BLEND, get_velocity_scale
+from .curriculums import (
+    BASE_VEL, CURVATURE_TARGET_MAX, REFERENCE_CURVATURE_BLEND,
+    SPINE_REFERENCE_TIME_CONSTANT, get_velocity_scale,
+)
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
@@ -229,8 +233,39 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
 
 
 # 重置代次 +1: 使同一控制步内已缓存的参考失效 (框架在同一步内先算奖励、再重置、再算观测)
-def invalidate_reference_cache(env: ManagerBasedRlEnv) -> None:
+def invalidate_reference_cache(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> None:
     env._ref_epoch = getattr(env, "_ref_epoch", 0) + 1  # type: ignore[attr-defined]
+    state = getattr(env, "_ref_spine_filter", None)
+    if state is not None and env_ids is not None:
+        state["step"][env_ids] = -1
+
+
+# 二阶段平滑四脊柱位置并由同一轨迹差分速度，重置与步级缓存语义见碰撞课程文档。
+def _smooth_spine_reference(env, ref_pos, ref_vel, phase1) -> None:
+    raw = ref_pos[:, _ACT_SPN_IDS]
+    state = getattr(env, "_ref_spine_filter", None)
+    if state is None:
+        state = {
+            "position": raw.clone(), "velocity": torch.zeros_like(raw),
+            "step": torch.full_like(env.episode_length_buf, -1),
+            "episode": env.episode_length_buf.clone(), "active": phase1.clone(),
+        }
+        env._ref_spine_filter = state
+    initialize = ((state["step"] < 0) | (env.episode_length_buf < state["episode"])
+                  | (phase1 != state["active"]))
+    advance = state["step"] != env.common_step_counter
+    alpha = env.step_dt / (SPINE_REFERENCE_TIME_CONSTANT + env.step_dt)
+    next_pos = state["position"] + alpha * (raw - state["position"])
+    next_vel = (next_pos - state["position"]) / env.step_dt
+    position = torch.where(initialize[:, None], raw,
+                           torch.where(advance[:, None], next_pos, state["position"]))
+    velocity = torch.where(initialize[:, None], torch.zeros_like(raw),
+                           torch.where(advance[:, None], next_vel, state["velocity"]))
+    ref_pos[:, _ACT_SPN_IDS] = torch.where(phase1[:, None], position, raw)
+    ref_vel[:, _ACT_SPN_IDS] = torch.where(phase1[:, None], velocity, ref_vel[:, _ACT_SPN_IDS])
+    state.update(position=ref_pos[:, _ACT_SPN_IDS].clone(), velocity=ref_vel[:, _ACT_SPN_IDS].clone(),
+                 step=torch.full_like(state["step"], env.common_step_counter),
+                 episode=env.episode_length_buf.clone(), active=phase1.clone())
 
 
 # 获取当前步的参考关节位置和速度
@@ -361,6 +396,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
                                 -0.65 * hind_slope * kappa_dot / kappa_norm,
                                 zero_dot)
     ref_vel[:, _ACT_H_BODY_ID] = -0.7 * kappa_dot / kappa_norm
+    _smooth_spine_reference(env, ref_pos, ref_vel, phase1)
     # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
     if getattr(env, "_ref_phase_step", None) != current_step:
         env._ref_kappa_prev = curvature_cmd.clone()  # type: ignore[attr-defined]

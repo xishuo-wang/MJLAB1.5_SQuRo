@@ -2,7 +2,10 @@ from __future__ import annotations
 import torch
 from mjlab.entity import Entity
 from typing import TYPE_CHECKING
-from .indices import _MODEL_INDICES, _ACT_LEG_IDS, _ACT_SPN_IDS, _ACT_NECK_IDS
+from .indices import (
+    _MODEL_INDICES, _ACT_JOINT_NAMES, _ACT_LEG_IDS, _ACT_SPN_IDS, _ACT_NECK_IDS,
+    _ACT_SHOULDER_IDS, _ACT_HIP_IDS,
+)
 from .path import (
     CORRIDOR_HALF_WIDTH,
     compute_path_ref,
@@ -289,4 +292,34 @@ def compute_action_soft_limit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_action_soft_limit")
     env.extras["log"]["Data/动作越界均值"] = excess.mean().item()
     return -weight * excess
+
+
+# 按参考相对角度检测前肩过抬、后髋过折，左右两侧使用同一容差。
+def _abnormal_leg_pose_excess(position, reference, tolerance):
+    error = position - reference
+    deviation = torch.cat((error[:, _ACT_SHOULDER_IDS], -error[:, _ACT_HIP_IDS]), dim=1)
+    return (deviation - tolerance).clamp_min(0.0).amax(dim=1)
+
+
+# 同时处罚实际异常姿态与限幅前请求，标定依据见 docs/SQuRo_Slalom_碰撞课程.md。
+def compute_abnormal_leg_pose_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    ref_pos, _ = get_reference_joint_state(env)
+    asset = env.scene["robot"]
+    action_term = env.action_manager.get_term("joint_pos")
+    columns = getattr(env, "_abnormal_pose_action_columns", None)
+    if columns is None:
+        columns = tuple(action_term.target_names.index(name) for name in _ACT_JOINT_NAMES)
+        env._abnormal_pose_action_columns = columns
+    requested = action_term.raw_action * action_term.scale + action_term.offset
+    requested = (requested - asset.data.encoder_bias[:, action_term.target_ids])[:, columns]
+    actual = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
+    tolerance = get_curriculum_reward_weight(env, "abnormal_leg_pose_tolerance")
+    mask = env.command_manager._terms["slalom_cmd"].phase1_mask
+    actual_excess = _abnormal_leg_pose_excess(actual, ref_pos, tolerance) * mask
+    request_excess = _abnormal_leg_pose_excess(requested, ref_pos, tolerance) * mask
+    weight = get_curriculum_reward_weight(env, "weight_abnormal_leg_pose")
+    env.extras["log"]["Data/异常腿部实际越界"] = actual_excess.mean().item()
+    env.extras["log"]["Data/异常腿部请求越界"] = request_excess.mean().item()
+    env.extras["log"]["Data/异常腿部姿态占比"] = (actual_excess > 0).float().mean().item()
+    return -weight * (actual_excess.square() + request_excess.square())
 

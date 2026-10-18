@@ -32,6 +32,7 @@ BASE_VEL = 0.1                      # 基础速度 (m/s, 1Hz 时)
 VELOCITY_CURVATURE_POWER = 1.5
 VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯低速)
 REFERENCE_CURVATURE_BLEND = 2.0     # 二阶段后脊柱在零曲率附近的平滑范围
+SPINE_REFERENCE_TIME_CONSTANT = 0.03  # 二阶段四脊柱位置参考的响应时间（秒）
 PHASE0_EPISODE_SECONDS = 20.0
 SLALOM_EPISODE_SECONDS = 30.0
 PASSAGE_REQUIRED_POLES = 3
@@ -85,6 +86,8 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "leg_saturation_threshold": (0.9,),
     "action_soft_limit":        (3.0,),
     "weight_action_soft_limit": (10.0, 10.0, 10.0),
+    "weight_abnormal_leg_pose": (0.0, 0.0, 5.0),
+    "abnormal_leg_pose_tolerance": (0.7,),
 }
 
 
