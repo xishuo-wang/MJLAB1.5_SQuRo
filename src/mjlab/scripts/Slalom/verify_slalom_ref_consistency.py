@@ -691,6 +691,87 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
                                msg="横向偏置的距离测量不正确")
 
 
+    # 路径数组按一阶段有效回合分配, 生产环境的 30 秒长度不得留下零值尾部
+    def test_phase0_path_has_no_zero_tail(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_velocity_scale
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        segments = torch.zeros(1, 6)
+        segments[0, 0] = 1.0
+        bounds = torch.full((1, 6), 1e9)
+        command = torch.zeros(1, 5)
+        command[0, 0] = 0.1 * 2.0 * float(get_velocity_scale(1.0))
+        cmd = NS(command=command, phase1_mask=torch.zeros(1, dtype=torch.bool),
+                 phase0_schedule={"dynamic": torch.tensor([False]), "segments": segments,
+                                  "bounds": bounds, "peak": torch.tensor([1.0])})
+        # 生产环境按 30 秒分配 max_episode_length, 一阶段只跑 20 秒
+        env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=3000,
+                 episode_length_buf=torch.zeros(1, dtype=torch.long),
+                 command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+                                  cmd.phase0_schedule, command[:, 0])
+        path = env._phase0_path_xy
+        self.assertEqual(path.shape[1], 2001, msg="路径数组未按一阶段有效长度分配")
+        self.assertGreater(float(torch.linalg.vector_norm(path[0, -1])), 0.5, msg="路径尾部存在零值")
+        # 终点与原点连线中点不应被判为在路径上 (旧实现会被零值尾部的假线段吸住)
+        midpoint = (path[0, -1] + path[0, 0]) / 2.0
+        distance, _, _ = project_phase0_path_points(midpoint[None, None], path,
+                                                    env._phase0_path_heading)
+        self.assertGreater(float(distance[0, 0]), 0.05, msg="终点至原点的假线段被当作真实路径")
+
+    # 起终点切线延伸: 沿切线对齐的包络点不应被计为越界
+    def test_phase0_path_corridor_extends_tangent(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        segments = torch.zeros(1, 6)
+        bounds = torch.full((1, 6), 1e9)
+        command = torch.zeros(1, 5)
+        command[0, 0] = 0.2
+        cmd = NS(command=command, phase1_mask=torch.zeros(1, dtype=torch.bool),
+                 phase0_schedule={"dynamic": torch.tensor([False]), "segments": segments,
+                                  "bounds": bounds, "peak": torch.zeros(1)})
+        env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=3000,
+                 episode_length_buf=torch.zeros(1, dtype=torch.long),
+                 command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+                                  cmd.phase0_schedule, command[:, 0])
+        path, heading = env._phase0_path_xy, env._phase0_path_heading
+        end_x = float(path[0, -1, 0])
+        points = torch.tensor([[[-0.08, 0.0], [-0.08, 0.05], [end_x + 0.08, 0.0]]])
+        distance, _, _ = project_phase0_path_points(points, path, heading)
+        self.assertLess(float(distance[0, 0]), 1e-3, msg="起点后方切线上的点被判离路径过远")
+        self.assertAlmostEqual(float(distance[0, 1]), 0.05, delta=1e-3,
+                               msg="起点后方横向距离测量不正确")
+        self.assertLess(float(distance[0, 2]), 1e-3, msg="终点前方切线上的点被判离路径过远")
+
+    # 包络边采样必须覆盖边中点: 角点合格、弦中点越界的反例
+    def test_envelope_sampling_covers_edges(self):
+        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import (
+            CORRIDOR_HALF_WIDTH, project_phase0_path_points, sample_body_envelopes)
+        radius = 1.0 / 15.0
+        angles = torch.linspace(0.0, math.pi * 2.0, 4001)
+        path = torch.stack((radius * torch.cos(angles), radius * torch.sin(angles)), dim=-1)[None]
+        heading = (angles + math.pi / 2.0)[None]   # 圆的切线方向
+        span = 2.0 * math.asin(0.127 / 2.0 / radius)
+        corners = torch.stack((radius * torch.cos(torch.tensor([0.0, span])),
+                               radius * torch.sin(torch.tensor([0.0, span]))), dim=-1)
+        middle = corners.mean(dim=0, keepdim=True)
+        corner_distance, _, _ = project_phase0_path_points(corners[None], path, heading)
+        middle_distance, _, _ = project_phase0_path_points(middle[None], path, heading)
+        self.assertTrue(bool(torch.all(corner_distance <= CORRIDOR_HALF_WIDTH + 0.02)))
+        self.assertGreater(float(middle_distance[0, 0]), CORRIDOR_HALF_WIDTH + 0.005,
+                           msg="弦中点应越出走廊")
+        # 采样点必须比顶点多, 才能覆盖边中点
+        box = torch.zeros(2, 8, 2)
+        box[:, :, 0] = torch.tensor([-0.04, 0.04, 0.04, -0.04, -0.04, 0.04, 0.04, -0.04])
+        box[:, :, 1] = torch.tensor([-0.035, -0.035, 0.035, 0.035, -0.035, -0.035, 0.035, 0.035])
+        env = NS(device=torch.device("cpu"), _slalom_body_envelope_vertices=box,
+                 _slalom_envelope_samples=None)
+        sampled = sample_body_envelopes(env, box[None])
+        self.assertGreater(int(sampled.shape[2]), 8, msg="包络只采了顶点, 未覆盖边中点")
+        self.assertEqual(tuple(sampled.shape[:2]), (1, 2))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

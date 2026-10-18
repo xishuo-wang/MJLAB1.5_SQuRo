@@ -285,3 +285,5 @@ class SlalomCommandCfg(CommandTermCfg):
     # 构造命令管理器实例。
     def build(self, env: ManagerBasedRlEnv) -> CommandTerm:
         return self.class_type(self, env)
+
+

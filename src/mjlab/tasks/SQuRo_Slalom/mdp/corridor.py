@@ -21,6 +21,7 @@ _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
 _ENVELOPE_SAMPLE_STEP = 0.002
 _PROJECTION_ENV_BLOCK = 64
 _PHASE0_PROJECTION_STRIDE = 8
+_PHASE0_ENVELOPE_SAMPLE_STEP = 0.006   # 一阶段动态回合的包络边采样间距 (m)
 
 
 # 将完整三维包围盒随躯干实际姿态投影到水平面。
@@ -171,21 +172,26 @@ def _project_slalom_points_block(
             torch.where(use_ray, 0.0, curvature))
 
 
-# 沿投影盒十二条边采样，边界相邻点在三维中的间距不超过两毫米。
-def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor) -> torch.Tensor:
-    cached = getattr(env, "_slalom_envelope_samples", None)
+# 沿投影盒十二条边采样，边界相邻点间距不超过给定步长 (按步长分别缓存)
+def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor,
+                          step: float = _ENVELOPE_SAMPLE_STEP) -> torch.Tensor:
+    cache = getattr(env, "_slalom_envelope_samples", None)
+    if cache is None:
+        cache = {}
+        env._slalom_envelope_samples = cache
+    cached = cache.get(float(step))
     if cached is None:
         local = env._slalom_body_envelope_vertices
         starts, ends, fractions = list(range(8)), list(range(8)), [0.0] * 8
         for start, end in _BOX_EDGES:
             count = max(1, int(torch.ceil(torch.linalg.vector_norm(local[:, end] - local[:, start], dim=-1).max()
-                                         / _ENVELOPE_SAMPLE_STEP).item()))
+                                         / step).item()))
             starts.extend([start] * (count - 1))
             ends.extend([end] * (count - 1))
             fractions.extend(i / count for i in range(1, count))
         cached = (torch.tensor(starts, device=env.device), torch.tensor(ends, device=env.device),
                   torch.tensor(fractions, device=env.device, dtype=vertices.dtype))
-        env._slalom_envelope_samples = cached
+        cache[float(step)] = cached
     starts, ends, fractions = cached
     return torch.lerp(vertices[:, :, starts], vertices[:, :, ends], fractions[None, None, :, None])
 
@@ -212,7 +218,7 @@ def compute_phase1_corridor_excess(
     outer = torch.where(inner_side, 0.0, excess).reshape(points.shape[:-1]).amax(-1)
     return inner, outer
 
-# 一阶段路径投影: 返回包络点到本回合实际路径的距离、侧向叉积与局部曲率
+# 一阶段路径投影: 返回包络点到本回合实际路径 (含起终点切线延伸) 的距离、侧向叉积与局部曲率
 def project_phase0_path_points(points: torch.Tensor, path_xy: torch.Tensor,
                                path_heading: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     stride = _PHASE0_PROJECTION_STRIDE
@@ -238,21 +244,47 @@ def project_phase0_path_points(points: torch.Tensor, path_xy: torch.Tensor,
     head_end = path_heading[rows, indices + 1]
     segment_length = torch.linalg.vector_norm(chosen_edge, dim=-1).clamp_min(1e-9)
     curvature = (head_end - head_start).gather(2, best).squeeze(2) / segment_length
+    # 起终点切线延伸: 起点向后、终点向前各作一条射线, 身体跨出路径端点时按射线量距
+    for position, extend_back in ((0, True), (-1, False)):
+        tangent = torch.stack((torch.cos(path_heading[:, position]),
+                               torch.sin(path_heading[:, position])), dim=-1)
+        offset = points - path_xy[:, position][:, None, :]
+        along = (offset * tangent[:, None]).sum(-1)
+        along = along.clamp_max(0.0) if extend_back else along.clamp_min(0.0)
+        ray_residual = offset - along[..., None] * tangent[:, None]
+        ray_distance = torch.linalg.vector_norm(ray_residual, dim=-1)
+        ray_lateral = tangent[:, None, 0] * ray_residual[..., 1] - tangent[:, None, 1] * ray_residual[..., 0]
+        use_ray = ray_distance < distance
+        distance = torch.where(use_ray, ray_distance, distance)
+        lateral = torch.where(use_ray, ray_lateral, lateral)
+        curvature = torch.where(use_ray, torch.zeros_like(curvature), curvature)
     return distance, lateral, curvature
 
 
-# 一阶段动态回合: 按各包络点到本回合实际路径的最近距离计算内外越界
+# 一阶段动态回合: 按各包络采样点到本回合实际路径的最近距离计算内外越界
 def compute_phase0_dynamic_corridor_excess(
     env: ManagerBasedRlEnv, env_ids: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     vertices = project_body_envelopes(env)[env_ids]
-    points = sample_body_envelopes(env, vertices)
+    points = sample_body_envelopes(env, vertices, _PHASE0_ENVELOPE_SAMPLE_STEP)
     origins = getattr(env.scene, "env_origins", None)
     if origins is not None:
         points = points - origins[env_ids, None, None, :2]
     path_xy = getattr(env, "_phase0_path_xy")[env_ids]
     path_heading = getattr(env, "_phase0_path_heading")[env_ids]
-    distance, lateral, curvature = project_phase0_path_points(points.flatten(1, 2), path_xy, path_heading)
+    flat = points.flatten(1, 2)
+    # 分块投影, 限制大中间张量的峰值显存
+    distances, laterals, curvatures = [], [], []
+    for block in range(0, len(env_ids), _PROJECTION_ENV_BLOCK):
+        section = slice(block, min(block + _PROJECTION_ENV_BLOCK, len(env_ids)))
+        distance, lateral, curvature = project_phase0_path_points(
+            flat[section], path_xy[section], path_heading[section])
+        distances.append(distance)
+        laterals.append(lateral)
+        curvatures.append(curvature)
+    distance = torch.cat(distances)
+    lateral = torch.cat(laterals)
+    curvature = torch.cat(curvatures)
     excess = (distance - CORRIDOR_HALF_WIDTH).clamp_min(0.0)
     inner_side = curvature * lateral > 0.0
     inner = torch.where(inner_side, excess, torch.zeros_like(excess)).reshape(points.shape[:-1]).amax(-1)

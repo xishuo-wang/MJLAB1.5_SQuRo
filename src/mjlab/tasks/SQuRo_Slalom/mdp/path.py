@@ -7,6 +7,7 @@ from .indices import _MODEL_INDICES
 from .curriculums import (
     BASE_VEL,
     CURVATURE_TARGET, Rmin,
+    PHASE0_EPISODE_SECONDS,
     get_velocity_scale,
     phase0_kappa_at,
 )
@@ -99,15 +100,16 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
 
 
 
-# 预计算一阶段回合路径: 按曲率日程积分成逐控制步位置/朝向数组
+# 预计算一阶段回合路径: 按曲率日程积分成逐控制步位置/朝向数组, 长度按一阶段有效回合
 def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_y, start_heading,
                               schedule, velocity) -> None:
     n = len(env_ids)
-    steps = int(env.max_episode_length)
     dt = float(env.step_dt)
+    steps = min(int(env.max_episode_length), int(round(PHASE0_EPISODE_SECONDS / dt)))
     segments = schedule["segments"][env_ids]
     bounds = schedule["bounds"][env_ids]
-    if getattr(env, "_phase0_path_xy", None) is None:
+    path_xy = getattr(env, "_phase0_path_xy", None)
+    if path_xy is None or path_xy.shape[1] != steps + 1:
         env._phase0_path_xy = torch.zeros(env.num_envs, steps + 1, 2, device=env.device)
         env._phase0_path_heading = torch.zeros(env.num_envs, steps + 1, device=env.device)
     env._phase0_schedule = schedule
