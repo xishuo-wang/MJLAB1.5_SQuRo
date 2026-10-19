@@ -58,7 +58,6 @@ HEIGHT_FINE_STEP_THRESHOLD = 0.050                  # 课程阈值 50mm
 HEIGHT_STEP = 0.002                                 # 大于阈值时课程 step
 HEIGHT_FINE_STEP = 0.001                            # 小于阈值时课程 step
 HEIGHT_MIN_SAMPLE_PROBABILITY = 0.30                # 普通模式最小高度固定采样概率
-HEIGHT_MIN_SUCCESS_BATCH = 256                      # 推进课程要求成功批次
 HEIGHT_MIN_SUCCESS_RATE = 0.60                      # 推进课程要求成功率
 HEIGHT_REQUIRED_BATCHES = 2                         # 推进课程要求连续成功批次
 HEIGHT_MIN_DWELL_ITERATIONS = 100

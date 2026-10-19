@@ -1,4 +1,3 @@
-import re
 import tyro
 import math
 import torch
@@ -24,9 +23,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     OBSTACLE_HEIGHT_SPLIT,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    STEPS_PER_ITER,
     get_current_stage,
-    stage_requires_collision,
     stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -73,15 +70,6 @@ class PlayConfig:
     obstacle_viz: bool = True               # 可视化障碍物
     high_obstacle_equal_height: bool | None = None  # 高板等高True／分段False，None沿用检查点
     obstacle_height: float | None = 0.065   # 障碍物板底高度 (m)
-
-
-
-# 从 checkpoint 文件名提取训练轮次
-def extract_iter_from_checkpoint(checkpoint_path: Path) -> int:
-    m = re.search(r"model_(\d+)", checkpoint_path.name)
-    if m:
-        return int(m.group(1))
-    return 0
 
 
 
@@ -354,7 +342,6 @@ def run_play(cfg: PlayConfig):
         if cfg.command_source == "schedule":
             # 与训练同源：前三阶段随机高度池，第四阶段单板高度规则。
             cmd_cfg.enable_height_course = True      # type: ignore[attr-defined]
-            cmd_cfg.enable_course_progress = False   # type: ignore[attr-defined]
             cmd_cfg.fixed_velocity = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_f = None            # type: ignore[attr-defined]
             cmd_cfg.fixed_height_h = None            # type: ignore[attr-defined]
@@ -390,19 +377,18 @@ def run_play(cfg: PlayConfig):
         if recorded is not None:
             final_step, stage_src = recorded, "检查点 env_state"
         else:
-            train_iter = extract_iter_from_checkpoint(resume_path)
-            final_step, stage_src = max(0, train_iter - 10) * STEPS_PER_ITER, "检查点文件名轮次"
+            final_step, stage_src = 0, "默认 (检查点缺少 env_state)"
     else:
         final_step, stage_src = 0, "默认 (无检查点)"
     final_stage = get_current_stage(final_step)
 
-    # 碰撞优先级: 显式 > 检查点记录 > 按上面解析出的最终阶段推断
+    # 碰撞优先级: 显式 > 检查点记录 > 训练默认关闭
     if cfg.collision is not None:
         collision, coll_src = cfg.collision, "命令行显式指定"
     elif saved_state.get("collision") is not None:
         collision, coll_src = bool(saved_state["collision"]), "检查点 obstacle_state"
     else:
-        collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
+        collision, coll_src = False, "默认 (训练无碰撞)"
     # 与训练同源：热身无板，课程使用单板；显式碰撞允许提前诊断。
     course_state = dict(saved_state.get("height_course") or HeightCurriculumState().state_dict())
     if cfg.obstacle_height is not None:

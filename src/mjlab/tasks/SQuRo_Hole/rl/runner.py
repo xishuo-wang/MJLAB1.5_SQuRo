@@ -13,19 +13,17 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
+from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_REQUIRED_BATCHES
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     HEIGHT_EVALUATION_ENVS,
-    HEIGHT_REQUIRED_BATCHES,
     RETREAT_FAILURE_LIMIT,
     get_current_stage,
-    stage_requires_collision,
     stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
     obstacle_collision_enabled,
-    configure_obstacle_collision,
 )
 
 
@@ -78,23 +76,14 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         return obstacle_collision_enabled(self.env.unwrapped)
 
 
-    # 课程在当前位置要求的碰撞开关
-    def _obstacle_target_collision(self) -> bool:
-        step = int(self.env.unwrapped.common_step_counter)
-        return stage_requires_collision(get_current_stage(step))
-
-
-    # 是否需要重建: 目标与实际编译值不一致
+    # 是否需要重建: 进入高度课程后训练场景必须是单板且无碰撞
     def _obstacle_change_needed(self) -> bool:
-        compiled = self._obstacle_compiled_collision()
-        if self._obstacle_target_collision() != compiled:
-            return True
         if (stage_uses_height_course(get_current_stage(int(self.env.unwrapped.common_step_counter))) and self._obstacle_height_course_enabled):
             obstacle_keys = [
                 key for key, entity in self.env.unwrapped.scene.entities.items()
                 if key.startswith("obstacle") and hasattr(entity, "cfg")
             ]
-            return set(obstacle_keys) != {"obstacle"}
+            return set(obstacle_keys) != {"obstacle"} or self._obstacle_compiled_collision()
         return False
 
 
@@ -122,17 +111,14 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 重建环境, 并按需重新取观测
     def _apply_obstacle_rebuild(self, refresh_obs: bool):
         step_counter = int(self.env.unwrapped.common_step_counter)
-        collision = self._obstacle_target_collision()
         old = self.env
         env_cfg = copy.deepcopy(self._obstacle_env_cfg)
         env_cfg.scene.num_envs = self._obstacle_num_envs
         stage = get_current_stage(step_counter)
         if stage_uses_height_course(stage):
-            configure_obstacle_entity(env_cfg, enable_collision=collision)
+            configure_obstacle_entity(env_cfg, enable_collision=False)
             if self._obstacle_height_course_enabled:
                 env_cfg.commands["hole_cmd"].height_curriculum_state = (self._height_curriculum_state.state_dict())  # type: ignore
-        else:
-            configure_obstacle_collision(env_cfg, enable_collision=collision)
         new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._obstacle_device, render_mode=self._obstacle_render_mode)
         new_env.common_step_counter = step_counter
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._obstacle_clip_actions)
@@ -148,7 +134,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             old.close()
         except Exception as exc:
             print(f"[WARN] 旧环境关闭失败: {exc}")
-        print(f"[INFO] 限高板重建: 碰撞={'开' if collision else '关'}, "
+        print(f"[INFO] 限高板重建: 碰撞=关, "
               f"stage={get_current_stage(step_counter)}, iter {step_counter // STEPS_PER_ITER}, "
               f"num_envs={self._obstacle_num_envs}")
         return self.env.get_observations().to(self.device) if refresh_obs else None
@@ -173,7 +159,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             cfg.scene.num_envs = HEIGHT_EVALUATION_ENVS
             cmd_cfg = cfg.commands["hole_cmd"]
             cmd_cfg.enable_height_course = True
-            cmd_cfg.enable_course_progress = False
             cmd_cfg.debug_vis = False
             cmd_cfg.fixed_velocity = None
             cmd_cfg.fixed_height_f = None
@@ -398,7 +383,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                         self.logger.stop_logging_writer()
 
 
-    # 续训: 恢复环境状态, 首次采样前把碰撞开关对齐到课程目标
+    # 续训: 恢复课程状态, 首次采样前重建单板训练场景
     def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
              map_location: str | None = None) -> dict:
         infos = super().load(path, load_cfg, strict, map_location)
@@ -416,27 +401,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[INFO] 检查点 obstacle_state: stage={saved.get('stage')}, "
                   f"实际碰撞={saved.get('collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
-            mismatch = []
-            current = {d["name"]: d for d in self._obstacle_scene_state()}
-            for d in saved.get("layout") or []:
-                cur = current.get(d.get("name"))
-                if cur is None:
-                    continue
-                for f in ("position", "size", "solref", "solimp"):
-                    a = d.get(f)
-                    b = cur.get(f)
-                    if a is None and b is None:
-                        continue
-                    if a != b:
-                        mismatch.append(f"{d.get('name')}.{f}: 保存={a} 当前={b}")
-            if mismatch:
-                print("[WARN] 检查点记录的板几何/接触参数与当前场景不一致, 精度口径可能变化:")
-                for line in mismatch:
-                    print(f"       {line}")
-
         if self._obstacle_change_needed():
-            print(f"[INFO] 续训: 实际碰撞={self._obstacle_compiled_collision()} "
-                  f"与课程目标 {self._obstacle_target_collision()} 不一致, 首次采样前重建")
+            print("[INFO] 续训: 首次采样前重建单板训练场景")
             self._apply_obstacle_rebuild(refresh_obs=False)
         return infos
 

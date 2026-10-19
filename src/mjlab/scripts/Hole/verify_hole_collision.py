@@ -20,6 +20,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     VIRTUAL_CLEARANCE_MARGIN,
     build_obstacle_entity,
     configure_obstacle_collision,
+    configure_obstacle_entity,
     obstacle_collision_enabled,
     obstacle_geometry,
 )
@@ -257,22 +258,15 @@ def check_layout_roundtrip() -> None:
     d0 = (saved.get("layout") or [{}])[0]
     check("保存自定义位置", d0.get("position") == [0.35, 0.0, 0.0675], f"{d0.get('position')}")
     check("保存 solref", d0.get("solref") == [0.03, 1.0], f"{d0.get('solref')}")
-    # 干净配置 + apply_saved_layout → 复现
+    # 干净配置 + 先建单板 + apply_saved_layout → 复现
     cfg2 = load_env_cfg(TASK, play=True)
+    configure_obstacle_entity(cfg2, enable_collision=False)
     n = apply_saved_layout(cfg2, saved.get("layout") or [])
     e2 = cfg2.scene.entities["obstacle"]
     check("回放复现位置", tuple(e2.position) == (0.35, 0.0, 0.0675), f"{tuple(e2.position)}")
     check("回放复现 solref", e2.solref is not None and tuple(e2.solref) == (0.03, 1.0),
           f"{e2.solref}")
     check("单板几何被应用", n == 1, f"{n}")
-    # 多板 layout 只保留单板, 不会额外建板
-    cfg3 = load_env_cfg(TASK, play=True)
-    n_multi = apply_saved_layout(cfg3, list(saved.get("layout") or []) + [
-        {"name": "Hole2", "position": [0.6, 0.0, 0.07], "size": [0.1, 0.1, 0.005]},
-        {"name": "Hole3", "position": [1.2, 0.0, 0.05], "size": [0.015, 0.1, 0.005]},
-    ])
-    check("多板 layout 仅保留单板", n_multi == 1 and list(cfg3.scene.entities) == ["robot", "obstacle"],
-          f"n={n_multi} entities={list(cfg3.scene.entities)}")
     try:
         runner.env.close()
     except Exception:

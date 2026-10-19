@@ -28,7 +28,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     get_current_stage,
     heights_for_stage,
     reward_weight_curriculum,
-    stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_mocap
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
@@ -42,8 +41,6 @@ def verify_stages() -> None:
     for iteration, expected in probes:
         stage = get_current_stage(iteration * STEPS_PER_ITER)
         assert stage == expected
-        # 训练阶段不再开启实体碰撞, 接触只由独立考核环境提供
-        assert stage_requires_collision(stage) is False
     previous = reward_weight_curriculum.get_reward_weights(1000 * STEPS_PER_ITER)
     warmup = reward_weight_curriculum.get_reward_weights(STAGE2_STEP)
     assert all(warmup[key] == value for key, value in previous.items() if key != "weight_corridor")

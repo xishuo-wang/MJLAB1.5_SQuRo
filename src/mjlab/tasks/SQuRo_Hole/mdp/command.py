@@ -112,7 +112,6 @@ class HoleCommand(CommandTerm):
         self.command_gait_freq.fill_(BASE_FREQ)
         self.command_curvature.fill_(BASE_CURVATURE)
         self.enable_height_course = cfg.enable_height_course
-        self.enable_course_progress = cfg.enable_course_progress
         self.adaptive_sampling = True
         self.height_curriculum_state = HeightCurriculumState()
         if cfg.height_curriculum_state:
@@ -339,7 +338,6 @@ class HoleCommandCfg(CommandTermCfg):
     fixed_height_f: Optional[float] = None
     fixed_height_h: Optional[float] = None
     enable_height_course: bool = False
-    enable_course_progress: bool = True
     high_obstacle_equal_height: Optional[bool] = None
     height_curriculum_state: dict = field(default_factory=dict)
     

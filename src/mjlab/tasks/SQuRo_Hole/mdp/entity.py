@@ -75,15 +75,14 @@ def build_obstacle_entity(enable_collision: bool, bottom_z: float = HEIGHT_INITI
 def configure_obstacle_collision(env_cfg, enable_collision: bool, solref: tuple[float, ...] | None = None, solimp: tuple[float, ...] | None = None) -> dict:
     mask = 1 if enable_collision else 0
     entities = dict(env_cfg.scene.entities)
-    for key, existing in tuple(entities.items()):
-        if not isinstance(existing, ObstacleEntityCfg):
-            continue
+    existing = entities.get("obstacle")
+    if isinstance(existing, ObstacleEntityCfg):
         keep: dict = {"contype": mask, "conaffinity": mask}
         if solref is not None:
             keep["solref"] = solref
         if solimp is not None:
             keep["solimp"] = solimp
-        entities[key] = replace(existing, **keep)
+        entities["obstacle"] = replace(existing, **keep)
     env_cfg.scene.entities = entities
     return entities
 
@@ -181,73 +180,56 @@ def obstacle_geometry(env=None) -> list[dict]:
     if env is None:
         return [_entity_geometry(ObstacleEntityCfg())]
     scene = getattr(env, "scene", env)
-    entities = getattr(scene, "entities", None) or {}
-    return [_entity_geometry(ent.cfg) for ent in entities.values() if isinstance(getattr(ent, "cfg", None), ObstacleEntityCfg)]
+    entity = (getattr(scene, "entities", None) or {}).get("obstacle")
+    cfg = getattr(entity, "cfg", None)
+    return [_entity_geometry(cfg)] if isinstance(cfg, ObstacleEntityCfg) else []
 
 
 
-# 统一设置障碍物板底高度
+# 设置障碍物板底高度
 def set_obstacle_bottom_z(env_cfg, bottom_z: float) -> int:
     entities = dict(env_cfg.scene.entities)
-    n = 0
-    for key, ent in entities.items():
-        if isinstance(ent, ObstacleEntityCfg):
-            entities[key] = replace(ent, position=(float(ent.position[0]), float(ent.position[1]), float(bottom_z)),)
-            n += 1
+    existing = entities.get("obstacle")
+    if not isinstance(existing, ObstacleEntityCfg):
+        return 0
+    entities["obstacle"] = replace(
+        existing,
+        position=(float(existing.position[0]), float(existing.position[1]), float(bottom_z)),
+    )
     env_cfg.scene.entities = entities
-    return n
+    return 1
 
 
 
 # 设置实际板体的可见性，仅改外观
 def set_obstacle_visibility(env_cfg, visible: bool, hidden_rgba: tuple = (0.0, 0.0, 0.0, 0.0), shown_rgba: tuple = (0.5, 0.5, 0.5, 0.5)) -> int:
     entities = dict(env_cfg.scene.entities)
-    rgba = tuple(shown_rgba) if visible else tuple(hidden_rgba)
-    n = 0
-    for key, ent in tuple(entities.items()):
-        if isinstance(ent, ObstacleEntityCfg):
-            entities[key] = replace(ent, rgba=rgba)
-            n += 1
+    existing = entities.get("obstacle")
+    if not isinstance(existing, ObstacleEntityCfg):
+        return 0
+    entities["obstacle"] = replace(existing, rgba=(tuple(shown_rgba) if visible else tuple(hidden_rgba)))
     env_cfg.scene.entities = entities
-    return n
+    return 1
 
 
 
 # 把 checkpoint 里记录的板几何/接触参数应用到 env_cfg
 def apply_saved_layout(env_cfg, layout: list) -> int:
-    primary_name = ObstacleEntityCfg().name.lower()
-    layout = [item for item in layout if str(item.get("name", "")).lower() == primary_name]
     if not layout:
         return 0
+    record = layout[0]
     entities = dict(env_cfg.scene.entities)
-    collision_template = next((ent for ent in entities.values() if isinstance(ent, ObstacleEntityCfg)), None,)
-    saved_keys = {str(d.get("name", "")).lower() for d in layout}
-    entities = {key: ent for key, ent in entities.items() if not isinstance(ent, ObstacleEntityCfg) or key in saved_keys}
-    applied = 0
-    for d in layout:
-        key = str(d.get("name", "")).lower()
-        existing = entities.get(key)
-        if not isinstance(existing, ObstacleEntityCfg):
-            position = d.get("position")
-            size = d.get("size")
-            if position is None or size is None or key != primary_name:
-                continue
-            existing = ObstacleEntityCfg(
-                name=str(d.get("name", key)),
-                position=(float(position[0]), float(position[1]), float(position[2])),
-                size=(float(size[0]), float(size[1]), float(size[2])),
-                contype=(int(collision_template.contype) if collision_template else 1),
-                conaffinity=(int(collision_template.conaffinity) if collision_template else 1),
-            )
-        keep: dict = {}
-        if d.get("position") is not None:
-            keep["position"] = tuple(float(v) for v in d["position"])
-        if d.get("size") is not None:
-            keep["size"] = tuple(float(v) for v in d["size"])
-        for f in ("solref", "solimp"):
-            if d.get(f) is not None:
-                keep[f] = tuple(float(v) for v in d[f])
-        entities[key] = replace(existing, **keep)
-        applied += 1
+    existing = entities.get("obstacle")
+    if not isinstance(existing, ObstacleEntityCfg):
+        return 0
+    keep: dict = {}
+    if record.get("position") is not None:
+        keep["position"] = tuple(float(v) for v in record["position"])
+    if record.get("size") is not None:
+        keep["size"] = tuple(float(v) for v in record["size"])
+    for f in ("solref", "solimp"):
+        if record.get(f) is not None:
+            keep[f] = tuple(float(v) for v in record[f])
+    entities["obstacle"] = replace(existing, **keep)
     env_cfg.scene.entities = entities
-    return applied
+    return 1

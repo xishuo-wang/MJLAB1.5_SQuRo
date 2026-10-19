@@ -32,9 +32,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_MAX,
     HEIGHT_MIN,
     HEIGHT_MIN_DWELL_ITERATIONS,
-    HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_MIN_SUCCESS_RATE,
-    HEIGHT_REQUIRED_BATCHES,
     HEIGHT_STEP,
     HEIGHT_FINE_STEP,
     FINAL_ACCEPT_RATE,
@@ -62,7 +60,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     sample_bin_heights,
     sample_range_bin_heights,
     height_bin_indices,
-    stage_requires_collision,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
@@ -107,7 +104,6 @@ def make_env() -> ManagerBasedRlEnv:
     configure_obstacle_entity(cfg, enable_collision=True)
     command = cfg.commands["hole_cmd"]
     command.enable_height_course = True
-    command.enable_course_progress = False
     command.high_obstacle_equal_height = True
     command.height_curriculum_state = HeightCurriculumState().state_dict()
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -351,48 +347,6 @@ def verify_high_obstacle_env(env: ManagerBasedRlEnv) -> None:
     env.reset()
 
 
-# 验证课程门控、批次失败重置、最低样本过滤与驻留下界。
-def verify_curriculum_state() -> None:
-    state = HeightCurriculumState(level_start_iteration=STAGE3_ITER)
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, True, STAGE2_ITER + 1, 2, True)
-    check("第二阶段和无碰撞回合不会推进课程", state.z_min == HEIGHT_INITIAL_MIN and state.all_height_episode_count == 0)
-    state = HeightCurriculumState(level_start_iteration=0)
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, True, 100, HEIGHT_RULE_STAGE, True)
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-        state.record_episode(HEIGHT_INITIAL_MIN, False, 100, HEIGHT_RULE_STAGE, True)
-    check("失败批清零连续达标批数", state.consecutive_success_batches == 0)
-    for iteration in range(HEIGHT_MIN_DWELL_ITERATIONS + 1):
-        for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-            state.record_episode(HEIGHT_INITIAL_MIN, True, iteration, HEIGHT_RULE_STAGE, True)
-        if state.z_min < HEIGHT_INITIAL_MIN:
-            break
-    check("达到两批、驻留期和 60% 后才降档", state.z_min == HEIGHT_INITIAL_MIN - 0.002 and state.consecutive_success_batches == 0)
-    state.z_min = HEIGHT_MIN
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        state.record_episode(HEIGHT_MIN, True, 1000, HEIGHT_RULE_STAGE, True)
-    check("最低档不会跌破课程下界", state.z_min == HEIGHT_MIN)
-    restored = HeightCurriculumState()
-    restored.load_state_dict(state.state_dict())
-    check("课程 checkpoint 状态往返", restored.state_dict() == state.state_dict())
-    check("最低成功率门槛为 60%", HEIGHT_MIN_SUCCESS_RATE == 0.60 and HEIGHT_MAX == 0.090)
-
-    delayed = HeightCurriculumState(level_start_iteration=0)
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        delayed.record_episode(HEIGHT_INITIAL_MIN, True, 99, HEIGHT_RULE_STAGE, True)
-    delayed_result = delayed.record_episode(
-        HEIGHT_INITIAL_MIN, True, 100, HEIGHT_RULE_STAGE, True
-    )
-    check(
-        "驻留达标后的部分批次降档也返回完整日志字段",
-        delayed.z_min == HEIGHT_INITIAL_MIN - 0.002
-        and all(key in delayed_result for key in (
-            "previous_z_min", "z_min", "success_rate", "sample_count"
-        )),
-    )
-
-
 # 构造一批考核结果, 最低档与较易档混合
 def _evaluation_results(z_min: float, min_count: int, min_success: int, other_count: int = 0) -> list[dict]:
     results = [
@@ -424,7 +378,6 @@ def _final_results(rounds_per_bin: int, successes_per_bin: list[int]) -> list[di
 
 # 验证独立考核的调度、最低档样本门槛、最终档均匀采样、验收与退档保护。
 def verify_evaluation_curriculum() -> None:
-    check("训练阶段不再要求实体碰撞", all(not stage_requires_collision(stage) for stage in (1, 2, 3, 4)))
     state = HeightCurriculumState()
     first_iteration = STAGE3_ITER + HEIGHT_EVALUATION_PRETRAIN_ITERATIONS
     check("考核在预训练轮数之前不触发", not state.should_evaluate(first_iteration - HEIGHT_EVALUATION_INTERVAL))
@@ -579,26 +532,11 @@ def verify_evaluation_curriculum() -> None:
     check("最终档采样范围正确",
           float(uniform.min()) >= HEIGHT_MIN and float(uniform.max()) <= HEIGHT_MAX)
 
-    # 旧检查点 46mm 下限迁移与新增字段默认值
-    legacy = HeightCurriculumState()
-    legacy_state = legacy.state_dict()
-    legacy_state["z_min"] = 0.046
-    for name in ("final_accepted", "consecutive_failures", "retreats",
-                 "retreat_pending_advance", "bin_weights"):
-        legacy_state.pop(name, None)
-    migrated = HeightCurriculumState()
-    migrated.load_state_dict(legacy_state)
-    check("旧 46mm 检查点加载时迁移到 47mm 并补齐新增字段",
-          migrated.z_min == HEIGHT_MIN and migrated.final_accepted is False
-          and migrated.consecutive_failures == 0 and len(migrated.bin_weights) == HEIGHT_BIN_COUNT)
-    pinned = HeightCurriculumState()
-    pinned_state = pinned.state_dict()
-    pinned_state["z_min"] = 0.046
-    pinned_state["z_max"] = 0.046
-    pinned_loaded = HeightCurriculumState()
-    pinned_loaded.load_state_dict(pinned_state)
-    check("显式固定46毫米回放工况不被下限迁移改写",
-          pinned_loaded.z_min == 0.046 and pinned_loaded.z_max == 0.046)
+    # 课程状态往返（当前版本检查点字段）
+    state = HeightCurriculumState()
+    restored = HeightCurriculumState()
+    restored.load_state_dict(state.state_dict())
+    check("课程 checkpoint 状态往返", restored.state_dict() == state.state_dict())
 
 
 # 验证最终档命令采样: 全挡位随机与显式固定板高
@@ -712,48 +650,6 @@ def verify_normal_adaptive_sampling() -> None:
     check("普通模式加权目标与推进成功率一致", NORMAL_BIN_TARGET_RATE == HEIGHT_MIN_SUCCESS_RATE)
 
 
-# 验证50毫米边界的细步长、47毫米下限和旧检查点续训。
-def verify_fine_height_steps() -> None:
-    expected_mm = (70, 68, 66, 64, 62, 60, 58, 56, 54, 52, 50, 49, 48, 47)
-    state = HeightCurriculumState()
-    for index, height_mm in enumerate(expected_mm[1:], start=1):
-        previous_height = state.z_min
-        iteration = STAGE3_ITER + index * HEIGHT_MIN_DWELL_ITERATIONS
-        for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-            state.record_episode(previous_height, True, iteration, HEIGHT_RULE_STAGE, True)
-        check(f"课程由 {previous_height * 1000:g} 降到 {height_mm} mm",
-              state.z_min == height_mm / 1000 and state.consecutive_success_batches == 0)
-    check("47毫米下限与完整降档序列一致", HEIGHT_MIN == expected_mm[-1] / 1000)
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        state.record_episode(state.z_min, True, iteration + HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
-    check("47毫米达标后保持下限", state.z_min == HEIGHT_MIN)
-
-    fine = HeightCurriculumState(level_start_iteration=0)
-    fine.z_min = 0.050
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS - 1, HEIGHT_RULE_STAGE, True)
-    check("50毫米档成功达标后仍须满足驻留时间", fine.z_min == 0.050)
-    fine.record_episode(fine.z_min, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
-    check("50毫米驻留达标后只降低1毫米", fine.z_min == 0.049)
-
-    failed = HeightCurriculumState(level_start_iteration=0)
-    failed.z_min = 0.050
-    for passed in (True, False):
-        for _ in range(HEIGHT_MIN_SUCCESS_BATCH):
-            failed.record_episode(failed.z_min, passed, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
-    check("细步长阶段失败批仍清零且不降档",
-          failed.z_min == 0.050 and failed.consecutive_success_batches == 0)
-
-    old = HeightCurriculumState(level_start_iteration=0)
-    old.z_min = 0.048
-    restored = HeightCurriculumState()
-    restored.load_state_dict(old.state_dict())
-    check("旧48毫米检查点加载时保留原课程状态", restored.state_dict() == old.state_dict())
-    for _ in range(HEIGHT_MIN_SUCCESS_BATCH * HEIGHT_REQUIRED_BATCHES):
-        restored.record_episode(0.048, True, HEIGHT_MIN_DWELL_ITERATIONS, HEIGHT_RULE_STAGE, True)
-    check("旧48毫米检查点达标后按新规则降至47毫米", restored.z_min == 0.047)
-
-
 # 把九个采样点放在指定位置，驱动监测器的成功与失败路径。
 def set_sites(
     env: ManagerBasedRlEnv,
@@ -842,53 +738,6 @@ def verify_dynamic_sources(env: ManagerBasedRlEnv) -> None:
     previous = read_obstacle_bottom_z(obstacle).clone()
     command._resample_command(torch.arange(env.num_envs, device=env.device))
     check("周期命令重采样不改变回合板高", torch.equal(read_obstacle_bottom_z(obstacle), previous))
-
-
-# 随机计时的首回合无论成败均排除，完整回合恢复正常统计。
-def verify_partial_episode_filter(env: ManagerBasedRlEnv) -> None:
-    command = env.command_manager.get_term("hole_cmd")
-    command.height_curriculum_state = HeightCurriculumState()
-    command.enable_course_progress = True
-    env.reset()
-    obstacle = env.scene.entities["obstacle"]
-    write_obstacle_mocap(obstacle, HEIGHT_INITIAL_MIN)
-    command.course_episode_eligible[:] = torch.tensor([False, False, True, True], device=env.device)
-    monitor = env._hole_passage_monitor
-    monitor.consume()
-    x1 = obstacle.cfg.position[0] - obstacle.cfg.size[0]
-    x2 = obstacle.cfg.position[0] + obstacle.cfg.size[0]
-    passed_ids = torch.tensor([1, 3], device=env.device)
-    set_sites(env, x1 - 0.01)
-    monitor.compute()
-    set_sites(env, x1 + 0.005, env_ids=passed_ids)
-    monitor.compute()
-    set_sites(env, x2 + 0.01, env_ids=passed_ids)
-    env.episode_length_buf[:] = env.max_episode_length
-    monitor.compute()
-    rows = {row["env_id"]: row for row in monitor.consume()}
-    state = command.height_curriculum_state
-    check("截短首回合成功和失败均不计课程分母",
-          not rows[0]["valid"] and not rows[1]["valid"] and rows[1]["success"]
-          and state.all_height_episode_count == 2 and state.all_height_success_count == 1
-          and state.level_episode_count == 2 and state.level_success_count == 1)
-    env.reset(env_ids=torch.tensor([0], device=env.device))
-    check("首次自然复位恢复当前环境资格且不影响其他截短回合",
-          command.course_episode_eligible.tolist() == [True, False, True, True])
-    env.reset()
-    write_obstacle_mocap(obstacle, HEIGHT_INITIAL_MIN)
-    set_sites(env, x1 - 0.01)
-    monitor.compute()
-    set_sites(env, x1 + 0.005)
-    monitor.compute()
-    set_sites(env, x2 + 0.01)
-    env.episode_length_buf[:] = env.max_episode_length
-    monitor.compute()
-    monitor.consume()
-    check("后续完整回合全部恢复课程统计",
-          command.course_episode_eligible.all()
-          and state.all_height_episode_count == 6 and state.all_height_success_count == 5)
-    command.enable_course_progress = False
-    env.reset()
 
 
 # 从独立的碰撞几何与编译尺寸读取实际板底。
@@ -1073,7 +922,6 @@ def verify_real_env() -> None:
     verify_continuous_reference(env)
     verify_dynamic_sources(env)
     verify_passage_monitor(env)
-    verify_partial_episode_filter(env)
     command = env.command_manager.get_term("hole_cmd")
     command.height_curriculum_state.z_min = HEIGHT_MIN
     command.height_curriculum_state.z_max = HEIGHT_MIN
@@ -1093,11 +941,9 @@ def main() -> None:
     verify_low_leg_hold()
     verify_virtual_contact()
     verify_high_obstacle_modes()
-    verify_curriculum_state()
     verify_evaluation_curriculum()
     verify_final_mode_command_sampling()
     verify_normal_adaptive_sampling()
-    verify_fine_height_steps()
     verify_real_env()
     if FAILURES:
         raise SystemExit(f"失败项: {FAILURES}")

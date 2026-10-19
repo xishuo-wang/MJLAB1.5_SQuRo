@@ -40,7 +40,6 @@ def main():
     cfg = SQuRo_Hole_Env_Cfg()
     cfg.scene.num_envs = len(args.heights) * (args.samples + 1)
     cfg.commands["hole_cmd"].enable_height_course = True
-    cfg.commands["hole_cmd"].enable_course_progress = False
     configure_obstacle_entity(cfg, enable_collision=True)
     env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
     env.common_step_counter = STAGE3_STEP
@@ -69,9 +68,8 @@ def main():
             runner.load(str(path), load_cfg={"actor": True}, strict=True, map_location=env.device)
             env = runner.env.unwrapped
             command = env.command_manager.get_term("hole_cmd")
-            command.enable_course_progress = False
             command.cfg.high_obstacle_equal_height = (
-                saved.get("high_obstacle_equal_height", True) if args.high_obstacle_mode == "saved"
+                saved.get("high_obstacle_equal_height") if args.high_obstacle_mode == "saved"
                 else {"equal": True, "segmented": False, "mixed": None}[args.high_obstacle_mode]
             )
             command._sample_obstacle_height = MethodType(sample_heights, command)

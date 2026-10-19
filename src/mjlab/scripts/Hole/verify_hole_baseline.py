@@ -1,5 +1,5 @@
 # uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
-# Hole 验证：参考表、单板高度规则、四阶段课程、实体碰撞与观测维度
+# Hole 验证：参考表、单板高度规则、四阶段课程、单板场景与观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
 import torch
@@ -27,7 +27,6 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     heights_for_stage,
     reward_weight_curriculum,
     obstacle_rule_bounds,
-    stage_requires_collision,
     stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
@@ -91,7 +90,7 @@ def check_command() -> None:
           f"step {STAGE2_STEP} → stage {get_current_stage(STAGE2_STEP)}, "
           f"step {STAGE3_STEP} → stage {get_current_stage(STAGE3_STEP)}")
     print("[3b] 四阶段定义 (边界唯一定义在 mdp/curriculums.py):")
-    print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'高度课程':>8}{'要求碰撞':>10}")
+    print(f"     {'阶段':>4}{'iter 区间':>16}{'命令来源':>26}{'高度课程':>8}")
     bounds = [0, STAGE1_STEP // STEPS_PER_ITER, STAGE2_STEP // STEPS_PER_ITER, STAGE3_STEP // STEPS_PER_ITER]
     for s in range(1, NUM_STAGES + 1):
         lo = bounds[s - 1]
@@ -99,7 +98,7 @@ def check_command() -> None:
         pool = heights_for_stage(s)
         src = "单板高度课程" if pool is None else f"随机 {len(pool)} 档"
         print(f"     {s:>4}{f'{lo}-{hi}':>16}{src:>26}"
-              f"{str(stage_uses_height_course(s)):>8}{str(stage_requires_collision(s)):>10}")
+              f"{str(stage_uses_height_course(s)):>8}")
 
     # 将阶段和板底设置为真实课程口径。
     env.common_step_counter = STAGE3_STEP
@@ -132,16 +131,16 @@ def check_curriculum() -> None:
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
     keys = ["weight_corridor", "weight_height", "weight_mimic_pos", "sigma_height"]
     header = "".join(f"{k:>16}" for k in keys)
-    print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
+    print(f"{'阶段阈值':>12}{'iter':>8}{header}{'训练碰撞':>14}")
     for step in thresholds:
         w = reward_weight_curriculum.get_reward_weights(step)
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
-              f"{str(reward_weight_curriculum.should_enable_obstacle(step)):>14}")
+              f"{'关':>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['weight_mimic_pos']}, height={eff['weight_height']}, "
           f"vel={eff['weight_vel']}, corridor={eff['weight_corridor']}, "
-          f"enable_holes={reward_weight_curriculum.should_enable_obstacle(STAGE3_STEP)}")
+          f"训练碰撞=关 (独立考核环境开启)")
 
 
 # 实体碰撞与观测维度
@@ -157,7 +156,7 @@ def check_env() -> None:
         env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
         obs = env.reset()
         obs_dict = obs[0] if isinstance(obs, tuple) else obs
-        print(f"     [{tag}] 初始限高板碰撞={obstacle_collision_enabled(env)} (前三阶段无板 / 课程阶段重建开), "
+        print(f"     [{tag}] 初始限高板碰撞={obstacle_collision_enabled(env)} (前三阶段无板 / 课程阶段重建单板且无碰撞), "
               f"actor {tuple(obs_dict['actor'].shape)}, "
               f"动作 {env.action_space.shape[-1]}, 参考表被控关节数 {_ACT_NUM}")
         if not play:
@@ -173,10 +172,10 @@ def main() -> None:
     check_curriculum()
     check_env()
     print(f"\n[结论] 参考表 {NUM_MODES} 模式 × {len(HEIGHT_LIST)} 高度档 × {TABLE_RESOLUTION} 相位 × {_ACT_NUM} 关节 (含头颈)、四阶段课程 "
-          "(0-1k 正常档随机 / 1k-2k 全档随机 / 2k-3k 走廊热身 / 3k+ 单板真实碰撞课程)、"
+          "(0-1k 正常档随机 / 1k-2k 全档随机 / 2k-3k 走廊热身 / 3k+ 单板高度课程)、"
           "动作 14 维 / 观测 113 维；高度规则按基座世界 X 查表")
-    print("     注: 课程阶段的实体碰撞由 rl/runner.py 在阶段边界重建环境完成 "
-          "(contype 编译期固化, 运行期改无效)")
+    print("     注: 训练环境不开启实体碰撞, 3000轮由 rl/runner.py 重建单板; "
+          "接触只在独立真实碰撞考核环境开启")
 
 
 if __name__ == "__main__":

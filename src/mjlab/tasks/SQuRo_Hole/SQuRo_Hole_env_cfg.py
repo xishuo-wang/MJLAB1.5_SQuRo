@@ -101,7 +101,6 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             asset_name="robot",
             debug_vis=False, 
             enable_height_course=True,
-            enable_course_progress=False,
         )
     }
 

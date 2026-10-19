@@ -2,8 +2,8 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 from .indices import _MODEL_INDICES, resolve_model_indices
-from .entity import obstacle_collision_enabled, read_obstacle_bottom_z
-from .curriculums import STEPS_PER_ITER, get_current_stage, stage_uses_height_course
+from .entity import read_obstacle_bottom_z
+from .curriculums import get_current_stage, stage_uses_height_course
 
 
 if TYPE_CHECKING:
@@ -144,23 +144,6 @@ class PassMonitor:
                 failure_code = 0
             self.seq[env_id] += 1
             valid = bool(valid_course and command.obstacle_height_sampled[env_id] and command.course_episode_eligible[env_id]) # type: ignore
-            course_result = {"advanced": False}
-            if command is not None and command.enable_course_progress:  # type: ignore
-                course_result = command.height_curriculum_state.record_episode(  # type: ignore
-                    float(bottom[env_id]),
-                    success,
-                    int(env.common_step_counter // STEPS_PER_ITER),
-                    get_current_stage(env.common_step_counter),
-                    obstacle_collision_enabled(env),
-                    eligible=valid,
-                    failure_code=failure_code,
-                )
-                if course_result["advanced"]:
-                    print(
-                        f"高度课程降档：Zmin {course_result['previous_z_min']:.3f}→"
-                        f"{course_result['z_min']:.3f} m，当前档通过率 "
-                        f"{course_result['success_rate']:.1%}，样本数 {course_result['sample_count']}"
-                    )
             self.completed.append({
                 "seq": int(self.seq[env_id]),
                 "env_id": env_id,
@@ -168,7 +151,6 @@ class PassMonitor:
                 "valid": valid,
                 "success": success,
                 "failure_code": failure_code,
-                "advanced": course_result["advanced"],
             })
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 

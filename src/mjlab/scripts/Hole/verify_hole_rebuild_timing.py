@@ -25,7 +25,6 @@ def main():
     torch.manual_seed(197)
     cfg = SQuRo_Hole_Env_Cfg()
     cfg.scene.num_envs = 16
-    cfg.commands["hole_cmd"].enable_course_progress = False
     env = ManagerBasedRlEnv(cfg, device="cuda:0")
     settings = asdict(SQuRo_Hole_PPO_Runner_Cfg())
     settings["logger"] = "tensorboard"

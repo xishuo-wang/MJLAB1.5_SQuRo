@@ -29,7 +29,6 @@ def make_env(reset_func=events.reset_model) -> ManagerBasedRlEnv:
     state = HeightCurriculumState()
     state.z_min = state.z_max = 0.064
     cfg.commands["hole_cmd"].height_curriculum_state = state.state_dict()
-    cfg.commands["hole_cmd"].enable_course_progress = False
     cfg.terminations = {"timeout": cfg.terminations["timeout"]}
     cfg.events["reset_all"].func = reset_func
     env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
