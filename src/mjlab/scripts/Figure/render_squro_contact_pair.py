@@ -29,8 +29,11 @@ from mjlab.scripts.Figure.render_squro_five_box import (
 )
 
 OBSTACLE_BLUE = (33, 137, 225)
+OBSTACLE_FILL = (145, 195, 232)
+OBSTACLE_FILL_ALPHA = 40
 BOX_TEAL = (32, 129, 126)
-VIOLATION_RED = (226, 77, 45)
+OVERLAP_MAUVE = (166, 120, 166)
+OVERLAP_FILL_ALPHA = 70
 BOARD_GRAY = (0.50, 0.55, 0.60, 1.0)
 DEFAULT_OUTPUT = DIAGNOSTICS_ROOT / "SQuRo_Envelope" / "contact_pair_20261019"
 
@@ -287,7 +290,7 @@ def render_base(renderer, data, camera, option, view_height):
   return Image.fromarray(np.dstack((rgb, mask.astype(np.uint8) * 255)))
 
 
-# 按相机深度依次叠加检测盒透明面。
+# 将凸面顶点按投影环序排列，再按深度叠加透明面。
 def face_layer(size, faces, camera, basis, view_height, color, alpha):
   output = Image.new("RGBA", size)
   projected = [
@@ -295,9 +298,10 @@ def face_layer(size, faces, camera, basis, view_height, color, alpha):
   ]
   for polygon in sorted(projected, key=lambda item: item[:, 2].mean(), reverse=True):
     layer = Image.new("RGBA", size)
-    ImageDraw.Draw(layer).polygon(
-      [tuple(p) for p in polygon[:, :2]], fill=(*color, alpha)
-    )
+    points = polygon[:, :2]
+    delta = points - points.mean(axis=0)
+    points = points[np.argsort(np.arctan2(delta[:, 1], delta[:, 0]))]
+    ImageDraw.Draw(layer).polygon([tuple(p) for p in points], fill=(*color, alpha))
     output = Image.alpha_composite(output, layer)
   return output
 
@@ -323,22 +327,7 @@ def dashed_line(draw, first, last, color, width, dash):
 # 从同一板体角点和五盒角点生成虚拟检测叠加层。
 def virtual_layers(size, boxes, board, intersections, camera, basis, view_height):
   faces = [box["corners"][list(face)] for box in boxes for face in BOX_FACES]
-  ordered_faces = []
-  for face in faces:
-    center = face.mean(axis=0)
-    normal = np.cross(face[1] - face[0], face[2] - face[0])
-    if np.linalg.norm(normal) < 1e-12:
-      continue
-    basis_a = face[0] - center
-    basis_b = np.cross(normal, basis_a)
-    angles = np.arctan2(
-      (face - center) @ basis_b / np.linalg.norm(basis_b),
-      (face - center) @ basis_a / np.linalg.norm(basis_a),
-    )
-    ordered_faces.append(face[np.argsort(angles)])
-  boxes_layer = face_layer(
-    size, ordered_faces, camera, basis, view_height, BOX_TEAL, 13
-  )
+  boxes_layer = face_layer(size, faces, camera, basis, view_height, BOX_TEAL, 13)
   draw = ImageDraw.Draw(boxes_layer)
   for box in boxes:
     projected = project_points(box["corners"], camera.lookat, basis, view_height, *size)
@@ -348,7 +337,15 @@ def virtual_layers(size, boxes, board, intersections, camera, basis, view_height
         fill=(*BOX_TEAL, 235),
         width=4,
       )
-  obstacle_layer = Image.new("RGBA", size)
+  obstacle_layer = face_layer(
+    size,
+    [board[list(face)] for face in BOX_FACES],
+    camera,
+    basis,
+    view_height,
+    OBSTACLE_FILL,
+    OBSTACLE_FILL_ALPHA,
+  )
   projected = project_points(board, camera.lookat, basis, view_height, *size)
   draw = ImageDraw.Draw(obstacle_layer)
   for a, b in BOX_EDGES:
@@ -359,8 +356,8 @@ def virtual_layers(size, boxes, board, intersections, camera, basis, view_height
     camera,
     basis,
     view_height,
-    VIOLATION_RED,
-    100,
+    OVERLAP_MAUVE,
+    OVERLAP_FILL_ALPHA,
   )
   draw = ImageDraw.Draw(overlap_layer)
   for region in intersections:
@@ -368,7 +365,7 @@ def virtual_layers(size, boxes, board, intersections, camera, basis, view_height
       polygon = project_points(face, camera.lookat, basis, view_height, *size)
       draw.line(
         [*map(tuple, polygon[:, :2]), tuple(polygon[0, :2])],
-        fill=(*VIOLATION_RED, 255),
+        fill=(*OVERLAP_MAUVE, 255),
         width=3,
       )
   return boxes_layer, obstacle_layer, overlap_layer
@@ -400,13 +397,13 @@ def detail_image(image, intersections, board, camera, basis, view_height, output
   x = min(820, max(projected[:, 0]) + 65)
   draw = ImageDraw.Draw(annotated)
   for point in projected:
-    draw.line([tuple(point), (x + 12, point[1])], fill=VIOLATION_RED, width=4)
+    draw.line([tuple(point), (x + 12, point[1])], fill=OVERLAP_MAUVE, width=4)
   a, b = sorted(projected[:, 1])
-  draw.line([(x, a), (x, b)], fill=VIOLATION_RED, width=5)
-  draw.polygon([(x, a), (x - 8, a + 17), (x + 8, a + 17)], fill=VIOLATION_RED)
-  draw.polygon([(x, b), (x - 8, b - 17), (x + 8, b - 17)], fill=VIOLATION_RED)
+  draw.line([(x, a), (x, b)], fill=OVERLAP_MAUVE, width=5)
+  draw.polygon([(x, a), (x - 8, a + 17), (x + 8, a + 17)], fill=OVERLAP_MAUVE)
+  draw.polygon([(x, b), (x - 8, b - 17), (x + 8, b - 17)], fill=OVERLAP_MAUVE)
   font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 46)
-  draw.text((x + 20, (a + b) / 2 - 27), "δ", font=font, fill=VIOLATION_RED)
+  draw.text((x + 20, (a + b) / 2 - 27), "δ", font=font, fill=OVERLAP_MAUVE)
   annotated.save(output / "04_violation_detail_delta.png", dpi=(300, 300))
   return {
     "crop_pixels": [left, top, side, side],
@@ -561,6 +558,11 @@ def main():
       "basis": basis.tolist(),
       "view_height": view_height,
       "size": [args.width, args.image_height],
+    },
+    "appearance": {
+      "virtual_obstacle_fill_rgba": [*OBSTACLE_FILL, OBSTACLE_FILL_ALPHA],
+      "virtual_obstacle_edge_rgb": list(OBSTACLE_BLUE),
+      "overlap_fill_rgba": [*OVERLAP_MAUVE, OVERLAP_FILL_ALPHA],
     },
     "off_collision_mask": [0, 0],
     "on_collision_mask": [1, 1],

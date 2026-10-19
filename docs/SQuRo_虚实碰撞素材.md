@@ -31,7 +31,7 @@
 中的奖励模块快照以完成环境注册，原工作区文件保持不变。
 
 五盒覆盖前躯干与前腿、前脊柱、后脊柱、后躯干与后腿、头颈的全部真实网格顶点。
-五盒与实际有限板体的交集通过半空间平面求交后计算凸包，橙红色区域来自真实交集。
+五盒与实际有限板体的交集通过半空间平面求交后计算凸包，紫粉色区域来自真实交集。
 局部 δ 为选中交集沿世界 Z 方向的重叠厚度，不是通用最小平移距离。
 若将来奖励增加安全裕度，应另画阈值，不改变蓝框与灰板本身的尺寸。
 
@@ -69,6 +69,21 @@ uv run python -B -m mjlab.scripts.Figure.render_squro_contact_pair `
 ```
 
 `geometry_checks.json` 额外记录尺寸来源、完整尺寸以及候选姿态在新几何上的检查口径。
+
+## 侧视与柔和配色版本
+
+v3 保留长顶板的完整尺寸、位置及两份机器人姿态，恢复 v1 的近侧视机位：方位角 105°、俯视角 2.5°。
+虚拟板增加淡蓝色 `#91C3E8` 半透明面填充，保留蓝色 `#2189E1` 虚线边界。
+实际几何交集及局部 δ 标注统一改为紫粉色 `#A678A6`，降低填充不透明度。
+板体每面 alpha 为 40/255，交集每面 alpha 为 70/255；重叠面按深度叠加。
+凸面顶点按投影环序排列，避免矩形角点的原始索引顺序造成交叉填充。
+颜色值和 alpha 统一定义在绘图脚本顶部，并写入 `geometry_checks.json` 的 `appearance`。
+
+```powershell
+uv run python -B -m mjlab.scripts.Figure.render_squro_contact_pair `
+  --output-dir logs/diagnostics/SQuRo_Envelope/contact_pair_side_mauve_20261019 `
+  --obstacle-size 0.24 0.14 0.02 --azimuth 105 --elevation -2.5
+```
 
 ## 输出
 
