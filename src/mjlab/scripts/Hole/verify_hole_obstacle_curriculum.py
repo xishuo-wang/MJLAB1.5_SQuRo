@@ -81,8 +81,8 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 )
 from mjlab.tasks.SQuRo_Hole.mdp.command import HoleCommand, get_height_mode, compute_cmd_vel_x
 from mjlab.tasks.SQuRo_Hole.mdp.rewards import (
-    compute_low_leg_hold_penalty,
-    compute_virtual_contact_penalty,
+    compute_contact_penalty,
+    compute_leg_motion_penalty,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
@@ -217,20 +217,20 @@ def verify_low_leg_hold() -> None:
         with patch.object(_MODEL_INDICES, "joint_ids", joint_ids), \
              patch.object(_MODEL_INDICES, "f_body_id", 0), \
              patch.object(_MODEL_INDICES, "linkage_joint_ids", (_ACT_NUM + 1,)):
-            reward = compute_low_leg_hold_penalty(probe)
+            reward = compute_leg_motion_penalty(probe)
             check(f"{device}静止惩罚覆盖64种组合且仅选中低侧四关节",
                   torch.allclose(reward, velocity.new_tensor(expected), atol=1e-6, rtol=0))
             single_front_low = (front.flatten() < THRESHOLD_HEIGHT) & (hind.flatten() >= THRESHOLD_HEIGHT)
             velocity[:, hind_ids] *= 100
-            changed = compute_low_leg_hold_penalty(probe)
+            changed = compute_leg_motion_penalty(probe)
             check("前低时运动侧后腿速度不影响静止惩罚", torch.equal(changed[single_front_low], reward[single_front_low]))
             velocity[:, hind_ids] /= 100
             permutation = torch.arange(front.numel() - 1, -1, -1, device=device)
             command[:] = command[permutation].clone()
-            reordered = compute_low_leg_hold_penalty(probe)
+            reordered = compute_leg_motion_penalty(probe)
             check("其他环境及批量排列不改变单环境静止惩罚", torch.allclose(reordered, reward[permutation], atol=1e-6, rtol=0))
             velocity.zero_()
-            check("低侧四关节静止时惩罚为零", bool((compute_low_leg_hold_penalty(probe) == 0).all()))
+            check("低侧四关节静止时惩罚为零", bool((compute_leg_motion_penalty(probe) == 0).all()))
 
 
 # 虚拟碰撞探针场景: 同时提供按名字取机器人与实体表。
@@ -281,20 +281,20 @@ def verify_virtual_contact() -> None:
          patch.object(_MODEL_INDICES, "h_body_site_ids", tuple(range(9, 18))), \
          patch("mjlab.tasks.SQuRo_Hole.mdp.rewards.resolve_model_indices", lambda asset: None), \
          patch("mjlab.tasks.SQuRo_Hole.mdp.rewards.read_obstacle_bottom_z", return_value=bottom):
-        penalty = compute_virtual_contact_penalty(build_probe(front_z, hind_z, body_x))
+        penalty = compute_contact_penalty(build_probe(front_z, hind_z, body_x))
         check("虚拟碰撞惩罚按实际板底与 X 区间数值正确", torch.allclose(penalty, expected, atol=1e-6, rtol=0))
         check("板外环境不受虚拟碰撞约束", float(penalty[0]) == 0.0)
         check("X 左右边界均计入板体区间", bool((penalty[[1, 2]] < 0).all()))
         check("恰好板底减余量时惩罚为零", float(penalty[5]) == 0.0 and float(penalty[6]) == 0.0)
         check("虚拟碰撞惩罚非正且有界", bool((penalty <= 0).all() and (penalty >= -weight).all()))
         stage3 = build_probe(front_z, hind_z, body_x, step_counter=STAGE2_STEP)
-        check("第三阶段虚拟碰撞权重为零", bool((compute_virtual_contact_penalty(stage3) == 0).all()))
+        check("第三阶段虚拟碰撞权重为零", bool((compute_contact_penalty(stage3) == 0).all()))
         swapped = build_probe(hind_z, front_z, body_x)
-        check("前后段交换不改变虚拟碰撞惩罚", torch.allclose(compute_virtual_contact_penalty(swapped), penalty, atol=1e-7, rtol=0))
+        check("前后段交换不改变虚拟碰撞惩罚", torch.allclose(compute_contact_penalty(swapped), penalty, atol=1e-7, rtol=0))
         permutation = torch.arange(num_envs - 1, -1, -1)
         permuted = build_probe(front_z[permutation], hind_z[permutation], body_x[permutation])
         check("环境排列不改变单环境虚拟碰撞惩罚",
-              torch.allclose(compute_virtual_contact_penalty(permuted), penalty[permutation], atol=1e-7, rtol=0))
+              torch.allclose(compute_contact_penalty(permuted), penalty[permutation], atol=1e-7, rtol=0))
 
 
 # 验证高板两种策略等概率采样，且不会改变低板规则。

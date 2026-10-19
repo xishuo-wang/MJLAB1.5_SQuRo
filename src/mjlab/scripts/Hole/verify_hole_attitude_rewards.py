@@ -60,8 +60,8 @@ class AttitudeRewardsTests(unittest.TestCase):
     # 只改变俯仰时，两个姿态奖励均保持满分。
     def test_pitch_is_not_roll(self):
         env = make_env([[0, 25, 0], [0, -25, 0], [0, 0, 0]])
-        torch.testing.assert_close(rewards.compute_angle_reward(env), torch.ones(3, dtype=torch.float64))
-        torch.testing.assert_close(rewards.compute_orientation_reward(env), torch.full((3,), 2., dtype=torch.float64))
+        torch.testing.assert_close(rewards.compute_roll_reward(env), torch.ones(3, dtype=torch.float64))
+        torch.testing.assert_close(rewards.compute_yaw_reward(env), torch.full((3,), 2., dtype=torch.float64))
 
     # 偏航使用圆周平均，跨越正负 180 度时不能被均成零。
     def test_circular_mean(self):
@@ -69,7 +69,7 @@ class AttitudeRewardsTests(unittest.TestCase):
         hind = [[0, 0, 10], [0, 0, -179], [0, 0, -20], [0, 0, 30]]
         env = make_env(front, hind)
         expected = 2 * torch.exp(-5 * torch.deg2rad(torch.tensor([20., 180., 0., 20.], dtype=torch.float64)).square())
-        torch.testing.assert_close(rewards.compute_orientation_reward(env), expected, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(rewards.compute_yaw_reward(env), expected, atol=1e-12, rtol=1e-12)
 
     # 四种高度模式保留单低选段和双高相加，双低两段都参与且不能符号抵消。
     def test_mode_selection_and_scale(self):
@@ -77,30 +77,30 @@ class AttitudeRewardsTests(unittest.TestCase):
                        [[.055, .055], [.02, .055], [.055, .02], [.02, .02]])
         error = torch.deg2rad(torch.tensor([5., 2., 3., 5.], dtype=torch.float64))
         sigma = error.new_tensor([100., 50., 50., 50.])
-        torch.testing.assert_close(rewards.compute_angle_reward(env), torch.exp(-sigma * error.square()))
+        torch.testing.assert_close(rewards.compute_roll_reward(env), torch.exp(-sigma * error.square()))
 
     # 改动其他环境的姿态或模式不改变当前环境的奖励。
     def test_environment_isolation(self):
         env = make_env([[5, 10, 15], [1, 2, 3]], heights=[[.02, .055], [.055, .055]])
-        first = [fn(env)[0].clone() for fn in (rewards.compute_angle_reward, rewards.compute_orientation_reward)]
+        first = [fn(env)[0].clone() for fn in (rewards.compute_roll_reward, rewards.compute_yaw_reward)]
         env.scene["robot"].data.body_link_quat_w[1] = make_env([[65, -35, -150]]).scene["robot"].data.body_link_quat_w[0]
         env.command_manager._terms["hole_cmd"].command[1, CMD_HEIGHT_H_IDS] = .02
-        for value, fn in zip(first, (rewards.compute_angle_reward, rewards.compute_orientation_reward)):
+        for value, fn in zip(first, (rewards.compute_roll_reward, rewards.compute_yaw_reward)):
             torch.testing.assert_close(value, fn(env)[0], atol=0, rtol=0)
 
     # 阶段切换只改变既有朝向权重，角度权重和指数核保持现有数值。
     def test_stage_weights(self):
         env = make_env([[0, 0, 20]])
-        first = rewards.compute_orientation_reward(env)
+        first = rewards.compute_yaw_reward(env)
         env.common_step_counter = STAGE3_STEP
-        torch.testing.assert_close(rewards.compute_orientation_reward(env), first * 2)
+        torch.testing.assert_close(rewards.compute_yaw_reward(env), first * 2)
 
     # CUDA 与 CPU 使用同一坐标约定并返回有限的逐环境奖励。
     @unittest.skipUnless(torch.cuda.is_available(), "没有可用 CUDA")
     def test_cpu_cuda(self):
         front = [[10, 20, 30], [-20, 25, -179], [0, -15, 179]]
         hind = [[-5, 10, -20], [15, -10, 179], [3, 20, -179]]
-        for fn in (rewards.compute_angle_reward, rewards.compute_orientation_reward):
+        for fn in (rewards.compute_roll_reward, rewards.compute_yaw_reward):
             cpu = fn(make_env(front, hind))
             gpu = fn(make_env(front, hind, device="cuda:0")).cpu()
             self.assertTrue(torch.isfinite(gpu).all())

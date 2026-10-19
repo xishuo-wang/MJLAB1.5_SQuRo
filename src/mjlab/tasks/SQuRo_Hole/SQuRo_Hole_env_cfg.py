@@ -75,15 +75,15 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "velocity": RewardTermCfg(func=mdp.compute_vel_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
-        "foot_clearance": RewardTermCfg( func=mdp.compute_foot_clearance_reward, weight=1.0),
-        "angle": RewardTermCfg( func=mdp.compute_angle_reward, weight=1.0),
-        "orientation": RewardTermCfg( func=mdp.compute_orientation_reward, weight=1.0),
+        "foot_clearance": RewardTermCfg( func=mdp.compute_foot_reward, weight=1.0),
+        "angle": RewardTermCfg( func=mdp.compute_roll_reward, weight=1.0),
+        "orientation": RewardTermCfg( func=mdp.compute_yaw_reward, weight=1.0),
         "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=1.0),
-        "virtual_contact": RewardTermCfg(func=mdp.compute_virtual_contact_penalty, weight=1.0),
+        "virtual_contact": RewardTermCfg(func=mdp.compute_contact_penalty, weight=1.0),
         # 惩罚项
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
-        "low_leg_hold": RewardTermCfg(func=mdp.compute_low_leg_hold_penalty, weight=1.0),
-        "stop": RewardTermCfg(func=mdp.compute_stop_reward, weight=1.0),
+        "low_leg_hold": RewardTermCfg(func=mdp.compute_leg_motion_penalty, weight=1.0),
+        "stop": RewardTermCfg(func=mdp.compute_leg_stop_reward, weight=1.0),
     }
 
 

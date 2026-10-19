@@ -47,7 +47,7 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算关节位置误差
     error = joint_pos - ref_pos
     error_leg = error[:, _ACT_LEG_IDS]
-    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
+    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
@@ -76,7 +76,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算关节位置误差
     error = joint_vel - ref_vel
     error_leg = error[:, _ACT_LEG_IDS]
-    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(env, error.device, error.dtype)
+    error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
@@ -93,10 +93,6 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = (reward_leg + reward_spn + reward_neck)/2 * weight
     return reward
-
-
-
-
 
 
 
@@ -152,7 +148,7 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 抬脚高度奖励（仅 Mode 0 触发）
-def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01) -> torch.Tensor:
+def compute_foot_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
@@ -161,10 +157,7 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
     # Mode 0: 前后肢高度都 >= 阈值
     mode0_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H >= THRESHOLD_HEIGHT)
     
-    # 非 Mode 0 直接返回零奖励
-    if not mode0_mask.any():
-        return torch.zeros(env.num_envs, device=env.device)
-    
+    # 非 Mode 0 由末尾掩码置零
     foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
     
     height_scale_F = desired_height_F / BASE_HEIGHT
@@ -186,20 +179,8 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
 
         
 
-# 用共享标定读取前后躯干的物理偏航角与滚转角
-def _get_body_orientation(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
-    asset: Entity = env.scene["robot"]
-    body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
-    quat = asset.data.body_link_quat_w[:, body_ids]
-    rotation = matrix_from_quat(quat) @ quat.new_tensor((SPINE_FRONT_FRAME, SPINE_HIND_FRAME))
-    yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
-    roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
-    return yaw, roll
-
-
-
 # 约束前后躯干物理偏航角的圆周均值朝向世界 +X。
-def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_yaw_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     yaw, _ = _get_body_orientation(env)
     yaw_error = torch.atan2(torch.sin(yaw).mean(dim=1), torch.cos(yaw).mean(dim=1))
     sigma = get_curriculum_reward_weight(env, "sigma_orientation")
@@ -210,7 +191,7 @@ def compute_orientation_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 按高度模式约束低侧躯干的物理滚转，双高与双低均约束两段。
-def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_roll_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
@@ -254,7 +235,7 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 板体 X 区间内按实际板底与躯干采样点高度给出虚拟碰撞惩罚
-def compute_virtual_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "virtual_contact")
     if weight == 0.0:
         return torch.zeros(env.num_envs, device=env.device)
@@ -290,8 +271,8 @@ def compute_virtual_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# Mode 2 前腿运动奖励（防止前腿不动）
-def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
+# Mode 2 前腿运动惩罚（防止前腿不动）
+def compute_leg_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
@@ -299,10 +280,6 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     
     # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
     mode2_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H < THRESHOLD_HEIGHT)
-    reward = torch.zeros(env.num_envs, device=env.device)
-    
-    if not mode2_mask.any():
-        return reward
     
     # 按前腿执行器分组读取模型关节速度
     joint_vel = asset.data.joint_vel
@@ -311,9 +288,7 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
     vel_deficit = torch.clamp(min_velocity - vel_abs, min=0.0)
     vel_deficit_sum = vel_deficit.sum(dim=1)
     mode2_reward = -vel_deficit_sum * 2.0
-    reward[mode2_mask] = mode2_reward[mode2_mask]
-    
-    return reward
+    return torch.where(mode2_mask, mode2_reward, torch.zeros_like(mode2_reward))
 
 
 
@@ -334,7 +309,7 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 单高单低时按高度强度抑制低侧四个驱动关节的运动
-def compute_low_leg_hold_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+def compute_leg_motion_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
     command = env.command_manager._terms["hole_cmd"].command
     height_f = command[:, CMD_HEIGHT_F_IDS]
@@ -356,7 +331,7 @@ _SPN_SCALE_CACHE: dict = {}
 
 
 # 缓存脊柱逐轴误差缩放
-def _error_spn_scale(env, device, dtype) -> torch.Tensor:
+def _error_spn_scale(device, dtype) -> torch.Tensor:
     scale = SPN_AXIS_SCALE
     key = (str(device), str(dtype), scale)
     s = _SPN_SCALE_CACHE.get(key)
@@ -364,3 +339,15 @@ def _error_spn_scale(env, device, dtype) -> torch.Tensor:
         s = torch.tensor(scale, device=device, dtype=dtype)
         _SPN_SCALE_CACHE[key] = s
     return s
+
+
+
+# 获取前后躯干的物理偏航角与滚转角
+def _get_body_orientation(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
+    asset: Entity = env.scene["robot"]
+    body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
+    quat = asset.data.body_link_quat_w[:, body_ids]
+    rotation = matrix_from_quat(quat) @ quat.new_tensor((SPINE_FRONT_FRAME, SPINE_HIND_FRAME))
+    yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
+    roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
+    return yaw, roll

@@ -33,7 +33,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_mocap
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_angle_reward, compute_corridor_reward
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_corridor_reward, compute_roll_reward
 
 
 # 验证三个边界两侧的阶段、奖励权重和课程门控。
@@ -206,7 +206,7 @@ def verify_angle_independence() -> None:
             scene={"robot": asset}, device="cpu", num_envs=len(ids), common_step_counter=step,
             command_manager=SimpleNamespace(_terms={"hole_cmd": SimpleNamespace(command=command[ids])}),
         )
-        return compute_angle_reward(env)
+        return compute_roll_reward(env)
 
     with patch("mjlab.tasks.SQuRo_Hole.mdp.rewards._MODEL_INDICES",
                SimpleNamespace(f_body_id=0, h_body_id=1)):
