@@ -14,11 +14,11 @@ from mjlab.scripts._diagnostics import HOLE_DIAGNOSTICS_ROOT
 def checkpoint(path):
     saved = torch.load(path, weights_only=False, map_location="cpu")
     info = saved.get("infos") or {}
-    hole = info.get("hole_state") or {}
-    course = hole.get("height_course") or {}
+    obstacle_state = info.get("obstacle_state") or {}
+    course = obstacle_state.get("height_course") or {}
     result = {key: value for key, value in course.items() if key != "history"}
     result.update(iteration=saved.get("iter"), env_step=(info.get("env_state") or {}).get("common_step_counter"),
-                  stage=hole.get("stage"), collision=hole.get("collision"))
+                  stage=obstacle_state.get("stage"), collision=obstacle_state.get("collision"))
     result["levels"] = []
     history = course.get("history", [])
     for height in dict.fromkeys(row["z_min"] for row in history):

@@ -1,4 +1,4 @@
-﻿# uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
+# uv run python -B -m mjlab.scripts.Hole.verify_hole_baseline
 # Hole 验证：参考表、单板高度规则、四阶段课程、实体碰撞与观测维度
 # 当前口径: 14 执行器 (含头颈), 参考表 14 列
 
@@ -130,7 +130,7 @@ def check_curriculum() -> None:
     # 阶段阈值 = iter 边界 × 每 iter 步数
     thresholds = [0, STAGE1_STEP, STAGE2_STEP, STAGE3_STEP]
     print(f"\n[4] 奖励权重课程 (阈值单位 = 全局步数, {len(thresholds)} 段):")
-    keys = ["corridor", "weight_height", "weight_mimic_pos", "sigma_height"]
+    keys = ["weight_corridor", "weight_height", "weight_mimic_pos", "sigma_height"]
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'enable_holes':>14}")
     for step in thresholds:
@@ -140,7 +140,7 @@ def check_curriculum() -> None:
               f"{str(reward_weight_curriculum.should_enable_obstacle(step)):>14}")
     eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['weight_mimic_pos']}, height={eff['weight_height']}, "
-          f"vel={eff['weight_vel']}, corridor={eff['corridor']}, "
+          f"vel={eff['weight_vel']}, corridor={eff['weight_corridor']}, "
           f"enable_holes={reward_weight_curriculum.should_enable_obstacle(STAGE3_STEP)}")
 
 

@@ -30,15 +30,15 @@ from mjlab.tasks.SQuRo_Hole.mdp.entity import (
 
 
 
-# 读取 checkpoint 里记录的 hole_state / env_state
-def read_hole_state(checkpoint_path) -> dict:
+# 读取 checkpoint 里记录的 obstacle_state / env_state
+def read_obstacle_state(checkpoint_path) -> dict:
     try:
         loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     except Exception as exc:
         print(f"[WARN] 读取检查点信息失败, 将按文件名轮次推算: {exc}")
         return {}
     infos = loaded.get("infos") or {}
-    state = infos.get("hole_state") if isinstance(infos, dict) else None
+    state = infos.get("obstacle_state") if isinstance(infos, dict) else None
     return state if isinstance(state, dict) else {}
 
 
@@ -408,12 +408,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             print("[INFO] 回放加载 (load_cfg.actor=True): 保留入口已编译好的配置, 不重建环境")
             return infos
 
-        saved = (infos or {}).get("hole_state") or {}
+        saved = (infos or {}).get("obstacle_state") or {}
         if saved.get("height_course") and self._height_curriculum_state is not None:
             self._height_curriculum_state.load_state_dict(saved["height_course"])
         if saved:
             step = int(self.env.unwrapped.common_step_counter)
-            print(f"[INFO] 检查点 hole_state: stage={saved.get('stage')}, "
+            print(f"[INFO] 检查点 obstacle_state: stage={saved.get('stage')}, "
                   f"实际碰撞={saved.get('collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
             mismatch = []
@@ -479,7 +479,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 if self._height_curriculum_state is not None else None
             ),
         }
-        super().save(path, infos={**(infos or {}), "hole_state": extra})
+        super().save(path, infos={**(infos or {}), "obstacle_state": extra})
         try:
             policy_dir, filename, onnx_path = self._get_export_paths(path)
             self.export_policy_to_onnx(str(policy_dir), filename)

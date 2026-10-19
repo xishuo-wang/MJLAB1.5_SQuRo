@@ -16,7 +16,7 @@ from mjlab.tasks.SQuRo_Hole.config.rl_cfg import SQuRo_Hole_PPO_Runner_Cfg
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import STAGE3_STEP, stage_uses_height_course
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity, write_obstacle_mocap
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import monitor_restricted_passage
-from mjlab.tasks.SQuRo_Hole.rl.runner import SQuRoHoleOnPolicyRunner, read_hole_state
+from mjlab.tasks.SQuRo_Hole.rl.runner import SQuRoHoleOnPolicyRunner, read_obstacle_state
 
 
 # 按指定真实板高分别评估均值动作和独立策略噪声，冻结网络与观测归一化。
@@ -63,7 +63,7 @@ def main():
     summaries = []
     try:
         for path in args.checkpoint:
-            saved = read_hole_state(path)
+            saved = read_obstacle_state(path)
             if not stage_uses_height_course(saved.get("stage", 0)):
                 raise ValueError("仅支持已进入真实单板课程的检查点")
             runner.load(str(path), load_cfg={"actor": True}, strict=True, map_location=env.device)

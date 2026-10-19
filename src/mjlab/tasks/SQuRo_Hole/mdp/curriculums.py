@@ -147,8 +147,8 @@ class RewardWeightCurriculum:
             result[name] = values[safe_idx]
         # 走廊余量在2000～3000轮从30毫米线性减至最终值。
         progress = min(1.0, max(0.0, (current_step - STAGE2_STEP) / (STAGE3_STEP - STAGE2_STEP)))
-        start, end = _CURVES["corridor_height_offset"][-2:]
-        result["corridor_height_offset"] = start + (end - start) * progress
+        start, end = _CURVES["offset_corridor"][-2:]
+        result["offset_corridor"] = start + (end - start) * progress
         return result
 
 

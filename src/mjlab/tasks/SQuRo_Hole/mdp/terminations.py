@@ -27,7 +27,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 受限空间穿越状态检测器
-class HolePassageMonitor:
+class PassMonitor:
     def __init__(self, env: ManagerBasedRlEnv):
         self.env = env
         n = env.num_envs
@@ -185,6 +185,6 @@ def monitor_restricted_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
     monitor = getattr(env, "_hole_passage_monitor", None)
     if monitor is None:
         with torch.inference_mode(False):
-            monitor = HolePassageMonitor(env)
+            monitor = PassMonitor(env)
         env._hole_passage_monitor = monitor  # type: ignore
     return monitor.compute()

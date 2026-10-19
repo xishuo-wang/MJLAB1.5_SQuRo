@@ -168,12 +168,12 @@ def check_rebuild_preserves_custom() -> None:
 
 # checkpoint 状态: 真实保存 / 读取 (不用示例字典)
 def check_state_roundtrip() -> None:
-    print("\n[6] checkpoint hole_state 真实保存与读取")
+    print("\n[6] checkpoint obstacle_state 真实保存与读取")
     import os
 
     from mjlab.tasks.SQuRo_Hole.rl.runner import (
         read_env_step,
-        read_hole_state,
+        read_obstacle_state,
     )
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = 2
@@ -182,11 +182,11 @@ def check_state_roundtrip() -> None:
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), "tmp_verify_log", device="cpu")
     env.common_step_counter = STAGE3_STEP
     runner._apply_obstacle_rebuild(refresh_obs=False)
-    path = "tmp_verify_log/hole_state_probe.pt"
+    path = "tmp_verify_log/obstacle_state_probe.pt"
     os.makedirs("tmp_verify_log", exist_ok=True)
     runner.save(path)
-    saved = read_hole_state(path)
-    check("hole_state 已写入", bool(saved))
+    saved = read_obstacle_state(path)
+    check("obstacle_state 已写入", bool(saved))
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_STEP))
     check("collision 记录为训练实际编译值 (关)", saved.get("collision") is False)
     check("training_collision 记录为关", saved.get("training_collision") is False)
@@ -252,8 +252,8 @@ def check_layout_roundtrip() -> None:
     runner = load_runner_cls(TASK)(vec, asdict(load_rl_cfg(TASK)), probe_dir, device="cpu")
     path = f"{probe_dir}/model_0.pt"
     runner.save(path)
-    from mjlab.tasks.SQuRo_Hole.rl.runner import read_hole_state
-    saved = read_hole_state(path)
+    from mjlab.tasks.SQuRo_Hole.rl.runner import read_obstacle_state
+    saved = read_obstacle_state(path)
     d0 = (saved.get("layout") or [{}])[0]
     check("保存自定义位置", d0.get("position") == [0.35, 0.0, 0.0675], f"{d0.get('position')}")
     check("保存 solref", d0.get("solref") == [0.03, 1.0], f"{d0.get('solref')}")
@@ -319,7 +319,7 @@ def main() -> None:
     print("[结论] 全部通过: 几何单一来源且与实际一致; 碰撞掩码按开关编译生效; "
           "开碰撞时机器人被板挡住; Runner 在课程起点重建一次且保留计数器, "
           "训练环境保持无碰撞、独立考核环境开启碰撞; "
-          "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; hole_state 可真实保存与回放复现; "
+          "自定义板位/接触参数不被重建覆盖且被虚拟约束采用; obstacle_state 可真实保存与回放复现; "
           "可见性开关只改外观不改碰撞")
 
 

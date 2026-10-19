@@ -33,7 +33,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
 from mjlab.tasks.SQuRo_Hole.mdp.entity import obstacle_geometry, write_obstacle_mocap
 from mjlab.tasks.SQuRo_Hole.mdp.indices import _MODEL_INDICES
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_corridor_reward, compute_roll_reward
+from mjlab.tasks.SQuRo_Hole.mdp.rewards import compute_corridor_penalty, compute_roll_reward
 
 
 # 验证三个边界两侧的阶段、奖励权重和课程门控。
@@ -46,17 +46,17 @@ def verify_stages() -> None:
         assert stage_requires_collision(stage) is False
     previous = reward_weight_curriculum.get_reward_weights(1000 * STEPS_PER_ITER)
     warmup = reward_weight_curriculum.get_reward_weights(STAGE2_STEP)
-    assert all(warmup[key] == value for key, value in previous.items() if key != "corridor")
-    assert previous["corridor"] == 0.0 and warmup["corridor"] == 5.0
+    assert all(warmup[key] == value for key, value in previous.items() if key != "weight_corridor")
+    assert previous["weight_corridor"] == 0.0 and warmup["weight_corridor"] == 5.0
     assert heights_for_stage(2) == heights_for_stage(3)
     physical = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
-    assert physical["corridor"] == 5.0
+    assert physical["weight_corridor"] == 5.0
     for iteration, margin in ((0, 0.030), (1999, 0.030), (2000, 0.030),
                               (2250, 0.02875), (2500, 0.0275), (2750, 0.02625),
                               (3000, 0.025), (6000, 0.025)):
-        value = reward_weight_curriculum.get_reward_weights(iteration * STEPS_PER_ITER)["corridor_height_offset"]
+        value = reward_weight_curriculum.get_reward_weights(iteration * STEPS_PER_ITER)["offset_corridor"]
         assert math.isclose(value, margin, abs_tol=1e-12)
-    half_step = reward_weight_curriculum.get_reward_weights(STAGE2_STEP + 24)["corridor_height_offset"]
+    half_step = reward_weight_curriculum.get_reward_weights(STAGE2_STEP + 24)["offset_corridor"]
     assert math.isclose(half_step, 0.0299975, abs_tol=1e-12)
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
@@ -129,9 +129,9 @@ def verify_corridor() -> None:
             -2.5 * (1.0 - math.exp(-2000.0 * 0.010 ** 2)),
             -2.5 * (1.0 - math.exp(-2000.0 * 0.002 ** 2)),
         ])
-        torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
+        torch.testing.assert_close(compute_corridor_penalty(env), expected, atol=1e-6, rtol=1e-5)
         env.common_step_counter = STAGE2_STEP - 1
-        assert not bool(compute_corridor_reward(env).any())
+        assert not bool(compute_corridor_penalty(env).any())
         for iteration, front_excess, hind_excess in (
             (2500, [0.0, 0.0035, 0.0125, 0.0025], [0.0, 0.0, 0.0, 0.0045]),
             (3000, [0.0, 0.006, 0.015, 0.005], [0.0, 0.0, 0.0, 0.007]),
@@ -139,7 +139,7 @@ def verify_corridor() -> None:
             env.common_step_counter = iteration * STEPS_PER_ITER
             expected = -2.5 * (2.0 - torch.exp(-2000.0 * torch.tensor(front_excess).square())
                               - torch.exp(-2000.0 * torch.tensor(hind_excess).square()))
-            torch.testing.assert_close(compute_corridor_reward(env), expected, atol=1e-6, rtol=1e-5)
+            torch.testing.assert_close(compute_corridor_penalty(env), expected, atol=1e-6, rtol=1e-5)
         print("[通过] 两段分别读取最高site，无位置门控，低于上限不罚，2k启用且3k后保留")
 
         env.common_step_counter = STAGE2_STEP
@@ -213,7 +213,7 @@ def verify_angle_independence() -> None:
         for iteration in (0, 1000, 2000, 3000):
             step = iteration * STEPS_PER_ITER
             mixed = evaluate(torch.arange(4), step)
-            weight = reward_weight_curriculum.get_reward_weights(step)["angle"]
+            weight = reward_weight_curriculum.get_reward_weights(step)["weight_roll"]
             torch.testing.assert_close(mixed, expected * weight, atol=1e-7, rtol=1e-5)
             separate = torch.cat([evaluate(torch.tensor([i]), step) for i in range(4)])
             torch.testing.assert_close(mixed, separate)
