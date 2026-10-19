@@ -162,11 +162,11 @@ class PassMonitor:
 
 
 
-# 执行永不触发的穿板监测项
-def monitor_restricted_passage(env: ManagerBasedRlEnv) -> torch.Tensor:
-    monitor = getattr(env, "_hole_passage_monitor", None)
+# 采集穿板状态并在需要时挂载监测器 (只发布结果, 不终止回合)
+def collect_passage_state(env: ManagerBasedRlEnv) -> torch.Tensor:
+    monitor = getattr(env, "_pass_monitor", None)
     if monitor is None:
         with torch.inference_mode(False):
             monitor = PassMonitor(env)
-        env._hole_passage_monitor = monitor  # type: ignore
+        env._pass_monitor = monitor  # type: ignore
     return monitor.compute()

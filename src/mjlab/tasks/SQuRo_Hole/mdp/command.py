@@ -290,7 +290,7 @@ class HoleCommand(CommandTerm):
         self._allow_obstacle_resample = True
         extras = super().reset(env_ids)
         self._allow_obstacle_resample = False
-        monitor = getattr(self._env, "_hole_passage_monitor", None)
+        monitor = getattr(self._env, "_pass_monitor", None)
         if monitor is not None:
             monitor.reset(env_ids)
         self.course_episode_eligible[env_ids if env_ids is not None else slice(None)] = True

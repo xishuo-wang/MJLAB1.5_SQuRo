@@ -84,7 +84,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.rewards import (
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state, initialize_tables
 from mjlab.tasks.SQuRo_Hole.mdp.terminations import (
     check_fallen,
-    monitor_restricted_passage,
+    collect_passage_state,
 )
 
 FAILURES: list[str] = []
@@ -678,8 +678,8 @@ def verify_passage_monitor(env: ManagerBasedRlEnv) -> None:
     command = env.command_manager.get_term("hole_cmd")
     command.obstacle_height_sampled[:] = True
     with torch.inference_mode():
-        monitor_restricted_passage(env)
-    monitor = env._hole_passage_monitor
+        collect_passage_state(env)
+    monitor = env._pass_monitor
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
     check("inference step 后可从外部执行部分 reset", not torch.is_inference(monitor.approached))
     obstacle = env.scene.entities["obstacle"]
@@ -908,8 +908,8 @@ def verify_real_env() -> None:
     ))
     keep = read_geom_bottom_z(env)[[1, 3]].clone()
     with torch.inference_mode():
-        monitor_restricted_passage(env)
-    monitor = env._hole_passage_monitor
+        collect_passage_state(env)
+    monitor = env._pass_monitor
     env.reset(env_ids=torch.tensor([0, 2], device=env.device))
     after_reset = read_obstacle_bottom_z(obstacle).clone()
     check("部分 reset 重采样且保留其他环境板高", torch.equal(after_reset[[1, 3]], keep) and torch.all(after_reset[[0, 2]] >= HEIGHT_INITIAL_MIN))

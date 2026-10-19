@@ -53,7 +53,7 @@ def main():
     # 保存课程回合快照后交还原消费函数，不改变训练统计。
     def observe_results(extras):
         current = runner.env.unwrapped
-        monitor = getattr(current, "_hole_passage_monitor", None)
+        monitor = getattr(current, "_pass_monitor", None)
         if monitor is not None and "obstacle" in current.scene.entities:
             episodes.extend(monitor.completed)
         original_consume(extras)

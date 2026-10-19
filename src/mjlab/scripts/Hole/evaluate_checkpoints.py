@@ -15,7 +15,7 @@ from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import SQuRo_Hole_Env_Cfg
 from mjlab.tasks.SQuRo_Hole.config.rl_cfg import SQuRo_Hole_PPO_Runner_Cfg
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import STAGE3_STEP, stage_uses_height_course
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity, write_obstacle_mocap
-from mjlab.tasks.SQuRo_Hole.mdp.terminations import monitor_restricted_passage
+from mjlab.tasks.SQuRo_Hole.mdp.terminations import collect_passage_state
 from mjlab.tasks.SQuRo_Hole.rl.runner import SQuRoHoleOnPolicyRunner, read_obstacle_state
 
 
@@ -76,8 +76,8 @@ def main():
             torch.manual_seed(args.seed)
             obs, _ = runner.env.reset()
             selected_modes = command.obstacle_equal_height.clone()
-            monitor_restricted_passage(env)
-            monitor = env._hole_passage_monitor
+            collect_passage_state(env)
+            monitor = env._pass_monitor
             monitor.consume()
             policy = runner.get_inference_policy(device=env.device)
             max_x = torch.full((env.num_envs,), -torch.inf, device=env.device)

@@ -202,13 +202,13 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         results: list[dict] = []
         seen: set[int] = set()
         obs, _ = evaluation.reset()
-        monitor = getattr(env, "_hole_passage_monitor", None)
+        monitor = getattr(env, "_pass_monitor", None)
         if monitor is not None:
             monitor.consume()
         for _ in range(env.max_episode_length + 1):
             actions = policy(obs.to(self.device)).to(evaluation.device)
             obs, _, _, _ = evaluation.step(actions)
-            monitor = getattr(env, "_hole_passage_monitor", None)
+            monitor = getattr(env, "_pass_monitor", None)
             for item in monitor.consume() if monitor is not None else []:
                 if item["env_id"] not in seen:
                     seen.add(item["env_id"])
@@ -461,7 +461,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 每个环境步消费终止阶段发布的回合结果快照
     def _consume_obstacle_results(self, extras) -> None:
         env = self.env.unwrapped
-        monitor = getattr(env, "_hole_passage_monitor", None)
+        monitor = getattr(env, "_pass_monitor", None)
         results = monitor.consume() if monitor is not None else []
         log = extras.setdefault("log", {}) if isinstance(extras, dict) else {}
         command = env.command_manager._terms.get("hole_cmd")
