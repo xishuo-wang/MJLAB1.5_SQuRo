@@ -437,7 +437,7 @@ def run_play(cfg: PlayConfig):
         print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
     if saved_state:
         print(f"[INFO] 检查点 obstacle_state: stage={saved_state.get('stage')}, "
-              f"记录碰撞={saved_state.get('collision')}")
+              f"记录碰撞={saved_state.get('training_collision')}")
 
     # 构建输出名后缀
     suffix_parts = [cfg.command_source]
