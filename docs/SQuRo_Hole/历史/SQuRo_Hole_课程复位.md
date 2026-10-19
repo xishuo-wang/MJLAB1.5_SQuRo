@@ -1,6 +1,6 @@
 # SQuRo_Hole 位置表复位修复
 
-本文记录历史位移表的起点修复。当前高度课程已经使用基座世界 X，旧表已移除；起点仍供位移诊断使用。现有复位验收覆盖当前单板规则的进入、中点和离开边界，并验证非零起点不会移动世界坐标边界；当前训练与验收以 `SQuRo_Hole_高度课程设计.md` 为准。
+本文记录历史位移表的起点修复。当前高度课程已经使用基座世界 X，旧表已移除；起点仍供位移诊断使用。现有复位验收覆盖当前单板规则的进入、中点和离开边界，并验证非零起点不会移动世界坐标边界；当前训练与验收以 `../../../README.md` 为准，历史课程细节见 `SQuRo_Hole_高度课程设计.md`。
 
 ## 训练现象与根因
 
@@ -58,7 +58,7 @@ uv run python -B -m mjlab.scripts.Hole.verify_hole_command_reset
 | `Data/error_height_H` | 后躯干高度误差 |
 
 高度课程四项（`Metrics/Zmin_m`、`Metrics/success_rate`、`Metrics/failure_rate`、
-`Metrics/level_progress`）由 runner 在阶段 4 记录，见 `docs/SQuRo_Hole_高度课程设计.md`。
+`Metrics/level_progress`）由 runner 在阶段 4 记录，见 `高度课程设计.md`。
 
 模式分组占比、模式方向误差、`课程/阶段`、`运动/侧向速度绝对值均值`、`走廊/*`
 以及 `vel_error_mean` 均已删除，不再输出。

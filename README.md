@@ -32,5 +32,7 @@ uv run python -B -m mjlab.scripts.SQuRo_Backup_Replay --visualize none # 手调�
 | `docs/SQuRo_Backup_奖励对照.md` | 翻正任务实验日志 |
 | `docs/SQuRo_Backup_修改清单.md` | 翻正任务状态与计划 |
 | `docs/SQuRo_Tunnel_技术细节.md` | 钻洞任务参考手册（洞几何、走廊口径、奖励权重、回放与未决问题） |
-| `docs/SQuRo_Hole_技术细节.md` | 钻洞虚拟碰撞版手册（6D 命令与位移位置表、4 段课程、body_contact 软限高） |
+| `docs/SQuRo_Hole/README.md` | 受限空间任务当前设计手册（单板几何、课程 v3.1、独立真实碰撞考核、验收与边界） |
+| `docs/SQuRo_Hole/奖励设计.md` | Hole 奖励/惩罚公式、权重与 σ 曲线、日志键 |
+| `docs/SQuRo_Hole/回放与工具.md` | Hole 回放/评估/可视化入口与诊断产物（历史资料在 `docs/SQuRo_Hole/历史/`） |
 | `docs/source/*.rst` | 上游 MJLAB 框架文档（Sphinx，与本研究无关） |

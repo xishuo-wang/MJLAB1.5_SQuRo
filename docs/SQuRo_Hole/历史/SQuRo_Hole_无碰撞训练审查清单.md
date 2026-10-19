@@ -9,7 +9,7 @@
 | `01d8356` | 新增板下虚拟碰撞惩罚（`virtual_contact`） |
 | `5c053b7` | 训练关闭板碰撞 + 独立真实碰撞考核课程 + 验收脚本同步 |
 | 分支 | `codex/slalom-collision-course`（Hole 代码与 main@271f594 一致，`hole-v2` tag 为改造前备份） |
-| 文档 | `docs/SQuRo_Hole_高度课程设计.md` 末尾新增"无碰撞训练与独立真实碰撞考核课程" |
+| 文档 | `高度课程设计.md` 末尾新增"无碰撞训练与独立真实碰撞考核课程" |
 
 改动文件：
 `src/mjlab/tasks/SQuRo_Hole/{SQuRo_Hole_env_cfg.py, mdp/curriculums.py, mdp/terminations.py, mdp/rewards.py, rl/runner.py}`

@@ -97,6 +97,8 @@ src/mjlab/
 | `docs/SQuRo_Backup_奖励对照.md` | 翻正任务**实验日志**（按时间追加） |
 | `docs/SQuRo_Backup_修改清单.md` | 翻正任务**状态与计划** |
 | `docs/SQuRo_Tunnel_技术细节.md` | 钻洞任务**参考手册**：洞几何、走廊口径、奖励权重、Phase0/1 速度规则、回放与未决问题 |
-| `docs/SQuRo_Hole_技术细节.md` | 钻洞**虚拟碰撞版**：6D 命令与位移位置表、4 段奖励课程、body_contact 软限高、与 Tunnel 的差异对照 |
+| `docs/SQuRo_Hole/README.md` | 受限空间任务**当前设计手册**：单板几何、四阶段课程 v3.1、独立真实碰撞考核、检查点、验收与已知边界 |
+| `docs/SQuRo_Hole/奖励设计.md` | Hole 奖励/惩罚公式、`_CURVES` 权重与 σ、日志键、调参提示 |
+| `docs/SQuRo_Hole/回放与工具.md` | Hole 回放/评估/可视化入口、诊断产物与验收命令；历史资料在 `docs/SQuRo_Hole/历史/` |
 | `docs/SQuRo_Slalom_手调转弯回放.md` | Slalom **手调转弯回放**：`Trun_Cyc_Min.py` 迁移映射、等效曲率/速度实测、与当前参考的逐项差距 |
 | `docs/source/*.rst` | 上游 MJLAB 框架的 Sphinx 文档（与本研究无关，一般不用改） |

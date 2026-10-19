@@ -9,7 +9,7 @@
 | **SQuRo_Backup**（仰卧翻正） | `Mjlab-SQuRo-Backup` | **当前主线**：翻正已学会，站立抖动已修复并验收 | `docs/SQuRo_Backup_技术细节.md` / `_奖励对照.md` / `_修改清单.md` |
 | **SQuRo_Slalom**（连续绕杆） | `Mjlab-SQuRo-Slalom` | 从零训练 8000 轮；3000 轮后无碰撞绕杆，独立真实碰撞考核将整数曲率 5～10 推进至 5～15 | [碰撞课程](docs/SQuRo_Slalom_碰撞课程.md) |
 | **SQuRo_Tunnel**（钻洞/越障·参考表路线） | `Mjlab-SQuRo-Tunnel` | Phase0 参考层已迁移，一阶段训练中（0~3k） | `docs/SQuRo_Tunnel_技术细节.md` |
-| **SQuRo_Hole**（钻洞/越障·虚拟碰撞路线） | `Mjlab-SQuRo-Hole` | 2026-04 备份（mjlab 0.1.0）在 1.5 上恢复，只做接口适配；旧检查点可直接回放 | `docs/SQuRo_Hole_技术细节.md` |
+| **SQuRo_Hole**（单板受限空间） | `Mjlab-SQuRo-Hole` | v3.1 课程协议：训练无接触 + 独立真实碰撞考核推进，47 mm 下限，最终档全挡位验收 | `docs/SQuRo_Hole/README.md`（历史在 `docs/SQuRo_Hole/历史/`） |
 
 **核心创新**：走廊一致性 (Corridor Conformance) 奖励框架 — 将机器人身体建模为两个铰接矩形 (F_body + H_body)，通过可调节宽度的走廊约束统一处理 XoY 平面绕杆和 YoZ 平面钻洞两种场景。
 
