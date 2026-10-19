@@ -252,21 +252,16 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             print("[高度考核] 47mm 档通过, 进入最终档全挡位均匀采样", flush=True)
         if self.logger.writer is not None:
             values = {
-                "Curriculum/考核通过率": result["success_rate"], # type: ignore
-                "Curriculum/考核样本数": result["sample_count"], # type: ignore
-                "Curriculum/本次考核达标": int(result["passed"]), # type: ignore
-                "Curriculum/最低板高米": course.z_min,
-                "Curriculum/连续达标批次": course.consecutive_success_batches,
-                "Curriculum/连续失败次数": course.consecutive_failures,
-                "Curriculum/退档次数": course.retreats,
-                "Curriculum/考核耗时秒": seconds,
-                "Curriculum/最终模式": int(final_mode),
-                "Curriculum/最终验收": int(course.final_accepted),
-                "Curriculum/各挡位最低通过率": course.metrics()["min_bin_rate"],
+                "Curriculum/eval_pass_rate": result["success_rate"], # type: ignore
+                "Curriculum/eval_passed": int(result["passed"]), # type: ignore
+                "Curriculum/obstacle_min": course.z_min * 1000,  # 单位 mm
+                "Curriculum/retreat_count": course.retreats,
+                "Curriculum/eval_seconds": seconds,
+                "Curriculum/final_mode": int(final_mode),
             }
             if result.get("bin_rate"): # type: ignore
                 for index, rate in enumerate(result["bin_rate"]): # type: ignore
-                    values[f"Curriculum/挡位{index}_通过率"] = rate
+                    values[f"Curriculum/bin{index}_pass_rate"] = rate
             for name, value in values.items():
                 self.logger.writer.add_scalar(name, value, iteration)
         if self.logger.log_dir is not None:
@@ -462,8 +457,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         ):
             return
         if results:
-            log["Metrics/训练无碰撞几何通过率"] = torch.tensor(sum(int(item["success"]) for item in results) / len(results), device=env.device)
-            log["Metrics/训练无碰撞通过高度均值"] = torch.tensor(sum(float(item["height"]) for item in results) / len(results), device=env.device)
+            log["Curriculum/train_pass_rate"] = torch.tensor(sum(int(item["success"]) for item in results) / len(results), device=env.device)
         stats = command.height_curriculum_state.metrics()  # type: ignore
         log["Metrics/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
         log["Metrics/success_rate"] = torch.tensor(stats["success_rate"], device=env.device)
