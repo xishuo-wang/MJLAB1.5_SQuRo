@@ -4,8 +4,18 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING
 from mjlab.utils.lab_api.math import matrix_from_quat
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
-    SPINE_FRONT_FRAME,
     SPINE_HIND_FRAME,
+    SPINE_FRONT_FRAME,
+)
+from .indices import (
+    _ACT_LEG_IDS,
+    _ACT_SPN_IDS,
+    _ACT_NECK_IDS,
+    _ACT_LEG_F_IDS,
+    _ACT_LEG_H_IDS,
+    _MODEL_INDICES,
+    resolve_model_indices,
+    resolve_actuator_joint_ids,
 )
 from .config import (
     BASE_HEIGHT,
@@ -15,23 +25,13 @@ from .config import (
     CMD_HEIGHT_H_IDS,
     VIRTUAL_CLEARANCE_MARGIN,
 )
-from .indices import (
-    _ACT_LEG_IDS,
-    _ACT_SPN_IDS,
-    _ACT_NECK_IDS,
-    _ACT_LEG_F_IDS,
-    _ACT_LEG_H_IDS,
-    _MODEL_INDICES,
-    resolve_actuator_joint_ids,
-    resolve_model_indices,
-)
-from .entity import read_obstacle_bottom_z
 from .curriculums import (
     SPN_AXIS_SCALE,
     get_curriculum_reward_weight,
 )
-from .reference import get_reference_joint_state
 from .command import get_low_height_factor
+from .entity import read_obstacle_bottom_z
+from .reference import get_reference_joint_state
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -96,20 +96,7 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 单高单低时按高度强度抑制低侧四个驱动关节的运动。
-def compute_low_leg_hold_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    command = env.command_manager._terms["hole_cmd"].command
-    height_f = command[:, CMD_HEIGHT_F_IDS]
-    height_h = command[:, CMD_HEIGHT_H_IDS]
-    front_low = height_f < THRESHOLD_HEIGHT
-    hind_low = height_h < THRESHOLD_HEIGHT
-    front_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
-    hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
-    low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
-    strength = get_low_height_factor(torch.minimum(height_f, height_h))
-    weight = get_curriculum_reward_weight(env, "weight_low_leg_hold")
-    return -weight * strength * low_mse * (front_low ^ hind_low)
+
 
 
 
@@ -199,7 +186,7 @@ def compute_foot_clearance_reward(env: ManagerBasedRlEnv, target_base_height: fl
 
         
 
-# 用共享标定读取前后躯干的物理偏航角与滚转角。
+# 用共享标定读取前后躯干的物理偏航角与滚转角
 def _get_body_orientation(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, torch.Tensor]:
     asset: Entity = env.scene["robot"]
     body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
@@ -246,23 +233,6 @@ def compute_angle_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# L2 动作平滑惩罚
-def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 获取当前和上一步动作   
-    current_action = env.action_manager.action
-    prev_action = env.action_manager.prev_action
-    # 计算动作差
-    action_diff = current_action - prev_action
-    # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_action_L2")
-    # 计算惩罚
-    p = -torch.sum(torch.square(action_diff), dim=1)
-    penalty = p * weight
-    return penalty
-
-
-
-
 # 全位置走廊只惩罚两段最高采样点超出各自目标上限
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "corridor")
@@ -297,8 +267,8 @@ def compute_virtual_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
     # 实际板底高度与板体 X 覆盖区间
     threshold = read_obstacle_bottom_z(obstacle) - VIRTUAL_CLEARANCE_MARGIN
-    center_x = float(obstacle.cfg.position[0])
-    half_length = float(obstacle.cfg.size[0])
+    center_x = float(obstacle.cfg.position[0]) # type: ignore
+    half_length = float(obstacle.cfg.size[0]) # type: ignore
     x_min, x_max = center_x - half_length, center_x + half_length
     body_x = asset.data.body_link_pos_w[:, (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id), 0]
     inside = (body_x >= x_min) & (body_x <= x_max)
@@ -347,6 +317,40 @@ def compute_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> to
 
 
 
+# L2 动作平滑惩罚
+def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取当前和上一步动作   
+    current_action = env.action_manager.action
+    prev_action = env.action_manager.prev_action
+    # 计算动作差
+    action_diff = current_action - prev_action
+    # 获取课程学习量
+    weight = get_curriculum_reward_weight(env, "weight_action_L2")
+    # 计算惩罚
+    p = -torch.sum(torch.square(action_diff), dim=1)
+    penalty = p * weight
+    return penalty
+
+
+
+# 单高单低时按高度强度抑制低侧四个驱动关节的运动
+def compute_low_leg_hold_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene["robot"]
+    command = env.command_manager._terms["hole_cmd"].command
+    height_f = command[:, CMD_HEIGHT_F_IDS]
+    height_h = command[:, CMD_HEIGHT_H_IDS]
+    front_low = height_f < THRESHOLD_HEIGHT
+    hind_low = height_h < THRESHOLD_HEIGHT
+    front_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
+    hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
+    low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
+    strength = get_low_height_factor(torch.minimum(height_f, height_h))
+    weight = get_curriculum_reward_weight(env, "weight_low_leg_hold")
+    return -weight * strength * low_mse * (front_low ^ hind_low)
+
+
+
+# 脊柱误差缩放缓存
 _SPN_SCALE_CACHE: dict = {}
 
 
