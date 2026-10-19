@@ -4,31 +4,30 @@ from typing import Any
 from .config import (
     HEIGHT_MAX,
     HEIGHT_MIN,
+    HEIGHT_LIST,
     HEIGHT_STEP,
     BASE_HEIGHT,
     EXIT_MARGIN,
     ENTRY_MARGIN,
     HEIGHT_FINE_STEP,
+    FINAL_ACCEPT_RATE,
     BODY_HEIGHT_OFFSET,
-    HEIGHT_LIST,
-    OBSTACLE_HEIGHT_EDGES,
     FULL_HEIGHT_VALUES,
     HEIGHT_INITIAL_MIN,
     RANDOM_HEIGHT_VALUES,
+    OBSTACLE_HEIGHT_EDGES,
+    FINAL_BIN_WEIGHT_GAIN,
+    RETREAT_FAILURE_LIMIT,
     OBSTACLE_HEIGHT_SPLIT,
+    NORMAL_BIN_TARGET_RATE,
+    RETREAT_REQUIRED_PASSES,
     HEIGHT_MIN_SUCCESS_RATE,
     HEIGHT_REQUIRED_BATCHES,
     HEIGHT_MIN_SUCCESS_BATCH,
     HEIGHT_FINE_STEP_THRESHOLD,
     HEIGHT_MIN_DWELL_ITERATIONS,
     HEIGHT_MIN_SAMPLE_PROBABILITY,
-    FINAL_ACCEPT_RATE,
-    NORMAL_BIN_TARGET_RATE,
-    FINAL_BIN_WEIGHT_GAIN,
-    RETREAT_FAILURE_LIMIT,
-    RETREAT_REQUIRED_PASSES,
 )
-
 
 
 # 训练阶段与课程步数配置
@@ -58,58 +57,6 @@ HEIGHT_BIN_EDGES = (HEIGHT_MIN,) + OBSTACLE_HEIGHT_EDGES + (HEIGHT_MAX,)
 HEIGHT_BIN_COUNT = len(HEIGHT_BIN_EDGES) - 1
 
 
-# 命令与分挡位统计共用的索引, 统一按 float32 分桶避免边界错位
-def height_bin_indices(heights: torch.Tensor) -> torch.Tensor:
-    values = torch.as_tensor(heights).to(torch.float32)
-    edges = torch.tensor(OBSTACLE_HEIGHT_EDGES, device=values.device, dtype=torch.float32)
-    return torch.bucketize(values.contiguous(), edges, right=True)
-
-
-# 课程高度序列: 退档时回到上一档而不是按当前挡位步长外推
-def _build_course_levels() -> tuple[float, ...]:
-    levels = [HEIGHT_INITIAL_MIN]
-    while levels[-1] > HEIGHT_MIN + 1e-9:
-        step = HEIGHT_FINE_STEP if levels[-1] <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
-        levels.append(max(HEIGHT_MIN, round(levels[-1] - step, 6)))
-    return tuple(levels)
-
-
-HEIGHT_COURSE_LEVELS = _build_course_levels()
-
-
-# 返回课程序列中比当前高度高一档的档位, 已在最高档返回 None
-def previous_course_height(z_min: float) -> float | None:
-    for level in reversed(HEIGHT_COURSE_LEVELS):
-        if level > float(z_min) + 1e-9:
-            return level
-    return None
-
-
-# 按挡位权重采样板底高度: 先选挡位再在挡内均匀取值
-def sample_bin_heights(count: int, weights, device) -> torch.Tensor:
-    edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
-    weight_tensor = torch.as_tensor(weights, device=device, dtype=torch.float32)
-    indices = torch.multinomial(weight_tensor, int(count), replacement=True)
-    lower = edges[indices]
-    upper = edges[indices + 1]
-    return lower + torch.rand(int(count), device=device) * (upper - lower)
-
-
-# 在 [lower,upper] 范围内按挡位权重采样板底高度, 用于普通模式 70% 部分
-def sample_range_bin_heights(count: int, weights, lower: float, upper: float, device) -> torch.Tensor:
-    edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
-    bin_weights = [
-        float(weights[index]) if (edges[index + 1] > lower and edges[index] < upper) else 0.0
-        for index in range(HEIGHT_BIN_COUNT)
-    ]
-    weight_tensor = torch.as_tensor(bin_weights, device=device, dtype=torch.float32)
-    indices = torch.multinomial(weight_tensor, int(count), replacement=True)
-    low = torch.maximum(edges[indices], torch.full((len(indices),), lower, device=device))
-    high = torch.minimum(edges[indices + 1], torch.full((len(indices),), upper, device=device))
-    return low + torch.rand(int(count), device=device) * (high - low).clamp_min(0.0)
-
-
-
 # 奖励权重与 σ 课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
@@ -134,7 +81,6 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "sigma_neck_vel":           (0.1, 0.1, 0.1, 0.1),
     "sigma_vel":                (100, 100, 100, 100),
     "sigma_height":             (500, 1000, 1000, 1000),
-
     "sigma_angle_low":          (50.0, 50.0, 50.0, 50.0),
     "sigma_angle_high":         (100.0, 100.0, 100.0, 100.0),
     "sigma_orientation":        (5.0, 5.0, 5.0, 5.0),
@@ -232,6 +178,62 @@ def obstacle_rule_bounds(center_x: float, half_length: float) -> tuple[float, fl
     middle = (x1 + x2) / 2.0
     right = x2 + EXIT_MARGIN
     return left, middle, right
+
+
+
+# 命令与分挡位统计共用的索引, 统一按 float32 分桶避免边界错位
+def height_bin_indices(heights: torch.Tensor) -> torch.Tensor:
+    values = torch.as_tensor(heights).to(torch.float32)
+    edges = torch.tensor(OBSTACLE_HEIGHT_EDGES, device=values.device, dtype=torch.float32)
+    return torch.bucketize(values.contiguous(), edges, right=True)
+
+
+
+# 课程高度序列: 退档时回到上一档而不是按当前挡位步长外推
+def _build_course_levels() -> tuple[float, ...]:
+    levels = [HEIGHT_INITIAL_MIN]
+    while levels[-1] > HEIGHT_MIN + 1e-9:
+        step = HEIGHT_FINE_STEP if levels[-1] <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
+        levels.append(max(HEIGHT_MIN, round(levels[-1] - step, 6)))
+    return tuple(levels)
+
+
+HEIGHT_COURSE_LEVELS = _build_course_levels()
+
+
+
+# 返回课程序列中比当前高度高一档的档位, 已在最高档返回 None
+def previous_course_height(z_min: float) -> float | None:
+    for level in reversed(HEIGHT_COURSE_LEVELS):
+        if level > float(z_min) + 1e-9:
+            return level
+    return None
+
+
+
+# 按挡位权重采样板底高度: 先选挡位再在挡内均匀取值
+def sample_bin_heights(count: int, weights, device) -> torch.Tensor:
+    edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
+    weight_tensor = torch.as_tensor(weights, device=device, dtype=torch.float32)
+    indices = torch.multinomial(weight_tensor, int(count), replacement=True)
+    lower = edges[indices]
+    upper = edges[indices + 1]
+    return lower + torch.rand(int(count), device=device) * (upper - lower)
+
+
+
+# 在 [lower,upper] 范围内按挡位权重采样板底高度, 用于普通模式 70% 部分
+def sample_range_bin_heights(count: int, weights, lower: float, upper: float, device) -> torch.Tensor:
+    edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
+    bin_weights = [
+        float(weights[index]) if (edges[index + 1] > lower and edges[index] < upper) else 0.0
+        for index in range(HEIGHT_BIN_COUNT)
+    ]
+    weight_tensor = torch.as_tensor(bin_weights, device=device, dtype=torch.float32)
+    indices = torch.multinomial(weight_tensor, int(count), replacement=True)
+    low = torch.maximum(edges[indices], torch.full((len(indices),), lower, device=device))
+    high = torch.minimum(edges[indices + 1], torch.full((len(indices),), upper, device=device))
+    return low + torch.rand(int(count), device=device) * (high - low).clamp_min(0.0)
 
 
 
