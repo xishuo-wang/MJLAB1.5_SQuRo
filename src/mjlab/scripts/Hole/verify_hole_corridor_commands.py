@@ -41,19 +41,19 @@ def verify_stages() -> None:
     for iteration, expected in probes:
         stage = get_current_stage(iteration * STEPS_PER_ITER)
         assert stage == expected
-    previous = reward_weight_curriculum.get_reward_weights(1000 * STEPS_PER_ITER)
-    warmup = reward_weight_curriculum.get_reward_weights(STAGE2_STEP)
+    previous = reward_weight_curriculum.get_curriculum_values(1000 * STEPS_PER_ITER)
+    warmup = reward_weight_curriculum.get_curriculum_values(STAGE2_STEP)
     assert all(warmup[key] == value for key, value in previous.items() if key != "weight_corridor")
     assert previous["weight_corridor"] == 0.0 and warmup["weight_corridor"] == 5.0
     assert heights_for_stage(2) == heights_for_stage(3)
-    physical = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
+    physical = reward_weight_curriculum.get_curriculum_values(STAGE3_STEP)
     assert physical["weight_corridor"] == 5.0
     for iteration, margin in ((0, 0.030), (1999, 0.030), (2000, 0.030),
                               (2250, 0.02875), (2500, 0.0275), (2750, 0.02625),
                               (3000, 0.025), (6000, 0.025)):
-        value = reward_weight_curriculum.get_reward_weights(iteration * STEPS_PER_ITER)["offset_corridor"]
+        value = reward_weight_curriculum.get_curriculum_values(iteration * STEPS_PER_ITER)["offset_corridor"]
         assert math.isclose(value, margin, abs_tol=1e-12)
-    half_step = reward_weight_curriculum.get_reward_weights(STAGE2_STEP + 24)["offset_corridor"]
+    half_step = reward_weight_curriculum.get_curriculum_values(STAGE2_STEP + 24)["offset_corridor"]
     assert math.isclose(half_step, 0.0299975, abs_tol=1e-12)
     print("[通过] 前两段设置保留，第三段仅增加走廊，3000轮开始真实碰撞")
 
@@ -210,7 +210,7 @@ def verify_angle_independence() -> None:
         for iteration in (0, 1000, 2000, 3000):
             step = iteration * STEPS_PER_ITER
             mixed = evaluate(torch.arange(4), step)
-            weight = reward_weight_curriculum.get_reward_weights(step)["weight_roll"]
+            weight = reward_weight_curriculum.get_curriculum_values(step)["weight_roll"]
             torch.testing.assert_close(mixed, expected * weight, atol=1e-7, rtol=1e-5)
             separate = torch.cat([evaluate(torch.tensor([i]), step) for i in range(4)])
             torch.testing.assert_close(mixed, separate)

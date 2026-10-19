@@ -385,8 +385,8 @@ def run_play(cfg: PlayConfig):
     # 碰撞优先级: 显式 > 检查点记录 > 训练默认关闭
     if cfg.collision is not None:
         collision, coll_src = cfg.collision, "命令行显式指定"
-    elif saved_state.get("collision") is not None:
-        collision, coll_src = bool(saved_state["collision"]), "检查点 obstacle_state"
+    elif saved_state.get("training_collision") is not None:
+        collision, coll_src = bool(saved_state["training_collision"]), "检查点 obstacle_state"
     else:
         collision, coll_src = False, "默认 (训练无碰撞)"
     # 与训练同源：热身无板，课程使用单板；显式碰撞允许提前诊断。

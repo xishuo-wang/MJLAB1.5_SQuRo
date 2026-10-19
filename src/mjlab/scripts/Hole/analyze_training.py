@@ -18,7 +18,7 @@ def checkpoint(path):
     course = obstacle_state.get("height_course") or {}
     result = {key: value for key, value in course.items() if key != "history"}
     result.update(iteration=saved.get("iter"), env_step=(info.get("env_state") or {}).get("common_step_counter"),
-                  stage=obstacle_state.get("stage"), collision=obstacle_state.get("collision"))
+                  stage=obstacle_state.get("stage"), collision=obstacle_state.get("training_collision"))
     result["levels"] = []
     history = course.get("history", [])
     for height in dict.fromkeys(row["z_min"] for row in history):

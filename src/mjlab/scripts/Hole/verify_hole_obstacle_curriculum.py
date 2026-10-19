@@ -56,7 +56,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     HeightCurriculumState,
     get_current_stage,
     obstacle_rule_bounds,
-    compute_base_heights,
+    compute_height_commands,
     sample_bin_heights,
     sample_range_bin_heights,
     height_bin_indices,
@@ -140,7 +140,7 @@ def verify_shared_rule() -> None:
                 (0.075, 0.050), (0.079999, 0.050), (0.080, 0.055), (0.090, 0.055),
             )
             for height, target in (*low_cases, *high_cases):
-                front, hind = compute_base_heights(positions, center, half_length, height)
+                front, hind = compute_height_commands(positions, center, half_length, height)
                 if height < 0.065:
                     expected_f = positions.new_tensor([0.055, target, target, 0.055, 0.055, 0.055, 0.055])
                     expected_h = positions.new_tensor([0.055, 0.055, 0.055, target, target, target, 0.055])
@@ -154,7 +154,7 @@ def verify_shared_rule() -> None:
                       get_height_mode(front, hind).tolist() == expected_modes)
         query = torch.linspace(left - 0.1, right + 0.1, 2001, dtype=torch.float64)
         for height in (HEIGHT_MIN, 0.048, 0.064, 0.065, 0.068, 0.070, 0.080, 0.090):
-            front, hind = compute_base_heights(query, center, half_length, height)
+            front, hind = compute_height_commands(query, center, half_length, height)
             check(f"板长 {half_length * 2000:.0f} mm、板高 {height * 1000:g} mm 全区间没有双低",
                   not bool(((front < THRESHOLD_HEIGHT) & (hind < THRESHOLD_HEIGHT)).any()))
             preview = sample_rule_schedule(query.numpy() - 0.1, obstacle, height, start_x=0.1)
@@ -297,16 +297,16 @@ def verify_virtual_contact() -> None:
 def verify_high_obstacle_modes() -> None:
     positions = torch.tensor([0.1, 0.1, 0.25, 0.25])
     choices = torch.tensor([True, False, True, False])
-    front, hind = compute_base_heights(positions, 0.2, 0.015, 0.074, choices)
+    front, hind = compute_height_commands(positions, 0.2, 0.015, 0.074, choices)
     check("74毫米高板逐环境选择等高或分段", torch.allclose(front, front.new_tensor([0.045, 0.045, 0.045, 0.055]))
           and torch.allclose(hind, hind.new_tensor([0.045, 0.055, 0.045, 0.045])))
     for height, target in ((0.064999, 0.035), (0.065, 0.040), (0.080, 0.055)):
-        front, hind = compute_base_heights(positions, 0.2, 0.015, height, False)
+        front, hind = compute_height_commands(positions, 0.2, 0.015, height, False)
         check(f"{height * 1000:g}毫米分段正确覆盖65毫米边界与55毫米封顶",
               torch.allclose(front, front.new_tensor([target, target, 0.055, 0.055]))
               and torch.allclose(hind, hind.new_tensor([0.055, 0.055, target, target])))
-    low_equal = compute_base_heights(positions, 0.2, 0.015, 0.047, True)
-    low_split = compute_base_heights(positions, 0.2, 0.015, 0.047, False)
+    low_equal = compute_height_commands(positions, 0.2, 0.015, 0.047, True)
+    low_split = compute_height_commands(positions, 0.2, 0.015, 0.047, False)
     check("47毫米低板忽略高板等高选项", all(torch.equal(a, b) for a, b in zip(low_equal, low_split)))
     fake = SimpleNamespace(cfg=SimpleNamespace(high_obstacle_equal_height=None), device="cpu",
                            obstacle_equal_height=torch.ones(4096, dtype=torch.bool))

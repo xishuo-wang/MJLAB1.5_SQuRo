@@ -123,8 +123,8 @@ def heights_for_stage(stage: int) -> list | None:
 
 
 # 奖励权重课程
-class RewardWeightCurriculum:
-    def get_reward_weights(self, current_step: int) -> dict[str, float]:
+class RewardCurriculum:
+    def get_curriculum_values(self, current_step: int) -> dict[str, float]:
         current_iter = current_step // STEPS_PER_ITER
         result: dict[str, float] = {}
         for name, values in _CURVES.items():
@@ -142,13 +142,13 @@ class RewardWeightCurriculum:
 
 
 
-reward_weight_curriculum = RewardWeightCurriculum()
+reward_weight_curriculum = RewardCurriculum()
 
 
 
 # 获取课程参数
-def get_curriculum_reward_weight(env, reward_name: str) -> float:
-    weights = reward_weight_curriculum.get_reward_weights(env.common_step_counter)
+def get_curriculum_value(env, reward_name: str) -> float:
+    weights = reward_weight_curriculum.get_curriculum_values(env.common_step_counter)
     try:
         return weights[reward_name]
     except KeyError:
@@ -224,7 +224,7 @@ def sample_range_bin_heights(count: int, weights, lower: float, upper: float, de
 
 
 # 按 base_Link 的世界 X 统一决定前后端高度
-def compute_base_heights(
+def compute_height_commands(
     base_x: torch.Tensor,
     center_x: float,
     half_length: float,

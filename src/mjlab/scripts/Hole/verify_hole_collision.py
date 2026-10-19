@@ -189,8 +189,8 @@ def check_state_roundtrip() -> None:
     saved = read_obstacle_state(path)
     check("obstacle_state 已写入", bool(saved))
     check("stage 正确", saved.get("stage") == get_current_stage(STAGE3_STEP))
-    check("collision 记录为训练实际编译值 (关)", saved.get("collision") is False)
-    check("training_collision 记录为关", saved.get("training_collision") is False)
+    check("training_collision 记录为训练实际编译值 (关)", saved.get("training_collision") is False)
+    check("旧重复 collision 字段已移除", "collision" not in saved)
     check("evaluation_envs 记录考核环境数", saved.get("evaluation_envs") == HEIGHT_EVALUATION_ENVS)
     layout = saved.get("layout") or []
     from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_INITIAL_MIN

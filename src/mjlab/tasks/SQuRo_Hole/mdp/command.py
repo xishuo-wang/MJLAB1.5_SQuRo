@@ -33,7 +33,7 @@ from .curriculums import (
     get_current_stage,
     heights_for_stage,
     sample_bin_heights,
-    compute_base_heights,
+    compute_height_commands,
     HeightCurriculumState,
     sample_range_bin_heights,
     stage_uses_height_course,
@@ -78,7 +78,7 @@ def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tens
 
 
 # 计算从40毫米的零到最低标定高度的满强度
-def get_low_height_factor(height: torch.Tensor) -> torch.Tensor:
+def get_low_pose_intensity(height: torch.Tensor) -> torch.Tensor:
     low_min = LOW_POSE_CALIBRATION[0][0]
     return ((THRESHOLD_HEIGHT - height) / (THRESHOLD_HEIGHT - low_min)).clamp(0.0, 1.0)
 
@@ -91,7 +91,7 @@ def compute_cmd_vel_x(height_f, height_h):
     low_max = LOW_POSE_CALIBRATION[-2][0]
     low_scale = ((heights - low_min) / (low_max - low_min)).clamp(min=0.0) * (low_max / BASE_HEIGHT)
     scale = torch.where(heights < low_max, low_scale, heights / BASE_HEIGHT)
-    low_factor = get_low_height_factor(heights.amin(dim=-1))
+    low_factor = get_low_pose_intensity(heights.amin(dim=-1))
     speed_ratio = 1.0 - (1.0 - LOW_POSE_SPEED_RATIO) * low_factor
     return BASE_SPEED * scale.mean(dim=-1) * speed_ratio
 
@@ -139,7 +139,7 @@ class HoleCommand(CommandTerm):
 
     # 可视化使用三维速度箭头
     @property
-    def vel_command_w(self) -> torch.Tensor:
+    def viz_cmd_vel(self) -> torch.Tensor:
         zeros = torch.zeros_like(self.command_vel_x)
         return torch.stack((self.command_vel_x, zeros, zeros), dim=-1)
 
@@ -257,7 +257,7 @@ class HoleCommand(CommandTerm):
         obstacle_cfg = self.obstacle.cfg
         base_x = self.robot.data.root_link_pos_w[:, 0]
         bottom_z = read_obstacle_bottom_z(self.obstacle)
-        front, hind = compute_base_heights(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z, self.obstacle_equal_height,) # type: ignore
+        front, hind = compute_height_commands(base_x, float(obstacle_cfg.position[0]), float(obstacle_cfg.size[0]), bottom_z, self.obstacle_equal_height,) # type: ignore
         velocity = compute_cmd_vel_x(front, hind)
         if self.cfg.fixed_velocity is not None:
             velocity.fill_(float(self.cfg.fixed_velocity))
@@ -310,7 +310,7 @@ class HoleCommand(CommandTerm):
         
         base_pos = self.robot.data.root_link_pos_w[batch].cpu().numpy()
         actual_vel = self.robot.data.root_link_lin_vel_w[batch].cpu().numpy()
-        cmd_vel = self.vel_command_w[batch].cpu().numpy()
+        cmd_vel = self.viz_cmd_vel[batch].cpu().numpy()
         if torch.norm(self.robot.data.root_link_pos_w[batch]) < 1e-6:
             return
         

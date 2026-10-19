@@ -137,8 +137,7 @@ def load_csv_spine(csv_path: str, spine_type: str) -> Dict[str, Any]:
 def csv_leg_trajectory(phases: np.ndarray, csv_data: Dict[str, Any], phase_lag: float, 
                                   rotate_angle: float, height_scale: float = 1.0, 
                                   x_offset: float = 0.0, z_offset: float = 0.0,
-                                  current_height: float = BASE_HEIGHT,
-                                  is_front: bool = True) -> tuple[np.ndarray, np.ndarray]:
+                                  current_height: float = BASE_HEIGHT) -> tuple[np.ndarray, np.ndarray]:
     if current_height < THRESHOLD_HEIGHT:
         return np.zeros_like(phases), np.full_like(phases, -current_height)
     
@@ -317,11 +316,11 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
                 else:
                     x_leg_fl, z_leg_fl = csv_leg_trajectory(
                         phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FL"], CSV_PARAMS["rotate_angle_F"],
-                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
+                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height
                     )
                     x_leg_fr, z_leg_fr = csv_leg_trajectory(
                         phases_np, front_trajectory, CSV_PARAMS["phase_lag"]["FR"], CSV_PARAMS["rotate_angle_F"],
-                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height, True
+                        height_scale, CSV_PARAMS["x_offset_F"], CSV_PARAMS["z_offset_F"], current_height
                     )
 
                 x_tensor_F = torch.tensor(np.stack([x_leg_fl, x_leg_fr], axis=-1), device=device, dtype=torch.float32)
@@ -357,11 +356,11 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
             else:
                 x_leg_hl, z_leg_hl = csv_leg_trajectory(
                     phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HL"], CSV_PARAMS["rotate_angle_H"],
-                    height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], current_height, False
+                    height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], current_height
                 )
                 x_leg_hr, z_leg_hr = csv_leg_trajectory(
                     phases_np, hind_trajectory, CSV_PARAMS["phase_lag"]["HR"], CSV_PARAMS["rotate_angle_H"],
-                    height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], current_height, False
+                    height_scale, CSV_PARAMS["x_offset_H"], CSV_PARAMS["z_offset_H"], current_height
                 )
                 x_tensor_H = torch.tensor(np.stack([x_leg_hl, x_leg_hr], axis=-1), device=device, dtype=torch.float32)
                 z_tensor_H = torch.tensor(np.stack([z_leg_hl, z_leg_hr], axis=-1), device=device, dtype=torch.float32)

@@ -133,11 +133,11 @@ def check_curriculum() -> None:
     header = "".join(f"{k:>16}" for k in keys)
     print(f"{'阶段阈值':>12}{'iter':>8}{header}{'训练碰撞':>14}")
     for step in thresholds:
-        w = reward_weight_curriculum.get_reward_weights(step)
+        w = reward_weight_curriculum.get_curriculum_values(step)
         row = "".join(f"{w.get(k, float('nan')):>16.2f}" for k in keys)
         print(f"{step:>12}{step // STEPS_PER_ITER:>8}{row}"
               f"{'关':>14}")
-    eff = reward_weight_curriculum.get_reward_weights(STAGE3_STEP)
+    eff = reward_weight_curriculum.get_curriculum_values(STAGE3_STEP)
     print(f"     末段生效权重: mimic_pos={eff['weight_mimic_pos']}, height={eff['weight_height']}, "
           f"vel={eff['weight_vel']}, corridor={eff['weight_corridor']}, "
           f"训练碰撞=关 (独立考核环境开启)")

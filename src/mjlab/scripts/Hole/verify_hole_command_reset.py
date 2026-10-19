@@ -15,7 +15,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_STEP,
     HeightCurriculumState,
-    compute_base_heights,
+    compute_height_commands,
     obstacle_rule_bounds,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import configure_obstacle_entity
@@ -97,7 +97,7 @@ def check_schedule_boundaries(env: ManagerBasedRlEnv) -> None:
         write_positions(env, positions)
         env.command_manager.compute(dt=0.0)
         command = env.command_manager.get_command("hole_cmd")
-        front, hind = compute_base_heights(
+        front, hind = compute_height_commands(
             torch.tensor(positions), obstacle.position[0], obstacle.size[0], board_bottom, True)
         expected = torch.stack((front, hind), dim=-1)
         torch.testing.assert_close(
@@ -151,7 +151,7 @@ def check_nonzero_reset_pose() -> None:
         env.command_manager.compute(dt=0.0)
         command = env.command_manager.get_command("hole_cmd")
         obstacle = env.scene["obstacle"].cfg
-        front, hind = compute_base_heights(
+        front, hind = compute_height_commands(
             torch.tensor(positions), obstacle.position[0], obstacle.size[0],
             torch.tensor(0.064), True)
         torch.testing.assert_close(

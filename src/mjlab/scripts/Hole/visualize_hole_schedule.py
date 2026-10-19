@@ -37,7 +37,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     HEIGHT_MIN as PREVIEW_HEIGHT_MIN,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
-    compute_base_heights,
+    compute_height_commands,
     obstacle_rule_bounds as _shared_rule_bounds,
 )
 
@@ -123,7 +123,7 @@ def sample_rule_schedule(
     for boundary in boundaries:
         query_world[np.abs(query_world - boundary) <= tolerance] = boundary
     query = torch.as_tensor(query_world, dtype=torch.float64)
-    front, hind = compute_base_heights(query, board[1], board[4], bottom_z, equal_height)
+    front, hind = compute_height_commands(query, board[1], board[4], bottom_z, equal_height)
     return {
         "position": position,
         "height_f": front.cpu().numpy(),

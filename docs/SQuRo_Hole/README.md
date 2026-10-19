@@ -40,7 +40,7 @@ uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule  # 高度-位置�
 
 ## 3. 高度查表规则
 
-规则参数在 `mdp/config.py`，查表函数在 `mdp/curriculums.py`（`obstacle_rule_bounds`、`compute_base_heights`）。设板 X 范围为 `[x1,x2]`、板底为 `h`：
+规则参数在 `mdp/config.py`，查表函数在 `mdp/curriculums.py`（`obstacle_rule_bounds`、`compute_height_commands`）。设板 X 范围为 `[x1,x2]`、板底为 `h`：
 
 - `L=x1-0.150`、`M=(x1+x2)/2`、`R=x2+0.100`；查表位置为 `base_Link` 世界 X（`robot.data.root_link_pos_w[:,0]`），区间外前后目标均为 55 mm。
 - 高板（`h>=0.065`）：板底按 `OBSTACLE_HEIGHT_EDGES` 每 5 mm 分桶映射到目标高度 `HEIGHT_LIST`，可用档位 40/45/50/55 mm。每回合按 50% 概率选择“等高”或“分段”：等高在 `[L,R]` 内前后同取该档；分段在 `[L,M)` 前端取该档、后端 55 mm，在 `[M,R]` 内交换。
@@ -97,7 +97,7 @@ uv run python -B -m mjlab.scripts.Hole.visualize_hole_schedule  # 高度-位置�
 
 ### 6.3 检查点与续训
 
-`runner.save()` 在 `infos["obstacle_state"]` 写入：`stage`、`collision`、`training_collision`、`evaluation_envs`、`layout`（单板几何/接触参数）、`high_obstacle_equal_height`、`height_course`（课程状态：`z_min/z_max`、驻留起点、批次计数、连续达标/失败、退档、`bin_weights`、`final_level_passed`、`final_accepted`、历史记录等）。
+`runner.save()` 在 `infos["obstacle_state"]` 写入：`stage`、`training_collision`、`evaluation_envs`、`layout`（单板几何/接触参数）、`high_obstacle_equal_height`、`height_course`（课程状态：`z_min/z_max`、驻留起点、批次计数、连续达标/失败、退档、`bin_weights`、`final_level_passed`、`final_accepted`、历史记录等）。
 
 - 续训时 `runner.load()` 恢复课程状态；进入阶段 4 后首次采样前会重建单板训练场景。
 - 旧检查点不保证可用：2026-10-19 清理后课程状态字段按当前版本严格读取，不再做缺失字段默认值/下限迁移；回放旧检查点可能只得到默认课程状态。

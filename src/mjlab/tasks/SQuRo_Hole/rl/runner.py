@@ -13,7 +13,7 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
-from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_REQUIRED_BATCHES
+from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_EVALUATION_BATCHES
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
     HEIGHT_EVALUATION_ENVS,
@@ -66,7 +66,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         self._obstacle_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
         self._obstacle_command = env.unwrapped.command_manager._terms.get("hole_cmd")  # type: ignore
         self._obstacle_height_course_enabled = bool(self._obstacle_command is not None and self._obstacle_command.enable_height_course)
-        self._height_curriculum_state = (self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None)
         self._episode_lengths_randomized = False
         self._evaluation_env = None
 
@@ -118,16 +117,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         if stage_uses_height_course(stage):
             configure_obstacle_entity(env_cfg, enable_collision=False)
             if self._obstacle_height_course_enabled:
-                env_cfg.commands["hole_cmd"].height_curriculum_state = (self._height_curriculum_state.state_dict())  # type: ignore
+                env_cfg.commands["hole_cmd"].height_curriculum_state = (self._obstacle_command.height_curriculum_state.state_dict())  # type: ignore
         new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._obstacle_device, render_mode=self._obstacle_render_mode)
         new_env.common_step_counter = step_counter
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._obstacle_clip_actions)
         self.env.unwrapped.common_step_counter = step_counter
         self._obstacle_command = new_env.command_manager._terms.get("hole_cmd")
-        self._height_curriculum_state = (
-            self._obstacle_command.height_curriculum_state  # type: ignore
-            if self._obstacle_command is not None else None
-        )
         self._clear_logger_episode_state()
         self._randomize_episode_lengths()
         try:
@@ -141,7 +136,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
 
     # 当前是否由独立真实碰撞考核推进高度课程
-    def _course_enabled(self) -> bool:
+    def _evaluation_enabled(self) -> bool:
         command = self._obstacle_command
         if command is None or not command.enable_height_course:
             return False
@@ -181,11 +176,12 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         env = self._evaluation_env.unwrapped
         command = env.command_manager._terms["hole_cmd"]
         state = command.height_curriculum_state
-        state.z_min = float(self._height_curriculum_state.z_min)
-        state.z_max = float(self._height_curriculum_state.z_max)
-        state.final_level_passed = bool(self._height_curriculum_state.final_level_passed)
+        course = self._obstacle_command.height_curriculum_state  # type: ignore
+        state.z_min = float(course.z_min)
+        state.z_max = float(course.z_max)
+        state.final_level_passed = bool(course.final_level_passed)
         # 考核始终按挡位等概率采样, 不继承训练侧的加权采样
-        state.bin_weights = [1.0] * len(self._height_curriculum_state.bin_weights)
+        state.bin_weights = [1.0] * len(course.bin_weights)
         command.adaptive_sampling = False
         if self._obstacle_command is not None:
             command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
@@ -222,8 +218,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 每 100 iter 做两批独立考核: 普通模式推进/退档, 最终模式全挡位验收
     def _maybe_evaluate_curriculum(self, iteration: int) -> None:
-        course = self._height_curriculum_state
-        if course is None or not self._course_enabled() or not course.should_evaluate(iteration):
+        course = self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None
+        if course is None or not self._evaluation_enabled() or not course.should_evaluate(iteration):
             return
         if self.is_distributed:
             raise RuntimeError("独立真实碰撞考核仅支持单卡训练")
@@ -236,7 +232,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         result: dict | None = None
         try:
             with torch.random.fork_rng(devices=devices), torch.no_grad():
-                for sweep in range(HEIGHT_REQUIRED_BATCHES):
+                for sweep in range(HEIGHT_EVALUATION_BATCHES):
                     results = self._run_evaluation_sweep(int(self.cfg.get("seed", 42)) + iteration + sweep)
                     batch_stats.append(measure(results))
                 result = course.record_evaluation(batch_stats, iteration)
@@ -306,9 +302,9 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             self._apply_obstacle_rebuild(refresh_obs=False)
         if init_at_random_ep_len and not self._episode_lengths_randomized:
             self._randomize_episode_lengths()
-        if self._course_enabled() and self.is_distributed:
+        if self._evaluation_enabled() and self.is_distributed:
             raise ValueError("独立真实碰撞考核仅支持单卡训练")
-        if self._course_enabled() and self._obstacle_compiled_collision():
+        if self._evaluation_enabled() and self._obstacle_compiled_collision():
             raise ValueError("高度课程要求训练环境关闭板碰撞, 仅独立考核开启")
 
         obs = self.env.get_observations().to(self.device)
@@ -331,7 +327,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                     for _ in range(self.cfg["num_steps_per_env"]):
                         actions = self.alg.act(obs) # type: ignore
                         obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
-                        self._consume_obstacle_results(extras)
+                        self._consume_passage_results(extras)
                         if self.cfg.get("check_for_nan", True):
                             check_nan(obs, rewards, dones)
                         obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
@@ -394,12 +390,13 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             return infos
 
         saved = (infos or {}).get("obstacle_state") or {}
-        if saved.get("height_course") and self._height_curriculum_state is not None:
-            self._height_curriculum_state.load_state_dict(saved["height_course"])
+        course = self._obstacle_command.height_curriculum_state
+        if saved.get("height_course") and course is not None:
+            course.load_state_dict(saved["height_course"])
         if saved:
             step = int(self.env.unwrapped.common_step_counter)
             print(f"[INFO] 检查点 obstacle_state: stage={saved.get('stage')}, "
-                  f"实际碰撞={saved.get('collision')}, "
+                  f"训练碰撞={saved.get('training_collision')}, "
                   f"当前恢复步数={step} (iter {step // STEPS_PER_ITER})")
         if self._obstacle_change_needed():
             print("[INFO] 续训: 首次采样前重建单板训练场景")
@@ -432,7 +429,6 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         step = int(self.env.unwrapped.common_step_counter)
         extra = {
             "stage": get_current_stage(step),
-            "collision": self._obstacle_compiled_collision(),
             "training_collision": self._obstacle_compiled_collision(),
             "evaluation_envs": HEIGHT_EVALUATION_ENVS,
             "layout": self._obstacle_scene_state(),
@@ -441,8 +437,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 if self._obstacle_command is not None else True
             ),
             "height_course": (
-                self._height_curriculum_state.state_dict()
-                if self._height_curriculum_state is not None else None
+                self._obstacle_command.height_curriculum_state.state_dict()  # type: ignore
+                if self._obstacle_command is not None else None
             ),
         }
         super().save(path, infos={**(infos or {}), "obstacle_state": extra})
@@ -459,7 +455,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
 
     # 每个环境步消费终止阶段发布的回合结果快照
-    def _consume_obstacle_results(self, extras) -> None:
+    def _consume_passage_results(self, extras) -> None:
         env = self.env.unwrapped
         monitor = getattr(env, "_pass_monitor", None)
         results = monitor.consume() if monitor is not None else []

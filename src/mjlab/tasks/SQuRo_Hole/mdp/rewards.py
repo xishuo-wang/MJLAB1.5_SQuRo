@@ -27,9 +27,9 @@ from .config import (
 )
 from .curriculums import (
     SPN_AXIS_SCALE,
-    get_curriculum_reward_weight,
+    get_curriculum_value,
 )
-from .command import get_low_height_factor
+from .command import get_low_pose_intensity
 from .entity import read_obstacle_bottom_z
 from .reference import get_reference_joint_state
 
@@ -50,10 +50,10 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
-    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
-    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
-    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
-    weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
+    sigma_leg = get_curriculum_value(env, "sigma_leg_pos")
+    sigma_spn = get_curriculum_value(env, "sigma_spn_pos")
+    sigma_neck = get_curriculum_value(env, "sigma_neck_pos")
+    weight = get_curriculum_value(env, "weight_mimic_pos")
     # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
@@ -79,10 +79,10 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     error_spn = error[:, _ACT_SPN_IDS] * _error_spn_scale(error.device, error.dtype)
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
-    sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
-    sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
-    sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
-    weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
+    sigma_leg = get_curriculum_value(env, "sigma_leg_vel")
+    sigma_spn = get_curriculum_value(env, "sigma_spn_vel")
+    sigma_neck = get_curriculum_value(env, "sigma_neck_vel")
+    weight = get_curriculum_value(env, "weight_mimic_vel")
     # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
@@ -108,8 +108,8 @@ def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算速度误差
     vel_error = torch.abs(desired_vel_x - actual_vel_x)
     # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_vel")
-    weight = get_curriculum_reward_weight(env, "weight_vel")
+    sigma = get_curriculum_value(env, "sigma_vel")
+    weight = get_curriculum_value(env, "weight_vel")
     # 计算奖励
     r = torch.exp(-sigma * vel_error ** 2) * weight
     reward = torch.where(min_speed_mask, torch.full_like(r, -1.0), r)
@@ -134,8 +134,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     height_F_error = torch.abs(z_ref_F - F_body_height)
     height_H_error = torch.abs(z_ref_H - H_body_height)
     # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_height")
-    weight = get_curriculum_reward_weight(env, "weight_height")
+    sigma = get_curriculum_value(env, "sigma_height")
+    weight = get_curriculum_value(env, "weight_height")
     # 计算奖励
     r_height_F = torch.exp(-sigma * height_F_error ** 2)
     r_height_H = torch.exp(-sigma * height_H_error ** 2)
@@ -154,8 +154,8 @@ def compute_yaw_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算偏航角误差
     yaw_error = torch.atan2(torch.sin(yaw).mean(dim=1), torch.cos(yaw).mean(dim=1))
     # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_yaw")
-    weight = get_curriculum_reward_weight(env, "weight_yaw")
+    sigma = get_curriculum_value(env, "sigma_yaw")
+    weight = get_curriculum_value(env, "weight_yaw")
     # 计算奖励
     r = torch.exp(-sigma * yaw_error ** 2)
     reward = r * weight
@@ -181,10 +181,10 @@ def compute_roll_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 获取课程学习量
     sigma = torch.where(
         high_height_mask,
-        get_curriculum_reward_weight(env, "sigma_roll_high"),
-        get_curriculum_reward_weight(env, "sigma_roll_low"),
+        get_curriculum_value(env, "sigma_roll_high"),
+        get_curriculum_value(env, "sigma_roll_low"),
     )
-    weight = get_curriculum_reward_weight(env, "weight_roll")
+    weight = get_curriculum_value(env, "weight_roll")
     # 计算奖励
     r = torch.exp(-sigma * roll_error ** 2)
     reward = r * weight
@@ -210,8 +210,8 @@ def compute_foot_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01
     # 计算高度误差
     height_error = torch.abs(foot_z - target_heights)
     # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_foot")
-    weight = get_curriculum_reward_weight(env, "weight_foot")
+    sigma = get_curriculum_value(env, "sigma_foot")
+    weight = get_curriculum_value(env, "weight_foot")
     # 计算奖励
     r_per_foot = torch.exp(-sigma * torch.square(height_error))
     r = torch.mean(r_per_foot, dim=1) * mode0_mask.float()
@@ -230,9 +230,9 @@ def compute_corridor_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
         asset.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids, 2].max(dim=1).values,
     ), dim=1)
     # 获取课程学习量
-    offset = get_curriculum_reward_weight(env, "offset_corridor")
-    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
-    weight = get_curriculum_reward_weight(env, "weight_corridor")
+    offset = get_curriculum_value(env, "offset_corridor")
+    sigma = get_curriculum_value(env, "sigma_corridor")
+    weight = get_curriculum_value(env, "weight_corridor")
     # 计算超出高度
     ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + offset  # type: ignore
     excess = (surface_z - ceiling).clamp_min(0.0)
@@ -267,8 +267,8 @@ def compute_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     active_threshold = torch.where(inside, threshold.unsqueeze(1), torch.full_like(surface_z, float("inf")))
     excess = (surface_z - active_threshold).clamp_min(0.0)
     # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_contact")
-    weight = get_curriculum_reward_weight(env, "weight_contact")
+    sigma = get_curriculum_value(env, "sigma_contact")
+    weight = get_curriculum_value(env, "weight_contact")
     # 计算惩罚
     p = (torch.exp(-sigma * excess.square()) - 1).mean(dim=1)
     penalty = p * weight
@@ -291,7 +291,7 @@ def compute_leg_stop_penalty(env: ManagerBasedRlEnv, min_velocity: float = 0.5) 
     vel_deficit = torch.clamp(min_velocity - torch.abs(leg_F_vel), min=0.0)
     vel_deficit_sum = vel_deficit.sum(dim=1)
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_leg_stop")
+    weight = get_curriculum_value(env, "weight_leg_stop")
     # 计算惩罚
     p = -vel_deficit_sum * weight
     penalty = torch.where(mode2_mask, p, torch.zeros_like(p))
@@ -313,9 +313,9 @@ def compute_leg_motion_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
     # 计算腿部速度误差
     low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
-    strength = get_low_height_factor(torch.minimum(height_f, height_h))
+    strength = get_low_pose_intensity(torch.minimum(height_f, height_h))
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_leg_motion")
+    weight = get_curriculum_value(env, "weight_leg_motion")
     # 计算惩罚
     p = -strength * low_mse * (front_low ^ hind_low)
     penalty = p * weight
@@ -331,7 +331,7 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算动作差
     action_diff = current_action - prev_action
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_action_L2")
+    weight = get_curriculum_value(env, "weight_action_L2")
     # 计算惩罚
     p = -torch.sum(torch.square(action_diff), dim=1)
     penalty = p * weight

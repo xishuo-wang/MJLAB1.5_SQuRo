@@ -35,7 +35,7 @@ def main():
     calls = []
     episodes = []
     original = runner._randomize_episode_lengths
-    original_consume = runner._consume_obstacle_results
+    original_consume = runner._consume_passage_results
 
     # 记录真实方法调用后的局部计时和全局步数，不改变被测方法。
     def observe():
@@ -60,7 +60,7 @@ def main():
 
     try:
         with patch.object(runner, "_randomize_episode_lengths", side_effect=observe), \
-             patch.object(runner, "_consume_obstacle_results", side_effect=observe_results):
+             patch.object(runner, "_consume_passage_results", side_effect=observe_results):
             runner.learn(3, init_at_random_ep_len=True)
             assert len(calls) == 2 and calls[-1]["step"] == STAGE3_STEP
             assert calls[0]["has_obstacle"] is False and calls[1]["has_obstacle"] is True
