@@ -53,3 +53,4 @@ def reset_model(env, env_ids):
             joint_pos[:, idx] = joint_positions[i]
 
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+    
