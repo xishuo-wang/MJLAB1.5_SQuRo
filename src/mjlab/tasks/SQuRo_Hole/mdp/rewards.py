@@ -147,148 +147,179 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 抬脚高度奖励（仅 Mode 0 触发）
+# 偏航角奖励
+def compute_yaw_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际 body 偏航角
+    yaw, _ = _get_body_orientation(env)
+    # 计算偏航角误差
+    yaw_error = torch.atan2(torch.sin(yaw).mean(dim=1), torch.cos(yaw).mean(dim=1))
+    # 获取课程学习量
+    sigma = get_curriculum_reward_weight(env, "sigma_yaw")
+    weight = get_curriculum_reward_weight(env, "weight_yaw")
+    # 计算奖励
+    r = torch.exp(-sigma * yaw_error ** 2)
+    reward = r * weight
+    return reward
+
+
+
+# 滚转角奖励
+def compute_roll_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取当前高度 Mode
+    cmd_term = env.command_manager._terms["hole_cmd"]
+    desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
+    desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
+    low_height_F_mask = desired_height_F < THRESHOLD_HEIGHT
+    low_height_H_mask = desired_height_H < THRESHOLD_HEIGHT
+    high_height_mask = ~(low_height_F_mask | low_height_H_mask)
+    # 获取期望和实际滚转
+    _, roll = _get_body_orientation(env)
+    f_roll_error, h_roll_error = torch.abs(roll).unbind(dim=1)
+    # 计算滚转角误差
+    roll_error = torch.where(high_height_mask | low_height_F_mask, f_roll_error, 0.0)
+    roll_error += torch.where(high_height_mask | low_height_H_mask, h_roll_error, 0.0)
+    # 获取课程学习量
+    sigma = torch.where(
+        high_height_mask,
+        get_curriculum_reward_weight(env, "sigma_roll_high"),
+        get_curriculum_reward_weight(env, "sigma_roll_low"),
+    )
+    weight = get_curriculum_reward_weight(env, "weight_roll")
+    # 计算奖励
+    r = torch.exp(-sigma * roll_error ** 2)
+    reward = r * weight
+    return reward
+
+
+
+# 抬脚高度奖励：仅双高的 Mode 0触发
 def compute_foot_reward(env: ManagerBasedRlEnv, target_base_height: float = 0.01) -> torch.Tensor:
+    # 获取当前高度 Mode
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    
-    # Mode 0: 前后肢高度都 >= 阈值
     mode0_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H >= THRESHOLD_HEIGHT)
-    
-    # 非 Mode 0 由末尾掩码置零
+    # 获取期望和实际足端 site 点高度
     foot_z = asset.data.site_pos_w[:, list(_MODEL_INDICES.foot_site_ids), 2]
-    
     height_scale_F = desired_height_F / BASE_HEIGHT
     height_scale_H = desired_height_H / BASE_HEIGHT
-    
     target_height_F = target_base_height * height_scale_F
     target_height_H = target_base_height * height_scale_H
     target_heights = torch.stack([target_height_F, target_height_F, target_height_H, target_height_H], dim=1)
-    
+    # 计算高度误差
     height_error = torch.abs(foot_z - target_heights)
-    reward_per_foot = torch.exp(-100.0 * torch.square(height_error))
-    reward = torch.mean(reward_per_foot, dim=1)
-    
-    # 只保留 Mode 0 的奖励，其他为 0
-    reward = reward * mode0_mask.float()
-    weight = get_curriculum_reward_weight(env, "foot_clearance")
-    
-    return reward * weight
-
-        
-
-# 约束前后躯干物理偏航角的圆周均值朝向世界 +X。
-def compute_yaw_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    yaw, _ = _get_body_orientation(env)
-    yaw_error = torch.atan2(torch.sin(yaw).mean(dim=1), torch.cos(yaw).mean(dim=1))
-    sigma = get_curriculum_reward_weight(env, "sigma_orientation")
-    weight = get_curriculum_reward_weight(env, "orientation")
-    reward = torch.exp(-sigma * yaw_error ** 2)
-    return reward * weight
+    # 获取课程学习量
+    sigma = get_curriculum_reward_weight(env, "sigma_foot")
+    weight = get_curriculum_reward_weight(env, "weight_foot")
+    # 计算奖励
+    r_per_foot = torch.exp(-sigma * torch.square(height_error))
+    r = torch.mean(r_per_foot, dim=1) * mode0_mask.float()
+    reward = r * weight
+    return reward
 
 
 
-# 按高度模式约束低侧躯干的物理滚转，双高与双低均约束两段。
-def compute_roll_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    cmd_term = env.command_manager._terms["hole_cmd"]
-    desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
-    desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    _, roll = _get_body_orientation(env)
-    f_roll_error, h_roll_error = torch.abs(roll).unbind(dim=1)
-    low_height_F_mask = desired_height_F < THRESHOLD_HEIGHT
-    low_height_H_mask = desired_height_H < THRESHOLD_HEIGHT
-    high_height_mask = ~(low_height_F_mask | low_height_H_mask)
-    # 保留双高误差相加的尺度，双低不再发生前段被后段覆盖。
-    roll_error = torch.where(high_height_mask | low_height_F_mask, f_roll_error, 0.0)
-    roll_error += torch.where(high_height_mask | low_height_H_mask, h_roll_error, 0.0)
-    sigma = torch.where(
-        high_height_mask,
-        get_curriculum_reward_weight(env, "sigma_angle_high"),
-        get_curriculum_reward_weight(env, "sigma_angle_low"),
-    )
-    weight = get_curriculum_reward_weight(env, "angle")
-    reward = torch.exp(-sigma * roll_error ** 2)
-    return reward * weight
-
-
-
-# 全位置走廊只惩罚两段最高采样点超出各自目标上限
-def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    weight = get_curriculum_reward_weight(env, "corridor")
-    if weight == 0.0:
-        return torch.zeros(env.num_envs, device=env.device)
-
+# 走廊惩罚
+def compute_corridor_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取期望身体高度
     asset: Entity = env.scene["robot"]
     command = env.command_manager.get_command("hole_cmd")
     surface_z = torch.stack((
         asset.data.site_pos_w[:, _MODEL_INDICES.f_body_site_ids, 2].max(dim=1).values,
         asset.data.site_pos_w[:, _MODEL_INDICES.h_body_site_ids, 2].max(dim=1).values,
     ), dim=1)
-    offset = get_curriculum_reward_weight(env, "corridor_height_offset")
+    # 获取课程学习量
+    offset = get_curriculum_reward_weight(env, "offset_corridor")
+    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
+    weight = get_curriculum_reward_weight(env, "weight_corridor")
+    # 计算超出高度
     ceiling = command[:, [CMD_HEIGHT_F_IDS, CMD_HEIGHT_H_IDS]] + offset  # type: ignore
     excess = (surface_z - ceiling).clamp_min(0.0)
-    sigma = get_curriculum_reward_weight(env, "sigma_corridor")
-    return -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
+    # 计算惩罚
+    p = (torch.exp(-sigma * excess.square()) - 1).mean(dim=1)
+    penalty = p * weight
+    return penalty
 
 
 
-# 板体 X 区间内按实际板底与躯干采样点高度给出虚拟碰撞惩罚
+# 虚拟碰撞惩罚
 def compute_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    weight = get_curriculum_reward_weight(env, "virtual_contact")
-    if weight == 0.0:
-        return torch.zeros(env.num_envs, device=env.device)
-
+    # 获取障碍物信息
     asset: Entity = env.scene["robot"]
     resolve_model_indices(asset)
     obstacle = env.scene.entities.get("obstacle")
     if obstacle is None:
         return torch.zeros(env.num_envs, device=env.device)
-
-    # 实际板底高度与板体 X 覆盖区间
+    # 获取障碍物对应区域
     threshold = read_obstacle_bottom_z(obstacle) - VIRTUAL_CLEARANCE_MARGIN
     center_x = float(obstacle.cfg.position[0]) # type: ignore
     half_length = float(obstacle.cfg.size[0]) # type: ignore
     x_min, x_max = center_x - half_length, center_x + half_length
+    # 获取机器人躯干 x 坐标
     body_x = asset.data.body_link_pos_w[:, (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id), 0]
+    # 计算位于障碍物区间内的身体超出量
     inside = (body_x >= x_min) & (body_x <= x_max)
-
-    # 前后段各取躯干采样点最高值, 板外的段不受约束
     front_ids = list(_MODEL_INDICES.f_body_site_ids)
     hind_ids = list(_MODEL_INDICES.h_body_site_ids)
     assert len(front_ids) == len(hind_ids), "前后段躯干采样点数量必须一致"
     surface_z = asset.data.site_pos_w[:, front_ids + hind_ids, 2].view(env.num_envs, 2, -1).max(dim=-1).values
     active_threshold = torch.where(inside, threshold.unsqueeze(1), torch.full_like(surface_z, float("inf")))
     excess = (surface_z - active_threshold).clamp_min(0.0)
-
-    sigma = get_curriculum_reward_weight(env, "sigma_virtual_contact")
-    penalty = -weight * (1.0 - torch.exp(-sigma * excess.square())).mean(dim=1)
-    log = env.extras["log"]
-    log["Metrics/虚拟碰撞/前段超限均值"] = excess[:, 0].mean().detach()
-    log["Metrics/虚拟碰撞/后段超限均值"] = excess[:, 1].mean().detach()
+    # 获取课程学习量
+    sigma = get_curriculum_reward_weight(env, "sigma_contact")
+    weight = get_curriculum_reward_weight(env, "weight_contact")
+    # 计算惩罚
+    p = (torch.exp(-sigma * excess.square()) - 1).mean(dim=1)
+    penalty = p * weight
     return penalty
 
 
 
-# Mode 2 前腿运动惩罚（防止前腿不动）
-def compute_leg_stop_reward(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
+# 前腿静止惩罚：仅前高后低的 Mode 2 触发
+def compute_leg_stop_penalty(env: ManagerBasedRlEnv, min_velocity: float = 0.5) -> torch.Tensor:
+    # 获取当前高度 Mode
     asset: Entity = env.scene["robot"]
     cmd_term = env.command_manager._terms["hole_cmd"]
     desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]
     desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
-    
-    # Mode 2 判断：前肢高度 >= 阈值，后肢高度 < 阈值
     mode2_mask = (desired_height_F >= THRESHOLD_HEIGHT) & (desired_height_H < THRESHOLD_HEIGHT)
-    
-    # 按前腿执行器分组读取模型关节速度
+    # 获取前腿关节速度
     joint_vel = asset.data.joint_vel
-    front_leg_vel = joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
-    vel_abs = torch.abs(front_leg_vel)
-    vel_deficit = torch.clamp(min_velocity - vel_abs, min=0.0)
+    leg_F_vel = joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
+    # 计算前腿速度误差
+    vel_deficit = torch.clamp(min_velocity - torch.abs(leg_F_vel), min=0.0)
     vel_deficit_sum = vel_deficit.sum(dim=1)
-    mode2_reward = -vel_deficit_sum * 2.0
-    return torch.where(mode2_mask, mode2_reward, torch.zeros_like(mode2_reward))
+    # 获取课程学习量
+    weight = get_curriculum_reward_weight(env, "weight_leg_stop")
+    # 计算惩罚
+    p = -vel_deficit_sum * weight
+    penalty = torch.where(mode2_mask, p, torch.zeros_like(p))
+    return penalty
+
+
+
+# 低侧腿运动惩罚
+def compute_leg_motion_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取当前高度 Mode
+    asset: Entity = env.scene["robot"]
+    command = env.command_manager._terms["hole_cmd"].command
+    height_f = command[:, CMD_HEIGHT_F_IDS]
+    height_h = command[:, CMD_HEIGHT_H_IDS]
+    front_low = height_f < THRESHOLD_HEIGHT
+    hind_low = height_h < THRESHOLD_HEIGHT
+    # 获取腿部速度
+    front_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
+    hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
+    # 计算腿部速度误差
+    low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
+    strength = get_low_height_factor(torch.minimum(height_f, height_h))
+    # 获取课程学习量
+    weight = get_curriculum_reward_weight(env, "weight_leg_motion")
+    # 计算惩罚
+    p = -strength * low_mse * (front_low ^ hind_low)
+    penalty = p * weight
+    return penalty
 
 
 
@@ -305,23 +336,6 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     p = -torch.sum(torch.square(action_diff), dim=1)
     penalty = p * weight
     return penalty
-
-
-
-# 单高单低时按高度强度抑制低侧四个驱动关节的运动
-def compute_leg_motion_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    command = env.command_manager._terms["hole_cmd"].command
-    height_f = command[:, CMD_HEIGHT_F_IDS]
-    height_h = command[:, CMD_HEIGHT_H_IDS]
-    front_low = height_f < THRESHOLD_HEIGHT
-    hind_low = height_h < THRESHOLD_HEIGHT
-    front_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_F_IDS)]
-    hind_vel = asset.data.joint_vel[:, resolve_actuator_joint_ids(asset, _ACT_LEG_H_IDS)]
-    low_mse = torch.where(front_low, front_vel.square().mean(dim=1), hind_vel.square().mean(dim=1))
-    strength = get_low_height_factor(torch.minimum(height_f, height_h))
-    weight = get_curriculum_reward_weight(env, "weight_low_leg_hold")
-    return -weight * strength * low_mse * (front_low ^ hind_low)
 
 
 
