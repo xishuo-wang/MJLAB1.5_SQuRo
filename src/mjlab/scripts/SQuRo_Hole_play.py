@@ -46,7 +46,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.indices import (
 from mjlab.tasks.SQuRo_Hole.mdp.command import THRESHOLD_HEIGHT
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import HeightCurriculumState
 from mjlab.tasks.SQuRo_Hole.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_hole_state
+from mjlab.tasks.SQuRo_Hole.rl.runner import read_env_step, read_obstacle_state
 
 TASK_NAME = "Mjlab-SQuRo-Hole"
 
@@ -69,10 +69,10 @@ class PlayConfig:
     fixed_velocity: float | None = None     # 期望速度
     fixed_height_f: float | None = 0.055    # 期望前肢高度
     fixed_height_h: float | None = 0.020    # 期望后肢高度
-    collision: bool | None = None           # 障碍物碰撞
+    collision: bool | None = True           # 障碍物碰撞
     obstacle_viz: bool = True               # 可视化障碍物
     high_obstacle_equal_height: bool | None = None  # 高板等高True／分段False，None沿用检查点
-    obstacle_height: float | None = 0.047   # 障碍物板底高度 (m)
+    obstacle_height: float | None = 0.065   # 障碍物板底高度 (m)
 
 
 
@@ -379,7 +379,7 @@ def run_play(cfg: PlayConfig):
             cmd_cfg.fixed_height_h = None            # type: ignore[attr-defined]
             print("[INFO] 命令来源 = random (按阶段随机采样, 忽略所有 fixed_* 字段)")
 
-    saved_state = read_hole_state(resume_path) if resume_path is not None else {}
+    saved_state = read_obstacle_state(resume_path) if resume_path is not None else {}
     high_equal = cfg.high_obstacle_equal_height
     if high_equal is None and saved_state:
         high_equal = saved_state.get("high_obstacle_equal_height", True)
@@ -400,7 +400,7 @@ def run_play(cfg: PlayConfig):
     if cfg.collision is not None:
         collision, coll_src = cfg.collision, "命令行显式指定"
     elif saved_state.get("collision") is not None:
-        collision, coll_src = bool(saved_state["collision"]), "检查点 hole_state"
+        collision, coll_src = bool(saved_state["collision"]), "检查点 obstacle_state"
     else:
         collision, coll_src = stage_requires_collision(final_stage), f"按阶段推断 (stage {final_stage})"
     # 与训练同源：热身无板，课程使用单板；显式碰撞允许提前诊断。
@@ -450,7 +450,7 @@ def run_play(cfg: PlayConfig):
     if not cfg.obstacle_viz:
         print(f"[INFO] 限高板已隐藏 (rgba=0,0,0,0, {n_hidden} 块); 碰撞不受影响")
     if saved_state:
-        print(f"[INFO] 检查点 hole_state: stage={saved_state.get('stage')}, "
+        print(f"[INFO] 检查点 obstacle_state: stage={saved_state.get('stage')}, "
               f"记录碰撞={saved_state.get('collision')}")
 
     # 构建输出名后缀
