@@ -32,10 +32,10 @@ from .config import (
 from .curriculums import (
     get_current_stage,
     heights_for_stage,
-    compute_base_heights,
     sample_bin_heights,
-    sample_range_bin_heights,
+    compute_base_heights,
     HeightCurriculumState,
+    sample_range_bin_heights,
     stage_uses_height_course,
 )
 from .entity import read_obstacle_bottom_z, write_obstacle_mocap
@@ -77,14 +77,14 @@ def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tens
 
 
 
-# 计算从40毫米的零到最低标定高度的满强度。
+# 计算从40毫米的零到最低标定高度的满强度
 def get_low_height_factor(height: torch.Tensor) -> torch.Tensor:
     low_min = LOW_POSE_CALIBRATION[0][0]
     return ((THRESHOLD_HEIGHT - height) / (THRESHOLD_HEIGHT - low_min)).clamp(0.0, 1.0)
 
 
 
-# 前后高度分别缩放取平均，并按最低高度连续减速。
+# 前后高度分别缩放取平均，并按最低高度连续减速
 def compute_cmd_vel_x(height_f, height_h):
     heights = torch.stack(torch.broadcast_tensors(height_f, height_h), dim=-1)
     low_min = LOW_POSE_CALIBRATION[0][0]
@@ -113,7 +113,6 @@ class HoleCommand(CommandTerm):
         self.command_curvature.fill_(BASE_CURVATURE)
         self.enable_height_course = cfg.enable_height_course
         self.enable_course_progress = cfg.enable_course_progress
-        # 训练环境按挡位成功率加权采样, 独立考核环境保持固定 30% + 均匀采样
         self.adaptive_sampling = True
         self.height_curriculum_state = HeightCurriculumState()
         if cfg.height_curriculum_state:
@@ -230,7 +229,7 @@ class HoleCommand(CommandTerm):
         self._update_obstacle_height_command()
 
 
-    # 高板姿态每回合独立采样一次，显式配置可固定等高或分段。
+    # 高板姿态每回合独立采样一次，显式配置可固定等高或分段
     def _sample_high_obstacle_mode(self, env_ids: torch.Tensor) -> None:
         fixed = self.cfg.high_obstacle_equal_height
         if fixed is None:
