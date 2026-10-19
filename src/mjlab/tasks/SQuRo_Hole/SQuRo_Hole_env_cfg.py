@@ -91,7 +91,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations = {
         "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
-        "hole_passage_monitor": TerminationTermCfg(func=mdp.collect_passage_state, time_out=False),
+        "hole_passa": TerminationTermCfg(func=mdp.collect_passage_state, time_out=False),
     }
 
 

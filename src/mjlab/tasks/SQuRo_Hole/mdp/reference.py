@@ -17,12 +17,12 @@ from .config import (
     MODE_BOTH_HIGH,
     MODE_FRONT_LOW,
     LOW_SPINE_PITCH,
-    LOW_POSE_CALIBRATION,
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     THRESHOLD_HEIGHT,
     TABLE_RESOLUTION,
     CMD_GAIT_FREQ_IDS,
+    LOW_POSE_CALIBRATION,
 )
 from .indices import (
     _ACT_NUM,
@@ -235,8 +235,7 @@ def inverse_kinematics(x: torch.Tensor, z: torch.Tensor, is_front: bool = True) 
 # 初始化预计算表
 def initialize_tables(device=None, force_reload=False) -> Dict[str, Any]:
     global _PRECOMPUTED_TABLES, _IS_TABLE_INITIALIZED
-    target = torch.device(device) if device is not None else torch.device(
-        "cuda:0" if torch.cuda.is_available() else "cpu")
+    target = torch.device(device) if device is not None else torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if _IS_TABLE_INITIALIZED and not force_reload:
         if _PRECOMPUTED_TABLES.get("device") == target:
             return _PRECOMPUTED_TABLES
@@ -370,7 +369,7 @@ def build_reference_tables(device: torch.device) -> Dict[str, Any]:
 
             # 脊柱参考轨迹: 整行按执行器列写入, 与表列序一致, 无需再散射
             if mode != MODE_BOTH_HIGH:
-                # 表内双低按同高保存；实际前后高度差在查询时更新。
+                # 表内双低按同高保存；实际前后高度差在查询时更新
                 front_height = BASE_HEIGHT if mode == MODE_HIND_LOW else current_height
                 hind_height = BASE_HEIGHT if mode == MODE_FRONT_LOW else current_height
                 spine_tensor = torch.zeros((TABLE_RESOLUTION, _ACT_NUM), device=device, dtype=torch.float32)
@@ -465,10 +464,7 @@ def get_reference_joint_state(env) -> tuple[torch.Tensor, torch.Tensor]:
     joint_vel = joint_vel * (frequency / BASE_FREQ).unsqueeze(1)
 
     # 受限侧使用标定固定角插值，相位速度为零。
-    for height, leg_ids, is_front in (
-        (desired_height_F, _ACT_LEG_F_IDS, True),
-        (desired_height_H, _ACT_LEG_H_IDS, False),
-    ):
+    for height, leg_ids, is_front in ((desired_height_F, _ACT_LEG_F_IDS, True), (desired_height_H, _ACT_LEG_H_IDS, False),):
         low = (height < THRESHOLD_HEIGHT).unsqueeze(1)
         angles = get_low_leg_reference(height, is_front).repeat(1, 2)
         joint_pos[:, leg_ids] = torch.where(low, angles, joint_pos[:, leg_ids])

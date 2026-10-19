@@ -2,29 +2,28 @@ import os
 import copy
 import json
 import time
-import random
-from pathlib import Path
-
-import numpy as np
 import torch
 import wandb
+import random
+import numpy as np
+from pathlib import Path
 from rsl_rl.utils import check_nan
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
-from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_EVALUATION_BATCHES
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STEPS_PER_ITER,
-    HEIGHT_EVALUATION_ENVS,
-    RETREAT_FAILURE_LIMIT,
     get_current_stage,
+    RETREAT_FAILURE_LIMIT,
+    HEIGHT_EVALUATION_ENVS,
     stage_uses_height_course,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.entity import (
     configure_obstacle_entity,
     obstacle_collision_enabled,
 )
+from mjlab.tasks.SQuRo_Hole.mdp.config import HEIGHT_EVALUATION_BATCHES
 
 
 
@@ -78,10 +77,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 是否需要重建: 进入高度课程后训练场景必须是单板且无碰撞
     def _obstacle_change_needed(self) -> bool:
         if (stage_uses_height_course(get_current_stage(int(self.env.unwrapped.common_step_counter))) and self._obstacle_height_course_enabled):
-            obstacle_keys = [
-                key for key, entity in self.env.unwrapped.scene.entities.items()
-                if key.startswith("obstacle") and hasattr(entity, "cfg")
-            ]
+            obstacle_keys = [key for key, entity in self.env.unwrapped.scene.entities.items() if key.startswith("obstacle") and hasattr(entity, "cfg")]
             return set(obstacle_keys) != {"obstacle"} or self._obstacle_compiled_collision()
         return False
 
@@ -99,7 +95,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 buf.zero_()
 
 
-    # 错开首次超时，截短的首回合不进入高度课程统计。
+    # 错开首次超时，截短的首回合不进入高度课程统计
     def _randomize_episode_lengths(self) -> None:
         self.env.episode_length_buf.random_(0, int(self.env.max_episode_length))
         if self._obstacle_command is not None:
@@ -138,10 +134,10 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
     # 当前是否由独立真实碰撞考核推进高度课程
     def _evaluation_enabled(self) -> bool:
         command = self._obstacle_command
-        if command is None or not command.enable_height_course:
+        if command is None or not command.enable_height_course: # type: ignore
             return False
         cfg = command.cfg
-        if cfg.fixed_velocity is not None or cfg.fixed_height_f is not None or cfg.fixed_height_h is not None:
+        if cfg.fixed_velocity is not None or cfg.fixed_height_f is not None or cfg.fixed_height_h is not None: # type: ignore
             return False
         step = int(self.env.unwrapped.common_step_counter)
         return stage_uses_height_course(get_current_stage(step))
@@ -173,16 +169,16 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 考核环境沿用训练当前的高度范围与高板策略
     def _sync_evaluation_course(self) -> None:
-        env = self._evaluation_env.unwrapped
+        env = self._evaluation_env.unwrapped # type: ignore
         command = env.command_manager._terms["hole_cmd"]
-        state = command.height_curriculum_state
+        state = command.height_curriculum_state # type: ignore
         course = self._obstacle_command.height_curriculum_state  # type: ignore
         state.z_min = float(course.z_min)
         state.z_max = float(course.z_max)
         state.final_level_passed = bool(course.final_level_passed)
         # 考核始终按挡位等概率采样, 不继承训练侧的加权采样
         state.bin_weights = [1.0] * len(course.bin_weights)
-        command.adaptive_sampling = False
+        command.adaptive_sampling = False # type: ignore
         if self._obstacle_command is not None:
             command.cfg.high_obstacle_equal_height = self._obstacle_command.cfg.high_obstacle_equal_height  # type: ignore
         env.common_step_counter = int(self.env.unwrapped.common_step_counter)
@@ -218,7 +214,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 每 100 iter 做两批独立考核: 普通模式推进/退档, 最终模式全挡位验收
     def _maybe_evaluate_curriculum(self, iteration: int) -> None:
-        course = self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None
+        course = self._obstacle_command.height_curriculum_state if self._obstacle_command is not None else None # type: ignore
         if course is None or not self._evaluation_enabled() or not course.should_evaluate(iteration):
             return
         if self.is_distributed:
@@ -226,7 +222,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         final_mode = bool(course.final_level_passed)
         measure = course.measure_final_batch if final_mode else course.measure_batch
         numpy_state, python_state = np.random.get_state(), random.getstate()
-        devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
+        devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else [] # type: ignore
         started = time.perf_counter()
         batch_stats: list[dict] = []
         result: dict | None = None
@@ -244,21 +240,21 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         for index, batch in enumerate(batch_stats):
             print(f"[高度考核] iter {iteration} 第{index + 1}批: {batch['count']} 回合, "
                   f"通过率 {batch['success_rate']:.1%}, 达标={batch['passed']}", flush=True)
-        print(f"[高度考核] iter {iteration} 本次考核({result['mode']}): 达标={result['passed']}, "
-              f"合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, "
+        print(f"[高度考核] iter {iteration} 本次考核({result['mode']}): 达标={result['passed']}, " # type: ignore
+              f"合计 {result['sample_count']} 回合, 通过率 {result['success_rate']:.1%}, " # type: ignore
               f"Zmin {course.z_min:.3f} m", flush=True)
-        if result["advanced"]:
-            print(f"[高度考核] 课程降档: Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
-        if result["retreated"]:
+        if result["advanced"]: # type: ignore
+            print(f"[高度考核] 课程降档: Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True) # type: ignore
+        if result["retreated"]: # type: ignore
             print(f"[高度考核] 连续 {RETREAT_FAILURE_LIMIT} 次失败退档: "
-                  f"Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True)
-        if result["entered_final_mode"]:
+                  f"Zmin {result['previous_z_min']:.3f}->{course.z_min:.3f} m", flush=True) # type: ignore
+        if result["entered_final_mode"]: # type: ignore
             print("[高度考核] 47mm 档通过, 进入最终档全挡位均匀采样", flush=True)
         if self.logger.writer is not None:
             values = {
-                "Curriculum/考核通过率": result["success_rate"],
-                "Curriculum/考核样本数": result["sample_count"],
-                "Curriculum/本次考核达标": int(result["passed"]),
+                "Curriculum/考核通过率": result["success_rate"], # type: ignore
+                "Curriculum/考核样本数": result["sample_count"], # type: ignore
+                "Curriculum/本次考核达标": int(result["passed"]), # type: ignore
                 "Curriculum/最低板高米": course.z_min,
                 "Curriculum/连续达标批次": course.consecutive_success_batches,
                 "Curriculum/连续失败次数": course.consecutive_failures,
@@ -268,8 +264,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
                 "Curriculum/最终验收": int(course.final_accepted),
                 "Curriculum/各挡位最低通过率": course.metrics()["min_bin_rate"],
             }
-            if result.get("bin_rate"):
-                for index, rate in enumerate(result["bin_rate"]):
+            if result.get("bin_rate"): # type: ignore
+                for index, rate in enumerate(result["bin_rate"]): # type: ignore
                     values[f"Curriculum/挡位{index}_通过率"] = rate
             for name, value in values.items():
                 self.logger.writer.add_scalar(name, value, iteration)
@@ -279,21 +275,20 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             payload = {
                 "iteration": int(iteration),
                 "z_min": float(course.z_min),
-                "mode": result["mode"],
-                "passed": bool(result["passed"]),
-                "advanced": bool(result["advanced"]),
-                "retreated": bool(result["retreated"]),
-                "entered_final_mode": bool(result["entered_final_mode"]),
+                "mode": result["mode"], # type: ignore
+                "passed": bool(result["passed"]), # type: ignore
+                "advanced": bool(result["advanced"]), # type: ignore
+                "retreated": bool(result["retreated"]), # type: ignore
+                "entered_final_mode": bool(result["entered_final_mode"]), # type: ignore
                 "final_accepted": bool(course.final_accepted),
-                "bin_rate": result.get("bin_rate", []),
-                "bin_count": result.get("bin_count", []),
-                "bin_weights": result.get("bin_weights", []),
+                "bin_rate": result.get("bin_rate", []), # type: ignore
+                "bin_count": result.get("bin_count", []), # type: ignore
+                "bin_weights": result.get("bin_weights", []), # type: ignore
                 "batches": batch_stats,
                 "seconds": seconds,
                 "collision": True,
             }
-            (directory / f"evaluation_{iteration:05d}.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            (directory / f"evaluation_{iteration:05d}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
     # 训练循环: 复制 rsl_rl 主循环, 在每轮采样前插入碰撞开关重建
@@ -380,8 +375,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
 
 
     # 续训: 恢复课程状态, 首次采样前重建单板训练场景
-    def load(self, path: str, load_cfg: dict | None = None, strict: bool = True,
-             map_location: str | None = None) -> dict:
+    def load(self, path: str, load_cfg: dict | None = None, strict: bool = True, map_location: str | None = None) -> dict:
         infos = super().load(path, load_cfg, strict, map_location)
         if self._obstacle_command is None:
             return infos
@@ -390,7 +384,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             return infos
 
         saved = (infos or {}).get("obstacle_state") or {}
-        course = self._obstacle_command.height_curriculum_state
+        course = self._obstacle_command.height_curriculum_state # type: ignore
         if saved.get("height_course") and course is not None:
             course.load_state_dict(saved["height_course"])
         if saved:
@@ -433,7 +427,7 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
             "evaluation_envs": HEIGHT_EVALUATION_ENVS,
             "layout": self._obstacle_scene_state(),
             "high_obstacle_equal_height": (
-                self._obstacle_command.cfg.high_obstacle_equal_height
+                self._obstacle_command.cfg.high_obstacle_equal_height # type: ignore
                 if self._obstacle_command is not None else True
             ),
             "height_course": (
@@ -468,10 +462,8 @@ class SQuRoHoleOnPolicyRunner(MjlabOnPolicyRunner):
         ):
             return
         if results:
-            log["Metrics/训练无碰撞几何通过率"] = torch.tensor(
-                sum(int(item["success"]) for item in results) / len(results), device=env.device)
-            log["Metrics/训练无碰撞通过高度均值"] = torch.tensor(
-                sum(float(item["height"]) for item in results) / len(results), device=env.device)
+            log["Metrics/训练无碰撞几何通过率"] = torch.tensor(sum(int(item["success"]) for item in results) / len(results), device=env.device)
+            log["Metrics/训练无碰撞通过高度均值"] = torch.tensor(sum(float(item["height"]) for item in results) / len(results), device=env.device)
         stats = command.height_curriculum_state.metrics()  # type: ignore
         log["Metrics/Zmin_m"] = torch.tensor(stats["z_min"], device=env.device)
         log["Metrics/success_rate"] = torch.tensor(stats["success_rate"], device=env.device)

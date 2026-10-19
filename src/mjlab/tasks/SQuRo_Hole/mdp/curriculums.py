@@ -57,7 +57,7 @@ HEIGHT_BIN_COUNT = len(HEIGHT_BIN_EDGES) - 1
 
 # 奖励权重与 σ 课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
-    # 奖励项
+    # 权重项
     "weight_mimic_pos":         (10.0, 10.0, 10.0, 10.0),
     "weight_mimic_vel":         (5.0, 5.0, 5.0, 5.0),
     "weight_vel":               (5.0, 5.0, 5.0, 10.0),
@@ -70,7 +70,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
     "weight_leg_stop":          (2.0, 2.0, 2.0, 2.0),
     "weight_leg_motion":        (0.2, 0.2, 0.2, 0.2),
     "weight_action_L2":         (0.1, 0.2, 0.2, 1.0),
-    # 非奖励项
+    # 非权重项
     "sigma_leg_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_spn_pos":            (5.0, 10.0, 10.0, 5.0),
     "sigma_neck_pos":           (5.0, 10.0, 10.0, 5.0),
@@ -184,6 +184,7 @@ def _build_course_levels() -> tuple[float, ...]:
     return tuple(levels)
 
 
+
 HEIGHT_COURSE_LEVELS = _build_course_levels()
 
 
@@ -211,10 +212,7 @@ def sample_bin_heights(count: int, weights, device) -> torch.Tensor:
 # 在 [lower,upper] 范围内按挡位权重采样板底高度, 用于普通模式 70% 部分
 def sample_range_bin_heights(count: int, weights, lower: float, upper: float, device) -> torch.Tensor:
     edges = torch.tensor(HEIGHT_BIN_EDGES, device=device, dtype=torch.float32)
-    bin_weights = [
-        float(weights[index]) if (edges[index + 1] > lower and edges[index] < upper) else 0.0
-        for index in range(HEIGHT_BIN_COUNT)
-    ]
+    bin_weights = [float(weights[index]) if (edges[index + 1] > lower and edges[index] < upper) else 0.0 for index in range(HEIGHT_BIN_COUNT)]
     weight_tensor = torch.as_tensor(bin_weights, device=device, dtype=torch.float32)
     indices = torch.multinomial(weight_tensor, int(count), replacement=True)
     low = torch.maximum(edges[indices], torch.full((len(indices),), lower, device=device))
@@ -277,8 +275,7 @@ class HeightCurriculumState:
     def should_evaluate(self, iteration: int) -> bool:
         if int(iteration) < STAGE3_ITER + HEIGHT_EVALUATION_PRETRAIN_ITERATIONS:
             return False
-        interval = (HEIGHT_EVALUATION_FINAL_INTERVAL if self.final_level_passed
-                    else HEIGHT_EVALUATION_INTERVAL)
+        interval = (HEIGHT_EVALUATION_FINAL_INTERVAL if self.final_level_passed else HEIGHT_EVALUATION_INTERVAL)
         return (int(iteration) - STAGE3_ITER) % interval == 0
 
 
@@ -320,8 +317,7 @@ class HeightCurriculumState:
         return {
             "bin_count": bin_count,
             "bin_successes": bin_successes,
-            "bin_rate": [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
-                         for i in range(HEIGHT_BIN_COUNT)],
+            "bin_rate": [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0 for i in range(HEIGHT_BIN_COUNT)],
         }
 
 
@@ -372,12 +368,9 @@ class HeightCurriculumState:
         self._add_episode_totals(batch_stats)
 
         # 普通模式: 按各挡位通过率更新 70% 部分的采样权重
-        bin_count = [sum(int(batch["bin_count"][i]) for batch in batch_stats)
-                     for i in range(HEIGHT_BIN_COUNT)]
-        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batch_stats)
-                         for i in range(HEIGHT_BIN_COUNT)]
-        bin_rate = [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
-                    for i in range(HEIGHT_BIN_COUNT)]
+        bin_count = [sum(int(batch["bin_count"][i]) for batch in batch_stats) for i in range(HEIGHT_BIN_COUNT)]
+        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batch_stats) for i in range(HEIGHT_BIN_COUNT)]
+        bin_rate = [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0 for i in range(HEIGHT_BIN_COUNT)]
         self.bin_weights = self._update_bin_weights(bin_count, bin_successes, NORMAL_BIN_TARGET_RATE)
 
         self.level_episode_count = sample_count
@@ -424,8 +417,7 @@ class HeightCurriculumState:
             return result
         # 驻留与连续达标次数满足后降档; 退档后需要连续两轮达标
         required_passes = RETREAT_REQUIRED_PASSES if self.retreat_pending_advance else 1
-        if (passed and self.consecutive_success_batches >= required_passes
-                and int(iteration) - self.level_start_iteration >= HEIGHT_MIN_DWELL_ITERATIONS):
+        if (passed and self.consecutive_success_batches >= required_passes and int(iteration) - self.level_start_iteration >= HEIGHT_MIN_DWELL_ITERATIONS):
             if self.z_min > HEIGHT_MIN:
                 previous_z_min = self.z_min
                 step = HEIGHT_FINE_STEP if self.z_min <= HEIGHT_FINE_STEP_THRESHOLD else HEIGHT_STEP
@@ -456,12 +448,9 @@ class HeightCurriculumState:
         rate = sample_successes / max(1, sample_count)
         self._add_episode_totals(batch_stats)
 
-        bin_count = [sum(int(batch["bin_count"][i]) for batch in batch_stats)
-                     for i in range(HEIGHT_BIN_COUNT)]
-        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batch_stats)
-                         for i in range(HEIGHT_BIN_COUNT)]
-        bin_rate = [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0
-                    for i in range(HEIGHT_BIN_COUNT)]
+        bin_count = [sum(int(batch["bin_count"][i]) for batch in batch_stats) for i in range(HEIGHT_BIN_COUNT)]
+        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batch_stats) for i in range(HEIGHT_BIN_COUNT)]
+        bin_rate = [bin_successes[i] / bin_count[i] if bin_count[i] else 0.0 for i in range(HEIGHT_BIN_COUNT)]
         self.level_episode_count = sample_count
         self.level_success_count = sample_successes
         self.batch_count = sample_count

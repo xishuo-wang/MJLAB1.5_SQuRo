@@ -33,8 +33,8 @@ from .curriculums import (
     get_current_stage,
     heights_for_stage,
     sample_bin_heights,
-    compute_height_commands,
     HeightCurriculumState,
+    compute_height_commands,
     sample_range_bin_heights,
     stage_uses_height_course,
 )
@@ -51,8 +51,10 @@ if TYPE_CHECKING:
 def get_height_mode(height_f: float, height_h: float) -> int: ...
 
 
+
 @overload
 def get_height_mode(height_f: torch.Tensor, height_h: torch.Tensor) -> torch.Tensor: ...
+
 
 
 # 标量可视化与批量参考查询共用四种模式判定
@@ -77,7 +79,7 @@ def get_height_mode(height_f: float | torch.Tensor, height_h: float | torch.Tens
 
 
 
-# 计算从40毫米的零到最低标定高度的满强度
+# 计算从 40 毫米的零到最低标定高度的满强度
 def get_low_pose_intensity(height: torch.Tensor) -> torch.Tensor:
     low_min = LOW_POSE_CALIBRATION[0][0]
     return ((THRESHOLD_HEIGHT - height) / (THRESHOLD_HEIGHT - low_min)).clamp(0.0, 1.0)
@@ -218,8 +220,7 @@ class HoleCommand(CommandTerm):
             # 普通模式: 30% 固定最低档, 其余 70% 按挡位成功率加权
             uniform = lower + torch.rand(count, device=self.device) * (upper - lower)
             at_minimum = torch.rand(count, device=self.device) < HEIGHT_MIN_SAMPLE_PROBABILITY
-            adaptive = (sample_range_bin_heights(count, state.bin_weights, lower, upper, self.device)
-                        if self.adaptive_sampling else uniform)
+            adaptive = (sample_range_bin_heights(count, state.bin_weights, lower, upper, self.device) if self.adaptive_sampling else uniform)
             heights = torch.where(at_minimum, torch.full_like(uniform, lower), adaptive)
         self.obstacle_sampled_bottom_z[env_ids] = heights
         self.obstacle_height_sampled[env_ids] = True

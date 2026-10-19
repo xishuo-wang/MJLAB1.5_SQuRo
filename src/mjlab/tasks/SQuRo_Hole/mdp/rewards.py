@@ -29,8 +29,8 @@ from .curriculums import (
     SPN_AXIS_SCALE,
     get_curriculum_value,
 )
-from .command import get_low_pose_intensity
 from .entity import read_obstacle_bottom_z
+from .command import get_low_pose_intensity
 from .reference import get_reference_joint_state
 
 if TYPE_CHECKING:
