@@ -57,13 +57,21 @@ def geometry_constant(name):
   return resolve(nodes[name])
 
 
-# 从任务实体构建同尺寸限高板，详见 docs/SQuRo_虚实碰撞素材.md。
-def build_model(contact: bool, height: float, width: int, image_height: int):
+# 构建同源限高板，独立素材可覆盖完整尺寸而不改变任务配置。
+def build_model(
+  contact: bool,
+  height: float,
+  width: int,
+  image_height: int,
+  obstacle_size: tuple[float, float, float] | None = None,
+):
   spec = get_spec()
   mask = int(contact)
   cfg = SimpleNamespace(
     position=(*geometry_constant("OBSTACLE_POSITION")[:2], height),
-    size=geometry_constant("OBSTACLE_SIZE"),
+    size=tuple(value / 2 for value in obstacle_size)
+    if obstacle_size is not None
+    else geometry_constant("OBSTACLE_SIZE"),
   )
   body = spec.worldbody.add_body(name="figure_obstacle", pos=cfg.position, mocap=True)
   body.add_geom(
@@ -156,7 +164,7 @@ def training_pose(model, groups, board_x):
   return data
 
 
-# 从接触开启回放候选中选择靠近板中心且无明显穿透的一帧。
+# 在本次板体几何上重检候选帧，选择靠近板中心且无明显穿透的姿态。
 def evaluation_pose(model, board_id, candidates):
   best = None
   feet = [model.geom(f"{name}_foot_collision").id for name in ("FL", "FR", "HL", "HR")]
@@ -448,6 +456,13 @@ def main():
     default=DEFAULT_OUTPUT / "evaluation_candidates.npz",
   )
   parser.add_argument("--height", type=float, default=0.075)
+  parser.add_argument(
+    "--obstacle-size",
+    type=float,
+    nargs=3,
+    metavar=("LENGTH", "WIDTH", "THICKNESS"),
+    help="仅覆盖论文素材板体的完整长宽厚，单位米，任务配置保持不变",
+  )
   parser.add_argument("--width", type=int, default=2000)
   parser.add_argument("--image-height", type=int, default=1200)
   parser.add_argument("--azimuth", type=float, default=105)
@@ -455,13 +470,17 @@ def main():
   args = parser.parse_args()
   if args.height <= 0 or args.width < 800 or args.image_height < 500:
     parser.error("板高必须为正，输出图像至少为 800×500")
+  if args.obstacle_size is not None and not all(
+    np.isfinite(value) and value > 0 for value in args.obstacle_size
+  ):
+    parser.error("板体完整长宽厚必须为正的有限数值")
   output = args.output_dir
   output.mkdir(parents=True, exist_ok=True)
   off_model, off_id, off_cfg = build_model(
-    False, args.height, args.width, args.image_height
+    False, args.height, args.width, args.image_height, args.obstacle_size
   )
   on_model, on_id, on_cfg = build_model(
-    True, args.height, args.width, args.image_height
+    True, args.height, args.width, args.image_height, args.obstacle_size
   )
   assert off_cfg.position == on_cfg.position and off_cfg.size == on_cfg.size
   groups = robot_groups(off_model)
@@ -525,8 +544,12 @@ def main():
     "source_xml": str(SQuRO_XML),
     "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     "obstacle": {
+      "geometry_source": "独立论文素材完整尺寸覆盖"
+      if args.obstacle_size is not None
+      else "Hole 任务几何常量",
       "position": list(off_cfg.position),
       "half_size": list(off_cfg.size),
+      "full_size": [2 * value for value in off_cfg.size],
       "world_corners_m": board.tolist(),
       "same_world_corners": True,
       "same_projection": True,
@@ -544,6 +567,7 @@ def main():
     "ground_contact_retained": True,
     "training_pose_source": "中性参考姿态在保留地面接触的原生 MuJoCo 中保持 0.36 秒，用作方法机制示意",
     "evaluation_pose_source": str(args.evaluation_candidates),
+    "evaluation_pose_processing": "原回放候选姿态在本次板体上重新执行原生接触检查；不表示新几何下的策略通过结果",
     "evaluation_checkpoint": provenance.get("checkpoint"),
     "evaluation_policy": provenance.get("policy"),
     "evaluation": evaluation,

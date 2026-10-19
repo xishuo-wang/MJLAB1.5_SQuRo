@@ -11,6 +11,7 @@
 障碍物的位置与半尺寸直接解析 `tasks/SQuRo_Hole/mdp/config.py` 中的唯一常量。
 按现有 `ObstacleEntity` 的约定，body 的 Z 是板底，geom 中心在板底上方一个半厚。
 默认示意板底为 75 mm，完整尺寸由任务常量决定，不额外添加侧柱。
+可用 `--obstacle-size` 仅覆盖独立论文素材的完整长宽厚，不写入训练配置。
 两份模型只改变板体碰撞掩码和显示颜色，地面接触均保留。
 蓝色线框和灰板都使用同一组八个世界角点，正交相机和输出画布完全相同。
 
@@ -23,6 +24,7 @@
 该姿态为方法机制示意，用于展示五盒局部进入虚拟板；并非收敛策略的能力数据。
 评价图从已有检查点的接触开启回放中提取完整 qpos，并按关节名称映射至原生模型。
 候选帧要求前躯干处于限高板附近，原生接触检查不得出现超过 0.8 mm 的板体穿透。
+覆盖板体尺寸时，程序会在新几何上重新检查候选帧；复用的是姿态，不是新几何下的策略通过结果。
 
 取帧使用独立进程，固定板高，关闭课程推进，不进行 PPO 更新。
 只读视觉回放不计算训练奖励。若工作区奖励接口正在编辑，取帧进程读取 Git HEAD
@@ -49,6 +51,24 @@ uv run python -B -m mjlab.scripts.Figure.render_squro_contact_pair
 
 可用 `--evaluation-candidates` 指定候选文件，用 `--azimuth`、`--elevation` 同时调整两图视角。
 `--height` 必须与候选回放板高一致，几何一致性检查写入 `geometry_checks.json`。
+
+## 长顶板素材版本
+
+2026-10-19 按论文参考示意图新增长顶板版本，保留原窄条版本。
+原任务完整板尺寸为 X 方向 30 mm、Y 方向 600 mm、Z 方向 10 mm。
+长顶板仅用于机制示意，完整尺寸为 X 方向 240 mm、Y 方向 140 mm、Z 方向 20 mm。
+板底保持 75 mm，平面中心保持 (200, 0) mm；两图共用正交相机，方位角 105°、俯视角 12°。
+评价姿态沿用原接触开启回放候选，并在长顶板上重新检查原生接触。
+本次选中候选 46，最小板体接触距离约 -0.259 mm，满足既定 0.8 mm 检查容差。
+该取帧不报告长顶板通行能力，不改变 Hole 障碍物、课程、训练或奖励配置。
+
+```powershell
+uv run python -B -m mjlab.scripts.Figure.render_squro_contact_pair `
+  --output-dir logs/diagnostics/SQuRo_Envelope/contact_pair_large_obstacle_20261019 `
+  --obstacle-size 0.24 0.14 0.02 --azimuth 105 --elevation -12
+```
+
+`geometry_checks.json` 额外记录尺寸来源、完整尺寸以及候选姿态在新几何上的检查口径。
 
 ## 输出
 
