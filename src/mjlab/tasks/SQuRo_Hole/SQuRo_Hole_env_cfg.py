@@ -41,6 +41,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     }
 
 
+    # 策略网络配置
     critic_terms = {**policy_terms,}
 
 
@@ -93,7 +94,18 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "hole_passage_monitor": TerminationTermCfg(func=mdp.monitor_restricted_passage, time_out=False),
     }
 
-    
+
+    # 命令空间配置
+    commands: dict[str, CommandTermCfg] = {
+        "hole_cmd": mdp.HoleCommandCfg(
+            asset_name="robot",
+            debug_vis=False, 
+            enable_height_course=True,
+            enable_course_progress=False,
+        )
+    }
+
+
     # 足部接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
@@ -105,29 +117,7 @@ def SQuRo_Hole_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-
-    # 播放模式配置
-    if play:
-        commands: dict[str, CommandTermCfg] = {
-            "hole_cmd": mdp.HoleCommandCfg(
-                asset_name="robot",
-                debug_vis=True, 
-                enable_height_course=False,
-                enable_course_progress=False,
-                viz=mdp.HoleCommandCfg.VizCfg(z_offset=0.1, scale=1.0,)
-            )
-        }
-    else:
-        commands: dict[str, CommandTermCfg] = {
-            "hole_cmd": mdp.HoleCommandCfg(
-                asset_name="robot",
-                debug_vis=False, 
-                enable_height_course=True,
-                enable_course_progress=False,
-            )
-        }
-
-
+    
     # 完整配置
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
