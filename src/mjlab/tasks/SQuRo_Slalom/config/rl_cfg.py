@@ -1,7 +1,7 @@
 from mjlab.rl import (
   RslRlModelCfg,
-  RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
+  RslRlOnPolicyRunnerCfg,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER, PHASE2_END_ITER
 
@@ -41,8 +41,6 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     save_interval=100,
     num_steps_per_env=_STEPS_PER_ITER,
     max_iterations=PHASE2_END_ITER,
-    
-    # 恢复无裁剪: 极端姿态由参考步幅与速度对应治本, 越界由动作软惩罚约束
     clip_actions=None,
     seed=42,
     

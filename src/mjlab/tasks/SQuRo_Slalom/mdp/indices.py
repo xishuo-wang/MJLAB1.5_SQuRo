@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 import mujoco
 import numpy as np
-
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
@@ -54,6 +52,7 @@ BODY_NAMES = ("F_body_Link", "H_body_Link")
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=_ACT_JOINT_NAMES)
 
 
+
 # 只保存模型编号，执行器列索引使用上方常量。
 class ModelIndices:
     __slots__ = ("f_body_id", "h_body_id", "foot_site_ids", "joint_ids", "linkage_joint_ids")
@@ -68,6 +67,7 @@ class ModelIndices:
 
 
 _MODEL_INDICES = ModelIndices()
+
 
 
 # 按名称解析身体、足端、驱动关节与闭链关节。
@@ -89,15 +89,18 @@ def resolve_model_indices(entity) -> None:
     print(f"[SQuRo Slalom] 模型索引解析完成，执行器顺序：{list(joint_names)}")
 
 
+
 # 将执行器列分组转换成模型关节编号。
 def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[int, ...]:
     resolve_model_indices(entity)
     return tuple(_MODEL_INDICES.joint_ids[i] for i in actuator_ids)
 
 
+
 # 足端力列按传感器名称排序。
 def resolve_foot_force_ids(sensor) -> tuple[int, ...]:
     return tuple(sensor.primary_names.index(name) for name in FOOT_GEOM_NAMES)
+
 
 
 # 从已编译网格解析前后躯干的身体局部三维包围盒。

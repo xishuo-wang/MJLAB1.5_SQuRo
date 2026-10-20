@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
+
 # 终止条件
 def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
     robot_entity = env.scene.entities["robot"]
@@ -15,6 +16,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 跌倒判定：姿态太倾斜
     fallen = uprightness < 0.2
     return fallen
+
 
 
 # 一阶段保持二十秒，二阶段使用配置中的完整回合时长。

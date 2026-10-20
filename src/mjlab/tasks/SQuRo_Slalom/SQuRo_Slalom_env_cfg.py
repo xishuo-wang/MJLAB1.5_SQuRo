@@ -2,13 +2,13 @@
 # uv run play Mjlab-SQuRo-Slalom-Play --checkpoint_file
 
 from mjlab.managers import (
-    ActionTermCfg,
-    CommandTermCfg,
     EventTermCfg,
-    ObservationGroupCfg,
-    ObservationTermCfg,
+    ActionTermCfg,
     RewardTermCfg,
+    CommandTermCfg,
+    ObservationTermCfg,
     TerminationTermCfg,
+    ObservationGroupCfg,
 )
 from mjlab.scene import SceneCfg
 from mjlab.viewer import ViewerConfig
@@ -24,10 +24,8 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
 
-    # 足端碰撞体名称
-    geom_names = mdp.FOOT_GEOM_NAMES
 
-    # 观测空间
+    # 观测空间配置
     policy_terms = {
         "actions": ObservationTermCfg(func=mdp.last_action, history_length=2),
         "ref_joint_pos": ObservationTermCfg(func=mdp.ref_joint_pos),
@@ -43,14 +41,18 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "slalom_cmd"}),
     }
 
+
+    # 策略网络配置
     critic_terms = {**policy_terms}
+
 
     observations = {
         "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
 
-    # 动作空间 — 14个执行器位置控制
+
+    # 动作空间配置
     actions: dict[str, ActionTermCfg] = {
         "joint_pos": JointPositionActionCfg(
             entity_name="robot",
@@ -60,20 +62,23 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 事件
+
+    # 事件配置
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
     }
 
-    # 奖励函数
+
+    # 奖励函数配置
     rewards = {
+        # 奖励项
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
         "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
-        # "track_omg": RewardTermCfg(func=mdp.compute_omg_track_reward, weight=1.0),
         "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=1.0),
         "track_head": RewardTermCfg(func=mdp.compute_head_track_reward, weight=1.0),
+        # 惩罚项
         "action_L1": RewardTermCfg(func=mdp.compute_action_L1_penalty, weight=1.0),
         "action_L2": RewardTermCfg(func=mdp.compute_action_L2_penalty, weight=1.0),
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
@@ -82,24 +87,16 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "abnormal_leg_pose": RewardTermCfg(func=mdp.compute_abnormal_leg_pose_penalty, weight=1.0),
     }
 
-    # 终止条件
+
+    # 终止条件配置
     terminations = {
         "timeout": TerminationTermCfg(func=mdp.check_episode_timeout, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
         "slalom_passage": TerminationTermCfg(func=mdp.track_slalom_passage, time_out=False),
     }
 
-    # 足端接触传感器
-    feet_ground_cfg = ContactSensorCfg(
-        name="feet_ground_contact",
-        primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
-        secondary=ContactMatch(mode="geom", pattern="floor", entity="robot"),
-        fields=("found", "force"),
-        reduce="netforce",
-        num_slots=1,
-        track_air_time=True,
-    )
 
+    # 命令空间配置
     commands: dict[str, CommandTermCfg] = {
         "slalom_cmd": mdp.SlalomCommandCfg(
             asset_name="robot",
@@ -110,7 +107,20 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-    # 杆体逐回合通过 mocap 更新，首轮关闭实际碰撞。
+
+    # 足部接触传感器
+    feet_ground_cfg = ContactSensorCfg(
+        name="feet_ground_contact",
+        primary=ContactMatch(mode="geom", pattern=mdp.FOOT_GEOM_NAMES, entity="robot"),
+        secondary=ContactMatch(mode="geom", pattern="floor", entity="robot"),
+        fields=("found", "force"),
+        reduce="netforce",
+        num_slots=1,
+        track_air_time=True,
+    )
+
+
+    # 杆体逐回合通过 mocap 更新，首轮关闭实际碰撞
     pole_entities: dict = {}
     for i in range(mdp.POLE_NUM):
         pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
@@ -118,6 +128,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
                 rgba=(0.9, 0.35, 0.2, 1.0),
             contype=0, conaffinity=0,
         )
+
 
     # 完整配置
     return ManagerBasedRlEnvCfg(

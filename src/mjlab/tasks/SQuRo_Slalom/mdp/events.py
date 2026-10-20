@@ -1,7 +1,8 @@
 from __future__ import annotations
 import torch
-from .indices import _MODEL_INDICES, resolve_model_indices
 from .path import _INIT_DIST
+from .indices import _MODEL_INDICES, resolve_model_indices
+
 
 
 # 重置模型

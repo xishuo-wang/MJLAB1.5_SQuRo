@@ -1,23 +1,20 @@
 from __future__ import annotations
-
+import torch
 from itertools import product
 from typing import TYPE_CHECKING
-
-import torch
-
 from mjlab.utils.lab_api.math import matrix_from_quat
-from .indices import _MODEL_INDICES, resolve_body_envelope_bounds
-from .path import CORRIDOR_HALF_WIDTH
 from .pole import POLE_RADIUS
+from .path import CORRIDOR_HALF_WIDTH
+from .indices import _MODEL_INDICES, resolve_body_envelope_bounds
 from .slalom_geometry import PROJECTION_STRIDE, get_spatial_slalom_tables
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
+
 _BOX_SIGNS = tuple(product((-1.0, 1.0), repeat=3))
-_BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8)
-                   if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
+_BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8) if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
 _ENVELOPE_SAMPLE_STEP = 0.002
 _PROJECTION_ENV_BLOCK = 64
 _PHASE0_PROJECTION_STRIDE = 8
@@ -29,8 +26,7 @@ def project_body_envelopes(env: ManagerBasedRlEnv) -> torch.Tensor:
     robot = env.scene["robot"]
     local_vertices = getattr(env, "_slalom_body_envelope_vertices", None)
     if local_vertices is None:
-        bounds = torch.as_tensor(resolve_body_envelope_bounds(robot, env.sim.mj_model),
-                                 device=env.device, dtype=torch.float32)
+        bounds = torch.as_tensor(resolve_body_envelope_bounds(robot, env.sim.mj_model), device=env.device, dtype=torch.float32)
         signs = torch.tensor(_BOX_SIGNS, device=env.device, dtype=bounds.dtype)
         center = bounds.mean(dim=1)
         half_size = (bounds[:, 1] - bounds[:, 0]) / 2
@@ -43,12 +39,14 @@ def project_body_envelopes(env: ManagerBasedRlEnv) -> torch.Tensor:
     return vertices[..., :2]
 
 
+
 # 稳定计算包络点相对参考圆半径的径向偏差。
 def _radial_offset(points: torch.Tensor, normal: torch.Tensor, curvature: torch.Tensor) -> torch.Tensor:
     scaled = curvature[:, None, None] * points - normal[:, None]
     numerator = (curvature.abs()[:, None] * points.square().sum(dim=-1)
                  - 2 * curvature.sign()[:, None] * (points * normal[:, None]).sum(dim=-1))
     return numerator / (torch.linalg.vector_norm(scaled, dim=-1) + 1)
+
 
 
 # 检查整个投影盒到圆心的最近边界和最远角点，详见一阶段训练文档。
@@ -93,6 +91,7 @@ def compute_annulus_side_excess(
     return torch.where(turning, inner, 0.0), torch.where(turning, outer, straight)
 
 
+
 # 按实际前后体包络计算一阶段圆环越界，直行退化为对称带。
 def compute_phase0_corridor_excess(
     env: ManagerBasedRlEnv,
@@ -109,6 +108,7 @@ def compute_phase0_corridor_excess(
         curvature[:, None].expand(-1, 2).reshape(-1),
     )
     return inner.reshape(batch_size, 2), outer.reshape(batch_size, 2)
+
 
 
 # 以固定形状分块查询，避免阶段切换时不同大批量形状累积显存预留。
@@ -132,6 +132,7 @@ def project_slalom_points(
         for output, value in zip(outputs, values, strict=True):
             output[start:stop].copy_(value[:stop - start])
     return outputs
+
 
 
 # 粗定位后在线段上细化投影，接近段起点向后延伸为切线射线。
@@ -172,6 +173,7 @@ def _project_slalom_points_block(
             torch.where(use_ray, 0.0, curvature))
 
 
+
 # 沿投影盒十二条边采样，边界相邻点间距不超过给定步长 (按步长分别缓存)
 def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor,
                           step: float = _ENVELOPE_SAMPLE_STEP) -> torch.Tensor:
@@ -196,6 +198,7 @@ def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor,
     return torch.lerp(vertices[:, :, starts], vertices[:, :, ends], fractions[None, None, :, None])
 
 
+
 # 二阶段按各包络点的最近实际轨迹计算内外越界，不依赖参考时钟的位置。
 def compute_phase1_corridor_excess(
     env: ManagerBasedRlEnv, env_ids: torch.Tensor,
@@ -217,6 +220,8 @@ def compute_phase1_corridor_excess(
     inner = torch.where(inner_side, excess, 0.0).reshape(points.shape[:-1]).amax(-1)
     outer = torch.where(inner_side, 0.0, excess).reshape(points.shape[:-1]).amax(-1)
     return inner, outer
+
+
 
 # 一阶段路径投影: 返回包络点到本回合实际路径 (含起终点切线延伸) 的距离、侧向叉积与局部曲率
 def project_phase0_path_points(points: torch.Tensor, path_xy: torch.Tensor,
@@ -259,6 +264,7 @@ def project_phase0_path_points(points: torch.Tensor, path_xy: torch.Tensor,
         lateral = torch.where(use_ray, ray_lateral, lateral)
         curvature = torch.where(use_ray, torch.zeros_like(curvature), curvature)
     return distance, lateral, curvature
+
 
 
 # 一阶段动态回合: 按各包络采样点到本回合实际路径的最近距离计算内外越界
