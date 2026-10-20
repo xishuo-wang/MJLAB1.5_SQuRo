@@ -1,101 +1,98 @@
 from __future__ import annotations
-
 import torch
-from typing import TYPE_CHECKING
-
 from mjlab.entity import Entity
-
-from .config import CORRIDOR_HALF_WIDTH
-from .curriculums import get_curriculum_reward_weight
-from .entity import POLE_RADIUS
+from typing import TYPE_CHECKING
 from .indices import (
     _ACT_HIP_IDS,
-    _ACT_JOINT_NAMES,
     _ACT_LEG_IDS,
-    _ACT_NECK_IDS,
-    _ACT_SHOULDER_IDS,
     _ACT_SPN_IDS,
+    _ACT_NECK_IDS,
     _MODEL_INDICES,
+    _ACT_JOINT_NAMES,
+    _ACT_SHOULDER_IDS,
 )
 from .reference import (
     _BOX_EDGES,
-    _PHASE0_ENVELOPE_SAMPLE_STEP,
-    PROJECTION_STRIDE,
     compute_path_ref,
-    get_f_body_physical_heading,
+    PROJECTION_STRIDE,
     get_path_curvature,
-    get_reference_joint_state,
-    get_spatial_slalom_tables,
-    project_body_envelopes,
     sample_body_envelopes,
+    project_body_envelopes,
+    get_spatial_slalom_tables,
+    get_reference_joint_state,
+    get_f_body_physical_heading,
+    _PHASE0_ENVELOPE_SAMPLE_STEP,
 )
+from .entity import POLE_RADIUS
+from .config import CORRIDOR_HALF_WIDTH
+from .curriculums import get_curriculum_reward_weight
+
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 
-
-# =========================================================================================
 # 关节位置模仿奖励
 def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际和期望关节位置
     asset: Entity = env.scene["robot"]
-    # 计算关节角度误差
     joint_pos = asset.data.joint_pos[:, _MODEL_INDICES.joint_ids]
     ref_pos, _ = get_reference_joint_state(env)
+    # 计算关节角度误差
     error = joint_pos - ref_pos
     error_leg = error[:, _ACT_LEG_IDS]
     error_spn = error[:, _ACT_SPN_IDS]
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_pos")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
-    # 计算奖励
+    weight = get_curriculum_reward_weight(env, "weight_mimic_pos")
+    # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
+    # 计算奖励
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
-    return reward * weight
+    reward = (0.5 * reward_leg + 0.5 * reward_spn + 0.3 * reward_neck) * weight
+    return reward
 
 
 
-# =========================================================================================
 # 关节速度模仿奖励
 def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际和期望关节位置
     asset: Entity = env.scene["robot"]
-    # 计算关节速度误差
     joint_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     _, ref_vel = get_reference_joint_state(env)
+    # 计算关节速度误差
     error = joint_vel - ref_vel
     error_leg = error[:, _ACT_LEG_IDS]
     error_spn = error[:, _ACT_SPN_IDS]
     error_neck = error[:, _ACT_NECK_IDS]
     # 获取课程学习量
-    weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
     sigma_leg = get_curriculum_reward_weight(env, "sigma_leg_vel")
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
-    # 计算奖励
+    weight = get_curriculum_reward_weight(env, "weight_mimic_vel")
+    # 计算 MSE 误差
     mse_leg = torch.mean(error_leg ** 2, dim=1)
     mse_spn = torch.mean(error_spn ** 2, dim=1)
     mse_neck = torch.mean(error_neck ** 2, dim=1)
+    # 计算奖励
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_spn * mse_neck)
-    reward = (reward_leg + reward_spn) / 2 + 0.3 * reward_neck
-    return reward * weight
+    reward = (0.5 * reward_leg + 0.5 * reward_spn + 0.3 * reward_neck) * weight
+    return reward
 
 
 
-# =========================================================================================
-# 线速度跟踪奖励 — F_body 局部坐标系（body-frame 前进/侧向/垂向）
-def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+# 线速度跟踪奖励
+def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际与期望速度
     asset: Entity = env.scene["robot"]
-    # F_body 物理前向 heading（body+X - π/2 → world+X = 0°）
     f_body_heading = get_f_body_physical_heading(env)
-    # F_body_Link 世界系速度
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
     # 投影到 F_body 局部坐标系：前进=物理前向，侧向=物理左向
     forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
@@ -124,29 +121,29 @@ def compute_vel_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# =========================================================================================
 # 身体高度跟踪奖励 
 def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际与期望前后肢高度
     asset: Entity = env.scene["robot"]
-    # 计算高度跟踪误差
     body_pos_w = asset.data.body_link_pos_w
     F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
     H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]          
     cmd_term = env.command_manager._terms["slalom_cmd"]
     desired_height_F = cmd_term.command[:, 1]    
-    desired_height_H = cmd_term.command[:, 2]    
+    desired_height_H = cmd_term.command[:, 2]
+    # 计算高度跟踪误差    
     height_F_error = torch.abs(desired_height_F - F_body_height)
     height_H_error = torch.abs(desired_height_H - H_body_height)
     # 获取课程学习量
-    sigma_height = get_curriculum_reward_weight(env, "sigma_height")
-    w_height = get_curriculum_reward_weight(env, "weight_height")
+    sigma = get_curriculum_reward_weight(env, "sigma_height")
+    weight = get_curriculum_reward_weight(env, "weight_height")
     # 计算奖励
-    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
-    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
-    Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
+    r_height_F = torch.exp(-sigma * height_F_error ** 2)
+    r_height_H = torch.exp(-sigma * height_H_error ** 2)   
+    reward = weight * (0.5 * r_height_F + 0.5 * r_height_H)
     # 记录日志
     env.extras["log"]["Data/height_actual"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
-    return Reward_height
+    return reward
 
 
 
@@ -192,39 +189,39 @@ def compute_head_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# =========================================================================================
 # L1 动作平滑惩罚
 def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 计算动作变化
+    # 获取当前和上一步动作   
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
-    abs_diff = torch.abs(current_action - prev_action)
-    leg_cost = torch.sum(abs_diff[:, _ACT_LEG_IDS], dim=1)
-    spn_cost = torch.sum(abs_diff[:, _ACT_SPN_IDS], dim=1)
-    error_cost = torch.sum(abs_diff[:, _ACT_NECK_IDS], dim=1)
+    # 计算动作差
+    action_diff = torch.abs(current_action - prev_action)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L1_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L1_spn")
-    # 计算奖励
+    # 计算惩罚
+    leg_cost = torch.sum(action_diff[:, _ACT_LEG_IDS], dim=1)
+    spn_cost = torch.sum(action_diff[:, _ACT_SPN_IDS], dim=1)
+    error_cost = torch.sum(action_diff[:, _ACT_NECK_IDS], dim=1)
     penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
 
 
-# =========================================================================================
 # L2 动作平滑惩罚
 def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # 计算动作变化
+    # 获取当前和上一步动作 
     current_action = env.action_manager.action
     prev_action = env.action_manager.prev_action
-    sq_diff = torch.square(current_action - prev_action)
-    leg_cost = torch.sum(sq_diff[:, _ACT_LEG_IDS], dim=1)
-    spn_cost = torch.sum(sq_diff[:, _ACT_SPN_IDS], dim=1)
-    error_cost = torch.sum(sq_diff[:, _ACT_NECK_IDS], dim=1)
+    # 计算动作差
+    action_diff = torch.square(current_action - prev_action)
     # 获取课程学习量
     w_leg = get_curriculum_reward_weight(env, "weight_smooth_L2_leg")
     w_spn = get_curriculum_reward_weight(env, "weight_smooth_L2_spn")
-    # 计算奖励
+    # 计算惩罚
+    leg_cost = torch.sum(action_diff[:, _ACT_LEG_IDS], dim=1)
+    spn_cost = torch.sum(action_diff[:, _ACT_SPN_IDS], dim=1)
+    error_cost = torch.sum(action_diff[:, _ACT_NECK_IDS], dim=1)
     penalty = -w_leg * leg_cost - w_spn * spn_cost - w_spn * error_cost
     return penalty
 
@@ -233,20 +230,20 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 # =========================================================================================
 # 能耗惩罚
 def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # 获取实际关节速度和力矩
     asset: Entity = env.scene["robot"]
-    # 计算能量消耗
     actuator_vel = asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
     actuator_torque = asset.data.actuator_force
-    cost = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
     # 获取课程学习量
     weight = get_curriculum_reward_weight(env, "weight_energy")
-    # 计算奖励
+    # 计算能量消耗
+    cost = torch.sum(torch.abs(actuator_vel * actuator_torque), dim=1)
+    # 计算惩罚
     penalty = -weight * cost
     return penalty
 
 
 
-# =========================================================================================
 # 走廊一致性奖励 — 身体包络不超出参考路径周围的允许走廊
 def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 一阶段沿参考圆环，二阶段沿实际空间轨迹检查完整躯干包络。
@@ -287,6 +284,7 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return reward * weight
 
 
+
 # 腿部执行器饱和软惩罚：接近力矩上限的持续占用才计罚, 详见 docs/SQuRo_Slalom_碰撞课程.md
 def compute_leg_saturation_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -306,6 +304,7 @@ def compute_leg_saturation_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return -weight * worst
 
 
+
 # 动作越界软惩罚：原始动作超出软限的部分计罚, 详见 docs/SQuRo_Slalom_碰撞课程.md
 def compute_action_soft_limit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     actions = env.action_manager.action
@@ -316,11 +315,13 @@ def compute_action_soft_limit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return -weight * excess
 
 
+
 # 按参考相对角度检测前肩过抬、后髋过折，左右两侧使用同一容差。
 def _abnormal_leg_pose_excess(position, reference, tolerance):
     error = position - reference
     deviation = torch.cat((error[:, _ACT_SHOULDER_IDS], -error[:, _ACT_HIP_IDS]), dim=1)
     return (deviation - tolerance).clamp_min(0.0).amax(dim=1)
+
 
 
 # 同时处罚实际异常姿态与限幅前请求，标定依据见 docs/SQuRo_Slalom_碰撞课程.md。

@@ -20,6 +20,7 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
+
 def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
@@ -74,8 +75,9 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # 奖励项
         "mimic_pos": RewardTermCfg(func=mdp.compute_mimic_pos_reward, weight=1.0),
         "mimic_vel": RewardTermCfg(func=mdp.compute_mimic_vel_reward, weight=1.0),
+        "vel": RewardTermCfg(func=mdp.compute_vel_reward, weight=1.0),
+
         "height": RewardTermCfg(func=mdp.compute_height_reward, weight=1.0),
-        "track_vel": RewardTermCfg(func=mdp.compute_vel_track_reward, weight=1.0),
         "corridor": RewardTermCfg(func=mdp.compute_corridor_reward, weight=1.0),
         "track_head": RewardTermCfg(func=mdp.compute_head_track_reward, weight=1.0),
         # 惩罚项
