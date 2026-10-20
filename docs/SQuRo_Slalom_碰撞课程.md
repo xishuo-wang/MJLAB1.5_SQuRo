@@ -44,7 +44,7 @@
 | 普通模式采样 | 训练：最低档固定 30%，其余 70% 按上批考核缺口加权；考核：最低档固定 30%，其余 70% 按档位等概率 |
 | 推进条件 | 两批最低档（当前上限曲率）各不少于 256 个回合、通过率都至少 60%，且每档至少驻留 100 轮 |
 | 最终档 | 曲率十五通过后进入：训练与考核都按 11 个整数档采样（考核等概率，训练按缺口加权） |
-| 最终验收 | 两批整体通过率都至少 80%，日志 `Curriculum/最终验收` |
+| 最终验收 | 两批整体通过率都至少 80%，日志 `Curriculum/final_accepted` |
 | 档位加权 | `bin_weights[i] = 1 + 2·max(0, 目标 − 该档通过率)`；普通模式目标 60%，最终档目标 80%，无样本档保持 1.0 |
 
 每次考核把允许的最大曲率增加一，最大杆距保持固定。已有回合不改变杆位或命令，
@@ -72,8 +72,9 @@
 最终档与最终验收状态、分档采样权重及历史。
 续训恢复这些状态；显式固定曲率／杆距和回放不自动推进课程。
 真实碰撞每批结果作为训练产物写入该运行目录的 `collision_evaluations/`，
-TensorBoard 使用 `Curriculum/考核通过率`、`考核样本数`、`本次考核达标`、`峰值曲率上限`、
-`最小杆心距米`、`最终模式`、`最终验收`、`各挡位最低通过率`、`挡位{i}_通过率` 等字段。
+TensorBoard 使用 `Curriculum/eval_pass_rate`、`Curriculum/eval_samples`、`Curriculum/eval_passed`、
+`Curriculum/max_curvature`、`Curriculum/min_pole_spacing_mm`、`Curriculum/final_mode`、
+`Curriculum/final_accepted`、`Curriculum/bin{i}_pass_rate` 等字段。
 这些考核率只覆盖当前最小杆距及默认命令分布，不代表跨模型扰动或其他地面条件的成功率。
 
 ```powershell
@@ -135,7 +136,7 @@ uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agen
 
 ### 保留与未采用
 
-- `leg_saturation` 奖励项保留为诊断用途（`_CURVES` 权重为 0，日志 `Data/腿部饱和占比`），后续若饱和仍不可接受可再调权重。
+- `leg_saturation` 奖励项保留为诊断用途（`_CURVES` 权重为 0，日志 `Data/leg_saturation_ratio`），后续若饱和仍不可接受可再调权重。
 - 换向参考的静态改造（幅值律、相位）在冻结策略上无效且成本更高；若仍要尝试，应在动作裁剪重训之后单独进行。
 - 验收脚本 `verify_slalom_training_setup` 的动作裁剪断言改为 Slalom 自身取值 3.0（与 Hole 的差异是有意保留的）。
 
@@ -150,7 +151,7 @@ uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agen
 - 考核改为两批：独立 1024 环境，每批一整轮 1024 个完整回合。普通模式每批最低档（当前上限曲率）
   需至少 256 个回合且通过率不小于 60%，两批都达标才推进一档，并保留每档 100 轮驻留。
 - 曲率十五档通过后进入最终档：训练与考核都按 11 个整数档采样（考核等概率、不继承训练权重），
-  两批整体通过率都不小于 80% 记为最终验收（`Curriculum/最终验收`）。
+  两批整体通过率都不小于 80% 记为最终验收（`Curriculum/final_accepted`）。
 - 普通模式考核的分档通过率回写训练采样：`bin_weights[i] = 1 + 2·max(0, 目标 − 该档通过率)`，
   普通模式目标 60%、最终档目标 80%，无样本档位保持 1.0；训练保留最低档 30% 固定采样，只加权其余 70%。
 - 已用 `model_6300.pt` 续训做端到端验证：第 6400 轮最终模式两批共 2048 回合、11 档各 164～216 回合、
@@ -193,7 +194,7 @@ uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agen
 - 过零处平均步幅：峰值 13 从 61.4 → 32.6 mm、峰值 15 从 61.4 → 25.6 mm（未触及上限时）。
 - 动作侧按用户要求还原 `clip_actions=None`，并新增动作越界软惩罚
   `-w · mean(max(0, |a| − 3.0))`（`_CURVES` 的 `weight_action_soft_limit = 10`，
-  日志 `Data/动作越界均值`）作为安全项，不承担治本作用。
+  日志 `Data/action_soft_limit_mean`）作为安全项，不承担治本作用。
 - 未处理：前/后腿生物行程相差 22%（67.6 对 55.2 mm），本次只统一平均值；
   另外"几何行程一致"不等价于支撑相足端速度、滑移与脊腿动力学一致，需训练后检查。
 - 验证：参考一致性 22 项（含新增的机械限位、相位连续/速度有界、基础速度覆盖三项）、
@@ -241,8 +242,8 @@ FL/FR 肩关节使用 `q - q_ref`；HL/HR 髋关节使用 `q_ref - q`。
 - 实际姿态与请求各取最严重关节，不在 14 维上平均稀释单腿异常。
   该项没有修改控制目标，没有施加新的硬限位，也没有约束脊柱的形变范围。
 - 只覆盖上述两类异常方向，其他异常运动仍需在回放中单独检查。
-- 日志增加 `Data/异常腿部实际越界`、`Data/异常腿部请求越界`、
-  `Data/异常腿部姿态占比`；越界量单位 rad，占比是本控制步的环境比例。
+- 日志增加 `Data/abnormal_leg_pose_actual_excess`、
+  `Data/abnormal_leg_pose_ratio`；越界量单位 rad，占比是本控制步的环境比例。
 
 ### 首轮容差的证据边界
 
