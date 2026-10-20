@@ -24,6 +24,7 @@ from .config import (
     CMD_HEIGHT_F_IDS,
     CMD_HEIGHT_H_IDS,
     VIRTUAL_CLEARANCE_MARGIN,
+    VIRTUAL_CONTACT_X_MARGIN,
 )
 from .curriculums import (
     SPN_AXIS_SCALE,
@@ -255,7 +256,8 @@ def compute_contact_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     threshold = read_obstacle_bottom_z(obstacle) - VIRTUAL_CLEARANCE_MARGIN
     center_x = float(obstacle.cfg.position[0]) # type: ignore
     half_length = float(obstacle.cfg.size[0]) # type: ignore
-    x_min, x_max = center_x - half_length, center_x + half_length
+    x_min = center_x - half_length - VIRTUAL_CONTACT_X_MARGIN
+    x_max = center_x + half_length + VIRTUAL_CONTACT_X_MARGIN
     # 获取机器人躯干 x 坐标
     body_x = asset.data.body_link_pos_w[:, (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id), 0]
     # 计算位于障碍物区间内的身体超出量

@@ -40,6 +40,7 @@ from mjlab.tasks.SQuRo_Hole.mdp.config import (
     RETREAT_FAILURE_LIMIT,
     RETREAT_REQUIRED_PASSES,
     VIRTUAL_CLEARANCE_MARGIN,
+    VIRTUAL_CONTACT_X_MARGIN,
 )
 from mjlab.tasks.SQuRo_Hole.mdp.curriculums import (
     STAGE3_STEP,
@@ -238,18 +239,24 @@ class _StubScene(dict):
 
 # 验证虚拟碰撞惩罚的 X 区间、板底余量、数值口径与课程开关。
 def verify_virtual_contact() -> None:
-    num_envs = 8
+    num_envs = 14
     board_position = (0.2, 0.0, 0.047)
     board_size = (0.015, 0.1, 0.005)
     bottom = torch.full((num_envs,), board_position[2])
     threshold = board_position[2] - VIRTUAL_CLEARANCE_MARGIN
     x_min = board_position[0] - board_size[0]
     x_max = board_position[0] + board_size[0]
-    body_x = torch.tensor([-0.10, x_min, x_max, 0.20, 0.20, 0.20, 0.20, 0.20])
+    x_margin = VIRTUAL_CONTACT_X_MARGIN
+    body_x = torch.tensor([
+        -0.10, x_min, x_max, 0.20, 0.20, 0.20, 0.20, 0.20,
+        x_min - x_margin, x_max + x_margin, x_min - x_margin / 2, x_max + x_margin / 2,
+        x_min - x_margin - 1e-4, x_max + x_margin + 1e-4,
+    ])
     front_z = torch.tensor([0.100, threshold + 0.001, threshold + 0.001, threshold + 0.002,
-                            threshold, threshold, threshold - 0.001, threshold + 0.002])
+                            threshold, threshold, threshold - 0.001, threshold + 0.002]
+                           + [threshold + 0.001] * 6)
     hind_z = torch.tensor([0.100, threshold, threshold, threshold,
-                           threshold + 0.001, threshold, threshold, threshold])
+                           threshold + 0.001, threshold, threshold, threshold] + [threshold] * 6)
 
     # 构造只含奖励输入的最小探针环境
     def build_probe(front, hind, positions, step_counter=STAGE3_STEP):
@@ -266,7 +273,7 @@ def verify_virtual_contact() -> None:
                                common_step_counter=step_counter, extras={"log": {}})
 
     sigma, weight = 2000.0, 5.0
-    inside = (body_x >= x_min) & (body_x <= x_max)
+    inside = (body_x >= x_min - x_margin) & (body_x <= x_max + x_margin)
     e_front = torch.where(inside, (front_z - threshold).clamp_min(0.0), torch.zeros(num_envs))
     e_hind = torch.where(inside, (hind_z - threshold).clamp_min(0.0), torch.zeros(num_envs))
     expected = -weight * (1.0 - torch.exp(-sigma * e_front.square())
@@ -281,6 +288,8 @@ def verify_virtual_contact() -> None:
         check("虚拟碰撞惩罚按实际板底与 X 区间数值正确", torch.allclose(penalty, expected, atol=1e-6, rtol=0))
         check("板外环境不受虚拟碰撞约束", float(penalty[0]) == 0.0)
         check("X 左右边界均计入板体区间", bool((penalty[[1, 2]] < 0).all()))
+        check("虚拟板前后冗余区及其边界均触发惩罚", bool((penalty[8:12] < 0).all()))
+        check("超出虚拟板扩展边界不触发惩罚", bool((penalty[12:14] == 0).all()))
         check("恰好板底减余量时惩罚为零", float(penalty[5]) == 0.0 and float(penalty[6]) == 0.0)
         check("虚拟碰撞惩罚非正且有界", bool((penalty <= 0).all() and (penalty >= -weight).all()))
         stage3 = build_probe(front_z, hind_z, body_x, step_counter=STAGE2_STEP)

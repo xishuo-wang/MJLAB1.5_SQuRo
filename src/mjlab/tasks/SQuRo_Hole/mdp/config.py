@@ -69,3 +69,4 @@ RETREAT_REQUIRED_PASSES = 2                         # 退档后重新推进所�
 OBSTACLE_POSITION = (0.2, 0.0, HEIGHT_INITIAL_MIN)  # 真实课程的初始板底位置
 OBSTACLE_SIZE = (0.015, 0.3, 0.005)                 # 单板半长、半宽、半厚, 总宽60厘米阻断绕侧
 VIRTUAL_CLEARANCE_MARGIN = 0.0025                   # 板底净空余量
+VIRTUAL_CONTACT_X_MARGIN = 0.005                    # 虚拟碰撞判定沿 X 前后各扩展 5 毫米
