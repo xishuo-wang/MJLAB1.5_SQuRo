@@ -12,7 +12,7 @@ import torch
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_spec
 from mjlab.tasks.SQuRo_Slalom.mdp import reference
 from mjlab.tasks.SQuRo_Slalom.mdp.config import CORRIDOR_HALF_WIDTH
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_RADIUS
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_RADIUS
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import BODY_NAMES, resolve_body_envelope_bounds
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import _BOX_SIGNS, project_body_envelopes
 from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_annulus_side_excess
@@ -45,7 +45,7 @@ def oracle(vertices, reference, heading, curvature):
     inside = bool((hull.equations[:, :2] @ center + hull.equations[:, 2] <= 1e-12).all())
     d_min = 0.0 if inside else min(distances)
     d_max = np.linalg.norm(vertices - center, axis=1).max()
-    return max(0.0, max(radius - CORRIDOR_HALF_WIDTH, POLE_RADIUS) - d_min), max(0.0, d_max - radius - CORRIDOR_HALF_WIDTH)
+    return max(0.0, max(radius - CORRIDOR_HALF_WIDTH, OBSTACLE_RADIUS) - d_min), max(0.0, d_max - radius - CORRIDOR_HALF_WIDTH)
 
 
 class TestSlalomAnnulus(unittest.TestCase):
@@ -53,7 +53,7 @@ class TestSlalomAnnulus(unittest.TestCase):
     def test_edge_intrusion(self):
         vertices = rectangle((0, 0)).unsqueeze(0)
         inner, outer = compute_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
-        self.assertGreater(float(torch.linalg.vector_norm(vertices[0] - torch.tensor([0, 0.04]), dim=-1).min()), POLE_RADIUS)
+        self.assertGreater(float(torch.linalg.vector_norm(vertices[0] - torch.tensor([0, 0.04]), dim=-1).min()), OBSTACLE_RADIUS)
         self.assertAlmostEqual(float(inner[0]), 0.005, places=7)
         self.assertAlmostEqual(float(outer[0]), 0.005, places=7)
 
@@ -61,7 +61,7 @@ class TestSlalomAnnulus(unittest.TestCase):
     def test_center_inside(self):
         inner, _ = compute_annulus_side_excess(rectangle((0, 0.04)).unsqueeze(0),
             torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
-        self.assertAlmostEqual(float(inner[0]), POLE_RADIUS, places=7)
+        self.assertAlmostEqual(float(inner[0]), OBSTACLE_RADIUS, places=7)
 
     # 圆弧切向姿态不再承受共同直线带的内侧误罚。
     def test_arc_tangent(self):
@@ -140,7 +140,7 @@ class TestSlalomAnnulus(unittest.TestCase):
         half = (bounds[:, 1] - bounds[:, 0]) / 2
         for size in half:
             width, length = size[0], size[2]
-            center = (0.0, 1 / CURVATURE_TARGET_MAX - (POLE_RADIUS + width))
+            center = (0.0, 1 / CURVATURE_TARGET_MAX - (OBSTACLE_RADIUS + width))
             inner, outer = compute_annulus_side_excess(rectangle(center, length=length, width=width).unsqueeze(0),
                 torch.zeros(1, 2), torch.zeros(1), torch.tensor([CURVATURE_TARGET_MAX]))
             self.assertLess(float(inner[0]), 1e-7)

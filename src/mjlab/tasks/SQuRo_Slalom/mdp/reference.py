@@ -669,7 +669,7 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
 
 
 # 将输入杆距映射到整数峰值曲率对应的真实杆距。
-def get_effective_pole_spacing(spacing: float) -> float:
+def get_effective_obstacle_spacing(spacing: float) -> float:
     return get_slalom_geometry(curvature_from_spacing(spacing))["spacing"]
 
 
@@ -724,7 +724,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     elapsed = (tau - approach_time).clamp_min(0)
     cycles = torch.floor(elapsed / period_time)
     period = _sample_slalom_table(tables["period"], rows, elapsed / period_time - cycles)
-    x_period = period[:, 0] + cmd.pole_spacing * (1 + 2 * cycles)  # type: ignore
+    x_period = period[:, 0] + cmd.obstacle_spacing * (1 + 2 * cycles)  # type: ignore
     x = torch.where(in_approach, approach[:, 0], x_period)
     y = torch.where(in_approach, approach[:, 1], period[:, 1])
     heading = torch.where(in_approach, approach[:, 2], period[:, 2])
@@ -795,7 +795,7 @@ def get_slalom_geometry(curvature: int) -> dict[str, Any]:
     approach["x"] += spacing - approach["x"][-1]
     approach["y"] -= approach["y"][-1]
     return {"curvature": curvature, "spacing": spacing,
-            "pole_y": float((period["y"].min() + period["y"].max()) / 2),
+            "obstacle_y": float((period["y"].min() + period["y"].max()) / 2),
             "period": period, "approach": approach}
 
 
@@ -850,7 +850,7 @@ def get_timed_slalom_tables(base_velocity: float) -> dict[str, np.ndarray]:
         "approach": np.stack([a[0] for a in approaches]),
         "approach_time": np.array([a[1] for a in approaches]),
         "spacing": np.array([g["spacing"] for g in geometries]),
-        "pole_y": np.array([g["pole_y"] for g in geometries]),
+        "obstacle_y": np.array([g["obstacle_y"] for g in geometries]),
         "start": np.array([[g["approach"][name][0] for name in ("x", "y", "heading")] for g in geometries]),
     }
 
@@ -862,15 +862,15 @@ _INIT_DIST = APPROACH_LENGTH
 
 
 # 无直行路径族的最小和最大杆心距
-def get_pole_spacing_bounds() -> tuple[float, float]:
+def get_obstacle_spacing_bounds() -> tuple[float, float]:
     return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"], get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
 
 
 
 # 回放未指定条件时采用峰值十五；训练按回合采样整数峰值
-def get_curriculum_pole_spacing(step_counter: int) -> float:
+def get_curriculum_obstacle_spacing(step_counter: int) -> float:
     del step_counter
-    return get_pole_spacing_bounds()[0]
+    return get_obstacle_spacing_bounds()[0]
 
 
 

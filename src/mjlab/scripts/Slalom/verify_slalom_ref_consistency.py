@@ -17,7 +17,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     PHASE1_END_ITER,
     PHASE1_MID_ITER,
     PHASE2_END_ITER,
-    POLE_SPACING_START,
+    OBSTACLE_SPACING_START,
     VEL_MIN, get_velocity_scale,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.events import reset_model
@@ -29,7 +29,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     compute_slalom_path_ref,
     get_approach_start,
-    get_effective_pole_spacing,
+    get_effective_obstacle_spacing,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
 
@@ -48,12 +48,12 @@ def bind_geometry(cmd, n, spacing=None):
     peak = 15 if spacing is None else curvature_from_spacing(spacing)
     cmd.slalom_curvature_index = torch.full((n,), peak - 5, dtype=torch.long)
     geometry = get_slalom_geometry(peak)
-    cmd.pole_spacing = torch.full((n,), geometry["spacing"])
-    cmd.pole_y = torch.full((n,), geometry["pole_y"])
+    cmd.obstacle_spacing = torch.full((n,), geometry["spacing"])
+    cmd.obstacle_y = torch.full((n,), geometry["obstacle_y"])
 
 
 # 构造只含参考计算所需字段的桩环境
-def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_STEP,
+def make_ref_env(gait_freqs, t_secs, spacing=OBSTACLE_SPACING_START, counter=PHASE1_STEP,
                  gait_scalar=None, base_vel=BASE_VEL):
     n = len(gait_freqs)
     cmd = object.__new__(SlalomCommand)
@@ -68,7 +68,7 @@ def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_
     )
     cmd._env = env
     cfg = SlalomCommandCfg()
-    cfg.fixed_pole_spacing = spacing
+    cfg.fixed_obstacle_spacing = spacing
     cfg.fixed_velocity = base_vel
     cmd.cfg = cfg
     # 生产代码在 __init__ 里从 cfg 拷贝的固定值 + 命令视图, 桩环境需手动补齐
@@ -77,8 +77,8 @@ def make_ref_env(gait_freqs, t_secs, spacing=POLE_SPACING_START, counter=PHASE1_
     cmd.fixed_height_h = None
     cmd.fixed_gait_freq = None
     cmd.fixed_curvature = None
-    cmd.fixed_pole_spacing = spacing
-    bind_geometry(cmd, n, getattr(cmd.cfg, "fixed_pole_spacing", None))
+    cmd.fixed_obstacle_spacing = spacing
+    bind_geometry(cmd, n, getattr(cmd.cfg, "fixed_obstacle_spacing", None))
     cmd.command_tensor = torch.zeros(n, 5)
     cmd.command_tensor[:, 3] = torch.tensor(gait_freqs, dtype=torch.float32)
     cmd.vel_command = cmd.command_tensor[:, 0]
@@ -243,11 +243,11 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertAlmostEqual(cmd.time_left[0].item(), 25.0 - 1000 * STEP_DT, delta=1e-3)
 
     # 固定杆距映射到最近整数曲率，并可反查到同一几何。
-    def test_active_pole_spacing_applies_effective(self):
+    def test_active_obstacle_spacing_applies_effective(self):
         for peak in range(5, 16):
             spacing = get_slalom_geometry(peak)["spacing"]
             self.assertEqual(curvature_from_spacing(spacing), peak)
-            self.assertAlmostEqual(get_effective_pole_spacing(spacing), spacing, places=10)
+            self.assertAlmostEqual(get_effective_obstacle_spacing(spacing), spacing, places=10)
 
     # 总预算必须包含三千轮转圈和五千轮绕杆。
     def test_default_budget_covers_phase0_range(self):
@@ -479,7 +479,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         )
 
         # env0 起步于边界前 (仍 Phase 0), env1 起步于边界后 (Phase 1)
-        env = make_ref_env([1.0, 1.0], [1.0, 1.0], spacing=POLE_SPACING_START)
+        env = make_ref_env([1.0, 1.0], [1.0, 1.0], spacing=OBSTACLE_SPACING_START)
         env.common_step_counter = PHASE1_STEP + 130
         env.episode_length_buf = torch.tensor([200, 50])
         cmd = env.command_manager._terms["slalom_cmd"]

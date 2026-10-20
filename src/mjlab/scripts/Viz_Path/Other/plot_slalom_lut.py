@@ -3,7 +3,7 @@
 展示 mdp/path.py 中 _generate_slalom_lut_one_period 的构造过程:
   - 6 段: CW弧 → CCW弧 → 直行 → CCW弧 → CW弧 → 直行 (一个周期)
   - 弧段圆心/辅助圆/直行段
-  - 杆位置 (y = POLE_Y) 与弧的几何关系
+  - 杆位置 (y = OBSTACLE_Y) 与弧的几何关系
   - 接近段 (机器人 X=-_INIT_DIST → 路径原点)
   - κ(s) 与 heading(s) 沿弧长分布
 
@@ -27,13 +27,13 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     Rmin,
     VEL_MIN,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_NUM, POLE_RADIUS, POLE_Y
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_NUM, OBSTACLE_RADIUS, OBSTACLE_Y
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import _INIT_DIST, _generate_slalom_lut_one_period
 
 
 EPISODE_LEN = 20.0          # episode 时长 (s, 与 env_cfg 一致)
 GAIT_FREQ = 1.0             # Phase 1 使用的步频 (Hz, 文件开头统一定义)
-POLE_SPACING = 0.15         # 杆间距 (m, 文件开头统一定义; 课程范围 0.15~0.20)
+OBSTACLE_SPACING = 0.15         # 杆间距 (m, 文件开头统一定义; 课程范围 0.15~0.20)
 
 
 # 与 path.py 内部 _arc_np 相同的单段弧生成 (用于画辅助圆/圆心)
@@ -113,7 +113,7 @@ def main():
     parser.add_argument("--no-show", action="store_true", help="不弹窗展示, 直接保存")
     args = parser.parse_args()
 
-    spacing = POLE_SPACING
+    spacing = OBSTACLE_SPACING
     n_periods = args.n_periods
     r = Rmin
 
@@ -162,14 +162,14 @@ def main():
                          arrowprops=dict(arrowstyle="-", color=dict(SEG_STYLES)[name], lw=0.8))
 
     # 杆
-    for i in range(POLE_NUM):
-        px, py = i * spacing, POLE_Y
+    for i in range(OBSTACLE_NUM):
+        px, py = i * spacing, OBSTACLE_Y
         if px > 2 * spacing * n_periods + 0.02:
             break
-        ax_path.add_patch(Circle((px, py), radius=POLE_RADIUS, facecolor="gray",
+        ax_path.add_patch(Circle((px, py), radius=OBSTACLE_RADIUS, facecolor="gray",
                                  edgecolor="black", zorder=4))
         if i < 3:
-            ax_path.annotate(f"pole{i}", xy=(px, py - 0.013), ha="center", fontsize=8)
+            ax_path.annotate(f"obstacle{i}", xy=(px, py - 0.013), ha="center", fontsize=8)
 
     # 走廊带 (第一周期)
     th = np.linspace(0.0, np.pi, 200)

@@ -12,7 +12,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
 
 # 创建实际位置通过判据的最小输入，两个环境允许检查局部重置。
 def make_monitor():
-    command = NS(pole_spacing=torch.full((2,), 0.2), pole_y=torch.zeros(2),
+    command = NS(obstacle_spacing=torch.full((2,), 0.2), obstacle_y=torch.zeros(2),
                  phase1_mask=torch.ones(2, dtype=torch.bool))
     env = NS(num_envs=2, device="cpu", scene=NS(env_origins=torch.zeros(2, 3)),
              command_manager=NS(_terms={"slalom_cmd": command}))

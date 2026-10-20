@@ -26,14 +26,14 @@ PHASE2_MID_ITER = 6000              # 绕杆奖励课程的后段边界
 PHASE2_END_ITER = 6000              # 完整训练预算
 PHASE0_EPISODE_SECONDS = 20.0
 SLALOM_EPISODE_SECONDS = 30.0
-PASSAGE_REQUIRED_POLES = 3
+PASSAGE_REQUIRED_OBSTACLES = 3
 
 
 # 绕杆曲率与参考几何
 SLALOM_CURVATURE_MIN = 5
 SLALOM_CURVATURE_MAX = 15
 CURVATURE_TARGET_MAX = 20.0         # 最大曲率同时用于命令采样与最大形变归一化
-POLE_SPACING_START = 0.20           # 编译占位；运行时杆距由本回合曲率决定
+OBSTACLE_SPACING_START = 0.20           # 编译占位；运行时杆距由本回合曲率决定
 APPROACH_LENGTH = 0.03
 TABLE_RESOLUTION = 50               # 预计算表相位分辨率
 PROJECTION_STRIDE = 8
@@ -41,9 +41,9 @@ PHASE0_ENVELOPE_SAMPLE_STEP = 0.006 # 一阶段动态回合的包络边采样间
 
 
 # 杆与身体几何
-POLE_RADIUS = 0.01
-POLE_HALF_HEIGHT = 0.05
-POLE_NUM = 12
+OBSTACLE_RADIUS = 0.01
+OBSTACLE_HALF_HEIGHT = 0.05
+OBSTACLE_NUM = 12
 F_BODY_HALF_LENGTH = 0.04           # F_body_Link 在XoY平面上沿身体前后轴半长(m)
 F_BODY_HALF_WIDTH = 0.035           # F_body_Link 在XoY平面左右方向半宽(m)
 H_BODY_HALF_LENGTH = 0.04           # H_body_Link 在XoY平面上沿身体前后轴半长(m)

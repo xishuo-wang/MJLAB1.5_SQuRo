@@ -44,7 +44,7 @@ from .reference import (
     build_phase0_episode_path,
     invalidate_reference_cache,
 )
-from .entity import write_pole_mocap
+from .entity import write_obstacle_mocap
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -81,8 +81,8 @@ class SlalomCommand(CommandTerm):
         self.fixed_gait_freq = cfg.fixed_gait_freq
         self.fixed_curvature = cfg.fixed_curvature
         self.slalom_curvature_index = torch.full((self.num_envs,), SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN, device=self.device, dtype=torch.long)
-        self.pole_spacing = torch.zeros(self.num_envs, device=self.device)
-        self.pole_y = torch.zeros_like(self.pole_spacing)
+        self.obstacle_spacing = torch.zeros(self.num_envs, device=self.device)
+        self.obstacle_y = torch.zeros_like(self.obstacle_spacing)
         self.metrics = {name: torch.zeros(self.num_envs, device=self.device) for name in ("slalom_fraction", "slalom_peak_curvature", "phase0_dynamic")}
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -109,8 +109,8 @@ class SlalomCommand(CommandTerm):
 
 
     @property
-    def active_pole_spacing(self) -> torch.Tensor:
-        return self.pole_spacing
+    def active_obstacle_spacing(self) -> torch.Tensor:
+        return self.obstacle_spacing
 
 
     @property
@@ -141,7 +141,7 @@ class SlalomCommand(CommandTerm):
 
     # 采样整数峰值；杆距覆盖映射到最近的整数曲率条件
     def _sample_slalom_indices(self, n: int) -> torch.Tensor:
-        fixed, spacing = self.cfg.fixed_slalom_curvature, self.cfg.fixed_pole_spacing
+        fixed, spacing = self.cfg.fixed_slalom_curvature, self.cfg.fixed_obstacle_spacing
         if fixed is not None and spacing is not None:
             raise ValueError("固定绕杆峰值曲率和固定杆距只能指定一个")
         if spacing is not None:
@@ -174,8 +174,8 @@ class SlalomCommand(CommandTerm):
         if phase1:
             self.slalom_curvature_index[env_ids] = self._sample_slalom_indices(n)
         rows = self.slalom_curvature_index[env_ids]
-        self.pole_spacing[env_ids] = tables["spacing"][rows]
-        self.pole_y[env_ids] = tables["pole_y"][rows]
+        self.obstacle_spacing[env_ids] = tables["spacing"][rows]
+        self.obstacle_y[env_ids] = tables["obstacle_y"][rows]
         if phase1:
             self.curvature_command[env_ids] = 0.0
             ax, ay, ah = tables["start"][rows].unbind(dim=-1)
@@ -203,7 +203,7 @@ class SlalomCommand(CommandTerm):
         c, s = torch.cos(ah / 2), torch.sin(ah / 2)
         root[:, 4], root[:, 5] = 0.70710678 * (s - c), -0.70710678 * (c + s)
         self.robot.write_root_state_to_sim(root, env_ids=env_ids)
-        write_pole_mocap(env, env_ids, self.pole_spacing[env_ids], self.pole_y[env_ids], phase1)
+        write_obstacle_mocap(env, env_ids, self.obstacle_spacing[env_ids], self.obstacle_y[env_ids], phase1)
         if not phase1:
             self._build_path(env_ids, ax, ay, ah)
         self._start_recorded[env_ids] = False
@@ -294,7 +294,7 @@ class SlalomCommandCfg(CommandTermCfg):
     fixed_height_h: float | None = None
     fixed_gait_freq: float | None = None
     fixed_curvature: float | None = None
-    fixed_pole_spacing: float | None = None
+    fixed_obstacle_spacing: float | None = None
     fixed_slalom_curvature: int | None = None
 
     @dataclass

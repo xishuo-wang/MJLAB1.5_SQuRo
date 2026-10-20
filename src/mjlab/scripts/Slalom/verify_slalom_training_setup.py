@@ -64,7 +64,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertEqual(set(peaks.tolist()), set(range(5, 16)))
         cmd.cfg.fixed_slalom_curvature = 12
         self.assertEqual(cmd._sample_slalom_indices(3).tolist(), [7, 7, 7])
-        cmd.cfg.fixed_pole_spacing = 0.2
+        cmd.cfg.fixed_obstacle_spacing = 0.2
         with self.assertRaises(ValueError):
             cmd._sample_slalom_indices(1)
 

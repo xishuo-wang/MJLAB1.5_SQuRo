@@ -1,4 +1,4 @@
-﻿import copy
+import copy
 import json
 import os
 import random
@@ -24,7 +24,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.config import (
   SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SLALOM_BIN_COUNT
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_pole_collision, pole_collision_enabled
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_obstacle_collision, obstacle_collision_enabled
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 
 
@@ -41,7 +41,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
   def _course_enabled(self) -> bool:
     cfg = self._command.cfg
     return (cfg.enable_spacing_curriculum and not cfg.phase0_only
-            and cfg.fixed_slalom_curvature is None and cfg.fixed_pole_spacing is None)
+            and cfg.fixed_slalom_curvature is None and cfg.fixed_obstacle_spacing is None)
 
   # 独立场景保留当前机器人和命令参数，只打开杆碰撞并按课程档位采样。
   def _get_evaluation_env(self):
@@ -54,13 +54,13 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
       command_cfg.phase0_only = False
       command_cfg.debug_vis = False
       command_cfg.fixed_slalom_curvature = None
-      command_cfg.fixed_pole_spacing = None
+      command_cfg.fixed_obstacle_spacing = None
       command_cfg.spacing_curriculum_state = None
-      configure_pole_collision(cfg, True)
+      configure_obstacle_collision(cfg, True)
       raw = ManagerBasedRlEnv(cfg, device=str(self.env.device), render_mode=None)
       raw.common_step_counter = self.env.unwrapped.common_step_counter
       self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self.env.clip_actions)
-      if not pole_collision_enabled(raw):
+      if not obstacle_collision_enabled(raw):
         raise RuntimeError("碰撞考核场景未真正开启杆碰撞")
       print(f"[INFO] 独立真实碰撞考核环境已创建: num_envs={SPACING_EVALUATION_ENVS}", flush=True)
     return self._evaluation_env
@@ -123,7 +123,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
           torch.manual_seed(int(self.cfg.get("seed", 42)) + iteration + sweep)
           batch_stats.append(measure(self._run_evaluation_batch()))
         assert self._evaluation_env is not None
-        collision = pole_collision_enabled(self._evaluation_env.unwrapped)
+        collision = obstacle_collision_enabled(self._evaluation_env.unwrapped)
         result = course.record_evaluation(batch_stats, iteration, collision)
     finally:
       np.random.set_state(numpy_state)
@@ -149,7 +149,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
         "Curriculum/eval_samples": result["sample_count"],
         "Curriculum/eval_passed": int(result["passed"]),
         "Curriculum/max_curvature": course.max_curvature,
-        "Curriculum/min_pole_spacing_mm": get_slalom_geometry(course.max_curvature)["spacing"] * 1000.0,
+        "Curriculum/min_obstacle_spacing_mm": get_slalom_geometry(course.max_curvature)["spacing"] * 1000.0,
         "Curriculum/consecutive_passed_batches": course.consecutive_success_batches,
         "Curriculum/final_mode": int(final_mode),
         "Curriculum/final_accepted": int(course.final_accepted),
@@ -181,13 +181,13 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     if results:
       log = extras.setdefault("log", {})
       log["Curriculum/train_pass_rate"] = sum(item["success"] for item in results) / len(results)
-      log["Metrics/passed_poles_mean"] = sum(item["passed_poles"] for item in results) / len(results)
+      log["Metrics/passed_obstacles_mean"] = sum(item["passed_obstacles"] for item in results) / len(results)
 
   # 保持 RSL-RL 的采样和 PPO 更新顺序，仅在更新完成后插入冻结策略考核。
   def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
     if self._course_enabled() and self.is_distributed:
       raise ValueError("当前 Slalom 独立碰撞考核仅支持单卡训练")
-    if self._course_enabled() and pole_collision_enabled(self.env.unwrapped):
+    if self._course_enabled() and obstacle_collision_enabled(self.env.unwrapped):
       raise ValueError("本课程要求训练环境关闭杆碰撞，仅独立考核开启")
     if init_at_random_ep_len and not self._command.slalom_mode_active:
       initial_limit = min(self.env.max_episode_length,
@@ -255,7 +255,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
   # 保存课程档位、批次和实际训练碰撞开关，并沿用策略导出接口。
   def save(self, path: str, infos=None):
     state = {"spacing_course": self._command.spacing_curriculum.state_dict(),
-             "training_collision": pole_collision_enabled(self.env.unwrapped)}
+             "training_collision": obstacle_collision_enabled(self.env.unwrapped)}
     super().save(path, {**(infos or {}), "slalom_state": state})
     policy_dir, filename, onnx_path = self._get_export_paths(path)
     try:

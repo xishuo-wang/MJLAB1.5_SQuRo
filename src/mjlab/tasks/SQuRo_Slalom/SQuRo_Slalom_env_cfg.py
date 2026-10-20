@@ -123,10 +123,10 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
     # 杆体逐回合通过 mocap 更新，首轮关闭实际碰撞
-    pole_entities: dict = {}
-    for i in range(mdp.POLE_NUM):
-        pole_entities[f"pole{i}"] = mdp.PoleEntityCfg(
-                name=f"pole{i}", position=((i + 1) * mdp.POLE_SPACING_START, mdp.POLE_Y, 0.0),  # 杆1 在 x=spacing
+    obstacle_entities: dict = {}
+    for i in range(mdp.OBSTACLE_NUM):
+        obstacle_entities[f"obstacle{i}"] = mdp.ObstacleEntityCfg(
+                name=f"obstacle{i}", position=((i + 1) * mdp.OBSTACLE_SPACING_START, mdp.OBSTACLE_Y, 0.0),  # 杆1 在 x=spacing
                 rgba=(0.9, 0.35, 0.2, 1.0),
             contype=0, conaffinity=0,
         )
@@ -137,7 +137,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             num_envs=1024,
             extent=1.0,
-            entities={"robot": SQURO_ROBOT_CFG, **pole_entities},
+            entities={"robot": SQURO_ROBOT_CFG, **obstacle_entities},
             sensors=(feet_ground_cfg,),
         ),
         observations=observations,

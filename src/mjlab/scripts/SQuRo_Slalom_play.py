@@ -18,7 +18,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     get_training_phase,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import (
-    PoleEntityCfg,
+    ObstacleEntityCfg,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
@@ -47,14 +47,14 @@ class PlayConfig:
     video_width: int | None = 1920
     record_data: bool = True
     # Slalom 任务相关配置
-    command_source: Literal["转圈", "绕杆"] | None = None  # 转圈=一阶段, 绕杆=二阶段; None=按检查点轮数判定
+    command_source: Literal["转圈", "绕杆"] | None = "绕杆"  # 转圈=一阶段, 绕杆=二阶段; None=按检查点轮数判定
     fixed_velocity: float | None = 0.1      # 基础速度; 最终命令还乘步频与曲率缩放
     fixed_height_f: float | None = 0.055    # 期望前肢高度; None = 任务默认
     fixed_height_h: float | None = 0.055    # 期望后肢高度; None = 任务默认
     fixed_gait_freq: float | None = 2.0     # 步频; None = 任务默认 (每回合 U(1,2) 采样)
     fixed_curvature: float | None = -15     # 仅转圈阶段生效; None = 任务默认 (每回合随机采样)
-    fixed_pole_spacing: float | None = None  # 仅绕杆生效，映射到最近整数曲率对应的杆距
-    fixed_slalom_curvature: int | None = None  # 绕杆峰值五至十五；None 为逐回合随机
+    fixed_obstacle_spacing: float | None = None  # 仅绕杆生效，映射到最近整数曲率对应的杆距
+    fixed_slalom_curvature: int | None = 15  # 绕杆峰值五至十五；None 为逐回合随机
     enable_collision: bool = False
     phase0_only: bool | None = None         # command_source 为 None 时的细粒度覆盖
     smoke_steps: int | None = None          # 无窗自检: 只跑 N 步打印统计后退出 (不启动 viewer)
@@ -383,20 +383,20 @@ def run_play(cfg: PlayConfig):
         align_iter = PHASE1_END_ITER
     align_step = align_iter * _STEPS_PER_ITER
 
-    # 命令固定值: 转圈用 fixed_curvature, 绕杆用 fixed_pole_spacing, 两者互斥; 为 None 的字段用任务默认
+    # 命令固定值: 转圈用 fixed_curvature, 绕杆用 fixed_obstacle_spacing, 两者互斥; 为 None 的字段用任务默认
     if cmd_cfg is not None:
         cmd_cfg.fixed_velocity = cfg.fixed_velocity  # type: ignore[assignment]
         cmd_cfg.fixed_height_f = cfg.fixed_height_f  # type: ignore[assignment]
         cmd_cfg.fixed_height_h = cfg.fixed_height_h  # type: ignore[assignment]
         cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore[assignment]
         cmd_cfg.fixed_curvature = None if is_slalom_phase else cfg.fixed_curvature  # type: ignore[assignment]
-        cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing if is_slalom_phase else None  # type: ignore[assignment]
+        cmd_cfg.fixed_obstacle_spacing = cfg.fixed_obstacle_spacing if is_slalom_phase else None  # type: ignore[assignment]
         cmd_cfg.fixed_slalom_curvature = cfg.fixed_slalom_curvature if is_slalom_phase else None  # type: ignore
-        if is_slalom_phase and cfg.fixed_pole_spacing is not None and cfg.fixed_slalom_curvature is not None:
+        if is_slalom_phase and cfg.fixed_obstacle_spacing is not None and cfg.fixed_slalom_curvature is not None:
             raise ValueError("固定绕杆峰值曲率和固定杆距只能指定一个")
 
     stage_name = "绕杆 (Phase 1)" if is_slalom_phase else "转圈 (Phase 0)"
-    stage_value = (f"杆间距={fmt_fixed(cfg.fixed_pole_spacing)}"
+    stage_value = (f"杆间距={fmt_fixed(cfg.fixed_obstacle_spacing)}"
                    if is_slalom_phase else f"曲率={fmt_fixed(cfg.fixed_curvature)}")
     print(f"[INFO] 阶段 = {stage_name} | 判定来源 = {stage_src}")
     print(f"[INFO] 命令固定值: vel={fmt_fixed(cfg.fixed_velocity)} h_f={fmt_fixed(cfg.fixed_height_f)} "
@@ -405,7 +405,7 @@ def run_play(cfg: PlayConfig):
     # 构建命令后缀（用于视频和CSV文件名）
     cmd_suffix_parts = ["raogan" if is_slalom_phase else "zhuanquan"]
     if is_slalom_phase:
-        peak = (curvature_from_spacing(cfg.fixed_pole_spacing) if cfg.fixed_pole_spacing is not None
+        peak = (curvature_from_spacing(cfg.fixed_obstacle_spacing) if cfg.fixed_obstacle_spacing is not None
                 else cfg.fixed_slalom_curvature)
         cmd_suffix_parts.append("kauto" if peak is None else f"k{peak}")
     else:
@@ -417,7 +417,7 @@ def run_play(cfg: PlayConfig):
     # 保留训练中的 mocap 杆实体，回合重置负责按实际曲率布置。
     mask = int(is_slalom_phase and cfg.enable_collision)
     env_cfg.scene.entities = {
-        name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, PoleEntityCfg) else entity
+        name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, ObstacleEntityCfg) else entity
         for name, entity in env_cfg.scene.entities.items()
     }
 
@@ -440,7 +440,7 @@ def run_play(cfg: PlayConfig):
             print("[INFO] 绕杆峰值曲率每回合随机采样整数 5～15，实体杆按同一几何更新")
         else:
             geometry = get_slalom_geometry(peak)
-            print(f"[INFO] 绕杆峰值曲率={peak}，实际杆心距={geometry['spacing']:.6f}m，输入杆距={cfg.fixed_pole_spacing}")
+            print(f"[INFO] 绕杆峰值曲率={peak}，实际杆心距={geometry['spacing']:.6f}m，输入杆距={cfg.fixed_obstacle_spacing}")
 
     # 初始化数据记录器
     data_recorder = None

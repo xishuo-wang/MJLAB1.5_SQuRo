@@ -17,7 +17,7 @@ from .config import (
     CMD_HEIGHT_H_IDS,
     CMD_VEL_X_IDS,
     PHASE0_ENVELOPE_SAMPLE_STEP,
-    POLE_RADIUS,
+    OBSTACLE_RADIUS,
     PROJECTION_STRIDE,
 )
 from .reference import (
@@ -414,7 +414,7 @@ def compute_annulus_side_excess(
     ref_xy: torch.Tensor,
     path_heading: torch.Tensor,
     curvature: torch.Tensor,
-    pole_clearance: float = POLE_RADIUS,
+    obstacle_clearance: float = OBSTACLE_RADIUS,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     normal = torch.stack((-path_heading.sin(), path_heading.cos()), dim=-1)
     relative = vertices_xy - ref_xy[:, None]
@@ -442,7 +442,7 @@ def compute_annulus_side_excess(
     inner_offset = torch.where(inside, -radius, inner_offset)
     min_distance = torch.where(inside, torch.zeros_like(radius), radius + inner_offset).clamp_min(0)
     inner = torch.maximum((-CORRIDOR_HALF_WIDTH - inner_offset).clamp_min(0),
-                          (pole_clearance - min_distance).clamp_min(0))
+                          (obstacle_clearance - min_distance).clamp_min(0))
     outer = (outer_offset - CORRIDOR_HALF_WIDTH).clamp_min(0)
 
     lateral = (relative * normal[:, None]).sum(dim=-1)
@@ -556,7 +556,7 @@ def compute_phase1_corridor_excess(
         env._slalom_spatial_tables = tables  # type: ignore
     cmd = env.command_manager._terms["slalom_cmd"]
     distance, lateral, curvature = project_slalom_points(
-        points.flatten(1, 2), tables, cmd.slalom_curvature_index[env_ids], cmd.pole_spacing[env_ids])  # type: ignore
+        points.flatten(1, 2), tables, cmd.slalom_curvature_index[env_ids], cmd.obstacle_spacing[env_ids])  # type: ignore
     excess = (distance - CORRIDOR_HALF_WIDTH).clamp_min(0)
     inner_side = curvature * lateral > 0
     inner = torch.where(inner_side, excess, 0.0).reshape(points.shape[:-1]).amax(-1)

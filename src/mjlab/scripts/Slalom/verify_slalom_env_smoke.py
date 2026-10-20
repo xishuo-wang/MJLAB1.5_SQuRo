@@ -13,7 +13,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEP
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref, get_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_NUM, pole_mocap_id
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_NUM, obstacle_mocap_id
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
 
@@ -84,7 +84,7 @@ def check_phase1(u, act) -> None:
     cmd_term = u.command_manager._terms["slalom_cmd"]
     if not bool(cmd_term.phase1_mask.all()):
         fail("对齐到 Phase 1 后 phase1_mask 不全为真")
-    print(f"    峰值曲率={cmd_term.slalom_peak_curvature.tolist()}，杆心距={cmd_term.active_pole_spacing.tolist()}")
+    print(f"    峰值曲率={cmd_term.slalom_peak_curvature.tolist()}，杆心距={cmd_term.active_obstacle_spacing.tolist()}")
 
     x_first = None
     for i in range(60):
@@ -202,13 +202,13 @@ def check_mocap_geometry(u, act) -> None:
         x, y, _, _, _ = compute_path_ref(u)
         if abs(float(x[0] - u.scene["robot"].data.root_link_pos_w[0, 0])) > 1e-5:
             fail(f"曲率 {peak} 的重置位置与参考不一致")
-        for i in range(POLE_NUM):
-            pole = u.scene.entities[f"pole{i}"]
-            position = pole.data.data.mocap_pos[:, pole_mocap_id(pole)]
+        for i in range(OBSTACLE_NUM):
+            obstacle = u.scene.entities[f"obstacle{i}"]
+            position = obstacle.data.data.mocap_pos[:, obstacle_mocap_id(obstacle)]
             origins = u.scene.env_origins
             expected = origins.clone()
             expected[:, 0] += (i + 1) * geometry["spacing"]
-            expected[:, 1] += geometry["pole_y"]
+            expected[:, 1] += geometry["obstacle_y"]
             if not torch.allclose(position, expected, atol=1e-6):
                 fail(f"曲率 {peak} 的杆 {i} 未按实际路径更新")
         step_and_check(u, act, f"曲率 {peak}")

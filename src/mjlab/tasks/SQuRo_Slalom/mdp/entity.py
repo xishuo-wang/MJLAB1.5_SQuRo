@@ -4,36 +4,36 @@ import mujoco
 from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 from .reference import get_slalom_geometry
-from .config import POLE_HALF_HEIGHT, POLE_NUM, POLE_RADIUS, SLALOM_CURVATURE_MAX
+from .config import OBSTACLE_HALF_HEIGHT, OBSTACLE_NUM, OBSTACLE_RADIUS, SLALOM_CURVATURE_MAX
 
 
 
 # 平滑后的杆心 Y 坐标
-def _smooth_pole_y() -> float:
-    return get_slalom_geometry(SLALOM_CURVATURE_MAX)["pole_y"]
+def _smooth_obstacle_y() -> float:
+    return get_slalom_geometry(SLALOM_CURVATURE_MAX)["obstacle_y"]
 
 
 
-POLE_Y = _smooth_pole_y()   # 编译占位和默认绘图使用，运行时逐环境更新
+OBSTACLE_Y = _smooth_obstacle_y()   # 编译占位和默认绘图使用，运行时逐环境更新
 
 
 
 # 仅改变独立考核场景的杆碰撞掩码，保留 mocap 与实际尺寸
-def configure_pole_collision(env_cfg, enabled: bool) -> None:
+def configure_obstacle_collision(env_cfg, enabled: bool) -> None:
     mask = int(enabled)
     env_cfg.scene.entities = {
-        name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, PoleEntityCfg) else entity
+        name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, ObstacleEntityCfg) else entity
         for name, entity in env_cfg.scene.entities.items()
     }
 
 
 # 从编译模型核对整排杆的实际碰撞开关
-def pole_collision_enabled(env) -> bool:
+def obstacle_collision_enabled(env) -> bool:
     model = env.sim.mj_model
     states = []
-    for index in range(POLE_NUM):
-        entity = env.scene.entities[f"pole{index}"]
-        local, _ = entity.find_geoms([f"pole{index}_geom"], preserve_order=True)
+    for index in range(OBSTACLE_NUM):
+        entity = env.scene.entities[f"obstacle{index}"]
+        local, _ = entity.find_geoms([f"obstacle{index}_geom"], preserve_order=True)
         geom_id = int(entity.indexing.geom_ids[local[0]])
         states.append(bool(model.geom_contype[geom_id] and model.geom_conaffinity[geom_id]))
     if any(states) and not all(states):
@@ -43,23 +43,23 @@ def pole_collision_enabled(env) -> bool:
 
 
 @dataclass
-class PoleEntityCfg(EntityCfg):
-    name: str = "pole"
+class ObstacleEntityCfg(EntityCfg):
+    name: str = "obstacle"
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    radius: float = POLE_RADIUS
-    half_height: float = POLE_HALF_HEIGHT
+    radius: float = OBSTACLE_RADIUS
+    half_height: float = OBSTACLE_HALF_HEIGHT
     rgba: tuple[float, float, float, float] = (0.9, 0.35, 0.2, 1.0)  # 橙红色
     contype: int = 1
     conaffinity: int = 1
 
-    def build(self) -> "PoleEntity":
-        return PoleEntity(cfg=self)
+    def build(self) -> "ObstacleEntity":
+        return ObstacleEntity(cfg=self)
 
 
 
-class PoleEntity(Entity):
-    cfg: PoleEntityCfg
-    def __init__(self, cfg: PoleEntityCfg):
+class ObstacleEntity(Entity):
+    cfg: ObstacleEntityCfg
+    def __init__(self, cfg: ObstacleEntityCfg):
         super().__init__(cfg)
         self.cfg = cfg
         self._geom_ref = None
@@ -86,8 +86,8 @@ class PoleEntity(Entity):
 
 
 # 按名称解析杆体的 mocap 编号，避免依赖模型中的排列顺序
-def pole_mocap_id(entity) -> int:
-    cached = getattr(entity, "_pole_mocap_id", None)
+def obstacle_mocap_id(entity) -> int:
+    cached = getattr(entity, "_obstacle_mocap_id", None)
     if cached is None:
         local, _ = entity.find_bodies([entity.cfg.name], preserve_order=True)
         if len(local) != 1:
@@ -96,36 +96,36 @@ def pole_mocap_id(entity) -> int:
         cached = int(entity.data.model.body_mocapid[body_id])
         if cached < 0:
             raise ValueError(f"杆体不是 mocap：{entity.cfg.name}")
-        entity._pole_mocap_id = cached
+        entity._obstacle_mocap_id = cached
     return cached
 
 
 
 # 仅更新重置环境的整排杆，一阶段将杆移出活动区域
-def write_pole_mocap(env, env_ids: torch.Tensor, spacing: torch.Tensor, pole_y: torch.Tensor, phase1: bool) -> None:
+def write_obstacle_mocap(env, env_ids: torch.Tensor, spacing: torch.Tensor, obstacle_y: torch.Tensor, phase1: bool) -> None:
     origins = getattr(env.scene, "env_origins", None)
     origin = torch.zeros((len(env_ids), 3), device=env.device) if origins is None else origins[env_ids]
-    for i in range(POLE_NUM):
-        entity = env.scene.entities.get(f"pole{i}")
+    for i in range(OBSTACLE_NUM):
+        entity = env.scene.entities.get(f"obstacle{i}")
         if entity is None:
             continue
-        mocap_id = pole_mocap_id(entity)
+        mocap_id = obstacle_mocap_id(entity)
         position = origin.clone()
         position[:, 0] += (i + 1) * spacing
-        position[:, 1] += pole_y if phase1 else 100.0
+        position[:, 1] += obstacle_y if phase1 else 100.0
         entity.data.data.mocap_pos[env_ids, mocap_id] = position
         entity.data.data.mocap_quat[env_ids, mocap_id] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
 
 
 
-def generate_pole_positions(
+def generate_obstacle_positions(
     spacing: float = 0.35,
-    num_poles: int = POLE_NUM,
+    num_obstacles: int = OBSTACLE_NUM,
     start_x: float = 0.0,
-    start_y: float = POLE_Y,
+    start_y: float = OBSTACLE_Y,
 ) -> list[tuple[float, float, float]]:
     positions: list[tuple[float, float, float]] = []
-    for i in range(num_poles):
+    for i in range(num_obstacles):
         x = start_x + i * spacing
         y = start_y
         positions.append((x, y, 0.0))

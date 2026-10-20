@@ -113,7 +113,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
         origins = torch.tensor([[0.0, 0.0, 0.0], [3.0, -2.0, 0.0]], dtype=torch.float64)
         vertices += origins[:, None, None, :2]
         cmd = NS(slalom_curvature_index=torch.full((2,), len(SLALOM_CURVATURES) - 1),
-                 pole_spacing=torch.full((2,), geometry["spacing"]))
+                 obstacle_spacing=torch.full((2,), geometry["spacing"]))
         env = NS(device="cpu", scene=NS(env_origins=origins), command_manager=NS(_terms={"slalom_cmd": cmd}),
                  _slalom_body_envelope_vertices=rectangle((0.0, 0.0), 0.0, length=0.04, width=0.045)[None].expand(2, -1, -1))
         with patch.object(rewards, "project_body_envelopes", return_value=vertices):
@@ -129,8 +129,8 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             approach = geometry["approach"]
             tangent = np.array((np.cos(approach["heading"][0]), np.sin(approach["heading"][0])))
             point = np.array((approach["x"][0], approach["y"][0])) - 0.08 * tangent
-            query = np.array([point, [4 * geometry["spacing"] - 1e-7, geometry["pole_y"]],
-                              [4 * geometry["spacing"] + 1e-7, geometry["pole_y"]]])
+            query = np.array([point, [4 * geometry["spacing"] - 1e-7, geometry["obstacle_y"]],
+                              [4 * geometry["spacing"] + 1e-7, geometry["obstacle_y"]]])
             distance = rewards.project_slalom_points(torch.tensor(query)[None], torch.tensor(get_spatial_slalom_tables()),
                 torch.tensor([row]), torch.tensor([geometry["spacing"]]))[0][0]
             self.assertLess(float(distance[0]), 1e-7)

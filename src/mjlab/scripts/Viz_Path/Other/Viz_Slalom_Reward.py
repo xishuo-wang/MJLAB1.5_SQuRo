@@ -24,15 +24,15 @@ D_LAT = 0.0                   # 横向偏移 (m)
 ROBO_POS = 0.6               # 机器人在一个周期路径上的位置比例 (0~1)
 
 # 期望轨迹
-POLE_SPACING = 0.2              # 杆间距 (m)
+OBSTACLE_SPACING = 0.2              # 杆间距 (m)
 RMIN = 0.06                     # 最小转弯半径
 SMOOTH_VEL = 0.3                # 平滑过渡速度 (m/s)
 SMOOTH_TIME = 0.1               # 平滑过渡时间 (s)
 CURVATURE_TARGET = 1.0 / RMIN   # 目标曲率 (1/m)
 
 # 杆
-POLE_RADIUS = 0.015             # 杆半径 (m)
-POLE_COLOR = '#2E86C1'          # 杆颜色
+OBSTACLE_RADIUS = 0.015             # 杆半径 (m)
+OBSTACLE_COLOR = '#2E86C1'          # 杆颜色
 
 # 绘图配置
 N_SAMPLE = 60                   # 身体阴影采样密度 (每边)
@@ -60,8 +60,8 @@ JOINT_RADIUS = 0.014
 JOINT_LINEWIDTH = 1.2
 
 # 杆边框
-POLE_EDGE_COLOR = 'black'
-POLE_EDGE_LINEWIDTH = 0.8
+OBSTACLE_EDGE_COLOR = 'black'
+OBSTACLE_EDGE_LINEWIDTH = 0.8
 
 # 惩罚阴影
 PENALTY_CMAP = 'plasma_r'
@@ -181,11 +181,11 @@ def main():
     delta_theta = np.deg2rad(DELTA_THETA)
     spine_angle = np.deg2rad(SPINE_ANGLE)
     d_lat = D_LAT
-    X = POLE_SPACING
+    X = OBSTACLE_SPACING
 
     tr = SMOOTH_VEL * SMOOTH_TIME
     _, x_sw_full = _get_smooth_xsw(tr)
-    pole_y = -x_sw_full
+    obstacle_y = -x_sw_full
 
     s_lut, x_lut, y_lut, hd_lut, k_lut = generate_slalom_lut_smooth_period(X)
     period = s_lut[-1]
@@ -300,14 +300,14 @@ def main():
 
     # --- 杆（平面圆盘） ---
     theta = np.linspace(0, 2 * np.pi, 30)
-    pole_xs = [POLE_SPACING, 2 * POLE_SPACING, 3 * POLE_SPACING]
-    for px in pole_xs:
-        x_circle = px + POLE_RADIUS * np.cos(theta)
-        y_circle = pole_y + POLE_RADIUS * np.sin(theta)
+    obstacle_xs = [OBSTACLE_SPACING, 2 * OBSTACLE_SPACING, 3 * OBSTACLE_SPACING]
+    for px in obstacle_xs:
+        x_circle = px + OBSTACLE_RADIUS * np.cos(theta)
+        y_circle = obstacle_y + OBSTACLE_RADIUS * np.sin(theta)
         verts = [list(zip(x_circle, y_circle, np.full_like(x_circle, z_plane)))]
-        ax.add_collection3d(Poly3DCollection(verts, facecolor=POLE_COLOR,
-                                            edgecolor=POLE_EDGE_COLOR,
-                                            linewidth=POLE_EDGE_LINEWIDTH))
+        ax.add_collection3d(Poly3DCollection(verts, facecolor=OBSTACLE_COLOR,
+                                            edgecolor=OBSTACLE_EDGE_COLOR,
+                                            linewidth=OBSTACLE_EDGE_LINEWIDTH))
 
     # --- 脊柱弧线 ---
     ax.plot(spine_pts[:, 0], spine_pts[:, 1], z_plane, '-', color='#404040', linewidth=2.0)

@@ -5,7 +5,7 @@ from matplotlib.patches import Circle
 
 # 直接从 Slalom 任务导入 RL 实际使用的平滑 LUT 路径生成函数 (保证展示 = 训练使用)
 from mjlab.tasks.SQuRo_Slalom.mdp.config import BODY_REF_OFFSET, CORRIDOR_HALF_WIDTH
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import generate_pole_positions
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import generate_obstacle_positions
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     _generate_slalom_lut_smooth_period,
     curvature_from_spacing,
@@ -16,10 +16,10 @@ from mjlab.scripts._diagnostics import SLALOM_DIAGNOSTICS_ROOT
 
 # 当前整数曲率对应的实际无直行路径。
 PEAK_CURVATURE = 15
-POLE_SPACING = get_slalom_geometry(PEAK_CURVATURE)["spacing"]
-POLE_Y = get_slalom_geometry(PEAK_CURVATURE)["pole_y"]
+OBSTACLE_SPACING = get_slalom_geometry(PEAK_CURVATURE)["spacing"]
+OBSTACLE_Y = get_slalom_geometry(PEAK_CURVATURE)["obstacle_y"]
 NUM_PERIODS = 3                 # 周期数
-NUM_POLES = 8                   # 显示杆数量
+NUM_OBSTACLES = 8                   # 显示杆数量
 
 X_RANGE = (0.0, 1.10)           # 显示 x 范围 (m)
 Y_RANGE = (-0.20, 0.20)         # 显示 y 范围 (m)
@@ -55,12 +55,12 @@ def generate_approach(spacing: float):
 def draw_path_subplot(ax, px, py, ph, title: str, desc: str, color: str,
                       draw_corridor: bool, spacing: float) -> None:
     # 杆 (仅显示)
-    poles = generate_pole_positions(spacing=spacing, num_poles=NUM_POLES,
-                                    start_x=spacing, start_y=POLE_Y)
-    for pole_x, pole_y, _ in poles:
-        ax.add_patch(Circle((pole_x, pole_y), 0.01, facecolor="red", edgecolor="darkred",
+    obstacles = generate_obstacle_positions(spacing=spacing, num_obstacles=NUM_OBSTACLES,
+                                    start_x=spacing, start_y=OBSTACLE_Y)
+    for obstacle_x, obstacle_y, _ in obstacles:
+        ax.add_patch(Circle((obstacle_x, obstacle_y), 0.01, facecolor="red", edgecolor="darkred",
                             alpha=0.6, zorder=4))
-        ax.plot(pole_x, pole_y, "rx", markersize=5, zorder=5)
+        ax.plot(obstacle_x, obstacle_y, "rx", markersize=5, zorder=5)
 
     # 走廊带 (沿路径法向 ± 半宽)
     if draw_corridor:
@@ -83,7 +83,7 @@ def draw_path_subplot(ax, px, py, ph, title: str, desc: str, color: str,
 
     # 直行段参考线
     ax.axhline(0.0, color="gray", linestyle=":", linewidth=1.0, zorder=2)
-    ax.axhline(2 * POLE_Y, color="gray", linestyle=":", linewidth=1.0, zorder=2)
+    ax.axhline(2 * OBSTACLE_Y, color="gray", linestyle=":", linewidth=1.0, zorder=2)
 
     ax.set_title(f"{title}  ( {desc} )", fontsize=10)
     ax.set_xlabel("X (m)")
@@ -96,7 +96,7 @@ def draw_path_subplot(ax, px, py, ph, title: str, desc: str, color: str,
 
 # 绘制三个子图 (前肢中心 / 基座 / 后肢中心), 展示 RL 实际使用的平滑 LUT 路径
 def plot_slalom_path() -> None:
-    spacing = POLE_SPACING
+    spacing = OBSTACLE_SPACING
     base_x, base_y, base_h = generate_base_path(spacing, NUM_PERIODS)
     f_x, f_y = offset_path(base_x, base_y, base_h, +BODY_REF_OFFSET)
     h_x, h_y = offset_path(base_x, base_y, base_h, -BODY_REF_OFFSET)

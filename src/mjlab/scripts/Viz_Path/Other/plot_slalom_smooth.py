@@ -22,14 +22,14 @@ plt.rcParams["axes.unicode_minus"] = False
 
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET, CURVATURE_TARGET_MAX
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import BASE_VEL, VEL_MIN
-from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_Y, POLE_RADIUS
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_Y, OBSTACLE_RADIUS
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import _generate_slalom_lut_one_period
 
 
 # ===== 文件头常量 =====
 GAIT_FREQ = 1.0             # Phase 1 使用的步频 (Hz)
 SMOOTH_TIME = 1.0           # 每段曲率过渡的时间 t (s): -20→0 与 0→+20 各 t
-POLE_SPACING = 0.14     # 杆间距 (m); None = 自动使用无直行最小间距 2×x_sw (同向连续)
+OBSTACLE_SPACING = 0.14     # 杆间距 (m); None = 自动使用无直行最小间距 2×x_sw (同向连续)
 N_PERIODS = 3               # 展示周期数
 RMIN = 1.0 / CURVATURE_TARGET   # 最小转弯半径 (= 0.05m, κ=20)
 
@@ -103,23 +103,23 @@ def main():
     x_sw_half = x_half[-1]
     spacing_min = 2 * x_sw_half
 
-    if POLE_SPACING is None or POLE_SPACING <= spacing_min + 1e-6:
+    if OBSTACLE_SPACING is None or OBSTACLE_SPACING <= spacing_min + 1e-6:
         # 无直行模式 (同向连续) — 用户特殊场景
         no_same = True
         straight = 0.0
         x_sw = x_sw_half
         spacing_used = spacing_min
         mode = f"无直行 (spacing=2×x_sw={spacing_min*1000:.1f}mm, 同向弧段直接连续)"
-        if POLE_SPACING is not None and POLE_SPACING < spacing_min - 1e-6:
-            print(f"[警告] POLE_SPACING={POLE_SPACING*1000:.0f}mm < 最小间距 {spacing_min*1000:.1f}mm")
+        if OBSTACLE_SPACING is not None and OBSTACLE_SPACING < spacing_min - 1e-6:
+            print(f"[警告] OBSTACLE_SPACING={OBSTACLE_SPACING*1000:.0f}mm < 最小间距 {spacing_min*1000:.1f}mm")
     else:
         # 有直行模式 (全过渡)
         x_full, _, _ = measure_xsw(arc_seg(-K))
         x_sw = x_full[-1]
-        straight = max(0.0, POLE_SPACING - 2 * x_sw)
+        straight = max(0.0, OBSTACLE_SPACING - 2 * x_sw)
         no_same = False
-        spacing_used = POLE_SPACING
-        mode = f"有直行 (spacing={POLE_SPACING*1000:.0f}mm > 2×x_sw={2*x_sw*1000:.1f}mm, 直行段={straight*1000:.1f}mm)"
+        spacing_used = OBSTACLE_SPACING
+        mode = f"有直行 (spacing={OBSTACLE_SPACING*1000:.0f}mm > 2×x_sw={2*x_sw*1000:.1f}mm, 直行段={straight*1000:.1f}mm)"
 
     # 阶段2: 完整路径
     s_grid, kappa = build(straight, no_same)
@@ -162,7 +162,7 @@ def main():
     if no_same:
         print(f"  无直行: S2→S4 / S5→S1 同向连续, 无 +20→0→+20 的 V 形过渡 [OK]")
     else:
-        print(f"  实际杆间距 {POLE_SPACING*1000:.0f}mm → 直行段 = {straight*1000:.1f} mm")
+        print(f"  实际杆间距 {OBSTACLE_SPACING*1000:.0f}mm → 直行段 = {straight*1000:.1f} mm")
     print(f"周期 x 位移 = {per_dx*1000:.1f} mm (应 = 2×spacing = {2*spacing_used*1000:.0f} mm)")
     print(f"周期弧长: 原始 {arc_o[-1]:.4f}m, 平滑 {per_len:.4f}m")
     print("=" * 60)
@@ -182,10 +182,10 @@ def main():
                      linewidth=1.2, alpha=0.7)
     # 杆
     for i in range(N_PERIODS * 4):
-        px, py = i * spacing_used, POLE_Y
+        px, py = i * spacing_used, OBSTACLE_Y
         if px > N_PERIODS * 2 * spacing_used:
             break
-        ax_path.add_patch(Circle((px, py), radius=POLE_RADIUS, facecolor="gray",
+        ax_path.add_patch(Circle((px, py), radius=OBSTACLE_RADIUS, facecolor="gray",
                                  edgecolor="black", zorder=5))
     # 第一切换点标注
     ax_path.scatter([0.0], [y0], marker="o", color="green", s=70, zorder=6)
