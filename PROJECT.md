@@ -241,7 +241,7 @@ Phase 1 周期起点 = 第一根杆正上方 `(spacing, 0)`（杆1 在 `(spacing
 
 接近段与主路径的衔接按模式对齐：**有直行模式**接近段 = 平台(-K)+过渡(-K→0)，终点 κ=0 接 LUT 首段直行；
 **无直行模式**接近段 = 过渡(0→-K)+平台(-K)，终点 κ=-K 接 LUT 首段 -K 平台
-（`_approach_rev_table(..., platform_at_end=is_no_straight_spacing(spacing))`），两种模式下 κ 与
+（当前固定使用末端 platform 的无直行结构），两种模式下 κ 与
 期望速度都连续。
 
 **名义时间 τ 推进（步频只作时间缩放）**：期望速度 v=base×gait×scale(κ)，故
@@ -264,7 +264,7 @@ gait=1 时 τ=t，与旧实现逐点等价。
 
 从 LUT 起点 `(spacing, 0)` 反推 `_INIT_DIST` 弧长生成接近段轨迹表（`_approach_rev_table`）：
 正向接近段 = 平台(-K) + 过渡(-K→0)，终点 `(spacing, 0)` κ=0、heading=0，与 LUT 进过渡衔接。
-机器人起点/姿态由 `get_approach_start(spacing)` / `get_phase1_approach(spacing)`（Phase 1）
+机器人起点/姿态由 `get_approach_start(spacing)`（Phase 1）
 或 `get_phase0_approach`（Phase 0，随 κ 动态）确定。
 
 ## 预计算表 (mdp/reference.py)
@@ -357,7 +357,7 @@ MuJoCo 圆柱体，`OBSTACLE_Y = -get_smooth_x_sw()` ≈ **-0.0630**（平滑路
 | 选项 | 生效方式 |
 | --- | --- |
 | `--fixed-curvature` | 仅转圈阶段生效；None = 每回合按课程随机采样 |
-| `--fixed-obstacle-spacing` | 仅绕杆阶段生效；None = 跟随课程（`get_curriculum_obstacle_spacing`） |
+| `--fixed-obstacle-spacing` | 仅绕杆阶段生效；None = 跟随课程 |
 | `--fixed-velocity` | 基础速度（最终速度仍按 `base×gait×scale(κ)` 变） |
 | `--fixed-height-f/h`、`--fixed-gait-freq` | 固定高度/步频；None = 任务默认（步频每回合 U(1,2) 采样） |
 

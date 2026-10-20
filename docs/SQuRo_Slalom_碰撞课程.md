@@ -189,7 +189,7 @@ uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume False --agen
 - 腿部参考夹角：`_LEG_LIMITS` 取 SQuRo.xml 关节 range 与执行器 ctrlrange 的交集，
   IK 输出折回后夹到该范围。旧参考在低曲率下前肘超机械下限约 8.5°；本次步幅放大初版还触发过
   后膝 IK 分支错误（参考最低约 −638°、速度峰值约 624 rad/s），加入上限与夹角后消失。
-- 基础速度进入参考：`_init_tables(device, base_velocity)` 按实际基础速度构建并缓存，
+- 基础速度进入参考：`initialize_tables(device, base_velocity)` 按实际基础速度构建并缓存，
   基础速度 0.05／0.10／0.15 对应不同步幅与参考速度（旧版三者完全相同）。
 - 过零处平均步幅：峰值 13 从 61.4 → 32.6 mm、峰值 15 从 61.4 → 25.6 mm（未触及上限时）。
 - 动作侧按用户要求还原 `clip_actions=None`，并新增动作越界软惩罚
