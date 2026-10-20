@@ -20,7 +20,7 @@ from mjlab.rl.exporter_utils import (
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, SlalomCommandCfg
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-  PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT, SLALOM_CURVATURE_MIN,
+  PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT,
   SPACING_EVALUATION_ENVS, SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_pole_collision, pole_collision_enabled
@@ -144,19 +144,21 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
       print("[绕杆考核] 最终验收通过: 全挡位两批整体通过率均不低于 80%", flush=True)
     if self.logger.writer is not None:
       metrics = {
-        "考核通过率": result["success_rate"], "考核样本数": result["sample_count"],
-        "本次考核达标": int(result["passed"]), "峰值曲率上限": course.max_curvature,
-        "最小杆心距米": get_slalom_geometry(course.max_curvature)["spacing"],
-        "最大杆心距米": get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"],
-        "连续达标批次": course.consecutive_success_batches,
-        "最终模式": int(final_mode), "最终验收": int(course.final_accepted),
-        "各挡位最低通过率": course.metrics()["min_bin_rate"], "考核耗时秒": seconds,
+        "Curriculum/eval_pass_rate": result["success_rate"],
+        "Curriculum/eval_samples": result["sample_count"],
+        "Curriculum/eval_passed": int(result["passed"]),
+        "Curriculum/max_curvature": course.max_curvature,
+        "Curriculum/min_pole_spacing_mm": get_slalom_geometry(course.max_curvature)["spacing"] * 1000.0,
+        "Curriculum/consecutive_passed_batches": course.consecutive_success_batches,
+        "Curriculum/final_mode": int(final_mode),
+        "Curriculum/final_accepted": int(course.final_accepted),
+        "Curriculum/eval_seconds": seconds,
       }
       if result.get("bin_rate"):
         for index, rate in enumerate(result["bin_rate"]):
-          metrics[f"挡位{index}_通过率"] = rate
+          metrics[f"Curriculum/bin{index}_pass_rate"] = rate
       for name, value in metrics.items():
-        self.logger.writer.add_scalar(f"Curriculum/{name}", value, iteration)
+        self.logger.writer.add_scalar(name, value, iteration)
     if self.logger.log_dir is not None:
       directory = Path(self.logger.log_dir) / "collision_evaluations"
       directory.mkdir(parents=True, exist_ok=True)
@@ -177,8 +179,8 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     results = monitor.consume() if monitor is not None else []
     if results:
       log = extras.setdefault("log", {})
-      log["Metrics/无碰撞绕杆通过率"] = sum(item["success"] for item in results) / len(results)
-      log["Metrics/实际通过杆数"] = sum(item["passed_poles"] for item in results) / len(results)
+      log["Curriculum/train_pass_rate"] = sum(item["success"] for item in results) / len(results)
+      log["Metrics/passed_poles_mean"] = sum(item["passed_poles"] for item in results) / len(results)
 
   # 保持 RSL-RL 的采样和 PPO 更新顺序，仅在更新完成后插入冻结策略考核。
   def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:

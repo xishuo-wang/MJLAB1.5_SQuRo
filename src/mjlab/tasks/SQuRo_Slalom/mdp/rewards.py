@@ -116,8 +116,8 @@ def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     r_vel_y = torch.exp(-sigma_yz * error_vy ** 2)
     r_vel_z = torch.exp(-sigma_yz * error_vz ** 2)
     # 记录日志
-    env.extras["log"]["Data/vel_actual"] = forward_speed.mean().item()
-    env.extras["log"]["Data/vel_des"] = v_cmd.mean().item()
+    env.extras["log"]["Data/act_vel_x"] = forward_speed.mean().item()
+    env.extras["log"]["Data/cmd_vel_x"] = v_cmd.mean().item()
     return r_vel_x * weight + (r_vel_y + r_vel_z) * weight_yz
 
 
@@ -143,31 +143,9 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     r_height_H = torch.exp(-sigma * height_H_error ** 2)   
     reward = weight * (0.5 * r_height_F + 0.5 * r_height_H)
     # 记录日志
-    env.extras["log"]["Data/height_actual"] = (0.5 * F_body_height + 0.5 * H_body_height).mean().item()
+    env.extras["log"]["Data/error_height_F"] = height_F_error.mean().item()
+    env.extras["log"]["Data/error_height_H"] = height_H_error.mean().item()
     return reward
-
-
-
-# =========================================================================================
-# 角速度跟踪奖励（ω_cmd = κ_cmd × v_cmd, 用 F_body 角速度避免万向节中心震荡）
-def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    # F_body_Link 世界系角速度 Z 分量 → 前体偏航率
-    actual_omega_z = asset.data.body_link_ang_vel_w[:, _MODEL_INDICES.f_body_id, 2]
-    cmd_term = env.command_manager._terms["slalom_cmd"]
-    curvature_cmd = cmd_term.command[:, 4]
-    vel_cmd = cmd_term.command[:, 0]
-    omega_cmd = curvature_cmd * vel_cmd
-    error = actual_omega_z - omega_cmd
-    # 获取课程学习量
-    sigma = get_curriculum_reward_weight(env, "sigma_track_omg")
-    weight = get_curriculum_reward_weight(env, "weight_track_omg")
-    # 计算奖励
-    reward = torch.exp(-sigma * error ** 2)
-    # 记录日志
-    env.extras["log"]["Data/omg_actual"] = actual_omega_z.mean().item()
-    env.extras["log"]["Data/omg_cmd"] = omega_cmd.mean().item()
-    return reward * weight
 
 
 
@@ -266,7 +244,6 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     inner_f, inner_h = inner.unbind(dim=1)
     outer_f, outer_h = outer.unbind(dim=1)
     v_f, v_h = torch.maximum(inner, outer).unbind(dim=1)
-    e_f, e_h = CORRIDOR_HALF_WIDTH + v_f, CORRIDOR_HALF_WIDTH + v_h
     # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_corridor")
     weight = get_curriculum_reward_weight(env, "weight_corridor")
@@ -277,11 +254,8 @@ def compute_corridor_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     reward = (r_f + r_h) / 2
     # 记录日志
     env.extras["log"]["Data/corridor_excess"] = ((v_f + v_h) / 2).mean().item()
-    env.extras["log"]["Data/corridor_e_f"] = e_f.mean().item()
-    env.extras["log"]["Data/corridor_e_h"] = e_h.mean().item()
-    env.extras["log"]["Data/走廊内侧越界"] = ((inner_f + inner_h) / 2).mean().item()
-    env.extras["log"]["Data/走廊外侧越界"] = ((outer_f + outer_h) / 2).mean().item()
-    env.extras["log"]["Data/走廊误差尺度"] = sigma ** -0.5
+    env.extras["log"]["Data/corridor_inner_excess"] = ((inner_f + inner_h) / 2).mean().item()
+    env.extras["log"]["Data/corridor_outer_excess"] = ((outer_f + outer_h) / 2).mean().item()
     return reward * weight
 
 
@@ -301,7 +275,7 @@ def compute_leg_saturation_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     excess = ((ratio - threshold) / max(1.0 - threshold, 1e-6)).clamp(0.0, 1.0)
     worst = excess[:, _ACT_LEG_IDS].max(dim=1).values
     weight = get_curriculum_reward_weight(env, "weight_leg_saturation")
-    env.extras["log"]["Data/腿部饱和占比"] = worst.mean().item()
+    env.extras["log"]["Data/leg_saturation_ratio"] = worst.mean().item()
     return -weight * worst
 
 
@@ -312,7 +286,7 @@ def compute_action_soft_limit_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     soft = get_curriculum_reward_weight(env, "action_soft_limit")
     excess = (actions.abs() - soft).clamp(min=0.0).mean(dim=-1)
     weight = get_curriculum_reward_weight(env, "weight_action_soft_limit")
-    env.extras["log"]["Data/动作越界均值"] = excess.mean().item()
+    env.extras["log"]["Data/action_soft_limit_mean"] = excess.mean().item()
     return -weight * excess
 
 
@@ -342,9 +316,8 @@ def compute_abnormal_leg_pose_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     actual_excess = _abnormal_leg_pose_excess(actual, ref_pos, tolerance) * mask
     request_excess = _abnormal_leg_pose_excess(requested, ref_pos, tolerance) * mask
     weight = get_curriculum_reward_weight(env, "weight_abnormal_leg_pose")
-    env.extras["log"]["Data/异常腿部实际越界"] = actual_excess.mean().item()
-    env.extras["log"]["Data/异常腿部请求越界"] = request_excess.mean().item()
-    env.extras["log"]["Data/异常腿部姿态占比"] = (actual_excess > 0).float().mean().item()
+    env.extras["log"]["Data/abnormal_leg_pose_actual_excess"] = actual_excess.mean().item()
+    env.extras["log"]["Data/abnormal_leg_pose_ratio"] = (actual_excess > 0).float().mean().item()
     return -weight * (actual_excess.square() + request_excess.square())
 
 

@@ -74,7 +74,7 @@ class SlalomCommand(CommandTerm):
         self.slalom_curvature_index = torch.full((self.num_envs,), SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN, device=self.device, dtype=torch.long)
         self.pole_spacing = torch.zeros(self.num_envs, device=self.device)
         self.pole_y = torch.zeros_like(self.pole_spacing)
-        self.metrics = {name: torch.zeros(self.num_envs, device=self.device) for name in ("slalom_fraction", "slalom_peak_curvature", "pole_spacing", "phase0_dynamic")}
+        self.metrics = {name: torch.zeros(self.num_envs, device=self.device) for name in ("slalom_fraction", "slalom_peak_curvature", "phase0_dynamic")}
         self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
         self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -235,7 +235,6 @@ class SlalomCommand(CommandTerm):
     def _update_metrics(self) -> None:
         self.metrics["slalom_fraction"].copy_(self.phase1_mask)
         self.metrics["slalom_peak_curvature"].copy_(self.slalom_peak_curvature)
-        self.metrics["pole_spacing"].copy_(self.pole_spacing)
         schedule = getattr(self, "phase0_schedule", None)
         if schedule is not None and "phase0_dynamic" in self.metrics:
             # 只标记一阶段环境, 二阶段不更新旧日程
