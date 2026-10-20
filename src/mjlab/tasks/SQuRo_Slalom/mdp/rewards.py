@@ -20,7 +20,7 @@ from .reference import (
     project_body_envelopes,
     get_spatial_slalom_tables,
     get_reference_joint_state,
-    get_f_body_physical_heading,
+    get_body_orientation,
     _PHASE0_ENVELOPE_SAMPLE_STEP,
 )
 from .entity import POLE_RADIUS
@@ -92,11 +92,12 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 获取实际与期望速度
     asset: Entity = env.scene["robot"]
-    f_body_heading = get_f_body_physical_heading(env)
+    yaw, _ = get_body_orientation(env)
+    f_body_yaw = yaw[:, 0]
     vel_w = asset.data.body_link_lin_vel_w[:, _MODEL_INDICES.f_body_id, :]  # [N, 3]
     # 投影到 F_body 局部坐标系：前进=物理前向，侧向=物理左向
-    forward_speed = vel_w[:, 0] * torch.cos(f_body_heading) + vel_w[:, 1] * torch.sin(f_body_heading)
-    lateral_speed = -vel_w[:, 0] * torch.sin(f_body_heading) + vel_w[:, 1] * torch.cos(f_body_heading)
+    forward_speed = vel_w[:, 0] * torch.cos(f_body_yaw) + vel_w[:, 1] * torch.sin(f_body_yaw)
+    lateral_speed = -vel_w[:, 0] * torch.sin(f_body_yaw) + vel_w[:, 1] * torch.cos(f_body_yaw)
     vertical_speed = vel_w[:, 2]
     # 期望前进速度
     cmd_term = env.command_manager._terms["slalom_cmd"]
@@ -171,12 +172,12 @@ def compute_omg_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # =========================================================================================
-# F_body 朝向跟踪奖励 — 实际 heading 对齐期望路径切线方向
+# F_body 朝向跟踪奖励 — 实际 yaw 对齐期望路径切线方向
 def compute_head_track_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     # 计算朝向误差
     _, _, _, _, path_heading = compute_path_ref(env)  # 期望朝向
-    actual_heading = get_f_body_physical_heading(env)  # 实际物理前向
-    error = actual_heading - path_heading
+    yaw, _ = get_body_orientation(env)  # 实际物理偏航（Hole 同口径）
+    error = yaw[:, 0] - path_heading
     error = torch.atan2(torch.sin(error), torch.cos(error))
     # 获取课程学习量
     sigma = get_curriculum_reward_weight(env, "sigma_track_head")

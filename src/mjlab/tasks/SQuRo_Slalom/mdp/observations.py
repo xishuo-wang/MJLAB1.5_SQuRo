@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .reference import get_reference_joint_state
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
-from .reference import compute_path_ref, get_f_body_physical_heading
+from .reference import compute_path_ref, get_body_orientation
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -60,9 +60,10 @@ def actuator_force(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = ACTUATED_
 
 
 
-# F_body_Link 物理前向 heading
+# F_body_Link 物理前向 heading（Hole 同口径 yaw）
 def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    return get_f_body_physical_heading(env).unsqueeze(-1)
+    yaw, _ = get_body_orientation(env)
+    return yaw[:, :1]
 
 
 

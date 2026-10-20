@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
 from mjlab.entity import Entity
 from mjlab.utils.lab_api.math import matrix_from_quat
 
@@ -469,15 +470,27 @@ def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> to
 
 
 
-# F_body_Link 物理前向 heading（body+X ≠ 物理前向，需减 π/2）
+# 躯干物理偏航与滚转，与 Hole 的 _get_body_orientation 使用同一套解剖坐标标定
+def get_body_orientation(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
+    asset: Entity = env.scene["robot"]
+    body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
+    quat = asset.data.body_link_quat_w[:, body_ids]
+    rotation = matrix_from_quat(quat) @ quat.new_tensor((SPINE_FRONT_FRAME, SPINE_HIND_FRAME))
+    yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
+    roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
+    return yaw, roll
+
+
+
+# F_body_Link 物理前向 heading（与 Hole 的 yaw 同源）
 def get_f_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_heading(env, _MODEL_INDICES.f_body_id) - (torch.pi / 2)
+    return get_body_orientation(env)[0][..., 0]
 
 
 
-# H_body_Link 物理前向 heading（body+X → world -Y，需加 π/2 修正）
+# H_body_Link 物理前向 heading
 def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_heading(env, _MODEL_INDICES.h_body_id) + (torch.pi / 2)
+    return get_body_orientation(env)[0][..., 1]
 
 
 
