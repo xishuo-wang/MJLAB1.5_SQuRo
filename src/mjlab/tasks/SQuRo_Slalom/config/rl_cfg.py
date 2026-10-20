@@ -3,7 +3,7 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
   RslRlOnPolicyRunnerCfg,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import _STEPS_PER_ITER, PHASE2_END_ITER
+from mjlab.tasks.SQuRo_Slalom.mdp.config import STEPS_PER_ITER, PHASE2_END_ITER
 
 
 def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
@@ -39,7 +39,7 @@ def SQuRo_Slalom_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     ),
     experiment_name="SQuRo_Slalom",
     save_interval=100,
-    num_steps_per_env=_STEPS_PER_ITER,
+    num_steps_per_env=STEPS_PER_ITER,
     max_iterations=PHASE2_END_ITER,
     clip_actions=None,
     seed=42,

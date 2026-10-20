@@ -6,23 +6,33 @@ from typing import TYPE_CHECKING
 from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
-from .curriculums import (
-    BASE_VEL, 
-    GAIT_FREQ_MIN, 
+from .config import (
+    BASE_VEL,
+    CMD_CURVATURE_IDS,
+    CMD_GAIT_FREQ_IDS,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_VEL_X_IDS,
+    COMMAND_DIM,
+    FIXED_HEIGHT_F,
+    FIXED_HEIGHT_H,
     GAIT_FREQ_MAX,
-    phase0_kappa_at, 
-    _STEPS_PER_ITER, 
-    SLALOM_BIN_COUNT,
-    get_velocity_scale, 
-    get_training_phase, 
-    SLALOM_CURVATURE_MIN, 
-    SLALOM_CURVATURE_MAX, 
-    sample_phase0_schedule,
-    SlalomSpacingCurriculum, 
-    get_training_phase_batch,
-    sample_curvature_indices, 
-    get_phase0_curvature_range, 
+    GAIT_FREQ_MIN,
+    SLALOM_CURVATURE_MAX,
+    SLALOM_CURVATURE_MIN,
     SPACING_HARDEST_PROBABILITY,
+)
+from .curriculums import (
+    _STEPS_PER_ITER,
+    SLALOM_BIN_COUNT,
+    SlalomSpacingCurriculum,
+    get_phase0_curvature_range,
+    get_training_phase,
+    get_training_phase_batch,
+    get_velocity_scale,
+    phase0_kappa_at,
+    sample_curvature_indices,
+    sample_phase0_schedule,
 )
 from .reference import (
     _INIT_DIST,
@@ -35,7 +45,6 @@ from .reference import (
     invalidate_reference_cache,
 )
 from .entity import write_pole_mocap
-from .config import FIXED_HEIGHT_F, FIXED_HEIGHT_H
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
@@ -60,12 +69,12 @@ class SlalomCommand(CommandTerm):
         self.phase0_schedule = sample_phase0_schedule(0, self.num_envs, self.device)
         self.curvature_peak = torch.zeros(self.num_envs, device=self.device)
         self.robot = env.scene[cfg.asset_name]
-        self.command_tensor = torch.zeros(self.num_envs, 5, device=self.device)
-        self.vel_command = self.command_tensor[:, 0]
-        self.height_f_command = self.command_tensor[:, 1]
-        self.height_h_command = self.command_tensor[:, 2]
-        self.gait_freq_command = self.command_tensor[:, 3]
-        self.curvature_command = self.command_tensor[:, 4]
+        self.command_tensor = torch.zeros(self.num_envs, COMMAND_DIM, device=self.device)
+        self.vel_command = self.command_tensor[:, CMD_VEL_X_IDS]
+        self.height_f_command = self.command_tensor[:, CMD_HEIGHT_F_IDS]
+        self.height_h_command = self.command_tensor[:, CMD_HEIGHT_H_IDS]
+        self.gait_freq_command = self.command_tensor[:, CMD_GAIT_FREQ_IDS]
+        self.curvature_command = self.command_tensor[:, CMD_CURVATURE_IDS]
         self.fixed_velocity = cfg.fixed_velocity
         self.fixed_height_f = cfg.fixed_height_f
         self.fixed_height_h = cfg.fixed_height_h
@@ -222,7 +231,7 @@ class SlalomCommand(CommandTerm):
         phase1 = self.phase1_mask
         schedule = getattr(self, "phase0_schedule", None)
         if schedule is None:
-            schedule = {"segments": self.command_tensor[:, 4:5], "bounds": torch.full_like(self.command_tensor[:, :1], 1e9)}
+            schedule = {"segments": self.command_tensor[:, CMD_CURVATURE_IDS:CMD_CURVATURE_IDS + 1], "bounds": torch.full_like(self.command_tensor[:, CMD_VEL_X_IDS:CMD_VEL_X_IDS + 1], 1e9)}
         phase0_kappa = phase0_kappa_at(self._env.episode_length_buf.float() * self._env.step_dt, schedule)
         self.curvature_command.copy_(torch.where(phase1, kappa, phase0_kappa))
         peak = getattr(self, "curvature_peak", None)

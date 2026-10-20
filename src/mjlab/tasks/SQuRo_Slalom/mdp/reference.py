@@ -9,21 +9,34 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 from mjlab.utils.lab_api.math import matrix_from_quat
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
-from .curriculums import (
-    Rmin,
+from .config import (
+    APPROACH_LENGTH,
     BASE_VEL,
-    SMOOTH_VEL,
-    SMOOTH_TIME,
-    phase0_kappa_at,
-    CURVATURE_TARGET,
-    SLALOM_CURVATURES,
-    get_velocity_scale,
+    CMD_CURVATURE_IDS,
+    CMD_GAIT_FREQ_IDS,
+    CMD_VEL_X_IDS,
+    CURVATURE_TARGET_MAX,
+    F_SPINE1_LIMIT,
+    H_SPINE1_LIMIT,
+    MAX_STRIDE_SCALE,
+    NECK_YAW_LIMIT,
+    PHASE0_EPISODE_SECONDS,
+    PHASE_LAG,
+    REFERENCE_CURVATURE_BLEND,
     SLALOM_CURVATURE_MAX,
     SLALOM_CURVATURE_MIN,
-    CURVATURE_TARGET_MAX,
-    PHASE0_EPISODE_SECONDS,
-    REFERENCE_CURVATURE_BLEND,
+    SMOOTH_TIME,
+    SMOOTH_VEL,
     SPINE_REFERENCE_TIME_CONSTANT,
+    STRIDE_MIN,
+    TABLE_RESOLUTION,
+)
+from .curriculums import (
+    CURVATURE_TARGET,
+    Rmin,
+    SLALOM_CURVATURES,
+    get_velocity_scale,
+    phase0_kappa_at,
 )
 from .indices import (
     _ACT_SPN_IDS,
@@ -53,15 +66,10 @@ if TYPE_CHECKING:
 
 
 
-# 步态配置
+# 生物步态数据目录
 _BIO_DATA_DIR = Path(__file__).parent / "Bio_Data"
-PHASE_LAG = {"FL": 0.0, "FR": 0.5, "HL": 0.5, "HR": 0.0}    # 步态相位差
-STRIDE_MIN = 0.0                                            # 最小步幅
 
-# 参考限位 (rad): 取 SQuRo.xml 中关节 range 与执行器 ctrlrange 的较小者
-F_SPINE1_LIMIT = 0.6
-H_SPINE1_LIMIT = 0.6
-NECK_YAW_LIMIT = 0.8
+
 # 腿部参考限位 (rad): 关节 range 与执行器 ctrlrange 的交集
 _LEG_LIMITS: dict[int, tuple[float, float]] = {
     _ACT_FL_SHOULDER_ID: (-1.5, 1.9),
@@ -73,8 +81,6 @@ _LEG_LIMITS: dict[int, tuple[float, float]] = {
     _ACT_HR_HIP_ID: (-1.5, 0.8),
     _ACT_HR_KNEE_ID: (-0.5, 1.9),
 }
-# 步幅放大上限: 参考不超过生物数据原幅值, 更快的命令由策略吸收
-MAX_STRIDE_SCALE = 1.0
 
 
 
@@ -90,8 +96,6 @@ _NUM_CURV = len(_CURVATURE_BINS)
 
 
 
-# 预计算表分辨率
-_TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
 _table_device: str | None = None
 _table_base_vel: float = BASE_VEL
@@ -167,7 +171,7 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
     z_h: np.ndarray = df_h["Z_mean"].values.astype(np.float64)
 
     # 生成等距相位网格
-    phases = np.linspace(0, 1, _TABLE_RESOLUTION)
+    phases = np.linspace(0, 1, TABLE_RESOLUTION)
 
     # 在相位网格上插值足端轨迹
     y_f_grid = np.interp(phases, phase_csv, y_f)
@@ -187,7 +191,7 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
 
     # 五维表 [峰值档, 内侧, 瞬时档, 相位, 关节]: 峰值决定本回合速度, 瞬时决定左右差速
     # 每侧只缩放"内侧腿"的 Y_mean, 腿部相位不随曲率符号改变
-    pos = torch.zeros(_NUM_CURV, 2, _NUM_CURV, _TABLE_RESOLUTION, len(_ACT_JOINT_NAMES), device=dev)
+    pos = torch.zeros(_NUM_CURV, 2, _NUM_CURV, TABLE_RESOLUTION, len(_ACT_JOINT_NAMES), device=dev)
 
     # 对每个峰值档与瞬时曲率生成参考：平均步幅 = 本回合每周前进距离
     for p, peak_k in enumerate(_CURVATURE_BINS):
@@ -205,22 +209,22 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
                 scale_hR = 1.0 if side == 0 else scale_inner
 
                 # 分别计算每条腿的关节角（应用相位差并夹到关节限位）
-                shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
+                shift = int(PHASE_LAG["FL"] * TABLE_RESOLUTION)
                 sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FL_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FL_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FL_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FL_ELBOW_ID)
 
-                shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
+                shift = int(PHASE_LAG["FR"] * TABLE_RESOLUTION)
                 sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FR_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FR_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FR_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FR_ELBOW_ID)
 
-                shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
+                shift = int(PHASE_LAG["HL"] * TABLE_RESOLUTION)
                 hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HL_HIP_ID] = _clamp_leg_angle(hp, _ACT_HL_HIP_ID)
                 pos[p, side, i, :, _ACT_HL_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HL_KNEE_ID)
 
-                shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
+                shift = int(PHASE_LAG["HR"] * TABLE_RESOLUTION)
                 hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HR_HIP_ID] = _clamp_leg_angle(hp, _ACT_HR_HIP_ID)
                 pos[p, side, i, :, _ACT_HR_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HR_KNEE_ID)
@@ -233,7 +237,7 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
 
     # 中心差分计算速度表（沿相位维度）
     vel = torch.zeros_like(pos)
-    two_dt = 2.0 / _TABLE_RESOLUTION
+    two_dt = 2.0 / TABLE_RESOLUTION
     vel[:, :, :, 1:-1] = (pos[:, :, :, 2:] - pos[:, :, :, :-2]) / two_dt
     vel[:, :, :, 0] = (pos[:, :, :, 1] - pos[:, :, :, -1]) / two_dt
     vel[:, :, :, -1] = (pos[:, :, :, 0] - pos[:, :, :, -2]) / two_dt
@@ -246,7 +250,7 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
     _tables_initialized = True
 
     print(f"\n[SQuRo Trot] 参考轨迹表生成完成: {_NUM_CURV} 峰值 × 2 内侧 × {_NUM_CURV} 瞬时 × "
-          f"{_TABLE_RESOLUTION} bins × {len(_ACT_JOINT_NAMES)} joints, 基础速度 {base_velocity:.3f} m/s")
+          f"{TABLE_RESOLUTION} bins × {len(_ACT_JOINT_NAMES)} joints, 基础速度 {base_velocity:.3f} m/s")
 
 
 
@@ -310,7 +314,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     # 当前相位 → 查表索引
     phase: torch.Tensor = env._ref_phase  # type: ignore[attr-defined]  # [N]
-    phase_indices = (phase * (_TABLE_RESOLUTION - 1)).long().clamp_(0, _TABLE_RESOLUTION - 1)
+    phase_indices = (phase * (TABLE_RESOLUTION - 1)).long().clamp_(0, TABLE_RESOLUTION - 1)
 
     # 瞬时曲率与参考位置同源: 由本步的路径参考算出 (重置后 t=0, 故重置回合拿到接近段起点曲率)
     compute_path_ref(env)
@@ -518,7 +522,7 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
     sx, sy, svx, svy, sh = compute_slalom_path_ref(env)
     kappa_slalom = env._path_kappa  # type: ignore[attr-defined]
     ax, ay, avx, avy, ah = compute_arc_path_ref(env)
-    env._path_kappa = torch.where(phase1, kappa_slalom, getattr(env, "_phase0_path_kappa", cmd_term.command[:, 4])) # type: ignore
+    env._path_kappa = torch.where(phase1, kappa_slalom, getattr(env, "_phase0_path_kappa", cmd_term.command[:, CMD_CURVATURE_IDS])) # type: ignore
     return (
         torch.where(phase1, sx, ax),
         torch.where(phase1, sy, ay),
@@ -577,11 +581,11 @@ def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
     if schedule is None:
         schedule = getattr(cmd_term, "phase0_schedule", None)
     if schedule is None:
-        schedule = {"segments": cmd_term.command[:, 4:5],
-                    "bounds": torch.full_like(cmd_term.command[:, :1], 1e9),
-                    "peak": cmd_term.command[:, 4].abs()}
+        schedule = {"segments": cmd_term.command[:, CMD_CURVATURE_IDS:CMD_CURVATURE_IDS + 1],
+                    "bounds": torch.full_like(cmd_term.command[:, CMD_VEL_X_IDS:CMD_VEL_X_IDS + 1], 1e9),
+                    "peak": cmd_term.command[:, CMD_CURVATURE_IDS].abs()}
     env._phase0_path_kappa = phase0_kappa_at(idx.float() * env.step_dt, schedule)  # type: ignore[attr-defined]
-    vel_cmd = cmd_term.command[:, 0]
+    vel_cmd = cmd_term.command[:, CMD_VEL_X_IDS]
     vx_des = vel_cmd * torch.cos(path_heading)
     vy_des = vel_cmd * torch.sin(path_heading)
     origins = getattr(getattr(env, "scene", None), "env_origins", None)
@@ -712,7 +716,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     base_velocity = float(getattr(env, "_slalom_base_vel_scalar", BASE_VEL))
     tables = get_slalom_tables(env, base_velocity)
     rows = cmd.slalom_curvature_index  # type: ignore
-    tau = env.episode_length_buf.float() * env.step_dt * cmd.command[:, 3]
+    tau = env.episode_length_buf.float() * env.step_dt * cmd.command[:, CMD_GAIT_FREQ_IDS]
     approach_time = tables["approach_time"][rows]
     period_time = tables["period_time"][rows]
     in_approach = tau < approach_time
@@ -728,7 +732,7 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     origins = getattr(getattr(env, "scene", None), "env_origins", None)
     if origins is not None:
         x, y = x + origins[:, 0], y + origins[:, 1]
-    velocity = base_velocity * cmd.command[:, 3] * get_velocity_scale(cmd.slalom_peak_curvature)  # type: ignore
+    velocity = base_velocity * cmd.command[:, CMD_GAIT_FREQ_IDS] * get_velocity_scale(cmd.slalom_peak_curvature)  # type: ignore
     env._path_kappa = kappa  # type: ignore
     return x, y, velocity * heading.cos(), velocity * heading.sin(), heading
 
@@ -737,15 +741,13 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
 # 获取当前路径瞬时曲率 κ(t) — 由 compute_path_ref 逐环境写入 (Phase 0 为命令值, Phase 1 为 LUT 插值)
 def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    return getattr(env, "_path_kappa", cmd_term.command[:, 4])
+    return getattr(env, "_path_kappa", cmd_term.command[:, CMD_CURVATURE_IDS])
 
 
 
 # 无直行路径几何 LUT
 _SEGMENT_SAMPLES = 256
 _APPROACH_SAMPLES = 256
-APPROACH_LENGTH = 0.03
-PROJECTION_STRIDE = 8
 _PROJECTION_PERIOD_SAMPLES = 512
 _PROJECTION_APPROACH_SAMPLES = 32
 
@@ -876,7 +878,6 @@ def get_curriculum_pole_spacing(step_counter: int) -> float:
 _BOX_SIGNS = tuple(product((-1.0, 1.0), repeat=3))
 _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8) if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
 _ENVELOPE_SAMPLE_STEP = 0.002
-_PHASE0_ENVELOPE_SAMPLE_STEP = 0.006   # 一阶段动态回合的包络边采样间距 (m)
 
 
 

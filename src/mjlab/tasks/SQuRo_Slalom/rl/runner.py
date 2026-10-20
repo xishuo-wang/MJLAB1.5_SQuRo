@@ -19,10 +19,11 @@ from mjlab.rl.exporter_utils import (
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, SlalomCommandCfg
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-  PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT,
-  SPACING_EVALUATION_ENVS, SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
+from mjlab.tasks.SQuRo_Slalom.mdp.config import (
+  PHASE0_EPISODE_SECONDS, SPACING_EVALUATION_ENVS,
+  SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
 )
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SLALOM_BIN_COUNT
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_pole_collision, pole_collision_enabled
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 

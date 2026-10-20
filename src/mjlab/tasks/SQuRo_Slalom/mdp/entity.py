@@ -4,13 +4,7 @@ import mujoco
 from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 from .reference import get_slalom_geometry
-from .curriculums import SLALOM_CURVATURE_MAX
-
-
-# 杆几何常量
-POLE_RADIUS = 0.01          # 半径 1cm
-POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
-POLE_NUM = 12               # 杆阵列数量，实际间距按回合几何更新
+from .config import POLE_HALF_HEIGHT, POLE_NUM, POLE_RADIUS, SLALOM_CURVATURE_MAX
 
 
 

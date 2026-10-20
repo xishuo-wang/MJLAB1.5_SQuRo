@@ -11,20 +11,25 @@ from .indices import (
     _ACT_JOINT_NAMES,
     _ACT_SHOULDER_IDS,
 )
+from .config import (
+    CORRIDOR_HALF_WIDTH,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_VEL_X_IDS,
+    PHASE0_ENVELOPE_SAMPLE_STEP,
+    POLE_RADIUS,
+    PROJECTION_STRIDE,
+)
 from .reference import (
     _BOX_EDGES,
     compute_path_ref,
-    PROJECTION_STRIDE,
-    get_path_curvature,
-    sample_body_envelopes,
-    project_body_envelopes,
-    get_spatial_slalom_tables,
-    get_reference_joint_state,
     get_body_orientation,
-    _PHASE0_ENVELOPE_SAMPLE_STEP,
+    get_path_curvature,
+    get_reference_joint_state,
+    get_spatial_slalom_tables,
+    project_body_envelopes,
+    sample_body_envelopes,
 )
-from .entity import POLE_RADIUS
-from .config import CORRIDOR_HALF_WIDTH
 from .curriculums import get_curriculum_reward_weight
 
 if TYPE_CHECKING:
@@ -101,7 +106,7 @@ def compute_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     vertical_speed = vel_w[:, 2]
     # 期望前进速度
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    v_cmd = cmd_term.command[:, 0]
+    v_cmd = cmd_term.command[:, CMD_VEL_X_IDS]
     # 计算速度跟踪误差
     error_vx = forward_speed - v_cmd
     error_vy = lateral_speed
@@ -130,8 +135,8 @@ def compute_height_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     F_body_height = body_pos_w[:, _MODEL_INDICES.f_body_id, 2]
     H_body_height = body_pos_w[:, _MODEL_INDICES.h_body_id, 2]          
     cmd_term = env.command_manager._terms["slalom_cmd"]
-    desired_height_F = cmd_term.command[:, 1]    
-    desired_height_H = cmd_term.command[:, 2]
+    desired_height_F = cmd_term.command[:, CMD_HEIGHT_F_IDS]    
+    desired_height_H = cmd_term.command[:, CMD_HEIGHT_H_IDS]
     # 计算高度跟踪误差    
     height_F_error = torch.abs(desired_height_F - F_body_height)
     height_H_error = torch.abs(desired_height_H - H_body_height)
@@ -611,7 +616,7 @@ def compute_phase0_dynamic_corridor_excess(
     env: ManagerBasedRlEnv, env_ids: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     vertices = project_body_envelopes(env)[env_ids]
-    points = sample_body_envelopes(env, vertices, _PHASE0_ENVELOPE_SAMPLE_STEP)
+    points = sample_body_envelopes(env, vertices, PHASE0_ENVELOPE_SAMPLE_STEP)
     origins = getattr(env.scene, "env_origins", None)
     if origins is not None:
         points = points - origins[env_ids, None, None, :2]

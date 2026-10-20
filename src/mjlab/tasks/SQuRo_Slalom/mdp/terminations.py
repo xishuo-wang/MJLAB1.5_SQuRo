@@ -1,10 +1,9 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
-from .entity import POLE_RADIUS
+from .config import CMD_GAIT_FREQ_IDS, PASSAGE_REQUIRED_POLES, PHASE0_EPISODE_SECONDS, POLE_RADIUS
 from .indices import _MODEL_INDICES
 from .reference import project_body_envelopes
-from .curriculums import PASSAGE_REQUIRED_POLES, PHASE0_EPISODE_SECONDS
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
@@ -102,7 +101,7 @@ class SlalomPassageMonitor:
             self.completed.append({
                 "success": failure == "", "failure": failure, "passed_poles": passed,
                 "curvature": int(command.slalom_peak_curvature[env_id]),
-                "gait": float(command.command[env_id, 3]),
+                "gait": float(command.command[env_id, CMD_GAIT_FREQ_IDS]),
                 "env_id": env_id,
             })
 

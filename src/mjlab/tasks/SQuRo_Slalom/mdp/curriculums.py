@@ -2,62 +2,57 @@ from __future__ import annotations
 import torch
 from typing import Any
 
+from .config import (
+    BASE_VEL,
+    CURVATURE_TARGET_MAX,
+    FINAL_ACCEPT_RATE,
+    FINAL_BIN_WEIGHT_GAIN,
+    GAIT_FREQ_MAX,
+    GAIT_FREQ_MIN,
+    NORMAL_BIN_TARGET_RATE,
+    PASSAGE_REQUIRED_POLES,
+    PHASE0_DYNAMIC_PROBABILITY,
+    PHASE0_DYNAMIC_START_ITER,
+    PHASE0_EPISODE_SECONDS,
+    PHASE0_MAX_SEGMENTS,
+    PHASE0_MIN_SEGMENTS,
+    PHASE0_SEGMENT_JITTER,
+    PHASE0_TRANSITION_SECONDS,
+    PHASE1_END_ITER,
+    PHASE1_MID_ITER,
+    PHASE2_END_ITER,
+    PHASE2_MID_ITER,
+    POLE_SPACING_START,
+    REFERENCE_CURVATURE_BLEND,
+    SLALOM_CURVATURE_MAX,
+    SLALOM_CURVATURE_MIN,
+    SLALOM_EPISODE_SECONDS,
+    SMOOTH_TIME,
+    SMOOTH_VEL,
+    SPACING_EVALUATION_ENVS,
+    SPACING_EVALUATION_EPISODE_SECONDS,
+    SPACING_EVALUATION_INTERVAL,
+    SPACING_EVALUATION_MIN_SAMPLES,
+    SPACING_HARDEST_PROBABILITY,
+    SPACING_INITIAL_CURVATURE_MAX,
+    SPACING_MIN_DWELL_ITERATIONS,
+    SPACING_PRETRAIN_ITERATIONS,
+    SPACING_REQUIRED_BATCHES,
+    SPACING_SUCCESS_RATE,
+    SPINE_REFERENCE_TIME_CONSTANT,
+    STEPS_PER_ITER,
+    VELOCITY_CURVATURE_POWER,
+    VEL_MIN,
+)
 
-_STEPS_PER_ITER = 48                # 与 Hole 的每轮策略步数一致
 
-PHASE1_MID_ITER = 2000              # iter 0-2000: 转弯曲率增大
-PHASE1_END_ITER = 3000              # 转圈结束后，新回合进入绕杆
-PHASE2_MID_ITER = 6000              # 绕杆奖励课程的后段边界
-PHASE2_END_ITER = 6000              # 完整训练预算
+_STEPS_PER_ITER = STEPS_PER_ITER      # 兼容旧导入名
 
-CURVATURE_TARGET_MAX = 20.0         # 最大曲率同时用于命令采样与最大形变归一化
-SLALOM_CURVATURE_MIN = 5
-SLALOM_CURVATURE_MAX = 15
+# 由 config 派生的整数档位与曲率目标
 SLALOM_CURVATURES = tuple(range(SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX + 1))
 SLALOM_BIN_COUNT = len(SLALOM_CURVATURES)   # 整数峰值档位数，最终档按档位等概率采样
 CURVATURE_TARGET = float(SLALOM_CURVATURE_MAX)  # 默认绕杆峰值，形变仍按二十归一化
 Rmin = 1.0 / CURVATURE_TARGET       # 最小转弯半径
-
-SMOOTH_TIME = 1.0                   # 仅用于定义固定平滑弧长，不代表实际过渡耗时
-SMOOTH_VEL = 0.025                  # 固定平滑弧长 = SMOOTH_VEL × SMOOTH_TIME
-
-POLE_SPACING_START = 0.20           # 编译占位；运行时杆距由本回合曲率决定
-
-GAIT_FREQ_MIN = 1.0                 # Phase 0 步频采样下限
-GAIT_FREQ_MAX = 2.0                 # Phase 0 步频采样上限
-
-# 两阶段共用速度曲线。
-BASE_VEL = 0.1                      # 基础速度 (m/s, 1Hz 时)
-VELOCITY_CURVATURE_POWER = 1.5
-VEL_MIN = 0.15                      # 最大曲率下速度缩放比例 (转弯低速)
-REFERENCE_CURVATURE_BLEND = 2.0     # 二阶段后脊柱在零曲率附近的平滑范围
-SPINE_REFERENCE_TIME_CONSTANT = 0.03  # 二阶段四脊柱位置参考的响应时间（秒）
-PHASE0_EPISODE_SECONDS = 20.0
-# 一阶段动态曲率: 前若干轮只学恒定曲率, 之后按概率混入动态切换回合
-PHASE0_DYNAMIC_START_ITER = 1000
-PHASE0_DYNAMIC_PROBABILITY = 0.5
-PHASE0_MIN_SEGMENTS = 4
-PHASE0_MAX_SEGMENTS = 6
-PHASE0_SEGMENT_JITTER = 0.5          # 段时长抖动 (秒), 使切换时机与步态相位独立
-PHASE0_TRANSITION_SECONDS = 0.5      # 曲率切换过渡时长 (秒)
-SLALOM_EPISODE_SECONDS = 30.0
-PASSAGE_REQUIRED_POLES = 3
-
-# 杆距课程与考核，语义对齐 Hole 的高度课程。
-SPACING_INITIAL_CURVATURE_MAX = 10
-SPACING_HARDEST_PROBABILITY = 0.30       # 普通模式最低档固定采样概率
-SPACING_SUCCESS_RATE = 0.60              # 普通模式推进门槛：最低档通过率
-SPACING_REQUIRED_BATCHES = 2             # 每次考核批数，两批都达标才推进
-SPACING_EVALUATION_MIN_SAMPLES = 256     # 普通模式一批内最低档回合数下限
-SPACING_MIN_DWELL_ITERATIONS = 100
-SPACING_PRETRAIN_ITERATIONS = 500
-SPACING_EVALUATION_INTERVAL = 100
-SPACING_EVALUATION_ENVS = 1024           # 独立考核环境数，每批取一整轮
-SPACING_EVALUATION_EPISODE_SECONDS = 20.0  # 考核回合时长, 比训练短以降低考核耗时
-FINAL_ACCEPT_RATE = 0.80                 # 最终档全挡位验收的整体通过率门槛
-NORMAL_BIN_TARGET_RATE = 0.60            # 普通模式非最低档加权的目标通过率
-FINAL_BIN_WEIGHT_GAIN = 2.0              # 未达标档位的训练采样权重增益
-
 
 # 奖励权重阶段
 _STAGES = (0, PHASE1_MID_ITER, PHASE1_END_ITER, PHASE2_MID_ITER)
