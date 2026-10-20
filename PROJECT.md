@@ -296,7 +296,7 @@ Phase 0: κ=静态命令值; Phase 1: κ=`get_path_curvature()` 动态读取 LUT
 |--------|------|
 | mimic_pos/vel | 关节位置/速度模仿 (腿+脊柱+颈分 σ) |
 | height | 身体高度跟踪 |
-| track_vel | body-frame 前进速度 (含侧向/垂向 vyz) |
+| vel | body-frame 前进速度 (含侧向/垂向 vyz) |
 | track_head | 朝向跟踪 (track_omg 已停用, 见 env_cfg) |
 | corridor | 身体包络走廊约束 (核心) |
 | action_L1/L2 | 动作平滑性 |
