@@ -116,7 +116,7 @@ def smooth_curvature_magnitude(curvature: torch.Tensor) -> tuple[torch.Tensor, t
 
 
 # 逆运动学
-def _inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True):
+def inverse_kinematics(x: torch.Tensor, y: torch.Tensor, is_front: bool = True):
     L1, L2 = (0.040, 0.040) if is_front else (0.040, 0.036)
 
     R = torch.sqrt(x**2 + y**2)
@@ -154,7 +154,7 @@ def _clamp_leg_angle(angle: torch.Tensor, joint_id: int) -> torch.Tensor:
 
 
 # 加载 CSV + IK 预计算（步幅按本回合目标速度缩放，瞬时曲率只负责左右差速）
-def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) -> None:
+def initialize_tables(device: torch.device | str, base_velocity: float = BASE_VEL) -> None:
     global _tables_initialized, _pos_table, _vel_table, _k_bins, _table_device, _table_base_vel
 
     base_velocity = float(base_velocity)
@@ -210,22 +210,22 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
 
                 # 分别计算每条腿的关节角（应用相位差并夹到关节限位）
                 shift = int(PHASE_LAG["FL"] * TABLE_RESOLUTION)
-                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
+                sh, el = inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FL_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FL_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FL_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FL_ELBOW_ID)
 
                 shift = int(PHASE_LAG["FR"] * TABLE_RESOLUTION)
-                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
+                sh, el = inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FR_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FR_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FR_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FR_ELBOW_ID)
 
                 shift = int(PHASE_LAG["HL"] * TABLE_RESOLUTION)
-                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
+                hp, kn = inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HL_HIP_ID] = _clamp_leg_angle(hp, _ACT_HL_HIP_ID)
                 pos[p, side, i, :, _ACT_HL_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HL_KNEE_ID)
 
                 shift = int(PHASE_LAG["HR"] * TABLE_RESOLUTION)
-                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
+                hp, kn = inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HR_HIP_ID] = _clamp_leg_angle(hp, _ACT_HR_HIP_ID)
                 pos[p, side, i, :, _ACT_HR_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HR_KNEE_ID)
 
@@ -306,7 +306,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     # 预计算查找表: 设备或实际基础速度变化时重建 (回放可指定固定速度)
     base_vel = float(getattr(env, "_slalom_base_vel_scalar", BASE_VEL))
     if not _tables_initialized or _table_device != str(env.device) or _table_base_vel != base_vel:
-        _init_tables(env.device, base_vel)
+        initialize_tables(env.device, base_vel)
 
     assert _pos_table is not None and _vel_table is not None
 
@@ -324,7 +324,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     gait_freq = cmd_tensor[:, 3]  # [N] — 动态步频
     kappa_norm = CURVATURE_TARGET_MAX
 
-    # 曲率绝对值及插值因子（k_bins 在 _init_tables 时缓存）
+    # 曲率绝对值及插值因子（k_bins 在 initialize_tables 时缓存）
     abs_k = curvature_cmd.abs()  # [N]
     assert _k_bins is not None
 
@@ -508,20 +508,14 @@ def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, to
 
 
 
-# 机器人初始位置/朝向 (名义 vel), 与 get_approach_start 同义
-def get_phase1_approach(spacing: float | None = None) -> tuple[float, float, float]:
-    return get_approach_start(spacing)
-
-
-
 # 路径参考调度 — 根据训练阶段自动选择圆弧或绕杆路径
 def compute_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
     # 逐环境阶段: 两条路径都算再按阶段选取, 阶段切换后的一个回合内会同时存在两种环境
     phase1 = cmd_term.phase1_mask  # type: ignore[union-attr]
-    sx, sy, svx, svy, sh = compute_slalom_path_ref(env)
+    sx, sy, svx, svy, sh = compute_phase1_path_ref(env)
     kappa_slalom = env._path_kappa  # type: ignore[attr-defined]
-    ax, ay, avx, avy, ah = compute_arc_path_ref(env)
+    ax, ay, avx, avy, ah = compute_phase0_path_ref(env)
     env._path_kappa = torch.where(phase1, kappa_slalom, getattr(env, "_phase0_path_kappa", cmd_term.command[:, CMD_CURVATURE_IDS])) # type: ignore
     return (
         torch.where(phase1, sx, ax),
@@ -564,7 +558,7 @@ def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_
 
 
 # 路径参考计算 — 基元阶段: 查本回合预计算路径, 动态切换时路径保持连续
-def compute_arc_path_ref(env: "ManagerBasedRlEnv"):
+def compute_phase0_path_ref(env: "ManagerBasedRlEnv"):
     cmd_term = env.command_manager._terms["slalom_cmd"]
     device = env.device
     path_xy = getattr(env, "_phase0_path_xy", None)
@@ -674,13 +668,6 @@ def get_effective_obstacle_spacing(spacing: float) -> float:
 
 
 
-# 保留诊断脚本入口，当前绕杆路径全部采用无直行结构。
-def is_no_straight_spacing(spacing: float) -> bool:
-    del spacing
-    return True
-
-
-
 # 返回无直行周期的几何表，曲率与杆距由同一份几何确定
 def _generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None, curvature: int | None = None):
     if smooth_time is not None or vel is not None:
@@ -711,7 +698,7 @@ def _sample_slalom_table(table: torch.Tensor, rows: torch.Tensor, progress: torc
 
 
 # 绕杆参考按本回合的整数曲率和自身步频推进，杆距不会随其他环境重置改变。
-def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
+def compute_phase1_path_ref(env: "ManagerBasedRlEnv"):
     cmd = env.command_manager._terms["slalom_cmd"]
     base_velocity = float(getattr(env, "_slalom_base_vel_scalar", BASE_VEL))
     tables = get_slalom_tables(env, base_velocity)
@@ -864,13 +851,6 @@ _INIT_DIST = APPROACH_LENGTH
 # 无直行路径族的最小和最大杆心距
 def get_obstacle_spacing_bounds() -> tuple[float, float]:
     return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"], get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
-
-
-
-# 回放未指定条件时采用峰值十五；训练按回合采样整数峰值
-def get_curriculum_obstacle_spacing(step_counter: int) -> float:
-    del step_counter
-    return get_obstacle_spacing_bounds()[0]
 
 
 

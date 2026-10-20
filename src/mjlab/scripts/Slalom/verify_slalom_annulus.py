@@ -15,7 +15,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.config import CORRIDOR_HALF_WIDTH
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_RADIUS
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import BODY_NAMES, resolve_body_envelope_bounds
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import _BOX_SIGNS, project_body_envelopes
-from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_annulus_side_excess
+from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_phase0_annulus_side_excess
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX
 
 
@@ -52,14 +52,14 @@ class TestSlalomAnnulus(unittest.TestCase):
     # 边缘穿入内孔时，即使四个角点均在孔外也必须处罚。
     def test_edge_intrusion(self):
         vertices = rectangle((0, 0)).unsqueeze(0)
-        inner, outer = compute_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
+        inner, outer = compute_phase0_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
         self.assertGreater(float(torch.linalg.vector_norm(vertices[0] - torch.tensor([0, 0.04]), dim=-1).min()), OBSTACLE_RADIUS)
         self.assertAlmostEqual(float(inner[0]), 0.005, places=7)
         self.assertAlmostEqual(float(outer[0]), 0.005, places=7)
 
     # 圆心落入完整矩形时，最近距离必须为零。
     def test_center_inside(self):
-        inner, _ = compute_annulus_side_excess(rectangle((0, 0.04)).unsqueeze(0),
+        inner, _ = compute_phase0_annulus_side_excess(rectangle((0, 0.04)).unsqueeze(0),
             torch.zeros(1, 2), torch.zeros(1), torch.tensor([25.0]))
         self.assertAlmostEqual(float(inner[0]), OBSTACLE_RADIUS, places=7)
 
@@ -69,7 +69,7 @@ class TestSlalomAnnulus(unittest.TestCase):
             radius = 1.0 / curvature
             angle = curvature * 0.04
             center = (radius * np.sin(angle), radius * (1 - np.cos(angle)))
-            inner, outer = compute_annulus_side_excess(rectangle(center, angle).unsqueeze(0),
+            inner, outer = compute_phase0_annulus_side_excess(rectangle(center, angle).unsqueeze(0),
                 torch.zeros(1, 2), torch.zeros(1), torch.tensor([curvature]))
             self.assertAlmostEqual(float(inner[0]), 0.0, places=7)
             self.assertGreater(float(outer[0]), 0.0)
@@ -77,21 +77,21 @@ class TestSlalomAnnulus(unittest.TestCase):
     # 左右镜像必须给出相同内外越界。
     def test_turn_mirror(self):
         vertices = rectangle((0.01, 0.005), 0.4).unsqueeze(0)
-        positive = compute_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([20.0]))
+        positive = compute_phase0_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([20.0]))
         mirrored = vertices.clone()
         mirrored[..., 1] *= -1
-        negative = compute_annulus_side_excess(mirrored, torch.zeros(1, 2), torch.zeros(1), torch.tensor([-20.0]))
+        negative = compute_phase0_annulus_side_excess(mirrored, torch.zeros(1, 2), torch.zeros(1), torch.tensor([-20.0]))
         for left, right in zip(positive, negative, strict=True):
             torch.testing.assert_close(left, right)
 
     # 路径与躯干整体平移旋转后，圆环度量保持一致。
     def test_rigid_transform(self):
         vertices = rectangle((0.01, 0.007), 0.3).unsqueeze(0)
-        base = compute_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([20.0]))
+        base = compute_phase0_annulus_side_excess(vertices, torch.zeros(1, 2), torch.zeros(1), torch.tensor([20.0]))
         angle = 1.2
         rotation = torch.tensor(((np.cos(angle), -np.sin(angle)), (np.sin(angle), np.cos(angle))), dtype=torch.float64)
         translation = torch.tensor([[2.0, -3.0]], dtype=torch.float64)
-        changed = compute_annulus_side_excess(vertices @ rotation.T + translation[:, None],
+        changed = compute_phase0_annulus_side_excess(vertices @ rotation.T + translation[:, None],
             translation, torch.tensor([angle], dtype=torch.float64), torch.tensor([20.0]))
         for left, right in zip(base, changed, strict=True):
             torch.testing.assert_close(left, right)
@@ -100,11 +100,11 @@ class TestSlalomAnnulus(unittest.TestCase):
     def test_straight_and_small_curvature(self):
         vertices = torch.stack((rectangle((0, 0.03)), rectangle((0, -0.03)))).float()
         reference, heading = torch.zeros(2, 2), torch.zeros(2)
-        inner, outer = compute_annulus_side_excess(vertices, reference, heading, torch.zeros(2))
+        inner, outer = compute_phase0_annulus_side_excess(vertices, reference, heading, torch.zeros(2))
         torch.testing.assert_close(inner, torch.zeros(2))
         torch.testing.assert_close(outer, torch.full((2,), 0.025))
         for curvature in (2e-6, 1e-5, -2e-6):
-            inner, outer = compute_annulus_side_excess(vertices, reference, heading, torch.full((2,), curvature))
+            inner, outer = compute_phase0_annulus_side_excess(vertices, reference, heading, torch.full((2,), curvature))
             torch.testing.assert_close(torch.maximum(inner, outer), torch.full((2,), 0.025), atol=1e-6, rtol=0)
 
     # 随机三维旋转的投影盒与独立二维凸包计算一致。
@@ -127,7 +127,7 @@ class TestSlalomAnnulus(unittest.TestCase):
             references.append(reference)
             headings.append(heading)
             curvatures.append(curvature)
-        actual = compute_annulus_side_excess(torch.tensor(np.array(vertices), dtype=torch.float32),
+        actual = compute_phase0_annulus_side_excess(torch.tensor(np.array(vertices), dtype=torch.float32),
             torch.tensor(np.array(references), dtype=torch.float32), torch.tensor(headings), torch.tensor(curvatures))
         torch.testing.assert_close(torch.stack(actual, dim=1), torch.tensor(expected, dtype=torch.float32), atol=2e-7, rtol=1e-5)
 
@@ -141,7 +141,7 @@ class TestSlalomAnnulus(unittest.TestCase):
         for size in half:
             width, length = size[0], size[2]
             center = (0.0, 1 / CURVATURE_TARGET_MAX - (OBSTACLE_RADIUS + width))
-            inner, outer = compute_annulus_side_excess(rectangle(center, length=length, width=width).unsqueeze(0),
+            inner, outer = compute_phase0_annulus_side_excess(rectangle(center, length=length, width=width).unsqueeze(0),
                 torch.zeros(1, 2), torch.zeros(1), torch.tensor([CURVATURE_TARGET_MAX]))
             self.assertLess(float(inner[0]), 1e-7)
             self.assertLess(float(outer[0]), 1e-7)

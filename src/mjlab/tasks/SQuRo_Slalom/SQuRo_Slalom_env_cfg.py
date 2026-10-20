@@ -94,7 +94,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations = {
         "timeout": TerminationTermCfg(func=mdp.check_episode_timeout, time_out=True),
         "fallen": TerminationTermCfg(func=mdp.check_fallen, time_out=False),
-        "slalom_passage": TerminationTermCfg(func=mdp.track_slalom_passage, time_out=False),
+        "slalom_passage": TerminationTermCfg(func=mdp.collect_passage_state, time_out=False),
     }
 
 
@@ -122,14 +122,8 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
 
 
-    # 杆体逐回合通过 mocap 更新，首轮关闭实际碰撞
-    obstacle_entities: dict = {}
-    for i in range(mdp.OBSTACLE_NUM):
-        obstacle_entities[f"obstacle{i}"] = mdp.ObstacleEntityCfg(
-                name=f"obstacle{i}", position=((i + 1) * mdp.OBSTACLE_SPACING_START, mdp.OBSTACLE_Y, 0.0),  # 杆1 在 x=spacing
-                rgba=(0.9, 0.35, 0.2, 1.0),
-            contype=0, conaffinity=0,
-        )
+    # 障碍物逐回合通过 mocap 更新，训练首轮关闭实际碰撞
+    obstacle_entities = mdp.build_obstacle_entities()
 
 
     # 完整配置

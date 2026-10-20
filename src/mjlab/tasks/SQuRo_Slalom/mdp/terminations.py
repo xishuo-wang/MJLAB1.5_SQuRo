@@ -32,7 +32,7 @@ def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 # 按真实躯干与基座越过杆平面的时刻检查交替侧别，不依赖参考时钟
-class SlalomPassageMonitor:
+class PassMonitor:
     def __init__(self, env):
         self.env = env
         shape = (env.num_envs, PASSAGE_REQUIRED_OBSTACLES, 3)
@@ -114,10 +114,10 @@ class SlalomPassageMonitor:
 
 
 # 记录绕杆成绩，不增加额外终止条件或奖励
-def track_slalom_passage(env) -> torch.Tensor:
+def collect_passage_state(env) -> torch.Tensor:
     monitor = getattr(env, "_slalom_passage_monitor", None)
     if monitor is None:
-        monitor = env._slalom_passage_monitor = SlalomPassageMonitor(env)
+        monitor = env._slalom_passage_monitor = PassMonitor(env)
     if bool(env.command_manager._terms["slalom_cmd"].phase1_mask.any()):
         monitor.compute()
     return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

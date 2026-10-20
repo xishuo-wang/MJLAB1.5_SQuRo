@@ -12,7 +12,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEPS_PER_ITER, PHASE1_END_ITER
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref, get_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_value
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_NUM, obstacle_mocap_id
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
@@ -175,7 +175,7 @@ def check_phase0_training(u, act) -> None:
         u.reset()
         if cmd.slalom_mode_active or bool(cmd.phase1_mask.any()):
             fail("一阶段锁定后仍进入绕杆阶段")
-        if get_curriculum_reward_weight(u, "sigma_spn_pos") != 10.0:
+        if get_curriculum_value(u, "sigma_spn_pos") != 10.0:
             fail("一阶段锁定后脊柱奖励进入二阶段")
         for _ in range(5):
             step_and_check(u, act, f"固定曲率 {curvature}")

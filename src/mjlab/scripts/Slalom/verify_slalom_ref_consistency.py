@@ -27,7 +27,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
     _ACT_F_BODY_ID, _ACT_H_BODY_ID, _ACT_NECK_PITCH_ID,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
-    compute_slalom_path_ref,
+    compute_phase1_path_ref,
     get_approach_start,
     get_effective_obstacle_spacing,
 )
@@ -121,7 +121,7 @@ def make_timer_cmd(n=4, time_left=25.0):
 
 # 参考路径解算 (返回顺序为 x, y, vx_des, vy_des, heading)
 def ref_of(env):
-    x, y, _, _, heading = compute_slalom_path_ref(env)
+    x, y, _, _, heading = compute_phase1_path_ref(env)
     return x, y, heading
 
 
@@ -298,7 +298,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
             high = min(model.actuator_ctrlrange[actuator.id, 1], model.jnt_range[joint.id, 1])
             limits.append((float(low), float(high)))
         limits = torch.tensor(limits)
-        ref_mod._init_tables("cpu")
+        ref_mod.initialize_tables("cpu")
         table = ref_mod._pos_table
         assert table is not None
         bins = ref_mod._CURVATURE_BINS
@@ -314,7 +314,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
 
     # 腿部参考角度沿相位连续, 速度有界
     def test_leg_reference_continuous_and_bounded(self):
-        ref_mod._init_tables("cpu")
+        ref_mod.initialize_tables("cpu")
         table = ref_mod._pos_table
         vel_table = ref_mod._vel_table
         assert table is not None and vel_table is not None
@@ -329,14 +329,14 @@ class TestSlalomRefConsistency(unittest.TestCase):
     # 基础速度必须进入参考表: 同一峰值不同基础速度对应不同步幅
     def test_reference_tracks_base_velocity(self):
         def leg_travel(base):
-            ref_mod._init_tables("cpu", base)
+            ref_mod.initialize_tables("cpu", base)
             assert ref_mod._pos_table is not None
             row = ref_mod._pos_table[ref_mod._CURVATURE_BINS.index(15.0), :, 0]
             leg = row[:, :, _ACT_LEG_IDS]
             return float((leg.max(dim=1).values - leg.min(dim=1).values).abs().max())
 
         low, high = leg_travel(0.05), leg_travel(0.15)
-        ref_mod._init_tables("cpu", BASE_VEL)
+        ref_mod.initialize_tables("cpu", BASE_VEL)
         # 关节角行程对足端步幅是非线性的, 只要求明显随基础速度变化
         self.assertGreater(high / max(low, 1e-6), 1.5, msg="基础速度未进入参考步幅")
 
@@ -473,9 +473,9 @@ class TestSlalomRefConsistency(unittest.TestCase):
     # 阶段必须按回合起点锁定, 不得在回合中途随全局计数器翻转
     def test_phase_locked_at_episode_start(self):
         from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
-            compute_arc_path_ref,
+            compute_phase0_path_ref,
             compute_path_ref,
-            compute_slalom_path_ref,
+            compute_phase1_path_ref,
         )
 
         # env0 起步于边界前 (仍 Phase 0), env1 起步于边界后 (Phase 1)
@@ -488,8 +488,8 @@ class TestSlalomRefConsistency(unittest.TestCase):
                          msg="阶段未按回合起点判定")
 
         x, _, _, _, _ = compute_path_ref(env)
-        arc_x, _, _, _, _ = compute_arc_path_ref(env)
-        slalom_x, _, _, _, _ = compute_slalom_path_ref(env)
+        arc_x, _, _, _, _ = compute_phase0_path_ref(env)
+        slalom_x, _, _, _, _ = compute_phase1_path_ref(env)
         self.assertAlmostEqual(x[0].item(), arc_x[0].item(), places=6,
                                msg="边界前起步的回合被切到了绕杆路径")
         self.assertAlmostEqual(x[1].item(), slalom_x[1].item(), places=6,
@@ -501,7 +501,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         self.assertEqual(cmd.phase1_mask.tolist(), [False, True],
                          msg="阶段在回合中途翻转了")
         x2, _, _, _, _ = compute_path_ref(env)
-        arc_x2, _, _, _, _ = compute_arc_path_ref(env)
+        arc_x2, _, _, _, _ = compute_phase0_path_ref(env)
         self.assertAlmostEqual(x2[0].item(), arc_x2[0].item(), places=6,
                                msg="回合中途被切到了绕杆路径")
 
@@ -559,7 +559,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 动态曲率路径连续: 预计算轨迹逐步连续, 恒定曲率段落在精确圆弧上。
     def test_dynamic_path_is_continuous(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path, compute_arc_path_ref
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path, compute_phase0_path_ref
         segments = torch.zeros(2, 6)
         segments[0, :2] = torch.tensor([8.0, -8.0])
         bounds = torch.full((2, 6), 1e9)
@@ -578,7 +578,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         previous = None
         for step in range(1, 2001):
             env.episode_length_buf.fill_(step)
-            x, y, _, _, heading = compute_arc_path_ref(env)  # type: ignore
+            x, y, _, _, heading = compute_phase0_path_ref(env)  # type: ignore
             if previous is not None:
                 move = float(torch.maximum((x - previous[0]).abs(), (y - previous[1]).abs()).max())
                 self.assertLess(move, 2e-3, msg=f"第 {step} 步路径跳变 {move:.5f} m")
@@ -586,7 +586,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
             previous = (x.clone(), y.clone())
         # 前 5 s 恒定曲率 8: 位置落在半径 0.125 m 的圆弧上
         env.episode_length_buf.fill_(100)  # 1 s
-        x, y, _, _, _ = compute_arc_path_ref(env)  # type: ignore
+        x, y, _, _, _ = compute_phase0_path_ref(env)  # type: ignore
         theta = 8.0 * 0.1 * 1.0
         expected = 2.0 * (1.0 / 8.0) * math.sin(theta / 2.0)
         self.assertAlmostEqual(float(torch.hypot(x[0], y[0])), expected, places=4)

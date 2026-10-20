@@ -28,7 +28,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_obstacle_collision, ob
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 
 
-class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
+class SQuRoSlalomOnPolicyRunner(MjlabOnPolicyRunner):
   env: RslRlVecEnvWrapper
 
   # 训练环境保持无杆碰撞，独立考核环境在第一次考核时创建并复用。
@@ -38,7 +38,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     self._command: SlalomCommand = cast(SlalomCommand, env.unwrapped.command_manager._terms["slalom_cmd"])
 
   # 显式固定条件与回放不自动推进杆距课程。
-  def _course_enabled(self) -> bool:
+  def _evaluation_enabled(self) -> bool:
     cfg = self._command.cfg
     return (cfg.enable_spacing_curriculum and not cfg.phase0_only
             and cfg.fixed_slalom_curvature is None and cfg.fixed_obstacle_spacing is None)
@@ -56,7 +56,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
       command_cfg.fixed_slalom_curvature = None
       command_cfg.fixed_obstacle_spacing = None
       command_cfg.spacing_curriculum_state = None
-      configure_obstacle_collision(cfg, True)
+      configure_obstacle_collision(cfg, enable_collision=True)
       raw = ManagerBasedRlEnv(cfg, device=str(self.env.device), render_mode=None)
       raw.common_step_counter = self.env.unwrapped.common_step_counter
       self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self.env.clip_actions)
@@ -79,7 +79,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     env.common_step_counter = int(self.env.unwrapped.common_step_counter)
 
   # 冻结策略在接触环境中跑一整轮，每环境只计第一个完整回合。
-  def _run_evaluation_batch(self) -> list[dict]:
+  def _run_evaluation_sweep(self) -> list[dict]:
     evaluation = self._get_evaluation_env()
     env = evaluation.unwrapped
     self._sync_evaluation_course()
@@ -106,7 +106,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
   # 每 100 轮做两批独立考核：普通模式推进/进入最终档，最终模式全挡位验收。
   def _maybe_evaluate_curriculum(self, iteration: int) -> None:
     course = self._command.spacing_curriculum
-    if not self._course_enabled() or not course.should_evaluate(iteration):
+    if not self._evaluation_enabled() or not course.should_evaluate(iteration):
       return
     if self.is_distributed:
       raise RuntimeError("当前 Slalom 独立碰撞考核仅支持单卡训练")
@@ -121,7 +121,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
       with torch.random.fork_rng(devices=devices), torch.no_grad():
         for sweep in range(SPACING_REQUIRED_BATCHES):
           torch.manual_seed(int(self.cfg.get("seed", 42)) + iteration + sweep)
-          batch_stats.append(measure(self._run_evaluation_batch()))
+          batch_stats.append(measure(self._run_evaluation_sweep()))
         assert self._evaluation_env is not None
         collision = obstacle_collision_enabled(self._evaluation_env.unwrapped)
         result = course.record_evaluation(batch_stats, iteration, collision)
@@ -175,7 +175,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
   # 消费训练回合仅用于诊断，训练成绩不能推进真实碰撞课程。
-  def _consume_training_results(self, extras) -> None:
+  def _consume_passage_results(self, extras) -> None:
     monitor = getattr(self.env.unwrapped, "_slalom_passage_monitor", None)
     results = monitor.consume() if monitor is not None else []
     if results:
@@ -185,9 +185,9 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
 
   # 保持 RSL-RL 的采样和 PPO 更新顺序，仅在更新完成后插入冻结策略考核。
   def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
-    if self._course_enabled() and self.is_distributed:
+    if self._evaluation_enabled() and self.is_distributed:
       raise ValueError("当前 Slalom 独立碰撞考核仅支持单卡训练")
-    if self._course_enabled() and obstacle_collision_enabled(self.env.unwrapped):
+    if self._evaluation_enabled() and obstacle_collision_enabled(self.env.unwrapped):
       raise ValueError("本课程要求训练环境关闭杆碰撞，仅独立考核开启")
     if init_at_random_ep_len and not self._command.slalom_mode_active:
       initial_limit = min(self.env.max_episode_length,
@@ -208,7 +208,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
           for _ in range(self.cfg["num_steps_per_env"]):
             actions = self.alg.act(obs)
             obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
-            self._consume_training_results(extras)
+            self._consume_passage_results(extras)
             if self.cfg.get("check_for_nan", True):
               check_nan(obs, rewards, dones)
             obs, rewards, dones = obs.to(self.device), rewards.to(self.device), dones.to(self.device)

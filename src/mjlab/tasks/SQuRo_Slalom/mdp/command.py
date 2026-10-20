@@ -25,7 +25,7 @@ from .config import (
 from .curriculums import (
     _STEPS_PER_ITER,
     SLALOM_BIN_COUNT,
-    SlalomSpacingCurriculum,
+    SpacingCurriculumState,
     get_phase0_curvature_range,
     get_training_phase,
     get_training_phase_batch,
@@ -51,18 +51,12 @@ if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
-# 一阶段在前两千轮扩展曲率，之后保持完整范围。
-def get_curvature_range(step_counter: int) -> tuple[float, float]:
-    return get_phase0_curvature_range(step_counter)
-
-
-
 # 管理逐回合命令、整数绕杆曲率及其对应的实体杆阵列。
 class SlalomCommand(CommandTerm):
     cfg: SlalomCommandCfg
     def __init__(self, cfg: SlalomCommandCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg, env)
-        self.spacing_curriculum = SlalomSpacingCurriculum()
+        self.spacing_curriculum = SpacingCurriculumState()
         if cfg.spacing_curriculum_state is not None:
             self.spacing_curriculum.load_state_dict(cfg.spacing_curriculum_state)
         self.adaptive_sampling = True   # 训练按考核缺口加权；考核环境置 False 走等概率

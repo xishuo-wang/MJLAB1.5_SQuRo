@@ -3,10 +3,10 @@ import unittest
 
 import torch
 
-from mjlab.tasks.SQuRo_Slalom.mdp.terminations import SlalomPassageMonitor
+from mjlab.tasks.SQuRo_Slalom.mdp.terminations import PassMonitor
 from mjlab.tasks.SQuRo_Slalom.mdp.terminations import check_episode_timeout
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-    SLALOM_BIN_COUNT, SlalomSpacingCurriculum,
+    SLALOM_BIN_COUNT, SpacingCurriculumState,
 )
 
 
@@ -16,7 +16,7 @@ def make_monitor():
                  phase1_mask=torch.ones(2, dtype=torch.bool))
     env = NS(num_envs=2, device="cpu", scene=NS(env_origins=torch.zeros(2, 3)),
              command_manager=NS(_terms={"slalom_cmd": command}))
-    return SlalomPassageMonitor(env)
+    return PassMonitor(env)
 
 
 # 生成按交替侧别绕杆的躯干中心，侧别取决于实际位置。
@@ -86,7 +86,7 @@ def make_results(plan: dict, count: int = 1024) -> list[dict]:
 class TestSpacingCurriculum(unittest.TestCase):
     # 无碰撞预训练至少五百轮，两批最低档都达标才推进一档。
     def test_pretraining_and_advance(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         self.assertFalse(course.should_evaluate(3499))
         self.assertTrue(course.should_evaluate(3500))
         batches = [course.measure_batch(make_results({10: 700})) for _ in range(2)]
@@ -98,7 +98,7 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 任一批未达最低档 60% 就不推进，连续达标数清零。
     def test_failure_keeps_level(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         batches = [course.measure_batch(make_results({10: 700})),
                    course.measure_batch(make_results({10: 500}))]
         result = course.record_evaluation(batches, 3500, True)
@@ -108,7 +108,7 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 无碰撞结果、批数不足被拒绝，未到考核间隔的重复提交不计分。
     def test_invalid_results_rejected(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         with self.assertRaises(ValueError):
             course.record_evaluation([], 3500, False)
         with self.assertRaises(ValueError):
@@ -121,10 +121,10 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 保存恢复后保留档位与分档权重，续训不会重新起课。
     def test_resume(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         course.record_evaluation(
             [course.measure_batch(make_results({10: 700})) for _ in range(2)], 3500, True)
-        restored = SlalomSpacingCurriculum()
+        restored = SpacingCurriculumState()
         restored.load_state_dict(course.state_dict())
         self.assertEqual(restored.max_curvature, 11)
         restored.record_evaluation(
@@ -133,7 +133,7 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 分档权重按普通模式目标通过率补齐缺口，无样本档位保持 1.0。
     def test_bin_weights_from_gap(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         plan = {10: 1024, 9: 400, 8: 300}
         batches = [course.measure_batch(make_results(plan)) for _ in range(2)]
         course.record_evaluation(batches, 3500, True)
@@ -145,7 +145,7 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 曲率十五档通过后进入最终档，档位权重重置为等概率。
     def test_final_level_entry(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         course.max_curvature = 15
         batches = [course.measure_batch(make_results({15: 700})) for _ in range(2)]
         result = course.record_evaluation(batches, 3500, True)
@@ -155,7 +155,7 @@ class TestSpacingCurriculum(unittest.TestCase):
 
     # 最终档两批整体通过率都达到 80% 才算最终验收，并按缺口更新训练权重。
     def test_final_acceptance(self):
-        course = SlalomSpacingCurriculum()
+        course = SpacingCurriculumState()
         course.max_curvature = 15
         course.final_level_passed = True
         failing = {curvature: 700 for curvature in range(5, 16)}

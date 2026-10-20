@@ -4,7 +4,7 @@ import mujoco
 from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 from .reference import get_slalom_geometry
-from .config import OBSTACLE_HALF_HEIGHT, OBSTACLE_NUM, OBSTACLE_RADIUS, SLALOM_CURVATURE_MAX
+from .config import OBSTACLE_HALF_HEIGHT, OBSTACLE_NUM, OBSTACLE_RADIUS, OBSTACLE_SPACING_START, SLALOM_CURVATURE_MAX
 
 
 
@@ -19,8 +19,8 @@ OBSTACLE_Y = _smooth_obstacle_y()   # 编译占位和默认绘图使用，运行
 
 
 # 仅改变独立考核场景的杆碰撞掩码，保留 mocap 与实际尺寸
-def configure_obstacle_collision(env_cfg, enabled: bool) -> None:
-    mask = int(enabled)
+def configure_obstacle_collision(env_cfg, enable_collision: bool) -> None:
+    mask = int(enable_collision)
     env_cfg.scene.entities = {
         name: replace(entity, contype=mask, conaffinity=mask) if isinstance(entity, ObstacleEntityCfg) else entity
         for name, entity in env_cfg.scene.entities.items()
@@ -82,6 +82,22 @@ class ObstacleEntity(Entity):
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec
+
+
+
+# 构建整排障碍物的实体配置，训练默认关闭实际碰撞
+def build_obstacle_entities(enable_collision: bool = False) -> dict[str, ObstacleEntityCfg]:
+    mask = int(enable_collision)
+    return {
+        f"obstacle{i}": ObstacleEntityCfg(
+            name=f"obstacle{i}",
+            position=((i + 1) * OBSTACLE_SPACING_START, OBSTACLE_Y, 0.0),
+            rgba=(0.9, 0.35, 0.2, 1.0),
+            contype=mask,
+            conaffinity=mask,
+        )
+        for i in range(OBSTACLE_NUM)
+    }
 
 
 

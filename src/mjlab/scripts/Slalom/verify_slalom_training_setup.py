@@ -14,13 +14,13 @@ from mjlab.tasks.SQuRo_Hole.SQuRo_Hole_env_cfg import SQuRo_Hole_Env_Cfg
 from mjlab.tasks.SQuRo_Slalom.config.rl_cfg import SQuRo_Slalom_PPO_Runner_Cfg
 from mjlab.tasks.SQuRo_Slalom.SQuRo_Slalom_env_cfg import SQuRo_Slalom_Env_Cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import events, indices
-from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, get_curvature_range
+from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     CURVATURE_TARGET, CURVATURE_TARGET_MAX, Rmin,
-    _STEPS_PER_ITER, get_curriculum_reward_weight, reward_weight_curriculum,
-    SlalomSpacingCurriculum,
+    _STEPS_PER_ITER, get_curriculum_value, get_phase0_curvature_range,
+    reward_weight_curriculum, SpacingCurriculumState,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_corridor_side_excess
+from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_phase1_corridor_side_excess
 
 
 # 用路径局部坐标生成带符号的身体横向偏移。
@@ -28,7 +28,7 @@ def side_excess(offsets, kappas, heading=0.0, body_delta=0.0):
     heading_t = torch.full((len(offsets),), heading)
     normal = torch.stack((-heading_t.sin(), heading_t.cos()), dim=1)
     xy = normal * torch.tensor(offsets).unsqueeze(1)
-    return compute_corridor_side_excess(
+    return compute_phase1_corridor_side_excess(
         xy, heading_t + body_delta, torch.zeros_like(xy), heading_t,
         0.04, 0.035, torch.tensor(kappas),
     )
@@ -41,7 +41,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         cmd = object.__new__(SlalomCommand)
         cmd._env = NS(device=torch.device("cpu"))
         cmd.cfg = SQuRo_Slalom_Env_Cfg().commands["slalom_cmd"]
-        cmd.spacing_curriculum = SlalomSpacingCurriculum()
+        cmd.spacing_curriculum = SpacingCurriculumState()
         cmd.adaptive_sampling = True
         peaks = cmd._sample_slalom_indices(4096) + 5
         self.assertEqual(set(peaks.tolist()), set(range(5, 11)))
@@ -109,8 +109,8 @@ class TestSlalomTrainingSetup(unittest.TestCase):
             env.episode_length_buf = torch.tensor([0, 17])
             self.assertFalse(cmd.slalom_mode_active)
             self.assertFalse(bool(cmd.phase1_mask.any()))
-            self.assertEqual(get_curriculum_reward_weight(env, "sigma_spn_pos"), 10.0)
-            self.assertEqual(get_curriculum_reward_weight(env, "weight_corridor"), 5.0)
+            self.assertEqual(get_curriculum_value(env, "sigma_spn_pos"), 10.0)
+            self.assertEqual(get_curriculum_value(env, "weight_corridor"), 5.0)
 
     # 一阶段保持二十归一化，绕杆峰值上限独立为十五。
     def test_curvature_range_reaches_20(self):
@@ -118,15 +118,15 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertEqual(CURVATURE_TARGET, 15.0)
         self.assertAlmostEqual(Rmin, 1 / 15)
         for iteration in (2000, 2999, 4000):
-            self.assertEqual(get_curvature_range(iteration * _STEPS_PER_ITER), (-20.0, 20.0))
-        self.assertLess(get_curvature_range(0)[1], 15.0)
+            self.assertEqual(get_phase0_curvature_range(iteration * _STEPS_PER_ITER), (-20.0, 20.0))
+        self.assertLess(get_phase0_curvature_range(0)[1], 15.0)
 
     # 左右转内侧互换，同时验证外侧不受内侧系数影响。
     def test_turn_side_and_reward_strength(self):
         inner, outer = side_excess([0.03, -0.03, -0.03, 0.03], [25.0, 25.0, -25.0, -25.0])
         torch.testing.assert_close(inner, torch.tensor([0.025, 0.0, 0.025, 0.0]))
         torch.testing.assert_close(outer, torch.tensor([0.0, 0.025, 0.0, 0.025]))
-        weights = reward_weight_curriculum.get_reward_weights(2000 * _STEPS_PER_ITER, True)
+        weights = reward_weight_curriculum.get_curriculum_values(2000 * _STEPS_PER_ITER, True)
         reward = torch.exp(-weights["sigma_corridor"] * (
             outer.square() + weights["corridor_inner_multiplier"] * inner.square()
         ))
@@ -148,7 +148,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
 
     # 误差尺度平滑收紧，课程边界后保持 20 毫米。
     def test_corridor_scale_tightens_continuously(self):
-        sigma = [reward_weight_curriculum.get_reward_weights(i * _STEPS_PER_ITER, True)["sigma_corridor"]
+        sigma = [reward_weight_curriculum.get_curriculum_values(i * _STEPS_PER_ITER, True)["sigma_corridor"]
                  for i in (0, 1, 1000, 1999, 2000, 4000, 8000)]
         self.assertEqual(sigma, sorted(sigma))
         self.assertAlmostEqual(sigma[0] ** -0.5, 0.05)

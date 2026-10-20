@@ -182,7 +182,7 @@ def sample_curvature_indices(count: int, weights, upper: int, device) -> torch.T
 
 
 # 仅用独立真实碰撞考核推进无碰撞训练的采样范围
-class SlalomSpacingCurriculum:
+class SpacingCurriculumState:
     def __init__(self):
         self.max_curvature = SPACING_INITIAL_CURVATURE_MAX
         self.level_start_iteration = PHASE1_END_ITER
@@ -426,8 +426,8 @@ class SlalomSpacingCurriculum:
 
 
 # 奖励权重课程
-class RewardWeightCurriculum:
-    def get_reward_weights(self, current_step: int, phase0_only: bool = False) -> dict[str, float]:
+class RewardCurriculum:
+    def get_curriculum_values(self, current_step: int, phase0_only: bool = False) -> dict[str, float]:
         current_iter = current_step // _STEPS_PER_ITER
         if phase0_only:
             current_iter = min(current_iter, PHASE1_END_ITER - 1)
@@ -455,19 +455,19 @@ class RewardWeightCurriculum:
             "current_stage": stage,
             "current_iter": current_iter,
             "current_step": current_step,
-            "reward_weights": self.get_reward_weights(current_step, phase0_only),
+            "reward_weights": self.get_curriculum_values(current_step, phase0_only),
         }
 
 
 
-reward_weight_curriculum = RewardWeightCurriculum()
+reward_weight_curriculum = RewardCurriculum()
 
 
 
 # 获取课程奖励权重
-def get_curriculum_reward_weight(env, reward_name: str) -> float:
+def get_curriculum_value(env, reward_name: str) -> float:
     command = env.command_manager._terms["slalom_cmd"]
-    return reward_weight_curriculum.get_reward_weights(env.common_step_counter, command.cfg.phase0_only)[reward_name]
+    return reward_weight_curriculum.get_curriculum_values(env.common_step_counter, command.cfg.phase0_only)[reward_name]
 
 
 
