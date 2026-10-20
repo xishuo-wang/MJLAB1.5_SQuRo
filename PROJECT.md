@@ -144,7 +144,7 @@ src/mjlab/tasks/SQuRo_Slalom/
 │   ├── indices.py             # 获取索引
 │   ├── observations.py        # 观测空间
 │   ├── path.py                # 参考路径生成
-│   ├── pole.py                # 杆实体
+│   ├── entity.py              # 障碍物实体
 │   ├── reference.py           # 关节参考预计算表
 │   ├── rewards.py             # 奖励函数
 │   └── terminations.py        # 终止条件
@@ -179,8 +179,8 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 2Rmin=0
 | CURVATURE_TARGET | CURVATURE_TARGET_MAX | Phase 1 绕杆弧曲率 (= 1/Rmin)，复用唯一上限 |
 | GAIT_FREQ_MIN/MAX | 1.0/2.0 | Phase 0 步频采样范围 |
 | GAIT_FREQ_PHASE1 | 1.0 | 仅作初始值 (Phase 1 实际用 1~2Hz 随机采样) |
-| POLE_SPACING_START | 0.20 | Phase 1 起始杆间距 (iter 4000 前固定) |
-| 最小杆间距 | 约 0.1009 | 由 `get_pole_spacing_bounds()[0]` 按当前曲率几何计算 |
+| OBSTACLE_SPACING_START | 0.20 | Phase 1 起始杆间距 (iter 4000 前固定) |
+| 最小杆间距 | 约 0.1009 | 由 `get_obstacle_spacing_bounds()[0]` 按当前曲率几何计算 |
 | SMOOTH_TIME | 1.0 | 曲率平滑名义时间 (s), 平滑弧长 = SMOOTH_VEL×SMOOTH_TIME |
 | SMOOTH_VEL | 0.025 | 名义平滑速度 (m/s, = base×gait×scale @gait=1) |
 | BASE_VEL | 0.1 | 基础速度 (m/s, 1Hz 时) |
@@ -190,9 +190,9 @@ Phase 1: 平滑 LUT 路径, 杆间距确定性课程(0.20→最小间距 2Rmin=0
 Rmin=0.05、tr=SMOOTH_VEL×SMOOTH_TIME=0.025 下实测：x_sw_half=0.05047、x_sw_full=0.06300，
 故**无直行最小间距 = 2×x_sw_half ≈ 0.1009 m**、**有直行下限 = 2×x_sw_full ≈ 0.1260 m**
 （见 `path.py` `_get_smooth_xsw`）。区间 (0.1009, 0.1260) 两种模式都无法周期匹配，**不可用**。
-课程据此分两段：iter 4000→`POLE_SPACING_RAMP_END_ITER`(5500) 在 [0.1260, 0.20] 内线性缩小，
-到 5500 一次性切到 0.1009 并保持到终点；几何边界由 `get_pole_spacing_bounds()`（内部惰性引用
-`path.py`）给出，**课程值恒落在可行区间**，不再依赖 `get_effective_pole_spacing` 的静默 clamp。
+课程据此分两段：iter 4000→`OBSTACLE_SPACING_RAMP_END_ITER`(5500) 在 [0.1260, 0.20] 内线性缩小，
+到 5500 一次性切到 0.1009 并保持到终点；几何边界由 `get_obstacle_spacing_bounds()`（内部惰性引用
+`path.py`）给出，**课程值恒落在可行区间**，不再依赖 `get_effective_obstacle_spacing` 的静默 clamp。
 
 ## 命令系统 (mdp/command.py)
 
@@ -229,7 +229,7 @@ Phase 1 重置时写入的初始曲率也按接近段起点取（有直行 -K / 
 ## 期望轨迹 (mdp/path.py)
 
 机器人初始接近段为**圆弧**（不再是直行），与主轨迹曲率一致。Phase 0 路径从世界原点 `(0,0)` 出发；
-Phase 1 周期起点 = 第一根杆正上方 `(spacing, 0)`（杆1 在 `(spacing, POLE_Y)`，杆2 在 `(2×spacing, POLE_Y)`）。
+Phase 1 周期起点 = 第一根杆正上方 `(spacing, 0)`（杆1 在 `(spacing, OBSTACLE_Y)`，杆2 在 `(2×spacing, OBSTACLE_Y)`）。
 
 **Phase 0**：接近段(圆弧, κ=curvature 反推 `_INIT_DIST`) → 圆弧(弦长公式, 从原点出发, 固定 κ)
 
@@ -256,8 +256,8 @@ gait=1 时 τ=t，与旧实现逐点等价。
 
 - **有直行模式**：间距 ≥ 2×x_sw_full (0.1260)，弧↔直行均有过渡；**直行段以杆为中心**——每根杆位于其直行段正中间（长度 L = spacing−2×x_sw_full），杆1/杆3 的直行段横跨周期边界、杆2 的直行段完整在周期内
 - **无直行模式**：间距 ≤ 2×x_sw_half (0.1009)，同向弧段 (S2→S4, S5→S1) **直接连续**（无 +20→0→+20 的 V 形过渡）
-- **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_pole_spacing` 自动落到无直行最小间距
-- 有效间距经 `active_pole_spacing` 统一处理（`fixed_pole_spacing` 覆盖值同样过这一步），
+- **不兼容区间** (0.1009, 0.1260)：两种模式都无法周期匹配 → `get_effective_obstacle_spacing` 自动落到无直行最小间距
+- 有效间距经 `active_obstacle_spacing` 统一处理（`fixed_obstacle_spacing` 覆盖值同样过这一步），
   `events.reset_model` 的出生点直接读该属性，保证**间距只有一个真源**
 
 ### 接近段圆弧
@@ -329,11 +329,11 @@ r = exp(-σ·(外侧越界² + 2·内侧越界²))
 σ 在前 2000 轮从 400 平滑增至 2500，名义误差尺度由 50 mm 收紧到 20 mm。
 一阶段圆环约束 F/H 躯干包络；二阶段仍为局部包络约束，头部、腿部与真实杆净空需碰撞验证。
 
-## 杆模块 (mdp/pole.py)
+## 障碍物模块 (mdp/entity.py)
 
-MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0630**（平滑路径等效圆心，不等于 -Rmin=-0.05）。
-训练全程 `contype=0`（无物理碰撞）。透明度由 `update_pole_visibility()` 按 `geom_type==CYLINDER` 匹配控制。
-杆数量 `POLE_NUM=12`。**杆实体位置在 env_cfg 里按 POLE_SPACING_START 一次性建好且从不移动**，
+MuJoCo 圆柱体，`OBSTACLE_Y = -get_smooth_x_sw()` ≈ **-0.0630**（平滑路径等效圆心，不等于 -Rmin=-0.05）。
+训练全程 `contype=0`（无物理碰撞）。透明度由 `update_obstacle_visibility()` 按 `geom_type==CYLINDER` 匹配控制。
+杆数量 `OBSTACLE_NUM=12`。**杆实体位置在 env_cfg 里按 OBSTACLE_SPACING_START 一次性建好且从不移动**，
 课程缩间距时场景里的杆与实际参考路径不一致（无碰撞，故只影响可视化；回放脚本会按正确间距重建）。
 
 ## 回放脚本 (scripts/SQuRo_Slalom_play.py)
@@ -357,11 +357,11 @@ MuJoCo 圆柱体，`POLE_Y = -get_smooth_x_sw()` ≈ **-0.0630**（平滑路径�
 | 选项 | 生效方式 |
 | --- | --- |
 | `--fixed-curvature` | 仅转圈阶段生效；None = 每回合按课程随机采样 |
-| `--fixed-pole-spacing` | 仅绕杆阶段生效；None = 跟随课程（`get_curriculum_pole_spacing`） |
+| `--fixed-obstacle-spacing` | 仅绕杆阶段生效；None = 跟随课程（`get_curriculum_obstacle_spacing`） |
 | `--fixed-velocity` | 基础速度（最终速度仍按 `base×gait×scale(κ)` 变） |
 | `--fixed-height-f/h`、`--fixed-gait-freq` | 固定高度/步频；None = 任务默认（步频每回合 U(1,2) 采样） |
 
-两者互斥由阶段决定：`fixed_curvature` 与 `fixed_pole_spacing` 一定只有一个被写入
+两者互斥由阶段决定：`fixed_curvature` 与 `fixed_obstacle_spacing` 一定只有一个被写入
 （另一个置 None），避免"回放转圈却带着杆间距"这类错配。绕杆阶段用有效间距重建杆实体，
 可视化与期望路径一致；视频/CSV 文件名带阶段标签（`zhuanquan` / `raogan`）。
 
@@ -454,15 +454,15 @@ uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 
 
 10. **Entropy 崩溃** → body-frame 速度 + corridor 组合约束
 11. **Phase 1 step 函数 κ 跳跃** → 改为 LUT 圆弧拼接 (CW/CCW 弧+直行)
-12. **杆间距硬编码 0.3** → 统一到 `POLE_SPACING = 2/CURVATURE_TARGET`
+12. **杆间距硬编码 0.3** → 统一到 `OBSTACLE_SPACING = 2/CURVATURE_TARGET`
 13. **curvature ±15 硬编码** → 统一到 `CURVATURE_TARGET`
 14. **平滑 LUT 几何随 vel 变化**（平滑弧长 = vel×SMOOTH_TIME）→ 同一间距下不同步频轨迹几何不同, 训练局部最优 → **平滑弧长与 vel 解耦**（固定名义 vel, 几何稳定）
-15. **平滑不兼容区间** (0.0812, 0.1062) → 两种模式均周期错位 → `get_effective_pole_spacing` 落到无直行最小间距
+15. **平滑不兼容区间** (0.0812, 0.1062) → 两种模式均周期错位 → `get_effective_obstacle_spacing` 落到无直行最小间距
 16. **无直行时同向弧段仍加 +25→0→+25 过渡** → 直行段不存在时 V 形过渡多余 → 无直行模式同向弧段直接连续
 17. **Phase 0 起点动态化**（随 κ 变化）→ 起始域扩大, 起步即转 → 需配合起始状态分布评估
-18. **课程有效间距断崖** → `POLE_SPACING_MIN=2Rmin=0.08` 低于几何下界 0.0812，且 (0.0812, 0.1062) 区间不可周期匹配，
+18. **课程有效间距断崖** → `OBSTACLE_SPACING_MIN=2Rmin=0.08` 低于几何下界 0.0812，且 (0.0812, 0.1062) 区间不可周期匹配，
     于是 iter 5563 有效间距从 0.1063 直接跳到 0.0812，其后到 6000 轮空转 →
-    改为两段课程（斜坡到 2×x_sw_full，再在 `POLE_SPACING_RAMP_END_ITER` 一次性切到 2×x_sw_half）
+    改为两段课程（斜坡到 2×x_sw_full，再在 `OBSTACLE_SPACING_RAMP_END_ITER` 一次性切到 2×x_sw_half）
 19. **默认预算练不到终点** → `max_iterations` 原为 5000 而课程到 6000 才结束 → 改为直接引用 `PHASE2_END_ITER`
 20. **参考位置动而速度说不动** → 脊柱/颈位置参考随 κ 变，但对应的 `ref_vel` 仍为 0（表里脊柱列全零），
     位置模仿要求转动、速度模仿同时奖励静止 → 速度参考改为位置参考的解析时间导数
@@ -491,9 +491,9 @@ uv run python -B -m mjlab.scripts.Viz_Path.Viz_Tunnel_Path                    # 
 
 1. **WarpBridge 不兼容 mj_name2id** → 改用 `geom_type==CYLINDER` 匹配
 2. **model.geom_rgba 是 torch tensor** → 赋值需 `torch.tensor`
-3. **entities 覆盖丢失实体** → 用 `{**orig, **pole}` merge
+3. **entities 覆盖丢失实体** → 用 `{**orig, **obstacle}` merge
 4. **可视化用机器人位置做起点** → 改用固定世界原点 (-_INIT_DIST, 0)
-5. **可视化杆重复显示**（红球/圆柱 + 场景杆实体）→ 可视化不再绘制杆, 由场景 PoleEntity 提供（回放时按正确间距重建）
+5. **可视化杆重复显示**（红球/圆柱 + 场景杆实体）→ 可视化不再绘制杆, 由场景 ObstacleEntity 提供（回放时按正确间距重建）
 
 ## Tunnel（钻洞）
 

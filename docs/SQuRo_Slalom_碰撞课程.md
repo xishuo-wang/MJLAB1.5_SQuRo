@@ -73,7 +73,7 @@
 续训恢复这些状态；显式固定曲率／杆距和回放不自动推进课程。
 真实碰撞每批结果作为训练产物写入该运行目录的 `collision_evaluations/`，
 TensorBoard 使用 `Curriculum/eval_pass_rate`、`Curriculum/eval_samples`、`Curriculum/eval_passed`、
-`Curriculum/max_curvature`、`Curriculum/min_pole_spacing_mm`、`Curriculum/final_mode`、
+`Curriculum/max_curvature`、`Curriculum/min_obstacle_spacing_mm`、`Curriculum/final_mode`、
 `Curriculum/final_accepted`、`Curriculum/bin{i}_pass_rate` 等字段。
 这些考核率只覆盖当前最小杆距及默认命令分布，不代表跨模型扰动或其他地面条件的成功率。
 

@@ -1,4 +1,4 @@
-﻿# SQuRo Slalom 两阶段无直行训练
+# SQuRo Slalom 两阶段无直行训练
 
 更新日期：2026-10-17。当前配置从随机初始化训练；训练始终关闭杆碰撞，独立真实碰撞考核推进杆距课程。
 最新换向修复、速度、成功判据及课程状态见 [碰撞课程说明](SQuRo_Slalom_碰撞课程.md)。
@@ -111,7 +111,7 @@ uv run train Mjlab-SQuRo-Slalom --agent.logger wandb --agent.resume True --agent
 曲率十五的转圈回放使用 `--command-source 转圈 --fixed-curvature -15`。
 二阶段固定条件使用 `--command-source 绕杆 --fixed-slalom-curvature 15`。
 绕杆峰值未指定时，每个新回合随机采样整数 5～15。
-保留 `--fixed-pole-spacing`，输入会映射到最近整数曲率条件，终端回显实际采用的杆心距。
+保留 `--fixed-obstacle-spacing`，输入会映射到最近整数曲率条件，终端回显实际采用的杆心距。
 固定峰值曲率和固定杆距只能指定一个；实际碰撞默认关闭，回放可用 `--enable-collision`。
 
 ## 验证与边界

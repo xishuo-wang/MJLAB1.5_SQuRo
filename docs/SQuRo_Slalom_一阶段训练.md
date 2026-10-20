@@ -81,7 +81,7 @@ Slalom 默认训练预算为 3000 轮，回合长度为 20 秒；最大轮数在
 一阶段非零曲率的圆心为 `c = p_ref + n_ref / κ`，参考半径 `R = 1 / abs(κ)`。
 前后体共用圆心，分别计算完整包络到圆心的最近距离 `d_min` 和最远距离 `d_max`：
 
-`R_inner = max(R - CORRIDOR_HALF_WIDTH, POLE_RADIUS)`
+`R_inner = max(R - CORRIDOR_HALF_WIDTH, OBSTACLE_RADIUS)`
 
 `R_outer = R + CORRIDOR_HALF_WIDTH`
 
@@ -89,7 +89,7 @@ Slalom 默认训练预算为 3000 轮，回合长度为 20 秒；最大轮数在
 
 `外侧越界 = max(d_max - R_outer, 0)`
 
-走廊半宽保持 40 mm，杆半径复用 `pole.py` 的 10 mm；首轮安全裕量为 0 mm。
+走廊半宽保持 40 mm，障碍物半径复用 `entity.py` 的 10 mm；首轮安全裕量为 0 mm。
 因此当前曲率 10/15/20 的内半径为 60/26.7/10 mm，外半径为 140/106.7/90 mm。
 曲率绝对值不超过 `1e-6` 时退化为对称直线带，仍使用当前躯干包络。
 奖励为前后段平均：`exp(-σ × (外侧越界² + 2 × 内侧越界²))`。
