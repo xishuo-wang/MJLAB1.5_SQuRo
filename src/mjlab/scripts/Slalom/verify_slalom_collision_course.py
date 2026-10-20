@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from mjlab.tasks.SQuRo_Slalom.mdp.passage import SlalomPassageMonitor
+from mjlab.tasks.SQuRo_Slalom.mdp.terminations import SlalomPassageMonitor
 from mjlab.tasks.SQuRo_Slalom.mdp.terminations import check_episode_timeout
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     SLALOM_BIN_COUNT, SlalomSpacingCurriculum,
@@ -67,9 +67,9 @@ class TestSlalomPassage(unittest.TestCase):
         env = NS(command_manager=NS(_terms={"slalom_cmd": command}),
                  step_dt=0.01, max_episode_length=3000,
                  episode_length_buf=torch.tensor([2000, 2000]))
-        self.assertEqual(check_episode_timeout(env).tolist(), [True, False])
+        self.assertEqual(check_episode_timeout(env).tolist(), [True, False])  # type: ignore
         env.episode_length_buf[:] = 3000
-        self.assertTrue(bool(check_episode_timeout(env).all()))
+        self.assertTrue(bool(check_episode_timeout(env).all()))  # type: ignore
 
 
 # 制造各档位指定成功数的完整考核结果。

@@ -9,6 +9,7 @@ import torch
 
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
+from .config import FIXED_HEIGHT_F, FIXED_HEIGHT_H
 from .curriculums import (
     BASE_VEL, GAIT_FREQ_MIN, GAIT_FREQ_MAX,
     SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX, SLALOM_BIN_COUNT,
@@ -16,18 +17,21 @@ from .curriculums import (
     get_phase0_curvature_range, get_training_phase, get_training_phase_batch,
     get_velocity_scale, phase0_kappa_at, sample_curvature_indices, sample_phase0_schedule,
 )
-from .path import _INIT_DIST, build_phase0_episode_path, compute_path_ref, get_phase0_approach, get_slalom_tables
-from .pole import write_pole_mocap
-from .reference import invalidate_reference_cache
-from .slalom_geometry import curvature_from_spacing, get_slalom_geometry
+from .entity import write_pole_mocap
+from .reference import (
+    _INIT_DIST,
+    build_phase0_episode_path,
+    compute_path_ref,
+    curvature_from_spacing,
+    get_phase0_approach,
+    get_slalom_geometry,
+    get_slalom_tables,
+    invalidate_reference_cache,
+)
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
-
-
-FIXED_HEIGHT_F = 0.055
-FIXED_HEIGHT_H = 0.055
 
 
 # 一阶段在前两千轮扩展曲率，之后保持完整范围。
@@ -55,8 +59,11 @@ class SlalomCommand(CommandTerm):
         self.height_h_command = self.command_tensor[:, 2]
         self.gait_freq_command = self.command_tensor[:, 3]
         self.curvature_command = self.command_tensor[:, 4]
-        for name in ("fixed_velocity", "fixed_height_f", "fixed_height_h", "fixed_gait_freq", "fixed_curvature"):
-            setattr(self, name, getattr(cfg, name))
+        self.fixed_velocity = cfg.fixed_velocity
+        self.fixed_height_f = cfg.fixed_height_f
+        self.fixed_height_h = cfg.fixed_height_h
+        self.fixed_gait_freq = cfg.fixed_gait_freq
+        self.fixed_curvature = cfg.fixed_curvature
         self.slalom_curvature_index = torch.full(
             (self.num_envs,), SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN, device=self.device, dtype=torch.long)
         self.pole_spacing = torch.zeros(self.num_envs, device=self.device)
@@ -142,7 +149,7 @@ class SlalomCommand(CommandTerm):
         env, n = self._env, len(env_ids)
         phase1 = self.slalom_mode_active
         base_velocity = BASE_VEL if self.fixed_velocity is None else float(self.fixed_velocity)
-        env._slalom_base_vel_scalar = base_velocity
+        setattr(env, "_slalom_base_vel_scalar", base_velocity)
         tables = get_slalom_tables(env, base_velocity)
         if phase1:
             self.slalom_curvature_index[env_ids] = self._sample_slalom_indices(n)
@@ -199,7 +206,7 @@ class SlalomCommand(CommandTerm):
     # 按逐环境阶段更新曲率: 一阶段取日程瞬时值, 二阶段取绕杆路径曲率。
     def _update_command(self) -> None:
         compute_path_ref(self._env)
-        kappa = self._env._path_kappa
+        kappa = getattr(self._env, "_path_kappa")
         base_velocity = BASE_VEL if self.fixed_velocity is None else float(self.fixed_velocity)
         phase1 = self.phase1_mask
         schedule = getattr(self, "phase0_schedule", None)

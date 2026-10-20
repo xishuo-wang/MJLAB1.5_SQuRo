@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import torch
 from typing import Any
 
@@ -115,19 +115,6 @@ def get_velocity_scale(curvature: Any) -> Any:
     remaining = 1.0 - abs(curvature) / CURVATURE_TARGET_MAX
     remaining = max(0.0, min(1.0, remaining)) if isinstance(remaining, (int, float)) else remaining.clip(0.0, 1.0)
     return VEL_MIN + (1.0 - VEL_MIN) * remaining ** VELOCITY_CURVATURE_POWER
-
-
-# 无直行路径族的最小和最大杆心距。
-def get_pole_spacing_bounds() -> tuple[float, float]:
-    from .slalom_geometry import get_slalom_geometry
-    return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"],
-            get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
-
-
-# 回放未指定条件时采用峰值十五；训练按回合采样整数峰值。
-def get_curriculum_pole_spacing(step_counter: int) -> float:
-    del step_counter
-    return get_pole_spacing_bounds()[0]
 
 
 # 一阶段曲率范围: 前两千轮从 0.5 扩到 20, 之后保持完整范围。

@@ -19,16 +19,16 @@ from matplotlib.patches import Circle
 plt.rcParams["font.sans-serif"] = ["SimHei"]
 plt.rcParams["axes.unicode_minus"] = False
 
-from mjlab.tasks.SQuRo_Slalom.mdp.path import (
-    _RMIN,
-    _INIT_DIST,
-    CORRIDOR_HALF_WIDTH,
-    _generate_slalom_lut_one_period,
+from mjlab.tasks.SQuRo_Slalom.mdp.config import CORRIDOR_HALF_WIDTH
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
+    BASE_VEL,
+    CURVATURE_TARGET,
+    CURVATURE_TARGET_MAX,
+    Rmin,
+    VEL_MIN,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_Y, POLE_RADIUS, POLE_NUM
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX
-from mjlab.tasks.SQuRo_Slalom.mdp.command import FIXED_VEL, VEL_MIN
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_NUM, POLE_RADIUS, POLE_Y
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import _INIT_DIST, _generate_slalom_lut_one_period
 
 
 EPISODE_LEN = 20.0          # episode 时长 (s, 与 env_cfg 一致)
@@ -73,7 +73,7 @@ SEG_STYLES = [
 
 def build_segments(spacing, n_arc_pts=15):
     """与 _generate_slalom_lut_one_period 相同的分段构造, 返回每段 (名称, 点集, 圆心或None)"""
-    r = _RMIN
+    r = Rmin
     x0, y0 = 0.0, 0.0
     pts_x, pts_y = [x0], [y0]
     segs = []
@@ -115,7 +115,7 @@ def main():
 
     spacing = POLE_SPACING
     n_periods = args.n_periods
-    r = _RMIN
+    r = Rmin
 
     # 真实 LUT (用于 κ/heading 曲线)
     arc, xs, ys, headings, kappa = _generate_slalom_lut_one_period(spacing)
@@ -219,7 +219,7 @@ def main():
     # ============ 子图: 曲率随时间变化 (期望速度驱动) ============
     scale_phase1 = 1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX
     s_period = float(arc[-1])
-    vel = FIXED_VEL * GAIT_FREQ * scale_phase1     # 期望速度 (恒速)
+    vel = BASE_VEL * GAIT_FREQ * scale_phase1     # 期望速度 (恒速)
     t_arr = np.linspace(0.0, EPISODE_LEN, 800)
     s_arr = vel * t_arr - _INIT_DIST               # 弧长: 接近段为负, 之后进入 LUT
     kappa_t = np.zeros_like(s_arr)

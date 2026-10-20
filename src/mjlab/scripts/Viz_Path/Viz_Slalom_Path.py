@@ -4,14 +4,13 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
 # 直接从 Slalom 任务导入 RL 实际使用的平滑 LUT 路径生成函数 (保证展示 = 训练使用)
-from mjlab.tasks.SQuRo_Slalom.mdp.path import (
+from mjlab.tasks.SQuRo_Slalom.mdp.config import BODY_REF_OFFSET, CORRIDOR_HALF_WIDTH
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import generate_pole_positions
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     _generate_slalom_lut_smooth_period,
-    BODY_REF_OFFSET,
-    CORRIDOR_HALF_WIDTH,
-    _INIT_DIST,
+    curvature_from_spacing,
+    get_slalom_geometry,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import generate_pole_positions
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry, curvature_from_spacing
 from mjlab.scripts._diagnostics import SLALOM_DIAGNOSTICS_ROOT
 
 

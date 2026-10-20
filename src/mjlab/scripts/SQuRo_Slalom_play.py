@@ -17,10 +17,10 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     PHASE1_END_ITER,
     get_training_phase,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import (
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import (
     PoleEntityCfg,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import curvature_from_spacing, get_slalom_geometry
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
@@ -169,9 +169,9 @@ class JointDataRecorder:
         ja = asset.data.joint_acc
         if jp.dim() == 1:
             jp, jv, ja = jp.unsqueeze(0), jv.unsqueeze(0), ja.unsqueeze(0)
-        joint_pos = jp[env_idx, joint_ids]  # type: ignore[call-overload]
-        joint_vel = jv[env_idx, joint_ids]  # type: ignore[call-overload]
-        joint_acc = ja[env_idx, joint_ids]  # type: ignore[call-overload]
+        joint_pos = jp[env_idx, joint_ids]
+        joint_vel = jv[env_idx, joint_ids]
+        joint_acc = ja[env_idx, joint_ids]
         actuator_force = asset.data.actuator_force[env_idx]
 
         # 基座位置
@@ -391,7 +391,7 @@ def run_play(cfg: PlayConfig):
         cmd_cfg.fixed_gait_freq = cfg.fixed_gait_freq  # type: ignore[assignment]
         cmd_cfg.fixed_curvature = None if is_slalom_phase else cfg.fixed_curvature  # type: ignore[assignment]
         cmd_cfg.fixed_pole_spacing = cfg.fixed_pole_spacing if is_slalom_phase else None  # type: ignore[assignment]
-        cmd_cfg.fixed_slalom_curvature = cfg.fixed_slalom_curvature if is_slalom_phase else None
+        cmd_cfg.fixed_slalom_curvature = cfg.fixed_slalom_curvature if is_slalom_phase else None  # type: ignore
         if is_slalom_phase and cfg.fixed_pole_spacing is not None and cfg.fixed_slalom_curvature is not None:
             raise ValueError("固定绕杆峰值曲率和固定杆距只能指定一个")
 
@@ -513,12 +513,12 @@ def run_play(cfg: PlayConfig):
         body_pos = robot.data.body_link_pos_w
         cmd = env.unwrapped.command_manager.get_command("slalom_cmd")
         print(f"[INFO] 自检 {cfg.smoke_steps} 步完成")
-        print(f"[INFO] 命令 = {[round(float(v), 4) for v in cmd[0].tolist()]}")
+        print(f"[INFO] 命令 = {[round(float(v), 4) for v in cmd[0].tolist()]}")  # type: ignore
         print(f"[INFO] F_body x={float(body_pos[0, _MODEL_INDICES.f_body_id, 0]):.4f} "
               f"z={float(body_pos[0, _MODEL_INDICES.f_body_id, 2]):.4f} | "
               f"H_body x={float(body_pos[0, _MODEL_INDICES.h_body_id, 0]):.4f} "
               f"z={float(body_pos[0, _MODEL_INDICES.h_body_id, 2]):.4f}")
-        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")  # type: ignore[index]
+        print(f"[INFO] 最近一步奖励: {float(rew[0]):.4f}")
         if data_recorder:
             data_recorder.save_to_csv()
         env.close()

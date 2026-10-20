@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from .reference import get_reference_joint_state
 from .indices import ACTUATED_JOINT_CFG, _MODEL_INDICES
-from .path import compute_path_ref, get_f_body_physical_heading
+from .reference import compute_path_ref, get_f_body_physical_heading
 
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv

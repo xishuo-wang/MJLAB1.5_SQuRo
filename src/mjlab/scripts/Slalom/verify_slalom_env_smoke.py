@@ -10,11 +10,11 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEPS_PER_ITER, PHASE1_END_ITER
-from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_path_ref, get_approach_start
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref, get_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_reward_weight
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_NUM, pole_mocap_id
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_NUM, pole_mocap_id
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
 
 TASK_NAME = "Mjlab-SQuRo-Slalom"
@@ -93,6 +93,7 @@ def check_phase1(u, act) -> None:
             x_ref, _, _, _, _ = compute_path_ref(u)
             x_first = float(x_ref[0])
         if i == 59:
+            assert x_first is not None
             x_ref, _, vx, vy, _ = compute_path_ref(u)
             print(f"    kappa=[{u._path_kappa.min().item():.2f}, {u._path_kappa.max().item():.2f}] "
                   f"| x_ref: {x_first:.5f} → {float(x_ref[0]):.5f} "

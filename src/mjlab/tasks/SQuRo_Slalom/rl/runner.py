@@ -4,6 +4,7 @@ import os
 import random
 import time
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import torch
@@ -17,12 +18,13 @@ from mjlab.rl.exporter_utils import (
   get_base_metadata,
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
+from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, SlalomCommandCfg
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
   PHASE0_EPISODE_SECONDS, SLALOM_BIN_COUNT, SLALOM_CURVATURE_MIN,
   SPACING_EVALUATION_ENVS, SPACING_EVALUATION_EPISODE_SECONDS, SPACING_REQUIRED_BATCHES,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import configure_pole_collision, pole_collision_enabled
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import configure_pole_collision, pole_collision_enabled
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 
 
 class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
@@ -32,7 +34,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
   def __init__(self, env, train_cfg, log_dir=None, device="cpu"):
     super().__init__(env, train_cfg, log_dir, device)
     self._evaluation_env = None
-    self._command = env.unwrapped.command_manager._terms["slalom_cmd"]
+    self._command: SlalomCommand = cast(SlalomCommand, env.unwrapped.command_manager._terms["slalom_cmd"])
 
   # 显式固定条件与回放不自动推进杆距课程。
   def _course_enabled(self) -> bool:
@@ -46,7 +48,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
       cfg = copy.deepcopy(self.env.unwrapped.cfg)
       cfg.scene.num_envs = SPACING_EVALUATION_ENVS
       cfg.episode_length_s = SPACING_EVALUATION_EPISODE_SECONDS
-      command_cfg = cfg.commands["slalom_cmd"]
+      command_cfg = cast(SlalomCommandCfg, cfg.commands["slalom_cmd"])
       command_cfg.enable_spacing_curriculum = True
       command_cfg.phase0_only = False
       command_cfg.debug_vis = False
@@ -64,8 +66,9 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
 
   # 考核沿用训练侧课程档位，但按挡位等概率采样且不继承训练权重。
   def _sync_evaluation_course(self) -> None:
+    assert self._evaluation_env is not None
     env = self._evaluation_env.unwrapped
-    command = env.command_manager._terms["slalom_cmd"]
+    command = cast(SlalomCommand, env.command_manager._terms["slalom_cmd"])
     course = command.spacing_curriculum
     train = self._command.spacing_curriculum
     course.max_curvature = int(train.max_curvature)
@@ -109,7 +112,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
     final_mode = bool(course.final_level_passed)
     measure = course.measure_final_batch if final_mode else course.measure_batch
     numpy_state, python_state = np.random.get_state(), random.getstate()
-    devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []
+    devices = [self.env.device.index or 0] if self.env.device.type == "cuda" else []  # type: ignore
     started = time.perf_counter()
     batch_stats: list[dict] = []
     result: dict | None = None
@@ -118,6 +121,7 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
         for sweep in range(SPACING_REQUIRED_BATCHES):
           torch.manual_seed(int(self.cfg.get("seed", 42)) + iteration + sweep)
           batch_stats.append(measure(self._run_evaluation_batch()))
+        assert self._evaluation_env is not None
         collision = pole_collision_enabled(self._evaluation_env.unwrapped)
         result = course.record_evaluation(batch_stats, iteration, collision)
     finally:
@@ -219,12 +223,14 @@ class SQuRoOnPolicyRunner(MjlabOnPolicyRunner):
           it=iteration, start_it=start_it, total_it=total_it,
           collect_time=collect_time, learn_time=learn_time, loss_dict=loss_dict,
           learning_rate=self.alg.learning_rate, action_std=self.alg.get_policy().output_std,
-          rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
+          rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
         )
         self._maybe_evaluate_curriculum(iteration)
         if self.logger.writer is not None and iteration % self.cfg["save_interval"] == 0:
+          assert self.logger.log_dir is not None
           self.save(os.path.join(self.logger.log_dir, f"model_{iteration}.pt"))
       if self.logger.writer is not None:
+        assert self.logger.log_dir is not None
         self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))
     finally:
       if self._evaluation_env is not None:

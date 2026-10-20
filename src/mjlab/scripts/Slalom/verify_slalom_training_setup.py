@@ -20,7 +20,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     _STEPS_PER_ITER, get_curriculum_reward_weight, reward_weight_curriculum,
     SlalomSpacingCurriculum,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_corridor_side_excess
+from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_corridor_side_excess
 
 
 # 用路径局部坐标生成带符号的身体横向偏移。
@@ -95,7 +95,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertEqual(slalom.sim.mujoco.timestep, hole.sim.mujoco.timestep)
         self.assertEqual(slalom.decimation, hole.decimation)
         self.assertAlmostEqual(slalom.decimation * slalom.sim.mujoco.timestep, 0.01)
-        self.assertFalse(slalom.commands["slalom_cmd"].phase0_only)
+        self.assertFalse(slalom.commands["slalom_cmd"].phase0_only)  # type: ignore
 
     # 跨过原绕杆边界后，路径与奖励仍使用一阶段。
     def test_phase0_lock_keeps_late_curriculum(self):

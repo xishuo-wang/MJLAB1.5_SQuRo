@@ -143,12 +143,12 @@ class TestAbnormalLegPose(unittest.TestCase):
 
     # 当前异常姿态有代价，参考附近和脊柱自由运动不受此项惩罚。
     def test_actual_fold_and_shoulder_lift(self):
-        self.assertAlmostEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)
+        self.assertAlmostEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)  # type: ignore
         self.actual[:, _ACT_SPN_IDS] = 2.0
-        self.assertAlmostEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)
+        self.assertAlmostEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)  # type: ignore
         self.actual[0, _ACT_HL_HIP_ID] = -1.5
         self.actual[1, _ACT_FL_SHOULDER_ID] = 1.1
-        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)
+        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)  # type: ignore
         torch.testing.assert_close(penalty, torch.tensor([-5 * 0.8**2, -5 * 0.4**2]))
 
     # 深度超出 XML 范围的请求仍有更大代价，不按十四维平均稀释单腿异常。
@@ -157,7 +157,7 @@ class TestAbnormalLegPose(unittest.TestCase):
         target[0, _ACT_HL_HIP_ID] = -1.5
         target[1, _ACT_HR_HIP_ID] = -2.0
         self.set_requested(target)
-        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)
+        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)  # type: ignore
         torch.testing.assert_close(penalty, torch.tensor([-5 * 0.8**2, -5 * 1.3**2]))
         self.assertTrue(bool((penalty < 0).all()))
 
@@ -165,12 +165,12 @@ class TestAbnormalLegPose(unittest.TestCase):
     def test_symmetry_phase_gate_and_tolerance(self):
         self.actual[0, _ACT_FL_SHOULDER_ID] = 1.2
         self.actual[1, _ACT_FR_SHOULDER_ID] = 1.2
-        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)
+        penalty = rewards.compute_abnormal_leg_pose_penalty(self.env)  # type: ignore
         torch.testing.assert_close(penalty[0], penalty[1])
         self.env.command_manager._terms["slalom_cmd"].phase1_mask[0] = False
-        self.assertEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env)[0]), 0.0)
+        self.assertEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env)[0]), 0.0)  # type: ignore
         self.env.command_manager._terms["slalom_cmd"].cfg.phase0_only = True
-        self.assertEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)
+        self.assertEqual(float(rewards.compute_abnormal_leg_pose_penalty(self.env).sum()), 0.0)  # type: ignore
 
 
 if __name__ == "__main__":

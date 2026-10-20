@@ -1,4 +1,4 @@
-﻿# SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
+# SQuRo_Slalom 参考路径一致性回归；不创建环境、不修改训练数据。
 # 覆盖: 局部重置隔离、参考推进与自身步频一致、gait=1 几何不变、命令计时器、
 #       固定间距的单一真源、一阶段预算与最大形变、腿部参考过零连续。
 import math
@@ -26,13 +26,12 @@ from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
     _ACT_F_SPINE1_ID, _ACT_H_SPINE1_ID, _ACT_NECK_YAW_ID,
     _ACT_F_BODY_ID, _ACT_H_BODY_ID, _ACT_NECK_PITCH_ID,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.path import (
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     compute_slalom_path_ref,
     get_approach_start,
     get_effective_pole_spacing,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_pole_spacing_bounds
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
 
 # 几何黄金数据仍采用历史时间步，真实频率由端到端自检检查。
 STEP_DT = 0.02
@@ -167,7 +166,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
     # 替换模型索引解析, 桩环境没有真实实体
     def setUp(self):
         self._orig_resolve = ref_mod.resolve_model_indices
-        ref_mod.resolve_model_indices = lambda entity: None
+        ref_mod.resolve_model_indices = lambda entity: None  # type: ignore
 
     def tearDown(self):
         ref_mod.resolve_model_indices = self._orig_resolve
@@ -301,6 +300,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
         limits = torch.tensor(limits)
         ref_mod._init_tables("cpu")
         table = ref_mod._pos_table
+        assert table is not None
         bins = ref_mod._CURVATURE_BINS
         index = torch.arange(len(bins))
         rows = {
@@ -315,7 +315,9 @@ class TestSlalomRefConsistency(unittest.TestCase):
     # 腿部参考角度沿相位连续, 速度有界
     def test_leg_reference_continuous_and_bounded(self):
         ref_mod._init_tables("cpu")
-        table, vel_table = ref_mod._pos_table, ref_mod._vel_table
+        table = ref_mod._pos_table
+        vel_table = ref_mod._vel_table
+        assert table is not None and vel_table is not None
         bins = ref_mod._CURVATURE_BINS
         slalom = torch.cat([table[p, :, :p + 1] for p, peak in enumerate(bins) if peak >= 5], dim=1)
         slalom_vel = torch.cat([vel_table[p, :, :p + 1] for p, peak in enumerate(bins) if peak >= 5], dim=1)
@@ -328,6 +330,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
     def test_reference_tracks_base_velocity(self):
         def leg_travel(base):
             ref_mod._init_tables("cpu", base)
+            assert ref_mod._pos_table is not None
             row = ref_mod._pos_table[ref_mod._CURVATURE_BINS.index(15.0), :, 0]
             leg = row[:, :, _ACT_LEG_IDS]
             return float((leg.max(dim=1).values - leg.min(dim=1).values).abs().max())
@@ -469,7 +472,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
 
     # 阶段必须按回合起点锁定, 不得在回合中途随全局计数器翻转
     def test_phase_locked_at_episode_start(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import (
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
             compute_arc_path_ref,
             compute_path_ref,
             compute_slalom_path_ref,
@@ -556,7 +559,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 动态曲率路径连续: 预计算轨迹逐步连续, 恒定曲率段落在精确圆弧上。
     def test_dynamic_path_is_continuous(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path, compute_arc_path_ref
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path, compute_arc_path_ref
         segments = torch.zeros(2, 6)
         segments[0, :2] = torch.tensor([8.0, -8.0])
         bounds = torch.full((2, 6), 1e9)
@@ -570,12 +573,12 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         env = NS(device=torch.device("cpu"), num_envs=2, step_dt=0.01, max_episode_length=2000,
                  episode_length_buf=torch.zeros(2, dtype=torch.long),
                  command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
-        build_phase0_episode_path(env, torch.arange(2), torch.zeros(2), torch.zeros(2), torch.zeros(2),
+        build_phase0_episode_path(env, torch.arange(2), torch.zeros(2), torch.zeros(2), torch.zeros(2),  # type: ignore
                                   cmd.phase0_schedule, command[:, 0])
         previous = None
         for step in range(1, 2001):
             env.episode_length_buf.fill_(step)
-            x, y, _, _, heading = compute_arc_path_ref(env)
+            x, y, _, _, heading = compute_arc_path_ref(env)  # type: ignore
             if previous is not None:
                 move = float(torch.maximum((x - previous[0]).abs(), (y - previous[1]).abs()).max())
                 self.assertLess(move, 2e-3, msg=f"第 {step} 步路径跳变 {move:.5f} m")
@@ -583,7 +586,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
             previous = (x.clone(), y.clone())
         # 前 5 s 恒定曲率 8: 位置落在半径 0.125 m 的圆弧上
         env.episode_length_buf.fill_(100)  # 1 s
-        x, y, _, _, _ = compute_arc_path_ref(env)
+        x, y, _, _, _ = compute_arc_path_ref(env)  # type: ignore
         theta = 8.0 * 0.1 * 1.0
         expected = 2.0 * (1.0 / 8.0) * math.sin(theta / 2.0)
         self.assertAlmostEqual(float(torch.hypot(x[0], y[0])), expected, places=4)
@@ -657,9 +660,9 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 动态回合走廊按实际路径投影: 中心线上相距 80 mm 的点不再被误罚
     def test_dynamic_corridor_projects_to_actual_path(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.rewards import project_phase0_path_points
         from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_velocity_scale
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path
         segments = torch.zeros(1, 6)
         segments[0, :2] = torch.tensor([15.0, -15.0])
         bounds = torch.full((1, 6), 1e9)
@@ -672,7 +675,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=2000,
                  episode_length_buf=torch.zeros(1, dtype=torch.long),
                  command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
-        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),  # type: ignore
                                   cmd.phase0_schedule, command[:, 0])
         path = env._phase0_path_xy
         heading = env._phase0_path_heading
@@ -693,9 +696,9 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 路径数组按一阶段有效回合分配, 生产环境的 30 秒长度不得留下零值尾部
     def test_phase0_path_has_no_zero_tail(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.rewards import project_phase0_path_points
         from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_velocity_scale
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path
         segments = torch.zeros(1, 6)
         segments[0, 0] = 1.0
         bounds = torch.full((1, 6), 1e9)
@@ -708,7 +711,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=3000,
                  episode_length_buf=torch.zeros(1, dtype=torch.long),
                  command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
-        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),  # type: ignore
                                   cmd.phase0_schedule, command[:, 0])
         path = env._phase0_path_xy
         self.assertEqual(path.shape[1], 2001, msg="路径数组未按一阶段有效长度分配")
@@ -721,8 +724,8 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 起终点切线延伸: 沿切线对齐的包络点不应被计为越界
     def test_phase0_path_corridor_extends_tangent(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import project_phase0_path_points
-        from mjlab.tasks.SQuRo_Slalom.mdp.path import build_phase0_episode_path
+        from mjlab.tasks.SQuRo_Slalom.mdp.rewards import project_phase0_path_points
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import build_phase0_episode_path
         segments = torch.zeros(1, 6)
         bounds = torch.full((1, 6), 1e9)
         command = torch.zeros(1, 5)
@@ -733,7 +736,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         env = NS(device=torch.device("cpu"), num_envs=1, step_dt=0.01, max_episode_length=3000,
                  episode_length_buf=torch.zeros(1, dtype=torch.long),
                  command_manager=NS(_terms={"slalom_cmd": cmd}), scene=NS(env_origins=None))
-        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),
+        build_phase0_episode_path(env, torch.arange(1), torch.zeros(1), torch.zeros(1), torch.zeros(1),  # type: ignore
                                   cmd.phase0_schedule, command[:, 0])
         path, heading = env._phase0_path_xy, env._phase0_path_heading
         end_x = float(path[0, -1, 0])
@@ -746,8 +749,9 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
 
     # 包络边采样必须覆盖边中点: 角点合格、弦中点越界的反例
     def test_envelope_sampling_covers_edges(self):
-        from mjlab.tasks.SQuRo_Slalom.mdp.corridor import (
-            CORRIDOR_HALF_WIDTH, project_phase0_path_points, sample_body_envelopes)
+        from mjlab.tasks.SQuRo_Slalom.mdp.config import CORRIDOR_HALF_WIDTH
+        from mjlab.tasks.SQuRo_Slalom.mdp.reference import sample_body_envelopes
+        from mjlab.tasks.SQuRo_Slalom.mdp.rewards import project_phase0_path_points
         radius = 1.0 / 15.0
         angles = torch.linspace(0.0, math.pi * 2.0, 4001)
         path = torch.stack((radius * torch.cos(angles), radius * torch.sin(angles)), dim=-1)[None]
@@ -767,7 +771,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
         box[:, :, 1] = torch.tensor([-0.035, -0.035, 0.035, 0.035, -0.035, -0.035, 0.035, 0.035])
         env = NS(device=torch.device("cpu"), _slalom_body_envelope_vertices=box,
                  _slalom_envelope_samples=None)
-        sampled = sample_body_envelopes(env, box[None])
+        sampled = sample_body_envelopes(env, box[None])  # type: ignore
         self.assertGreater(int(sampled.shape[2]), 8, msg="包络只采了顶点, 未覆盖边中点")
         self.assertEqual(tuple(sampled.shape[:2]), (1, 2))
 

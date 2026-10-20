@@ -7,7 +7,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     get_velocity_scale,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import smooth_curvature_magnitude
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry, get_timed_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_timed_slalom_tables
 
 
 # 检查后脊柱过零参考的连续性、解析导数和端点形态。

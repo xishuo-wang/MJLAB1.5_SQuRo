@@ -6,10 +6,10 @@ import unittest
 import numpy as np
 import torch
 
-from mjlab.tasks.SQuRo_Slalom.mdp import corridor, rewards
+from mjlab.tasks.SQuRo_Slalom.mdp import reference, rewards
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SLALOM_CURVATURES
-from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_corridor_side_excess
-from mjlab.tasks.SQuRo_Slalom.mdp.slalom_geometry import get_slalom_geometry, get_spatial_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_spatial_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_corridor_side_excess
 
 
 # 用原始积分节点逐线段穷举最近距离，并包含接近段起点的向后射线。
@@ -33,7 +33,7 @@ def oracle(points, curvature):
 
 # 用三维盒的编号顺序构造水平矩形投影。
 def rectangle(center, heading, length=0.03, width=0.02):
-    points = torch.tensor(corridor._BOX_SIGNS, dtype=torch.float64)[:, :2]
+    points = torch.tensor(reference._BOX_SIGNS, dtype=torch.float64)[:, :2]
     rotation = torch.tensor(((np.cos(heading), -np.sin(heading)),
                              (np.sin(heading), np.cos(heading))), dtype=torch.float64)
     return points * torch.tensor((length, width)) @ rotation.T + torch.as_tensor(center)
@@ -47,13 +47,13 @@ class TestSlalomCurveCorridor(unittest.TestCase):
         spacing = tables[rows, -1, 0] / 5
         generator = torch.Generator().manual_seed(42)
         points = torch.rand(129, 11, 2, generator=generator, dtype=torch.float64) * 0.2
-        expected = corridor._project_slalom_points_block(points, tables, rows, spacing)
+        expected = rewards._project_slalom_points_block(points, tables, rows, spacing)
         for count in (0, 1, 63, 64, 65, 129):
-            with patch.object(corridor, "_project_slalom_points_block", wraps=corridor._project_slalom_points_block) as project:
-                actual = corridor.project_slalom_points(points[:count], tables, rows[:count], spacing[:count])
+            with patch.object(rewards, "_project_slalom_points_block", wraps=rewards._project_slalom_points_block) as project:
+                actual = rewards.project_slalom_points(points[:count], tables, rows[:count], spacing[:count])
             for call in project.call_args_list:
                 size = call.args[0].shape[0]
-                self.assertLessEqual(size, corridor._PROJECTION_ENV_BLOCK)
+                self.assertLessEqual(size, rewards._PROJECTION_ENV_BLOCK)
                 self.assertEqual(size & (size - 1), 0)
             for value, reference in zip(actual, expected, strict=True):
                 torch.testing.assert_close(value, reference[:count])
@@ -69,7 +69,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             sign = np.sign(np.interp(arc, path["arc"], path["kappa"]))
             normal = np.array((-np.sin(heading), np.cos(heading)))
             points = torch.tensor(np.stack((center + sign * 0.045 * normal, center - sign * 0.045 * normal)))
-            _, lateral, curvature = corridor.project_slalom_points(points[None], torch.tensor(get_spatial_slalom_tables()),
+            _, lateral, curvature = rewards.project_slalom_points(points[None], torch.tensor(get_spatial_slalom_tables()),
                 torch.tensor([len(SLALOM_CURVATURES) - 1]), torch.tensor([geometry["spacing"]]))
             self.assertGreater(float(lateral[0, 0] * curvature[0, 0]), 0)
             self.assertLess(float(lateral[0, 1] * curvature[0, 1]), 0)
@@ -83,7 +83,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             spacing = geometry["spacing"]
             points = np.column_stack((rng.uniform(geometry["approach"]["x"][0] - 0.08, 4 * spacing, 120),
                                       rng.uniform(geometry["period"]["y"].min() - 0.06, 0.06, 120)))
-            actual = corridor.project_slalom_points(torch.tensor(points)[None], tables,
+            actual = rewards.project_slalom_points(torch.tensor(points)[None], tables,
                 torch.tensor([row]), torch.tensor([spacing]))[0][0].numpy()
             np.testing.assert_allclose(actual, oracle(points, curvature), atol=0.0001, rtol=0)
 
@@ -95,7 +95,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
                            np.interp(0.04, path["arc"], path["y"])))
         heading = np.interp(0.04, path["arc"], path["heading"])
         vertices = rectangle(center, heading)
-        distance = corridor.project_slalom_points(vertices[None], torch.tensor(get_spatial_slalom_tables()),
+        distance = rewards.project_slalom_points(vertices[None], torch.tensor(get_spatial_slalom_tables()),
                     torch.tensor([len(SLALOM_CURVATURES) - 1]), torch.tensor([geometry["spacing"]]))[0]
         self.assertLess(float(distance.max()), 0.04)
         old = compute_corridor_side_excess(torch.tensor(center)[None], torch.tensor([heading]),
@@ -116,8 +116,8 @@ class TestSlalomCurveCorridor(unittest.TestCase):
                  pole_spacing=torch.full((2,), geometry["spacing"]))
         env = NS(device="cpu", scene=NS(env_origins=origins), command_manager=NS(_terms={"slalom_cmd": cmd}),
                  _slalom_body_envelope_vertices=rectangle((0.0, 0.0), 0.0, length=0.04, width=0.045)[None].expand(2, -1, -1))
-        with patch.object(corridor, "project_body_envelopes", return_value=vertices):
-            inner, outer = corridor.compute_phase1_corridor_excess(env, torch.arange(2))
+        with patch.object(rewards, "project_body_envelopes", return_value=vertices):
+            inner, outer = rewards.compute_phase1_corridor_excess(env, torch.arange(2))  # type: ignore
         self.assertGreater(float(inner.min()), 0.004)
         torch.testing.assert_close(inner[0], inner[1], atol=1e-7, rtol=0)
         torch.testing.assert_close(outer[0], outer[1], atol=1e-7, rtol=0)
@@ -131,7 +131,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             point = np.array((approach["x"][0], approach["y"][0])) - 0.08 * tangent
             query = np.array([point, [4 * geometry["spacing"] - 1e-7, geometry["pole_y"]],
                               [4 * geometry["spacing"] + 1e-7, geometry["pole_y"]]])
-            distance = corridor.project_slalom_points(torch.tensor(query)[None], torch.tensor(get_spatial_slalom_tables()),
+            distance = rewards.project_slalom_points(torch.tensor(query)[None], torch.tensor(get_spatial_slalom_tables()),
                 torch.tensor([row]), torch.tensor([geometry["spacing"]]))[0][0]
             self.assertLess(float(distance[0]), 1e-7)
             self.assertLess(float(abs(distance[1] - distance[2])), 1e-6)
@@ -145,7 +145,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
              patch.object(rewards, "get_curriculum_reward_weight", return_value=1.0), \
              patch.object(rewards, "compute_phase0_corridor_excess", return_value=(torch.zeros(2, 2), torch.zeros(2, 2))), \
              patch.object(rewards, "compute_phase1_corridor_excess", return_value=(torch.full((1, 2), 0.02), torch.zeros(1, 2))) as phase1:
-            value = rewards.compute_corridor_reward(env)
+            value = rewards.compute_corridor_reward(env)  # type: ignore
         torch.testing.assert_close(phase1.call_args.args[1], torch.tensor([1]))
         self.assertEqual(float(value[0]), 1.0)
         self.assertLess(float(value[1]), 1.0)

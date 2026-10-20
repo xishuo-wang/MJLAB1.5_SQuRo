@@ -21,9 +21,9 @@ plt.rcParams["font.sans-serif"] = ["SimHei"]
 plt.rcParams["axes.unicode_minus"] = False
 
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET, CURVATURE_TARGET_MAX
-from mjlab.tasks.SQuRo_Slalom.mdp.command import FIXED_VEL, VEL_MIN
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_Y, POLE_RADIUS
-from mjlab.tasks.SQuRo_Slalom.mdp.path import _generate_slalom_lut_one_period
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import BASE_VEL, VEL_MIN
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_Y, POLE_RADIUS
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import _generate_slalom_lut_one_period
 
 
 # ===== 文件头常量 =====
@@ -41,7 +41,7 @@ def main():
     args = parser.parse_args()
 
     t = SMOOTH_TIME
-    v = FIXED_VEL * GAIT_FREQ * (1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX)
+    v = BASE_VEL * GAIT_FREQ * (1.0 - (1.0 - VEL_MIN) * CURVATURE_TARGET / CURVATURE_TARGET_MAX)
     tr = v * t                          # 单段过渡弧长
     L90 = np.pi / 2 * RMIN              # 90° 弧长
 

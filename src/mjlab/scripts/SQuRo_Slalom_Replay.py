@@ -29,7 +29,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
     resolve_foot_force_ids,
     resolve_model_indices,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.path import compute_path_ref
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     _BIO_DATA_DIR,
     get_reference_joint_state,
@@ -250,7 +250,7 @@ class HandTunedReplayPolicy:
         base_ang_vel = self.robot.data.root_link_ang_vel_w[0].detach().cpu().numpy()
         foot_pos = self.robot.data.site_pos_w[0, self._foot_site_ids].detach().cpu().numpy()
         x_ref, y_ref, vx_des, vy_des, path_heading = compute_path_ref(env)
-        cmd = env.command_manager.get_command("slalom_cmd")[0].detach().cpu().numpy()
+        cmd = env.command_manager.get_command("slalom_cmd")[0].detach().cpu().numpy()  # type: ignore
         self.command = cmd
 
         quat = self.robot.data.root_link_quat_w[0]
@@ -264,7 +264,7 @@ class HandTunedReplayPolicy:
             "time": float(step[0]) * env.step_dt,
             "episode_step": float(step[1]),
             "motion_phase": motion_phase,
-            "ref_phase": float(env._ref_phase[0]) if hasattr(env, "_ref_phase") else float("nan"),
+            "ref_phase": float(env._ref_phase[0]) if hasattr(env, "_ref_phase") else float("nan"),  # type: ignore
             "base_pos_x": float(base_pos[0]),
             "base_pos_y": float(base_pos[1]),
             "base_pos_z": float(base_pos[2]),

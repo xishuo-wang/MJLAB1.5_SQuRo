@@ -4,7 +4,7 @@ import mujoco
 from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
 from .curriculums import SLALOM_CURVATURE_MAX
-from .slalom_geometry import get_slalom_geometry
+from .reference import get_slalom_geometry
 
 
 # 杆几何常量
@@ -59,6 +59,8 @@ class PoleEntityCfg(EntityCfg):
 
 
 class PoleEntity(Entity):
+    cfg: PoleEntityCfg
+
     def __init__(self, cfg: PoleEntityCfg):
         super().__init__(cfg)
         self.cfg = cfg

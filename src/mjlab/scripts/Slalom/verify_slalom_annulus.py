@@ -10,11 +10,12 @@ from scipy.spatial import ConvexHull
 import torch
 
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_spec
-from mjlab.tasks.SQuRo_Slalom.mdp.corridor import compute_annulus_side_excess, _BOX_SIGNS
-from mjlab.tasks.SQuRo_Slalom.mdp import corridor
+from mjlab.tasks.SQuRo_Slalom.mdp import reference
+from mjlab.tasks.SQuRo_Slalom.mdp.config import CORRIDOR_HALF_WIDTH
+from mjlab.tasks.SQuRo_Slalom.mdp.entity import POLE_RADIUS
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import BODY_NAMES, resolve_body_envelope_bounds
-from mjlab.tasks.SQuRo_Slalom.mdp.path import CORRIDOR_HALF_WIDTH
-from mjlab.tasks.SQuRo_Slalom.mdp.pole import POLE_RADIUS
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import _BOX_SIGNS, project_body_envelopes
+from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_annulus_side_excess
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX
 
 
@@ -156,8 +157,8 @@ class TestSlalomAnnulus(unittest.TestCase):
                    data=NS(body_link_pos_w=torch.tensor(data.xpos[ids])[None].float(),
                            body_link_quat_w=torch.tensor(data.xquat[ids])[None].float()))
         env = NS(scene={"robot": robot}, device="cpu", sim=NS(mj_model=model))
-        with patch.object(corridor, "_MODEL_INDICES", NS(f_body_id=0, h_body_id=1)):
-            boxes = corridor.project_body_envelopes(env)[0].numpy()
+        with patch.object(reference, "_MODEL_INDICES", NS(f_body_id=0, h_body_id=1)):
+            boxes = project_body_envelopes(env)[0].numpy()  # type: ignore
         for box, body_id in zip(boxes, ids, strict=True):
             hull = ConvexHull(box)
             for geom_id in np.flatnonzero(model.geom_bodyid == body_id):
