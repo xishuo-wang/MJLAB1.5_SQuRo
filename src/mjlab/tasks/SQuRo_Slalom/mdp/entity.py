@@ -3,8 +3,8 @@ import torch
 import mujoco
 from dataclasses import dataclass, replace
 from mjlab.entity import Entity, EntityCfg
-from .curriculums import SLALOM_CURVATURE_MAX
 from .reference import get_slalom_geometry
+from .curriculums import SLALOM_CURVATURE_MAX
 
 
 # 杆几何常量
@@ -13,15 +13,18 @@ POLE_HALF_HEIGHT = 0.05     # 高 10cm（半高 5cm）
 POLE_NUM = 12               # 杆阵列数量，实际间距按回合几何更新
 
 
+
 # 平滑后的杆心 Y 坐标
 def _smooth_pole_y() -> float:
     return get_slalom_geometry(SLALOM_CURVATURE_MAX)["pole_y"]
 
 
+
 POLE_Y = _smooth_pole_y()   # 编译占位和默认绘图使用，运行时逐环境更新
 
 
-# 仅改变独立考核场景的杆碰撞掩码，保留 mocap 与实际尺寸。
+
+# 仅改变独立考核场景的杆碰撞掩码，保留 mocap 与实际尺寸
 def configure_pole_collision(env_cfg, enabled: bool) -> None:
     mask = int(enabled)
     env_cfg.scene.entities = {
@@ -30,7 +33,7 @@ def configure_pole_collision(env_cfg, enabled: bool) -> None:
     }
 
 
-# 从编译模型核对整排杆的实际碰撞开关。
+# 从编译模型核对整排杆的实际碰撞开关
 def pole_collision_enabled(env) -> bool:
     model = env.sim.mj_model
     states = []
@@ -42,6 +45,7 @@ def pole_collision_enabled(env) -> bool:
     if any(states) and not all(states):
         raise ValueError("整排杆的实际碰撞开关不一致")
     return all(states)
+
 
 
 @dataclass
@@ -58,14 +62,15 @@ class PoleEntityCfg(EntityCfg):
         return PoleEntity(cfg=self)
 
 
+
 class PoleEntity(Entity):
     cfg: PoleEntityCfg
-
     def __init__(self, cfg: PoleEntityCfg):
         super().__init__(cfg)
         self.cfg = cfg
         self._geom_ref = None
         self._build_geometry()
+
 
     def _build_geometry(self):
         body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position, mocap=True)
@@ -79,12 +84,14 @@ class PoleEntity(Entity):
             conaffinity=self.cfg.conaffinity,
         )
 
+
     @property
     def spec(self) -> mujoco.MjSpec:
         return self._spec
 
 
-# 按名称解析杆体的 mocap 编号，避免依赖模型中的排列顺序。
+
+# 按名称解析杆体的 mocap 编号，避免依赖模型中的排列顺序
 def pole_mocap_id(entity) -> int:
     cached = getattr(entity, "_pole_mocap_id", None)
     if cached is None:
@@ -99,7 +106,8 @@ def pole_mocap_id(entity) -> int:
     return cached
 
 
-# 仅更新重置环境的整排杆，一阶段将杆移出活动区域。
+
+# 仅更新重置环境的整排杆，一阶段将杆移出活动区域
 def write_pole_mocap(env, env_ids: torch.Tensor, spacing: torch.Tensor, pole_y: torch.Tensor, phase1: bool) -> None:
     origins = getattr(env.scene, "env_origins", None)
     origin = torch.zeros((len(env_ids), 3), device=env.device) if origins is None else origins[env_ids]
@@ -112,8 +120,8 @@ def write_pole_mocap(env, env_ids: torch.Tensor, spacing: torch.Tensor, pole_y: 
         position[:, 0] += (i + 1) * spacing
         position[:, 1] += pole_y if phase1 else 100.0
         entity.data.data.mocap_pos[env_ids, mocap_id] = position
-        entity.data.data.mocap_quat[env_ids, mocap_id] = torch.tensor(
-            [1.0, 0.0, 0.0, 0.0], device=env.device)
+        entity.data.data.mocap_quat[env_ids, mocap_id] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
+
 
 
 def generate_pole_positions(

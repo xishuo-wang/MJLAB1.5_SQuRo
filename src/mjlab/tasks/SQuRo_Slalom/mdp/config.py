@@ -1,5 +1,3 @@
-# SQuRo Slalom 命令与几何静态配置（本文件不得 import 任务内其他模块）
-
 FIXED_HEIGHT_F = 0.055   # 命令默认前肢高度
 FIXED_HEIGHT_H = 0.055   # 命令默认后肢高度
 

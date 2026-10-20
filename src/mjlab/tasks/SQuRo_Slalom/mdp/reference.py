@@ -1,59 +1,55 @@
 from __future__ import annotations
-
 import math
-from functools import lru_cache
-from itertools import product
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
+import torch
 import numpy as np
 import pandas as pd
-import torch
-
-from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
-from mjlab.entity import Entity
+from pathlib import Path
+from itertools import product
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 from mjlab.utils.lab_api.math import matrix_from_quat
-
+from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
 from .curriculums import (
+    Rmin,
     BASE_VEL,
+    SMOOTH_VEL,
+    SMOOTH_TIME,
+    phase0_kappa_at,
     CURVATURE_TARGET,
+    SLALOM_CURVATURES,
+    get_velocity_scale,
+    SLALOM_CURVATURE_MAX,
+    SLALOM_CURVATURE_MIN,
     CURVATURE_TARGET_MAX,
     PHASE0_EPISODE_SECONDS,
     REFERENCE_CURVATURE_BLEND,
-    Rmin,
-    SLALOM_CURVATURE_MAX,
-    SLALOM_CURVATURE_MIN,
-    SLALOM_CURVATURES,
-    SMOOTH_TIME,
-    SMOOTH_VEL,
     SPINE_REFERENCE_TIME_CONSTANT,
-    get_velocity_scale,
-    phase0_kappa_at,
 )
 from .indices import (
-    _ACT_F_BODY_ID,
-    _ACT_F_SPINE1_ID,
-    _ACT_FL_ELBOW_ID,
-    _ACT_FL_SHOULDER_ID,
-    _ACT_FR_ELBOW_ID,
-    _ACT_FR_SHOULDER_ID,
-    _ACT_H_BODY_ID,
-    _ACT_H_SPINE1_ID,
-    _ACT_HL_HIP_ID,
-    _ACT_HL_KNEE_ID,
-    _ACT_HR_HIP_ID,
-    _ACT_HR_KNEE_ID,
-    _ACT_JOINT_NAMES,
-    _ACT_NECK_PITCH_ID,
-    _ACT_NECK_YAW_ID,
     _ACT_SPN_IDS,
     _MODEL_INDICES,
-    resolve_body_envelope_bounds,
+    _ACT_F_BODY_ID,
+    _ACT_H_BODY_ID,
+    _ACT_HL_HIP_ID,
+    _ACT_HR_HIP_ID,
+    _ACT_HL_KNEE_ID,
+    _ACT_HR_KNEE_ID,
+    _ACT_JOINT_NAMES,
+    _ACT_F_SPINE1_ID,
+    _ACT_H_SPINE1_ID,
+    _ACT_FL_ELBOW_ID,
+    _ACT_FR_ELBOW_ID,
+    _ACT_NECK_YAW_ID,
+    _ACT_NECK_PITCH_ID,
+    _ACT_FL_SHOULDER_ID,
+    _ACT_FR_SHOULDER_ID,
     resolve_model_indices,
+    resolve_body_envelope_bounds,
 )
+from mjlab.entity import Entity
+
 if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
-
 
 
 
@@ -81,6 +77,7 @@ _LEG_LIMITS: dict[int, tuple[float, float]] = {
 MAX_STRIDE_SCALE = 1.0
 
 
+
 # 离散曲率绝对值表
 def _generate_curvature_bins(max_k: float) -> list[float]:
     bins = [i * 0.5 for i in range(11)]  # [0.0, 0.5, ..., 5.0]
@@ -92,6 +89,7 @@ _CURVATURE_BINS = _generate_curvature_bins(CURVATURE_TARGET_MAX)
 _NUM_CURV = len(_CURVATURE_BINS)
 
 
+
 # 预计算表分辨率
 _TABLE_RESOLUTION = 50                      # 预计算表分辨率
 _tables_initialized = False
@@ -100,6 +98,7 @@ _table_base_vel: float = BASE_VEL
 _k_bins: torch.Tensor | None = None        # [_NUM_CURV] 曲率查找表(缓存)
 _pos_table: torch.Tensor | None = None     # [峰值档, 内侧, 瞬时档, 相位, 关节]
 _vel_table: torch.Tensor | None = None     # 同上
+
 
 
 # 平滑后脊柱曲率幅值及其导数，零点保留微小弯曲以避免速度翻转。
@@ -207,26 +206,22 @@ def _init_tables(device: torch.device | str, base_velocity: float = BASE_VEL) ->
 
                 # 分别计算每条腿的关节角（应用相位差并夹到关节限位）
                 shift = int(PHASE_LAG["FL"] * _TABLE_RESOLUTION)
-                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift),
-                                             torch.roll(z_f_t, shifts=shift), True)
+                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fL, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FL_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FL_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FL_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FL_ELBOW_ID)
 
                 shift = int(PHASE_LAG["FR"] * _TABLE_RESOLUTION)
-                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift),
-                                             torch.roll(z_f_t, shifts=shift), True)
+                sh, el = _inverse_kinematics(torch.roll(y_f_t * row_scale * scale_fR, shifts=shift), torch.roll(z_f_t, shifts=shift), True)
                 pos[p, side, i, :, _ACT_FR_SHOULDER_ID] = _clamp_leg_angle(sh, _ACT_FR_SHOULDER_ID)
                 pos[p, side, i, :, _ACT_FR_ELBOW_ID] = _clamp_leg_angle(el, _ACT_FR_ELBOW_ID)
 
                 shift = int(PHASE_LAG["HL"] * _TABLE_RESOLUTION)
-                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift),
-                                             torch.roll(z_h_t, shifts=shift), False)
+                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hL, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HL_HIP_ID] = _clamp_leg_angle(hp, _ACT_HL_HIP_ID)
                 pos[p, side, i, :, _ACT_HL_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HL_KNEE_ID)
 
                 shift = int(PHASE_LAG["HR"] * _TABLE_RESOLUTION)
-                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift),
-                                             torch.roll(z_h_t, shifts=shift), False)
+                hp, kn = _inverse_kinematics(torch.roll(y_h_t * row_scale * scale_hR, shifts=shift), torch.roll(z_h_t, shifts=shift), False)
                 pos[p, side, i, :, _ACT_HR_HIP_ID] = _clamp_leg_angle(hp, _ACT_HR_HIP_ID)
                 pos[p, side, i, :, _ACT_HR_KNEE_ID] = _clamp_leg_angle(kn, _ACT_HR_KNEE_ID)
 
@@ -263,7 +258,8 @@ def invalidate_reference_cache(env: ManagerBasedRlEnv, env_ids: torch.Tensor | N
         state["step"][env_ids] = -1
 
 
-# 二阶段平滑四脊柱位置并由同一轨迹差分速度，重置与步级缓存语义见碰撞课程文档。
+
+# 二阶段平滑四脊柱位置并由同一轨迹差分速度，重置与步级缓存语义见碰撞课程文档
 def _smooth_spine_reference(env, ref_pos, ref_vel, phase1) -> None:
     raw = ref_pos[:, _ACT_SPN_IDS]
     state = getattr(env, "_ref_spine_filter", None)
@@ -274,21 +270,19 @@ def _smooth_spine_reference(env, ref_pos, ref_vel, phase1) -> None:
             "episode": env.episode_length_buf.clone(), "active": phase1.clone(),
         }
         env._ref_spine_filter = state
-    initialize = ((state["step"] < 0) | (env.episode_length_buf < state["episode"])
-                  | (phase1 != state["active"]))
+    initialize = ((state["step"] < 0) | (env.episode_length_buf < state["episode"]) | (phase1 != state["active"]))
     advance = state["step"] != env.common_step_counter
     alpha = env.step_dt / (SPINE_REFERENCE_TIME_CONSTANT + env.step_dt)
     next_pos = state["position"] + alpha * (raw - state["position"])
     next_vel = (next_pos - state["position"]) / env.step_dt
-    position = torch.where(initialize[:, None], raw,
-                           torch.where(advance[:, None], next_pos, state["position"]))
-    velocity = torch.where(initialize[:, None], torch.zeros_like(raw),
-                           torch.where(advance[:, None], next_vel, state["velocity"]))
+    position = torch.where(initialize[:, None], raw, torch.where(advance[:, None], next_pos, state["position"]))
+    velocity = torch.where(initialize[:, None], torch.zeros_like(raw), torch.where(advance[:, None], next_vel, state["velocity"]))
     ref_pos[:, _ACT_SPN_IDS] = torch.where(phase1[:, None], position, raw)
     ref_vel[:, _ACT_SPN_IDS] = torch.where(phase1[:, None], velocity, ref_vel[:, _ACT_SPN_IDS])
     state.update(position=ref_pos[:, _ACT_SPN_IDS].clone(), velocity=ref_vel[:, _ACT_SPN_IDS].clone(),
                  step=torch.full_like(state["step"], env.common_step_counter),
                  episode=env.episode_length_buf.clone(), active=phase1.clone())
+
 
 
 # 获取当前步的参考关节位置和速度
@@ -334,8 +328,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     command_term = env.command_manager._terms["slalom_cmd"]
     phase1 = command_term.phase1_mask  # type: ignore
     peak_attr = getattr(command_term, "curvature_peak_command", None)
-    peak_k = peak_attr if peak_attr is not None else torch.where(
-        phase1, command_term.slalom_peak_curvature, abs_k)  # type: ignore
+    peak_k = peak_attr if peak_attr is not None else torch.where(phase1, command_term.slalom_peak_curvature, abs_k)  # type: ignore
 
     # 峰值轴插值: 表按平均步幅对应本回合每周前进距离, 一阶段曲率连续需要插值
     pidx = torch.searchsorted(_k_bins, peak_k) - 1
@@ -403,8 +396,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     smooth_magnitude, smooth_slope = smooth_curvature_magnitude(curvature_cmd)
     # 二阶段与动态一阶段都经过零点: 幅值、斜率与四脊柱滤波统一用同源平滑, 恒定一阶段保持原状
     schedule = getattr(command_term, "phase0_schedule", None)
-    dynamic_phase0 = (schedule["dynamic"] & ~phase1) if schedule is not None \
-        else torch.zeros_like(phase1)
+    dynamic_phase0 = (schedule["dynamic"] & ~phase1) if schedule is not None else torch.zeros_like(phase1)
     smooth_mask = phase1 | dynamic_phase0
     hind_magnitude = torch.where(smooth_mask, smooth_magnitude, abs_k)
     hind_slope = torch.where(smooth_mask, smooth_slope, curvature_cmd.sign())
@@ -430,9 +422,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     ref_vel[:, _ACT_F_BODY_ID] = -0.9 * kappa_dot / kappa_norm
     ref_vel[:, _ACT_NECK_YAW_ID] = torch.where(unclamped_yaw, 0.8 * kappa_dot / kappa_norm, zero_dot)
     ref_vel[:, _ACT_NECK_PITCH_ID] = 0.0
-    ref_vel[:, _ACT_H_SPINE1_ID] = torch.where(unclamped_h,
-                                -0.65 * hind_slope * kappa_dot / kappa_norm,
-                                zero_dot)
+    ref_vel[:, _ACT_H_SPINE1_ID] = torch.where(unclamped_h, -0.65 * hind_slope * kappa_dot / kappa_norm, zero_dot)
     ref_vel[:, _ACT_H_BODY_ID] = -0.7 * kappa_dot / kappa_norm
     _smooth_spine_reference(env, ref_pos, ref_vel, smooth_mask)
     # 相位推进 / κ 历史 / 重置清零每步只做一次: 重置后的重算不得二次推进或二次记录
@@ -450,9 +440,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
     env._ref_state_cache = (current_step, ref_pos, ref_vel, epoch)  # type: ignore[attr-defined]
     return ref_pos, ref_vel
-
-
-# 参考路径生成与几何 LUT
 
 
 
@@ -504,6 +491,7 @@ def get_approach_start(spacing: float | None = None, curvature: int | None = Non
     return x, y, heading
 
 
+
 # Phase 0 圆弧接近段
 def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     s0 = _INIT_DIST
@@ -530,8 +518,7 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
     sx, sy, svx, svy, sh = compute_slalom_path_ref(env)
     kappa_slalom = env._path_kappa  # type: ignore[attr-defined]
     ax, ay, avx, avy, ah = compute_arc_path_ref(env)
-    env._path_kappa = torch.where(phase1, kappa_slalom,  # type: ignore[attr-defined]
-                                  getattr(env, "_phase0_path_kappa", cmd_term.command[:, 4]))
+    env._path_kappa = torch.where(phase1, kappa_slalom, getattr(env, "_phase0_path_kappa", cmd_term.command[:, 4])) # type: ignore
     return (
         torch.where(phase1, sx, ax),
         torch.where(phase1, sy, ay),
@@ -543,8 +530,7 @@ def compute_path_ref(env: "ManagerBasedRlEnv"):
 
 
 # 预计算一阶段回合路径: 按曲率日程积分成逐控制步位置/朝向数组, 长度按一阶段有效回合
-def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_y, start_heading,
-                              schedule, velocity) -> None:
+def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_y, start_heading, schedule, velocity) -> None:
     n = len(env_ids)
     dt = float(env.step_dt)
     steps = min(int(env.max_episode_length), int(round(PHASE0_EPISODE_SECONDS / dt)))
@@ -557,23 +543,20 @@ def build_phase0_episode_path(env: "ManagerBasedRlEnv", env_ids, start_x, start_
     env._phase0_schedule = schedule  # type: ignore
     # 逐控制步中点曲率, 用圆弧弦增量累积: 常数曲率下与解析圆弧一致
     mid_t = (torch.arange(steps, device=env.device).float() + 0.5) * dt
-    kappa = phase0_kappa_at(mid_t[None, :].expand(n, -1),
-                            {"segments": segments, "bounds": bounds})
+    kappa = phase0_kappa_at(mid_t[None, :].expand(n, -1), {"segments": segments, "bounds": bounds})
     delta_theta = kappa * velocity[:, None] * dt
-    heading = torch.cat((start_heading[:, None],
-                         start_heading[:, None] + torch.cumsum(delta_theta, dim=1)), dim=1)
+    heading = torch.cat((start_heading[:, None], start_heading[:, None] + torch.cumsum(delta_theta, dim=1)), dim=1)
     previous, following = heading[:, :-1], heading[:, 1:]
     turning = kappa.abs() > 1e-6
     safe = torch.where(turning, kappa, torch.ones_like(kappa))
-    chord_x = torch.where(turning, (torch.sin(following) - torch.sin(previous)) / safe,
-                          velocity[:, None] * dt * torch.cos(previous))
-    chord_y = torch.where(turning, -(torch.cos(following) - torch.cos(previous)) / safe,
-                          velocity[:, None] * dt * torch.sin(previous))
+    chord_x = torch.where(turning, (torch.sin(following) - torch.sin(previous)) / safe, velocity[:, None] * dt * torch.cos(previous))
+    chord_y = torch.where(turning, -(torch.cos(following) - torch.cos(previous)) / safe, velocity[:, None] * dt * torch.sin(previous))
     env._phase0_path_xy[env_ids, :, 0] = torch.cat(  # type: ignore
         (start_x[:, None], start_x[:, None] + torch.cumsum(chord_x, dim=1)), dim=1)
     env._phase0_path_xy[env_ids, :, 1] = torch.cat(  # type: ignore
         (start_y[:, None], start_y[:, None] + torch.cumsum(chord_y, dim=1)), dim=1)
     env._phase0_path_heading[env_ids, :] = heading  # type: ignore
+
 
 
 # 路径参考计算 — 基元阶段: 查本回合预计算路径, 动态切换时路径保持连续
@@ -680,9 +663,11 @@ def _generate_slalom_lut_one_period(X: float, n_arc_pts: int = 15):
     return arc, pts_x, pts_y, headings, kappa_vals
 
 
+
 # 将输入杆距映射到整数峰值曲率对应的真实杆距。
 def get_effective_pole_spacing(spacing: float) -> float:
     return get_slalom_geometry(curvature_from_spacing(spacing))["spacing"]
+
 
 
 # 保留诊断脚本入口，当前绕杆路径全部采用无直行结构。
@@ -691,7 +676,8 @@ def is_no_straight_spacing(spacing: float) -> bool:
     return True
 
 
-# 返回无直行周期的几何表，曲率与杆距由同一份几何确定。
+
+# 返回无直行周期的几何表，曲率与杆距由同一份几何确定
 def _generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None, curvature: int | None = None):
     if smooth_time is not None or vel is not None:
         raise ValueError("无直行路径使用集中配置的固定平滑弧长")
@@ -700,22 +686,24 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None, cur
     return tuple(period[name] for name in ("arc", "x", "y", "heading", "kappa"))
 
 
+
 # 把全部整数曲率的名义时间表缓存到当前设备。
 def get_slalom_tables(env, base_velocity: float) -> dict[str, torch.Tensor]:
     cached = getattr(env, "_slalom_tables", None)
     if cached is None or cached[0] != base_velocity:
-        cached = (base_velocity, {name: torch.as_tensor(value, device=env.device, dtype=torch.float32)
-                                for name, value in get_timed_slalom_tables(base_velocity).items()})
+        cached = (base_velocity, {name: torch.as_tensor(value, device=env.device, dtype=torch.float32) for name, value in get_timed_slalom_tables(base_velocity).items()})
         env._slalom_tables = cached
     return cached[1]
 
 
-# 按逐环境曲率行和归一化时间插值，避免每步复制完整路径表。
+
+# 按逐环境曲率行和归一化时间插值，避免每步复制完整路径表
 def _sample_slalom_table(table: torch.Tensor, rows: torch.Tensor, progress: torch.Tensor) -> torch.Tensor:
     coordinate = progress.clamp(0, 1) * (table.shape[1] - 1)
     left = coordinate.long().clamp(max=table.shape[1] - 2)
     fraction = (coordinate - left).unsqueeze(-1)
     return torch.lerp(table[rows, left], table[rows, left + 1], fraction)
+
 
 
 # 绕杆参考按本回合的整数曲率和自身步频推进，杆距不会随其他环境重置改变。
@@ -745,15 +733,15 @@ def compute_slalom_path_ref(env: "ManagerBasedRlEnv"):
     return x, y, velocity * heading.cos(), velocity * heading.sin(), heading
 
 
+
 # 获取当前路径瞬时曲率 κ(t) — 由 compute_path_ref 逐环境写入 (Phase 0 为命令值, Phase 1 为 LUT 插值)
 def get_path_curvature(env: "ManagerBasedRlEnv") -> torch.Tensor:
     cmd_term = env.command_manager._terms["slalom_cmd"]
     return getattr(env, "_path_kappa", cmd_term.command[:, 4])
 
 
+
 # 无直行路径几何 LUT
-
-
 _SEGMENT_SAMPLES = 256
 _APPROACH_SAMPLES = 256
 APPROACH_LENGTH = 0.03
@@ -762,10 +750,10 @@ _PROJECTION_PERIOD_SAMPLES = 512
 _PROJECTION_APPROACH_SAMPLES = 32
 
 
+
 # 按每段真实步长积分曲率，保留位置、切线和曲率的连续端点。
 def integrate_segments(segments: list[tuple[float, float, float]]) -> dict[str, np.ndarray]:
-    lengths = np.concatenate([np.full(_SEGMENT_SAMPLES, length / _SEGMENT_SAMPLES)
-                              for length, _, _ in segments])
+    lengths = np.concatenate([np.full(_SEGMENT_SAMPLES, length / _SEGMENT_SAMPLES) for length, _, _ in segments])
     pieces = [np.linspace(start, end, _SEGMENT_SAMPLES + 1) for _, start, end in segments]
     kappa = np.concatenate([pieces[0]] + [piece[1:] for piece in pieces[1:]])
     delta_heading = 0.5 * (kappa[:-1] + kappa[1:]) * lengths
@@ -780,7 +768,8 @@ def integrate_segments(segments: list[tuple[float, float, float]]) -> dict[str, 
     }
 
 
-# 构建整数峰值对应的无直行路径；杆心距取半周期的真实纵向位移。
+
+# 构建整数峰值对应的无直行路径；杆心距取半周期的真实纵向位移
 @lru_cache(maxsize=len(SLALOM_CURVATURES))
 def get_slalom_geometry(curvature: int) -> dict[str, Any]:
     if curvature not in SLALOM_CURVATURES:
@@ -808,14 +797,16 @@ def get_slalom_geometry(curvature: int) -> dict[str, Any]:
             "period": period, "approach": approach}
 
 
-# 将指定杆距映射到最近的整数曲率条件，实际杆距必须向调用者回显。
+
+# 将指定杆距映射到最近的整数曲率条件，实际杆距必须向调用者回显
 def curvature_from_spacing(spacing: float) -> int:
     if not np.isfinite(spacing) or spacing <= 0:
         raise ValueError("杆心距必须是有限正数")
     return min(SLALOM_CURVATURES, key=lambda k: abs(get_slalom_geometry(k)["spacing"] - spacing))
 
 
-# 按弧长生成接近段和两个周期，供身体包络查询实际空间轨迹。
+
+# 按弧长生成接近段和两个周期，供身体包络查询实际空间轨迹
 @lru_cache(maxsize=1)
 def get_spatial_slalom_tables() -> np.ndarray:
     tables = []
@@ -826,24 +817,24 @@ def get_spatial_slalom_tables() -> np.ndarray:
                                     (geometry["period"], _PROJECTION_PERIOD_SAMPLES, geometry["spacing"]),
                                     (geometry["period"], _PROJECTION_PERIOD_SAMPLES, 3 * geometry["spacing"])):
             arc = np.linspace(0, path["arc"][-1], count + 1)
-            piece = np.stack([np.interp(arc, path["arc"], path[name])
-                              for name in ("x", "y", "heading", "kappa")], axis=-1)
+            piece = np.stack([np.interp(arc, path["arc"], path[name]) for name in ("x", "y", "heading", "kappa")], axis=-1)
             piece[:, 0] += offset
             pieces.append(piece if not pieces else piece[1:])
         tables.append(np.concatenate(pieces))
     return np.stack(tables)
 
 
-# 将空间路径重采样到等名义时间网格，运行时只需按行插值。
+
+# 将空间路径重采样到等名义时间网格，运行时只需按行插值
 def timed_samples(path: dict[str, np.ndarray], base_velocity: float, count: int) -> tuple[np.ndarray, float]:
     velocity = base_velocity * get_velocity_scale(float(np.abs(path["kappa"]).max()))
     time = path["arc"] / velocity
-    samples = np.stack([np.interp(np.linspace(0, time[-1], count), time, path[name])
-                        for name in ("x", "y", "heading", "kappa")], axis=-1)
+    samples = np.stack([np.interp(np.linspace(0, time[-1], count), time, path[name]) for name in ("x", "y", "heading", "kappa")], axis=-1)
     return samples, float(time[-1])
 
 
-# 预计算全部整数曲率，步频仅在运行时缩放时间。
+
+# 预计算全部整数曲率，步频仅在运行时缩放时间
 @lru_cache(maxsize=8)
 def get_timed_slalom_tables(base_velocity: float) -> dict[str, np.ndarray]:
     if not np.isfinite(base_velocity) or base_velocity <= 0:
@@ -861,17 +852,20 @@ def get_timed_slalom_tables(base_velocity: float) -> dict[str, np.ndarray]:
         "start": np.array([[g["approach"][name][0] for name in ("x", "y", "heading")] for g in geometries]),
     }
 
+
+
 # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
 _INIT_DIST = APPROACH_LENGTH
 
 
-# 无直行路径族的最小和最大杆心距。
+
+# 无直行路径族的最小和最大杆心距
 def get_pole_spacing_bounds() -> tuple[float, float]:
-    return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"],
-            get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
+    return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"], get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
 
 
-# 回放未指定条件时采用峰值十五；训练按回合采样整数峰值。
+
+# 回放未指定条件时采用峰值十五；训练按回合采样整数峰值
 def get_curriculum_pole_spacing(step_counter: int) -> float:
     del step_counter
     return get_pole_spacing_bounds()[0]
@@ -879,7 +873,6 @@ def get_curriculum_pole_spacing(step_counter: int) -> float:
 
 
 # 躯干包络投影与边采样
-
 _BOX_SIGNS = tuple(product((-1.0, 1.0), repeat=3))
 _BOX_EDGES = tuple((i, j) for i in range(8) for j in range(i + 1, 8) if sum(a != b for a, b in zip(_BOX_SIGNS[i], _BOX_SIGNS[j], strict=True)) == 1)
 _ENVELOPE_SAMPLE_STEP = 0.002
@@ -887,7 +880,7 @@ _PHASE0_ENVELOPE_SAMPLE_STEP = 0.006   # 一阶段动态回合的包络边采样
 
 
 
-# 将完整三维包围盒随躯干实际姿态投影到水平面。
+# 将完整三维包围盒随躯干实际姿态投影到水平面
 def project_body_envelopes(env: ManagerBasedRlEnv) -> torch.Tensor:
     robot = env.scene["robot"]
     local_vertices = getattr(env, "_slalom_body_envelope_vertices", None)
@@ -905,9 +898,9 @@ def project_body_envelopes(env: ManagerBasedRlEnv) -> torch.Tensor:
     return vertices[..., :2]
 
 
+
 # 沿投影盒十二条边采样，边界相邻点间距不超过给定步长 (按步长分别缓存)
-def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor,
-                          step: float = _ENVELOPE_SAMPLE_STEP) -> torch.Tensor:
+def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor, step: float = _ENVELOPE_SAMPLE_STEP) -> torch.Tensor:
     cache = getattr(env, "_slalom_envelope_samples", None)
     if cache is None:
         cache = {}
@@ -917,13 +910,11 @@ def sample_body_envelopes(env: ManagerBasedRlEnv, vertices: torch.Tensor,
         local = env._slalom_body_envelope_vertices  # type: ignore
         starts, ends, fractions = list(range(8)), list(range(8)), [0.0] * 8
         for start, end in _BOX_EDGES:
-            count = max(1, int(torch.ceil(torch.linalg.vector_norm(local[:, end] - local[:, start], dim=-1).max()
-                                         / step).item()))
+            count = max(1, int(torch.ceil(torch.linalg.vector_norm(local[:, end] - local[:, start], dim=-1).max() / step).item()))
             starts.extend([start] * (count - 1))
             ends.extend([end] * (count - 1))
             fractions.extend(i / count for i in range(1, count))
-        cached = (torch.tensor(starts, device=env.device), torch.tensor(ends, device=env.device),
-                  torch.tensor(fractions, device=env.device, dtype=vertices.dtype))
+        cached = (torch.tensor(starts, device=env.device), torch.tensor(ends, device=env.device), torch.tensor(fractions, device=env.device, dtype=vertices.dtype))
         cache[float(step)] = cached
     starts, ends, fractions = cached
     return torch.lerp(vertices[:, :, starts], vertices[:, :, ends], fractions[None, None, :, None])

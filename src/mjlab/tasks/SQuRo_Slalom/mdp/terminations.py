@@ -1,16 +1,13 @@
 from __future__ import annotations
-
 import torch
 from typing import TYPE_CHECKING
-
-from .curriculums import PASSAGE_REQUIRED_POLES, PHASE0_EPISODE_SECONDS
 from .entity import POLE_RADIUS
 from .indices import _MODEL_INDICES
 from .reference import project_body_envelopes
+from .curriculums import PASSAGE_REQUIRED_POLES, PHASE0_EPISODE_SECONDS
+
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
-
-
 
 
 
@@ -26,7 +23,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 一阶段保持二十秒，二阶段使用配置中的完整回合时长。
+# 一阶段保持二十秒，二阶段使用配置中的完整回合时长
 def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
     phase1 = env.command_manager._terms["slalom_cmd"].phase1_mask  # type: ignore
     phase0_steps = min(env.max_episode_length, round(PHASE0_EPISODE_SECONDS / env.step_dt))
@@ -34,12 +31,9 @@ def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
     return env.episode_length_buf >= limit
 
 
-# 绕杆通过状态检测（原 mdp/passage.py）
 
-
-# 按真实躯干与基座越过杆平面的时刻检查交替侧别，不依赖参考时钟。
+# 按真实躯干与基座越过杆平面的时刻检查交替侧别，不依赖参考时钟
 class SlalomPassageMonitor:
-    # 创建逐回合通过状态与一次性结果队列。
     def __init__(self, env):
         self.env = env
         shape = (env.num_envs, PASSAGE_REQUIRED_POLES, 3)
@@ -51,13 +45,15 @@ class SlalomPassageMonitor:
         self.last_done_step = torch.full((env.num_envs,), -1, device=env.device, dtype=torch.long)
         self.completed: list[dict] = []
 
-    # 仅清理重置环境的通过状态，已发布的结果继续由 runner 消费。
+
+    # 仅清理重置环境的通过状态，已发布的结果继续由 runner 消费
     def reset(self, env_ids) -> None:
         for buffer in (self.crossed, self.passed, self.wrong_side, self.initialized):
             buffer[env_ids] = False
         self.last_done_step[env_ids] = -1
 
-    # 检查实际位置；足端与两段躯干均过杆后才累计通过。
+
+    # 检查实际位置；足端与两段躯干均过杆后才累计通过
     def update(self, centers: torch.Tensor, rear_extent: torch.Tensor) -> None:
         env = self.env
         command = env.command_manager._terms["slalom_cmd"]
@@ -69,11 +65,8 @@ class SlalomPassageMonitor:
         previous_x = self.previous_centers[..., 0]
         previous_y = self.previous_centers[..., 1]
         initial = ~self.initialized
-        crossed_now = (x[:, None] >= pole_x[:, :, None]) & (
-            (previous_x[:, None] < pole_x[:, :, None]) | initial[:, None, None]
-        )
-        fraction = ((pole_x[:, :, None] - previous_x[:, None])
-                    / (x - previous_x)[:, None].clamp_min(1e-12)).clamp(0, 1)
+        crossed_now = (x[:, None] >= pole_x[:, :, None]) & ((previous_x[:, None] < pole_x[:, :, None]) | initial[:, None, None])
+        fraction = ((pole_x[:, :, None] - previous_x[:, None]) / (x - previous_x)[:, None].clamp_min(1e-12)).clamp(0, 1)
         crossing_y = previous_y[:, None] + fraction * (y - previous_y)[:, None]
         crossing_y = torch.where(initial[:, None, None], y[:, None], crossing_y)
         expected_side = torch.where(numbers % 2 == 1, 1.0, -1.0)
@@ -86,13 +79,13 @@ class SlalomPassageMonitor:
         self.previous_centers.copy_(centers)
         self.initialized[:] = True
 
-    # 在真实回合结束时发布成绩；超时本身不能作为成功。
+
+    # 在真实回合结束时发布成绩；超时本身不能作为成功
     def compute(self) -> None:
         env = self.env
         robot = env.scene["robot"]
         body_ids = (_MODEL_INDICES.f_body_id, _MODEL_INDICES.h_body_id)
-        centers = torch.cat((robot.data.root_link_pos_w[:, None, :2],
-                             robot.data.body_link_pos_w[:, body_ids, :2]), dim=1)
+        centers = torch.cat((robot.data.root_link_pos_w[:, None, :2], robot.data.body_link_pos_w[:, body_ids, :2]), dim=1)
         vertices = project_body_envelopes(env)
         feet = robot.data.site_pos_w[:, _MODEL_INDICES.foot_site_ids]
         rear_extent = torch.minimum(vertices[..., 0].amin(dim=(1, 2)), feet[..., 0].amin(dim=1))
@@ -113,13 +106,15 @@ class SlalomPassageMonitor:
                 "env_id": env_id,
             })
 
-    # 取走已结束回合，避免重复计数或无限积累。
+
+    # 取走已结束回合，避免重复计数或无限积累
     def consume(self) -> list[dict]:
         results, self.completed = self.completed, []
         return results
 
 
-# 记录绕杆成绩，不增加额外终止条件或奖励。
+
+# 记录绕杆成绩，不增加额外终止条件或奖励
 def track_slalom_passage(env) -> torch.Tensor:
     monitor = getattr(env, "_slalom_passage_monitor", None)
     if monitor is None:
