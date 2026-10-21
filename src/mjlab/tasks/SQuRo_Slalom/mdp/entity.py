@@ -61,14 +61,12 @@ class ObstacleEntity(Entity):
     cfg: ObstacleEntityCfg
     def __init__(self, cfg: ObstacleEntityCfg):
         super().__init__(cfg)
-        self.cfg = cfg
-        self._geom_ref = None
         self._build_geometry()
 
 
     def _build_geometry(self):
         body = self._spec.worldbody.add_body(name=self.cfg.name, pos=self.cfg.position, mocap=True)
-        self._geom_ref = body.add_geom(
+        body.add_geom(
             name=f"{self.cfg.name}_geom",
             pos=(0, 0, self.cfg.half_height),  # 圆柱中心离地半个高度
             size=(self.cfg.radius, self.cfg.half_height),
@@ -77,11 +75,6 @@ class ObstacleEntity(Entity):
             contype=self.cfg.contype,
             conaffinity=self.cfg.conaffinity,
         )
-
-
-    @property
-    def spec(self) -> mujoco.MjSpec:
-        return self._spec
 
 
 

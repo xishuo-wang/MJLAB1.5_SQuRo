@@ -24,8 +24,6 @@ from .config import (
     TABLE_RESOLUTION,
     CMD_CURVATURE_IDS,
     CMD_GAIT_FREQ_IDS,
-    SLALOM_CURVATURE_MAX,
-    SLALOM_CURVATURE_MIN,
     CURVATURE_TARGET_MAX,
     PHASE0_EPISODE_SECONDS,
     REFERENCE_CURVATURE_BLEND,
@@ -320,7 +318,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     compute_path_ref(env)
     curvature_cmd = get_path_curvature(env)  # [N]
     cmd_tensor = env.command_manager._terms["slalom_cmd"].command
-    vel_cmd = cmd_tensor[:, 0]  # [N]
     gait_freq = cmd_tensor[:, 3]  # [N] — 动态步频
     kappa_norm = CURVATURE_TARGET_MAX
 
@@ -447,20 +444,6 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
 
 
 
-# 获取指定 body_link 的偏航角
-def get_body_heading(env: "ManagerBasedRlEnv", body_id: int | None = None) -> torch.Tensor:
-    asset: Entity = env.scene["robot"]
-    if body_id is None:
-        quat = asset.data.root_link_quat_w
-    else:
-        quat = asset.data.body_link_quat_w[:, body_id]
-    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
-    sin_h = 2.0 * (w * z + x * y)
-    cos_h = 1.0 - 2.0 * (y * y + z * z)
-    return torch.atan2(sin_h, cos_h)
-
-
-
 # 躯干物理偏航与滚转，与 Hole 的 _get_body_orientation 使用同一套解剖坐标标定
 def get_body_orientation(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
     asset: Entity = env.scene["robot"]
@@ -470,18 +453,6 @@ def get_body_orientation(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.
     yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
     roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
     return yaw, roll
-
-
-
-# F_body_Link 物理前向 heading（与 Hole 的 yaw 同源）
-def get_f_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_orientation(env)[0][..., 0]
-
-
-
-# H_body_Link 物理前向 heading
-def get_h_body_physical_heading(env: "ManagerBasedRlEnv") -> torch.Tensor:
-    return get_body_orientation(env)[0][..., 1]
 
 
 
@@ -845,12 +816,6 @@ def get_timed_slalom_tables(base_velocity: float) -> dict[str, np.ndarray]:
 
 # 初始接近段弧长 (m): 机器人从圆弧起点走 _INIT_DIST 到路径起点 (0,0)
 _INIT_DIST = APPROACH_LENGTH
-
-
-
-# 无直行路径族的最小和最大杆心距
-def get_obstacle_spacing_bounds() -> tuple[float, float]:
-    return (get_slalom_geometry(SLALOM_CURVATURE_MAX)["spacing"], get_slalom_geometry(SLALOM_CURVATURE_MIN)["spacing"])
 
 
 

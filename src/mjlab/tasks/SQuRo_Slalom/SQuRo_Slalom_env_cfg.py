@@ -105,7 +105,7 @@ def SQuRo_Slalom_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             phase0_only=False,
             enable_spacing_curriculum=not play,
             debug_vis=play,
-            viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05, scale=1.0),
+            viz=mdp.SlalomCommandCfg.VizCfg(z_offset=-0.05),
         )
     }
 

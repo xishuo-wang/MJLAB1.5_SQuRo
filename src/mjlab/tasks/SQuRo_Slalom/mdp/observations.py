@@ -67,13 +67,6 @@ def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_C
 
 
 
-# 基座位置
-def base_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
-    asset: Entity = env.scene[asset_cfg.name]
-    return asset.data.root_link_pos_w
-
-
-
 # 参考关节位置
 def ref_joint_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
     pos, _ = get_reference_joint_state(env)

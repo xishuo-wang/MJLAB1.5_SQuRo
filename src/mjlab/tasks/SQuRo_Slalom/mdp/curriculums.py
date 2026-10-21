@@ -3,15 +3,9 @@ import torch
 from typing import Any
 from .config import (
     VEL_MIN,
-    BASE_VEL,
-    SMOOTH_VEL,
-    SMOOTH_TIME,
-    GAIT_FREQ_MAX,
-    GAIT_FREQ_MIN,
     STEPS_PER_ITER,
     PHASE1_END_ITER,
     PHASE1_MID_ITER,
-    PHASE2_END_ITER,
     PHASE2_MID_ITER,
     FINAL_ACCEPT_RATE,
     PHASE0_MAX_SEGMENTS,
@@ -24,24 +18,25 @@ from .config import (
     PHASE0_SEGMENT_JITTER,
     PHASE0_EPISODE_SECONDS,
     NORMAL_BIN_TARGET_RATE,
-    SLALOM_EPISODE_SECONDS,
-    OBSTACLE_SPACING_START,
-    SPACING_EVALUATION_ENVS,
     SPACING_REQUIRED_BATCHES,
     VELOCITY_CURVATURE_POWER,
     PHASE0_TRANSITION_SECONDS,
     PHASE0_DYNAMIC_START_ITER,
-    REFERENCE_CURVATURE_BLEND,
     PHASE0_DYNAMIC_PROBABILITY,
-    PASSAGE_REQUIRED_OBSTACLES,
     SPACING_EVALUATION_INTERVAL,
-    SPACING_HARDEST_PROBABILITY,
     SPACING_PRETRAIN_ITERATIONS,
     SPACING_MIN_DWELL_ITERATIONS,
     SPACING_INITIAL_CURVATURE_MAX,
-    SPINE_REFERENCE_TIME_CONSTANT,
     SPACING_EVALUATION_MIN_SAMPLES,
-    SPACING_EVALUATION_EPISODE_SECONDS,
+)
+
+# 回放、绘图和验证脚本使用的配置再导出
+from .config import (
+    BASE_VEL as BASE_VEL,
+    PHASE2_END_ITER as PHASE2_END_ITER,
+    OBSTACLE_SPACING_START as OBSTACLE_SPACING_START,
+    REFERENCE_CURVATURE_BLEND as REFERENCE_CURVATURE_BLEND,
+    SPINE_REFERENCE_TIME_CONSTANT as SPINE_REFERENCE_TIME_CONSTANT,
 )
 
 
@@ -370,29 +365,6 @@ class SpacingCurriculumState:
         }
 
 
-    # 汇总最近一次考核结果，供日志和检查点使用
-    def metrics(self) -> dict[str, Any]:
-        success_rate = 0.0
-        passed = False
-        min_bin_rate = 0.0
-        if self.history:
-            last = self.history[-1]
-            success_rate = float(last.get("success_rate", 0.0))
-            passed = bool(last.get("passed", False))
-            bin_rate = last.get("bin_rate") or []
-            bin_count = last.get("bin_count") or []
-            rates = [rate for rate, count in zip(bin_rate, bin_count) if count]
-            min_bin_rate = float(min(rates)) if rates else 0.0
-        return {
-            "max_curvature": self.max_curvature,
-            "success_rate": success_rate,
-            "level_progress": 1.0 if passed else 0.0,
-            "final_mode": int(self.final_level_passed),
-            "final_accepted": int(self.final_accepted),
-            "min_bin_rate": min_bin_rate,
-        }
-
-
     # 序列化档位、最终档状态、分档权重与历史，续训不会重新起课
     def state_dict(self) -> dict:
         return {
@@ -442,20 +414,6 @@ class RewardCurriculum:
                 progress = min(max(current_iter / PHASE1_MID_ITER, 0.0), 1.0)
                 result[name] = values[0] + progress * (values[1] - values[0])
         return result
-
-    def get_current_stage_info(self, current_step: int, phase0_only: bool = False) -> dict[str, Any]:
-        current_iter = current_step // _STEPS_PER_ITER
-        stage_iter = min(current_iter, PHASE1_END_ITER - 1) if phase0_only else current_iter
-        stage = 0
-        for t in _STAGES:
-            if stage_iter >= t:
-                stage = t
-        return {
-            "current_stage": stage,
-            "current_iter": current_iter,
-            "current_step": current_step,
-            "reward_weights": self.get_curriculum_values(current_step, phase0_only),
-        }
 
 
 

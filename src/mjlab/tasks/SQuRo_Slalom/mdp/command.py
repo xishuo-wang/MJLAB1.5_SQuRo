@@ -32,7 +32,6 @@ from .curriculums import (
     SpacingCurriculumState,
     get_training_phase_batch,
     sample_curvature_indices,
-    get_phase0_curvature_range,
 )
 from .reference import (
     _INIT_DIST,
@@ -78,8 +77,6 @@ class SlalomCommand(CommandTerm):
         self.obstacle_spacing = torch.zeros(self.num_envs, device=self.device)
         self.obstacle_y = torch.zeros_like(self.obstacle_spacing)
         self.metrics = {name: torch.zeros(self.num_envs, device=self.device) for name in ("slalom_fraction", "slalom_peak_curvature", "phase0_dynamic")}
-        self._start_positions = torch.zeros(self.num_envs, 3, device=self.device)
-        self._start_recorded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._resample_command(env_ids)
         self._resample_curvature(env_ids)
@@ -200,7 +197,6 @@ class SlalomCommand(CommandTerm):
         write_obstacle_mocap(env, env_ids, self.obstacle_spacing[env_ids], self.obstacle_y[env_ids], phase1)
         if not phase1:
             self._build_path(env_ids, ax, ay, ah)
-        self._start_recorded[env_ids] = False
 
 
     # 命令管理器完成重采样后同步几何，并使参考缓存失效
@@ -295,7 +291,6 @@ class SlalomCommandCfg(CommandTermCfg):
     @dataclass
     class VizCfg:
         z_offset: float = 0.1
-        scale: float = 1.0
 
     viz: VizCfg = field(default_factory=VizCfg)
     class_type: type[CommandTerm] = SlalomCommand

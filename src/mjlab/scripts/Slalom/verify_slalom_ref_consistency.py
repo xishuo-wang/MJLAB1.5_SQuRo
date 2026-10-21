@@ -86,7 +86,6 @@ def make_ref_env(gait_freqs, t_secs, spacing=OBSTACLE_SPACING_START, counter=PHA
     cmd.height_h_command = cmd.command_tensor[:, 2]
     cmd.gait_freq_command = cmd.command_tensor[:, 3]
     cmd.curvature_command = cmd.command_tensor[:, 4]
-    cmd._start_recorded = torch.zeros(n, dtype=torch.bool)
     env.command_manager = NS(_terms={"slalom_cmd": cmd})
     # 旧实现从全局槽读步频; 桩里默认模拟"最后重置者"写入
     env._slalom_gait_scalar = float(gait_freqs[-1] if gait_scalar is None else gait_scalar)

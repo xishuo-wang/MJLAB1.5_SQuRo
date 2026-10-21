@@ -1,7 +1,6 @@
 from __future__ import annotations
 import mujoco
 import numpy as np
-from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 
 # 执行器顺序
@@ -25,7 +24,6 @@ _ACT_JOINT_NAMES = [
 
 # 执行器对应索引
 _ACT_IDX = {name: i for i, name in enumerate(_ACT_JOINT_NAMES)}
-_ACT_NUM = len(_ACT_JOINT_NAMES)                        # 驱动关节数量
 _ACT_F_SPINE1_ID    = _ACT_IDX["F_spine1_joint"]        # 脊柱侧摆: 0
 _ACT_F_BODY_ID      = _ACT_IDX["F_body_joint"]          # 前脊柱扭转: 1
 _ACT_NECK_YAW_ID    = _ACT_IDX["Neck_yaw_joint"]        # 头部侧摆: 2
@@ -90,8 +88,6 @@ class ModelIndices:
         "f_body_id", 
         "h_body_id",
         "foot_site_ids",
-        "f_body_site_ids", 
-        "h_body_site_ids",
         "joint_ids",
         "linkage_joint_ids",
     )
@@ -127,13 +123,6 @@ def resolve_model_indices(entity) -> None:
     _MODEL_INDICES.joint_ids = tuple(joint_ids)
     _MODEL_INDICES.linkage_joint_ids = tuple(linkage_ids)
     print(f"[SQuRo Slalom] 模型索引解析完成，执行器顺序：{list(joint_names)}")
-
-
-
-# 将执行器列分组转换成模型关节编号
-def resolve_actuator_joint_ids(entity, actuator_ids: tuple[int, ...]) -> tuple[int, ...]:
-    resolve_model_indices(entity)
-    return tuple(_MODEL_INDICES.joint_ids[i] for i in actuator_ids)
 
 
 

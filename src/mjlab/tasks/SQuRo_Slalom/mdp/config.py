@@ -44,10 +44,6 @@ PHASE0_ENVELOPE_SAMPLE_STEP = 0.006 # 一阶段动态回合的包络边采样间
 OBSTACLE_RADIUS = 0.01
 OBSTACLE_HALF_HEIGHT = 0.05
 OBSTACLE_NUM = 12
-F_BODY_HALF_LENGTH = 0.04           # F_body_Link 在XoY平面上沿身体前后轴半长(m)
-F_BODY_HALF_WIDTH = 0.035           # F_body_Link 在XoY平面左右方向半宽(m)
-H_BODY_HALF_LENGTH = 0.04           # H_body_Link 在XoY平面上沿身体前后轴半长(m)
-H_BODY_HALF_WIDTH = 0.035           # H_body_Link 在XoY平面左右方向半宽(m)
 BODY_REF_OFFSET = 0.04              # F_body/H_body 中心距 base 中心的X轴偏移量
 CORRIDOR_HALF_WIDTH = 0.04          # 走廊半宽（基元阶段 = 身体半宽 + 控制余量）
 
