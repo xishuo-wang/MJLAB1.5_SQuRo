@@ -1,8 +1,24 @@
 from __future__ import annotations
 import torch
+from .indices import (
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
 from .reference import _INIT_DIST
-from .indices import _MODEL_INDICES, resolve_model_indices
 
+
+# 驱动关节的复位角度
+_ACT_JOINT_POS = (
+    0.0, 0.0, 0.0, -0.3, 0.1, -0.3, 0.1, 
+    -0.3, 0.0, 0.0, -0.1, 0.3, -0.1, 0.3,
+)
+
+
+# 非驱动关节的复位角度
+_UNACT_JOINT_POS = (
+    -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
+    0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905,
+)
 
 
 # 重置模型
@@ -15,7 +31,7 @@ def reset_model(env, env_ids):
     robot_entity = env.scene.entities["robot"]
     resolve_model_indices(robot_entity)
     
-    # 先写中性位姿，命令管理器随后按本回合采样的曲率写最终起点。
+    # 确定机器人初始姿态
     root_state = torch.zeros(n, 13, device=env.device)
     ax, ay = -_INIT_DIST, 0.0
     qx, qy = -0.70710678, -0.70710678
@@ -27,22 +43,13 @@ def reset_model(env, env_ids):
     root_state[:, 4] = qx           # quat x
     root_state[:, 5] = qy           # quat y
     root_state[:, 6] = 0.0          # quat z
-    
     robot_entity.write_root_state_to_sim(root_state, env_ids=env_ids)
     
     # 重置关节状态
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
-
-    joint_indices = _MODEL_INDICES.joint_ids + _MODEL_INDICES.linkage_joint_ids
-    
-    joint_positions = [
-        0.0, 0.0, 0.0, -0.3, 0.1, -0.3, 0.1, -0.3,
-        0.0, 0.0, -0.1, 0.3, -0.1, 0.3,
-    ] + [
-        -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
-        0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905
-    ]
+    joint_positions = list(_ACT_JOINT_POS) + list(_UNACT_JOINT_POS)
+    joint_indices = tuple(_MODEL_INDICES.joint_ids) + tuple(_MODEL_INDICES.linkage_joint_ids)
 
     for i, idx in enumerate(joint_indices):
         if idx < robot_entity.num_joints:
