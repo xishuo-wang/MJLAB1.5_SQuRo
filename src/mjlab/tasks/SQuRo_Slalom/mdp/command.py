@@ -8,31 +8,31 @@ from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .config import (
     BASE_VEL,
-    CMD_CURVATURE_IDS,
-    CMD_GAIT_FREQ_IDS,
-    CMD_HEIGHT_F_IDS,
-    CMD_HEIGHT_H_IDS,
-    CMD_VEL_X_IDS,
     COMMAND_DIM,
-    FIXED_HEIGHT_F,
-    FIXED_HEIGHT_H,
     GAIT_FREQ_MAX,
     GAIT_FREQ_MIN,
+    CMD_VEL_X_IDS,
+    FIXED_HEIGHT_F,
+    FIXED_HEIGHT_H,
+    CMD_HEIGHT_F_IDS,
+    CMD_HEIGHT_H_IDS,
+    CMD_CURVATURE_IDS,
+    CMD_GAIT_FREQ_IDS,
     SLALOM_CURVATURE_MAX,
     SLALOM_CURVATURE_MIN,
     SPACING_HARDEST_PROBABILITY,
 )
 from .curriculums import (
+    phase0_kappa_at,
     _STEPS_PER_ITER,
     SLALOM_BIN_COUNT,
-    SpacingCurriculumState,
-    get_phase0_curvature_range,
     get_training_phase,
-    get_training_phase_batch,
     get_velocity_scale,
-    phase0_kappa_at,
-    sample_curvature_indices,
     sample_phase0_schedule,
+    SpacingCurriculumState,
+    get_training_phase_batch,
+    sample_curvature_indices,
+    get_phase0_curvature_range,
 )
 from .reference import (
     _INIT_DIST,
@@ -47,11 +47,11 @@ from .reference import (
 from .entity import write_obstacle_mocap
 
 if TYPE_CHECKING:
-    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
+    from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-# 管理逐回合命令、整数绕杆曲率及其对应的实体杆阵列。
+
 class SlalomCommand(CommandTerm):
     cfg: SlalomCommandCfg
     def __init__(self, cfg: SlalomCommandCfg, env: ManagerBasedRlEnv):
@@ -156,7 +156,7 @@ class SlalomCommand(CommandTerm):
         return torch.randint(0, SLALOM_CURVATURE_MAX - SLALOM_CURVATURE_MIN + 1, (n,), device=self.device)
 
 
-    # 重置曲率、机器人起点和实体杆，只作用于本次重置环境。
+    # 重置曲率、机器人起点和实体杆，只作用于本次重置环境
     def _resample_curvature(self, env_ids: torch.Tensor) -> None:
         if len(env_ids) == 0:
             return
@@ -234,7 +234,7 @@ class SlalomCommand(CommandTerm):
         self.vel_command.copy_(torch.where(phase1, velocity, self.vel_command))
 
 
-    # 在训练日志中标记绕杆比例和当前几何分布。
+    # 在训练日志中标记绕杆比例和当前几何分布
     def _update_metrics(self) -> None:
         self.metrics["slalom_fraction"].copy_(self.phase1_mask)
         self.metrics["slalom_peak_curvature"].copy_(self.slalom_peak_curvature)
@@ -244,7 +244,8 @@ class SlalomCommand(CommandTerm):
             phase0 = (~self.phase1_mask).float()
             self.metrics["phase0_dynamic"].copy_(phase0 * schedule["dynamic"].float())
 
-    # 绘制选中环境本回合的真实参考几何。
+
+    # 绘制选中环境本回合的真实参考几何
     def _debug_vis_impl(self, visualizer: DebugVisualizer) -> None:
         if not self.cfg.debug_vis or visualizer.env_idx >= self.num_envs:
             return
