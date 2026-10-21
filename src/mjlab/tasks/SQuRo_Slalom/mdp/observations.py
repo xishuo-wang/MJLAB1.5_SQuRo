@@ -60,8 +60,8 @@ def actuator_force(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_
 
 
 
-# F_body_Link 物理前向 heading（Hole 同口径 yaw）
-def heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
+# F_body_Link 物理前向 body_heading（Hole 同口径 yaw）
+def body_heading(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG) -> torch.Tensor:
     yaw, _ = get_body_orientation(env)
     return yaw[:, :1]
 

@@ -13,7 +13,7 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-    _STEPS_PER_ITER,
+    STEPS_PER_ITER,
     PHASE1_END_ITER,
     get_training_phase,
 )
@@ -349,8 +349,8 @@ def run_play(cfg: PlayConfig):
         saved_clip = saved_agent.get("clip_actions", "null")
         agent_cfg.clip_actions = None if saved_clip.lower() in ("null", "none", "") else float(saved_clip)
         saved_steps = str(saved_agent.get("num_steps_per_env", "null")).lower()
-        if saved_steps not in ("null", "none", "") and int(saved_steps) != _STEPS_PER_ITER:
-            print(f"[WARN] 检查点按每轮 {int(saved_steps)} 步训练, 当前口径为 {_STEPS_PER_ITER} 步/轮; "
+        if saved_steps not in ("null", "none", "") and int(saved_steps) != STEPS_PER_ITER:
+            print(f"[WARN] 检查点按每轮 {int(saved_steps)} 步训练, 当前口径为 {STEPS_PER_ITER} 步/轮; "
                   f"课程按轮次对齐故不受影响, 但检查点里的 step 计数不可直接比较")
     if saved_env:
         env_cfg.decimation = int(saved_env.get("decimation", env_cfg.decimation))
@@ -365,14 +365,14 @@ def run_play(cfg: PlayConfig):
         is_slalom_phase = cfg.command_source == "绕杆"
         stage_src = f"命令行 command_source={cfg.command_source}"
     elif cfg.phase0_only is not None:
-        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, cfg.phase0_only) == 1
+        is_slalom_phase = get_training_phase(align_iter * STEPS_PER_ITER, cfg.phase0_only) == 1
         stage_src = f"命令行 phase0_only={cfg.phase0_only}"
     elif "phase0_only" in saved_command:
         saved_phase0 = str(saved_command["phase0_only"]).lower() == "true"
-        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, saved_phase0) == 1
+        is_slalom_phase = get_training_phase(align_iter * STEPS_PER_ITER, saved_phase0) == 1
         stage_src = f"检查点 phase0_only={saved_phase0}"
     else:
-        is_slalom_phase = get_training_phase(align_iter * _STEPS_PER_ITER, False) == 1
+        is_slalom_phase = get_training_phase(align_iter * STEPS_PER_ITER, False) == 1
         stage_src = (f"检查点轮数 iter {align_iter}" if resume_path is not None
                      else "无检查点, 默认一阶段")
 
@@ -381,7 +381,7 @@ def run_play(cfg: PlayConfig):
     if is_slalom_phase and align_iter < PHASE1_END_ITER:
         print(f"[WARN] iter {align_iter} 早于绕杆阶段起点 iter {PHASE1_END_ITER}, 按 {stage_src} 对齐到起点")
         align_iter = PHASE1_END_ITER
-    align_step = align_iter * _STEPS_PER_ITER
+    align_step = align_iter * STEPS_PER_ITER
 
     # 命令固定值: 转圈用 fixed_curvature, 绕杆用 fixed_obstacle_spacing, 两者互斥; 为 None 的字段用任务默认
     if cmd_cfg is not None:

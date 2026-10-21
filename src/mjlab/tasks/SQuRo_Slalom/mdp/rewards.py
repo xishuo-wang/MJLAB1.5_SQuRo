@@ -26,7 +26,7 @@ from .reference import (
     get_body_orientation,
     get_path_curvature,
     get_reference_joint_state,
-    get_spatial_slalom_tables,
+    get_slalom_spatial_tables,
     project_body_envelopes,
     sample_body_envelopes,
 )
@@ -537,7 +537,7 @@ def compute_phase1_corridor_excess(
         points = points - origins[env_ids, None, None, :2]
     tables = getattr(env, "_slalom_spatial_tables", None)
     if tables is None:
-        tables = torch.as_tensor(get_spatial_slalom_tables(), device=env.device, dtype=points.dtype)
+        tables = torch.as_tensor(get_slalom_spatial_tables(), device=env.device, dtype=points.dtype)
         env._slalom_spatial_tables = tables  # type: ignore
     cmd = env.command_manager._terms["slalom_cmd"]
     distance, lateral, curvature = project_phase1_path_points(

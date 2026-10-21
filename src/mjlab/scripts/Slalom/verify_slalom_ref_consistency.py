@@ -11,7 +11,7 @@ import torch
 from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand, SlalomCommandCfg
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-    _STEPS_PER_ITER,
+    STEPS_PER_ITER,
     BASE_VEL,
     CURVATURE_TARGET_MAX,
     PHASE1_END_ITER,
@@ -28,15 +28,15 @@ from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     compute_phase1_path_ref,
-    get_approach_start,
+    get_phase1_approach_start,
     get_effective_obstacle_spacing,
 )
-from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry, get_timed_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import curvature_from_spacing, get_slalom_geometry, get_slalom_timed_tables
 
 # 几何黄金数据仍采用历史时间步，真实频率由端到端自检检查。
 STEP_DT = 0.02
 # Phase 1 期间的 common_step_counter (绕杆模式生效)
-PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER
+PHASE1_STEP = PHASE1_END_ITER * STEPS_PER_ITER
 # 腿部关节列 (FL/FR/HL/HR) 与内侧腿列
 _LEG_COLS = _ACT_LEG_IDS
 _LEFT_COLS = _ACT_FL_LEG_IDS + _ACT_HL_LEG_IDS
@@ -508,7 +508,7 @@ class TestSlalomRefConsistency(unittest.TestCase):
     def test_curriculum_spacing_avoids_incompatible_window(self):
         spacings = [get_slalom_geometry(k)["spacing"] for k in range(5, 16)]
         self.assertTrue(all(a > b for a, b in zip(spacings, spacings[1:])))
-        tables = get_timed_slalom_tables(BASE_VEL)
+        tables = get_slalom_timed_tables(BASE_VEL)
         self.assertLess(float((tables["period_time"] + tables["approach_time"]).max()), 20.0)
 
 
@@ -533,7 +533,7 @@ class TestPhase0DynamicSchedule(unittest.TestCase):
                                msg=f"动态回合占比 {ratio:.2f} 偏离目标")
         dynamic = after["dynamic"]
         segments = after["segments"][dynamic]
-        lower, upper = get_phase0_curvature_range(iteration * _STEPS_PER_ITER)
+        lower, upper = get_phase0_curvature_range(iteration * STEPS_PER_ITER)
         self.assertGreaterEqual(float(segments.min()), lower - 1e-6)
         self.assertLessEqual(float(segments.max()), upper + 1e-6)
         counts = (after["bounds"][dynamic] < 20.0).sum(dim=1)

@@ -7,7 +7,7 @@ import torch
 
 from mjlab.tasks.SQuRo_Slalom.mdp import reference, rewards
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
-    PHASE1_END_ITER, SPINE_REFERENCE_TIME_CONSTANT, _STEPS_PER_ITER,
+    PHASE1_END_ITER, SPINE_REFERENCE_TIME_CONSTANT, STEPS_PER_ITER,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import (
     _ACT_JOINT_NAMES, _ACT_SPN_IDS, _ACT_LEG_IDS, _ACT_FL_SHOULDER_ID,
@@ -20,7 +20,7 @@ from mjlab.scripts.Slalom.verify_slalom_ref_consistency import make_ref_state_en
 def make_env():
     env = make_ref_state_env([15.0, -15.0], gait=0.0)
     env.step_dt = 0.01
-    env.common_step_counter = PHASE1_END_ITER * _STEPS_PER_ITER + 100
+    env.common_step_counter = PHASE1_END_ITER * STEPS_PER_ITER + 100
     return env
 
 
@@ -120,7 +120,7 @@ class TestAbnormalLegPose(unittest.TestCase):
         term = NS(raw_action=self.raw, scale=0.3, offset=(self.offset + self.bias)[:, self.order],
                   target_ids=torch.tensor(self.order), target_names=[_ACT_JOINT_NAMES[i] for i in self.order])
         command = NS(phase1_mask=torch.tensor([True, True]), cfg=NS(phase0_only=False))
-        self.env = NS(common_step_counter=PHASE1_END_ITER * _STEPS_PER_ITER,
+        self.env = NS(common_step_counter=PHASE1_END_ITER * STEPS_PER_ITER,
                       scene={"robot": NS(data=NS(joint_pos=self.actual, encoder_bias=self.bias))},
                       action_manager=NS(get_term=lambda name: term),
                       command_manager=NS(_terms={"slalom_cmd": command}), extras={"log": {}})

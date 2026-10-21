@@ -9,8 +9,8 @@ import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.SQuRo_Slalom.mdp import reference as ref_mod
-from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, _STEPS_PER_ITER, PHASE1_END_ITER
-from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref, get_approach_start
+from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import CURVATURE_TARGET_MAX, STEPS_PER_ITER, PHASE1_END_ITER
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import compute_path_ref, get_phase1_approach_start
 from mjlab.tasks.SQuRo_Slalom.mdp.indices import _ACT_JOINT_NAMES
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import get_curriculum_value
 from mjlab.tasks.SQuRo_Slalom.mdp.entity import OBSTACLE_NUM, obstacle_mocap_id
@@ -18,7 +18,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry
 from mjlab.scripts.SQuRo_Slalom_play import JointDataRecorder
 
 TASK_NAME = "Mjlab-SQuRo-Slalom"
-PHASE1_STEP = PHASE1_END_ITER * _STEPS_PER_ITER
+PHASE1_STEP = PHASE1_END_ITER * STEPS_PER_ITER
 NUM_ENVS = 2
 FAILURES: list[str] = []
 
@@ -116,7 +116,7 @@ def check_reset_boundary(u, act) -> None:
 
     if not bool(u.reset_buf.all()):
         fail("强制超时后 reset_buf 未标记全体环境")
-    expected_x = get_approach_start(curvature=int(cmd_term.slalom_peak_curvature[0]))[0]
+    expected_x = get_phase1_approach_start(curvature=int(cmd_term.slalom_peak_curvature[0]))[0]
     x_ref, _, _, _, _ = compute_path_ref(u)
     got_x = float(x_ref[0])
     if abs(got_x - expected_x) > 1e-4:
@@ -166,7 +166,7 @@ def check_phase0_training(u, act) -> None:
     print("\n[5] 一阶段锁定与大曲率")
     cmd = u.command_manager._terms["slalom_cmd"]
     cmd.cfg.phase0_only = True
-    u.common_step_counter = 8000 * _STEPS_PER_ITER
+    u.common_step_counter = 8000 * STEPS_PER_ITER
     if abs(float(u.step_dt) - 0.01) > 1e-8:
         fail("策略周期未对齐 Hole 的 0.01 秒")
     for curvature in (sign * fraction * CURVATURE_TARGET_MAX

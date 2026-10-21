@@ -8,7 +8,7 @@ import torch
 
 from mjlab.tasks.SQuRo_Slalom.mdp import reference, rewards
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import SLALOM_CURVATURES
-from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_spatial_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_slalom_spatial_tables
 from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_phase1_corridor_side_excess
 
 
@@ -42,7 +42,7 @@ def rectangle(center, heading, length=0.03, width=0.02):
 class TestSlalomCurveCorridor(unittest.TestCase):
     # 分块、尾块补齐及跨块曲率混排必须与原几何查询一致。
     def test_block_projection_preserves_geometry(self):
-        tables = torch.tensor(get_spatial_slalom_tables(), dtype=torch.float64)
+        tables = torch.tensor(get_slalom_spatial_tables(), dtype=torch.float64)
         rows = torch.arange(129) % len(tables)
         spacing = tables[rows, -1, 0] / 5
         generator = torch.Generator().manual_seed(42)
@@ -69,14 +69,14 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             sign = np.sign(np.interp(arc, path["arc"], path["kappa"]))
             normal = np.array((-np.sin(heading), np.cos(heading)))
             points = torch.tensor(np.stack((center + sign * 0.045 * normal, center - sign * 0.045 * normal)))
-            _, lateral, curvature = rewards.project_phase1_path_points(points[None], torch.tensor(get_spatial_slalom_tables()),
+            _, lateral, curvature = rewards.project_phase1_path_points(points[None], torch.tensor(get_slalom_spatial_tables()),
                 torch.tensor([len(SLALOM_CURVATURES) - 1]), torch.tensor([geometry["spacing"]]))
             self.assertGreater(float(lateral[0, 0] * curvature[0, 0]), 0)
             self.assertLess(float(lateral[0, 1] * curvature[0, 1]), 0)
 
     # 全部整数曲率及换向邻域的距离与原始高密度线段穷举对照。
     def test_dense_geometry_oracle(self):
-        tables = torch.tensor(get_spatial_slalom_tables(), dtype=torch.float64)
+        tables = torch.tensor(get_slalom_spatial_tables(), dtype=torch.float64)
         rng = np.random.default_rng(42)
         for row, curvature in enumerate(SLALOM_CURVATURES):
             geometry = get_slalom_geometry(curvature)
@@ -95,7 +95,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
                            np.interp(0.04, path["arc"], path["y"])))
         heading = np.interp(0.04, path["arc"], path["heading"])
         vertices = rectangle(center, heading)
-        distance = rewards.project_phase1_path_points(vertices[None], torch.tensor(get_spatial_slalom_tables()),
+        distance = rewards.project_phase1_path_points(vertices[None], torch.tensor(get_slalom_spatial_tables()),
                     torch.tensor([len(SLALOM_CURVATURES) - 1]), torch.tensor([geometry["spacing"]]))[0]
         self.assertLess(float(distance.max()), 0.04)
         old = compute_phase1_corridor_side_excess(torch.tensor(center)[None], torch.tensor([heading]),
@@ -131,7 +131,7 @@ class TestSlalomCurveCorridor(unittest.TestCase):
             point = np.array((approach["x"][0], approach["y"][0])) - 0.08 * tangent
             query = np.array([point, [4 * geometry["spacing"] - 1e-7, geometry["obstacle_y"]],
                               [4 * geometry["spacing"] + 1e-7, geometry["obstacle_y"]]])
-            distance = rewards.project_phase1_path_points(torch.tensor(query)[None], torch.tensor(get_spatial_slalom_tables()),
+            distance = rewards.project_phase1_path_points(torch.tensor(query)[None], torch.tensor(get_slalom_spatial_tables()),
                 torch.tensor([row]), torch.tensor([geometry["spacing"]]))[0][0]
             self.assertLess(float(distance[0]), 1e-7)
             self.assertLess(float(abs(distance[1] - distance[2])), 1e-6)

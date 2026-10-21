@@ -7,7 +7,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     get_velocity_scale,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.reference import smooth_curvature_magnitude
-from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_timed_slalom_tables
+from mjlab.tasks.SQuRo_Slalom.mdp.reference import get_slalom_geometry, get_slalom_timed_tables
 
 
 # 检查后脊柱过零参考的连续性、解析导数和端点形态。
@@ -37,7 +37,7 @@ def verify_reference() -> None:
 # 检查全部几何的时钟积分与峰值限速一致，过零不再加速。
 def verify_velocity() -> None:
     for base in (0.07, 0.1):
-        tables = get_timed_slalom_tables(base)
+        tables = get_slalom_timed_tables(base)
         for row, peak in enumerate(range(5, 16)):
             speed = base * get_velocity_scale(peak)
             geometry = get_slalom_geometry(peak)

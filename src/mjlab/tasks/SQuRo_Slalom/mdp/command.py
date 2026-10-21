@@ -24,7 +24,7 @@ from .config import (
 )
 from .curriculums import (
     phase0_kappa_at,
-    _STEPS_PER_ITER,
+    STEPS_PER_ITER,
     SLALOM_BIN_COUNT,
     get_training_phase,
     get_velocity_scale,
@@ -37,7 +37,7 @@ from .reference import (
     _INIT_DIST,
     compute_path_ref,
     get_slalom_tables,
-    get_phase0_approach,
+    get_phase0_approach_start,
     get_slalom_geometry,
     curvature_from_spacing,
     build_phase0_episode_path,
@@ -110,7 +110,7 @@ class SlalomCommand(CommandTerm):
 
 
     @property
-    def curvature_peak_command(self) -> torch.Tensor:
+    def episode_peak_curvature(self) -> torch.Tensor:
         return self.curvature_peak
 
 
@@ -172,7 +172,7 @@ class SlalomCommand(CommandTerm):
             ax, ay, ah = tables["start"][rows].unbind(dim=-1)
         else:
             # 一阶段: 恒定曲率或动态切换日程, 起点取首段目标
-            schedule = sample_phase0_schedule(env.common_step_counter // _STEPS_PER_ITER, n, self.device)
+            schedule = sample_phase0_schedule(env.common_step_counter // STEPS_PER_ITER, n, self.device)
             for name in ("dynamic", "segments", "bounds", "peak"):
                 self.phase0_schedule[name][env_ids] = schedule[name]
             if self.fixed_curvature is None:
@@ -183,7 +183,7 @@ class SlalomCommand(CommandTerm):
                 self.phase0_schedule["bounds"][env_ids] = 1e9
                 self.phase0_schedule["peak"][env_ids] = abs(self.fixed_curvature)
                 self.phase0_schedule["dynamic"][env_ids] = False
-            ax, ay, ah = get_phase0_approach(self.curvature_command[env_ids])
+            ax, ay, ah = get_phase0_approach_start(self.curvature_command[env_ids])
         self.curvature_peak[env_ids] = (self.slalom_peak_curvature[env_ids].float() if phase1 else self.phase0_schedule["peak"][env_ids])
         self.vel_command[env_ids] = base_velocity * self.gait_freq_command[env_ids] * get_velocity_scale(self.curvature_peak[env_ids])
         root = torch.zeros(n, 13, device=self.device)

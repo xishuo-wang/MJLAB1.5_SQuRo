@@ -162,11 +162,11 @@ def initialize_tables(device: torch.device | str, base_velocity: float = BASE_VE
     # 加载 CSV
     df_f = pd.read_csv(_BIO_DATA_DIR / "Trot_F.csv")
     df_h = pd.read_csv(_BIO_DATA_DIR / "Trot_H.csv")
-    phase_csv: np.ndarray = df_f["Phase"].values.astype(np.float64) # type: ignore
-    y_f: np.ndarray = df_f["Y_mean"].values.astype(np.float64) # type: ignore
-    z_f: np.ndarray = df_f["Z_mean"].values.astype(np.float64) # type: ignore
-    y_h: np.ndarray = df_h["Y_mean"].values.astype(np.float64) # type: ignore
-    z_h: np.ndarray = df_h["Z_mean"].values.astype(np.float64) # type: ignore
+    phase_csv: np.ndarray = df_f["Phase"].to_numpy(dtype=np.float64)
+    y_f: np.ndarray = df_f["Y_mean"].to_numpy(dtype=np.float64)
+    z_f: np.ndarray = df_f["Z_mean"].to_numpy(dtype=np.float64)
+    y_h: np.ndarray = df_h["Y_mean"].to_numpy(dtype=np.float64)
+    z_h: np.ndarray = df_h["Z_mean"].to_numpy(dtype=np.float64)
 
     # 生成等距相位网格
     phases = np.linspace(0, 1, TABLE_RESOLUTION)
@@ -328,7 +328,7 @@ def get_reference_joint_state(env: ManagerBasedRlEnv) -> tuple[torch.Tensor, tor
     # 本回合目标峰值: 二阶段取采样档位, 一阶段取日程峰值 (动态回合同样按速度缩放)
     command_term = env.command_manager._terms["slalom_cmd"]
     phase1 = command_term.phase1_mask  # type: ignore
-    peak_attr = getattr(command_term, "curvature_peak_command", None)
+    peak_attr = getattr(command_term, "episode_peak_curvature", None)
     peak_k = peak_attr if peak_attr is not None else torch.where(phase1, command_term.slalom_peak_curvature, abs_k)  # type: ignore
 
     # 峰值轴插值: 表按平均步幅对应本回合每周前进距离, 一阶段曲率连续需要插值
@@ -457,7 +457,7 @@ def get_body_orientation(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.
 
 
 # 按整数曲率返回接近段起点，指定杆距时选择最近的可实现条件。
-def get_approach_start(spacing: float | None = None, curvature: int | None = None) -> tuple[float, float, float]:
+def get_phase1_approach_start(spacing: float | None = None, curvature: int | None = None) -> tuple[float, float, float]:
     k = curvature if curvature is not None else (int(CURVATURE_TARGET) if spacing is None else curvature_from_spacing(spacing))
     approach = get_slalom_geometry(k)["approach"]
     x = float(approach["x"][0])
@@ -468,7 +468,7 @@ def get_approach_start(spacing: float | None = None, curvature: int | None = Non
 
 
 # Phase 0 圆弧接近段
-def get_phase0_approach(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_phase0_approach_start(k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     s0 = _INIT_DIST
     mask = torch.abs(k) > 1e-6
     k_s = torch.where(mask, k, torch.ones_like(k))
@@ -653,7 +653,7 @@ def _generate_slalom_lut_smooth_period(X: float, smooth_time=None, vel=None, cur
 def get_slalom_tables(env, base_velocity: float) -> dict[str, torch.Tensor]:
     cached = getattr(env, "_slalom_tables", None)
     if cached is None or cached[0] != base_velocity:
-        cached = (base_velocity, {name: torch.as_tensor(value, device=env.device, dtype=torch.float32) for name, value in get_timed_slalom_tables(base_velocity).items()})
+        cached = (base_velocity, {name: torch.as_tensor(value, device=env.device, dtype=torch.float32) for name, value in get_slalom_timed_tables(base_velocity).items()})
         env._slalom_tables = cached
     return cached[1]
 
@@ -768,7 +768,7 @@ def curvature_from_spacing(spacing: float) -> int:
 
 # 按弧长生成接近段和两个周期，供身体包络查询实际空间轨迹
 @lru_cache(maxsize=1)
-def get_spatial_slalom_tables() -> np.ndarray:
+def get_slalom_spatial_tables() -> np.ndarray:
     tables = []
     for curvature in SLALOM_CURVATURES:
         geometry = get_slalom_geometry(curvature)
@@ -796,7 +796,7 @@ def timed_samples(path: dict[str, np.ndarray], base_velocity: float, count: int)
 
 # 预计算全部整数曲率，步频仅在运行时缩放时间
 @lru_cache(maxsize=8)
-def get_timed_slalom_tables(base_velocity: float) -> dict[str, np.ndarray]:
+def get_slalom_timed_tables(base_velocity: float) -> dict[str, np.ndarray]:
     if not np.isfinite(base_velocity) or base_velocity <= 0:
         raise ValueError("基础速度必须是有限正数")
     geometries = [get_slalom_geometry(k) for k in SLALOM_CURVATURES]

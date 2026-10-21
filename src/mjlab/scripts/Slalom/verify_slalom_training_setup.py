@@ -17,7 +17,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp import events, indices
 from mjlab.tasks.SQuRo_Slalom.mdp.command import SlalomCommand
 from mjlab.tasks.SQuRo_Slalom.mdp.curriculums import (
     CURVATURE_TARGET, CURVATURE_TARGET_MAX, Rmin,
-    _STEPS_PER_ITER, get_curriculum_value, get_phase0_curvature_range,
+    STEPS_PER_ITER, get_curriculum_value, get_phase0_curvature_range,
     reward_weight_curriculum, SpacingCurriculumState,
 )
 from mjlab.tasks.SQuRo_Slalom.mdp.rewards import compute_phase1_corridor_side_excess
@@ -85,7 +85,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         for name in ("algorithm", "actor", "critic"):
             self.assertEqual(asdict(getattr(hole, name)), asdict(getattr(slalom, name)))
         self.assertEqual(slalom.num_steps_per_env, hole.num_steps_per_env)
-        self.assertEqual(slalom.num_steps_per_env, _STEPS_PER_ITER)
+        self.assertEqual(slalom.num_steps_per_env, STEPS_PER_ITER)
         self.assertEqual(slalom.clip_actions, hole.clip_actions)
 
     # 控制周期与物理步长均对齐 Hole，训练允许自动进入绕杆。
@@ -105,7 +105,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         env = NS(command_manager=NS(_terms={"slalom_cmd": cmd}))
         cmd._env = env
         for iteration in (2000, 3999, 4000, 6000, 8000):
-            env.common_step_counter = iteration * _STEPS_PER_ITER
+            env.common_step_counter = iteration * STEPS_PER_ITER
             env.episode_length_buf = torch.tensor([0, 17])
             self.assertFalse(cmd.slalom_mode_active)
             self.assertFalse(bool(cmd.phase1_mask.any()))
@@ -118,7 +118,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         self.assertEqual(CURVATURE_TARGET, 15.0)
         self.assertAlmostEqual(Rmin, 1 / 15)
         for iteration in (2000, 2999, 4000):
-            self.assertEqual(get_phase0_curvature_range(iteration * _STEPS_PER_ITER), (-20.0, 20.0))
+            self.assertEqual(get_phase0_curvature_range(iteration * STEPS_PER_ITER), (-20.0, 20.0))
         self.assertLess(get_phase0_curvature_range(0)[1], 15.0)
 
     # 左右转内侧互换，同时验证外侧不受内侧系数影响。
@@ -126,7 +126,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
         inner, outer = side_excess([0.03, -0.03, -0.03, 0.03], [25.0, 25.0, -25.0, -25.0])
         torch.testing.assert_close(inner, torch.tensor([0.025, 0.0, 0.025, 0.0]))
         torch.testing.assert_close(outer, torch.tensor([0.0, 0.025, 0.0, 0.025]))
-        weights = reward_weight_curriculum.get_curriculum_values(2000 * _STEPS_PER_ITER, True)
+        weights = reward_weight_curriculum.get_curriculum_values(2000 * STEPS_PER_ITER, True)
         reward = torch.exp(-weights["sigma_corridor"] * (
             outer.square() + weights["corridor_inner_multiplier"] * inner.square()
         ))
@@ -148,7 +148,7 @@ class TestSlalomTrainingSetup(unittest.TestCase):
 
     # 误差尺度平滑收紧，课程边界后保持 20 毫米。
     def test_corridor_scale_tightens_continuously(self):
-        sigma = [reward_weight_curriculum.get_curriculum_values(i * _STEPS_PER_ITER, True)["sigma_corridor"]
+        sigma = [reward_weight_curriculum.get_curriculum_values(i * STEPS_PER_ITER, True)["sigma_corridor"]
                  for i in (0, 1, 1000, 1999, 2000, 4000, 8000)]
         self.assertEqual(sigma, sorted(sigma))
         self.assertAlmostEqual(sigma[0] ** -0.5, 0.05)

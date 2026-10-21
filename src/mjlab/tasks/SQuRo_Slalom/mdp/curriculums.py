@@ -40,7 +40,7 @@ from .config import (
 )
 
 
-_STEPS_PER_ITER = STEPS_PER_ITER      # 兼容旧导入名
+STEPS_PER_ITER = STEPS_PER_ITER      # 兼容旧导入名
 
 # 由 config 派生的整数档位与曲率目标
 SLALOM_CURVATURES = tuple(range(SLALOM_CURVATURE_MIN, SLALOM_CURVATURE_MAX + 1))
@@ -89,7 +89,7 @@ _CURVES: dict[str, tuple[float, ...]] = {
 
 # 获取训练阶段
 def get_training_phase(step_counter: int, phase0_only: bool = False) -> int:
-    return 0 if phase0_only or step_counter // _STEPS_PER_ITER < PHASE1_END_ITER else 1
+    return 0 if phase0_only or step_counter // STEPS_PER_ITER < PHASE1_END_ITER else 1
 
 
 
@@ -97,7 +97,7 @@ def get_training_phase(step_counter: int, phase0_only: bool = False) -> int:
 def get_training_phase_batch(step_counter: torch.Tensor, phase0_only: bool = False) -> torch.Tensor:
     if phase0_only:
         return torch.zeros_like(step_counter, dtype=torch.bool)
-    return (step_counter // _STEPS_PER_ITER) >= PHASE1_END_ITER
+    return (step_counter // STEPS_PER_ITER) >= PHASE1_END_ITER
 
 
 
@@ -111,7 +111,7 @@ def get_velocity_scale(curvature: Any) -> Any:
 
 # 一阶段曲率范围: 前两千轮从 0.5 扩到 20, 之后保持完整范围
 def get_phase0_curvature_range(step_counter: int) -> tuple[float, float]:
-    progress = min((step_counter // _STEPS_PER_ITER) / PHASE1_MID_ITER, 1.0)
+    progress = min((step_counter // STEPS_PER_ITER) / PHASE1_MID_ITER, 1.0)
     upper = 0.5 + progress * (CURVATURE_TARGET_MAX - 0.5)
     return -upper, upper
 
@@ -119,7 +119,7 @@ def get_phase0_curvature_range(step_counter: int) -> tuple[float, float]:
 
 # 采样一阶段曲率日程: 恒定回合单段, 动态回合 4~6 段并在段间平滑过渡
 def sample_phase0_schedule(iteration: int, count: int, device) -> dict:
-    lower, upper = get_phase0_curvature_range(iteration * _STEPS_PER_ITER)
+    lower, upper = get_phase0_curvature_range(iteration * STEPS_PER_ITER)
     dynamic = torch.rand(count, device=device) < (
         PHASE0_DYNAMIC_PROBABILITY if iteration >= PHASE0_DYNAMIC_START_ITER else 0.0)
     positions = torch.arange(PHASE0_MAX_SEGMENTS, device=device)
@@ -399,7 +399,7 @@ class SpacingCurriculumState:
 # 奖励权重课程
 class RewardCurriculum:
     def get_curriculum_values(self, current_step: int, phase0_only: bool = False) -> dict[str, float]:
-        current_iter = current_step // _STEPS_PER_ITER
+        current_iter = current_step // STEPS_PER_ITER
         if phase0_only:
             current_iter = min(current_iter, PHASE1_END_ITER - 1)
         result: dict[str, float] = {}
