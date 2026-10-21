@@ -109,8 +109,7 @@ _MODEL_INDICES = ModelIndices()
 
 # 解析并缓存模型 body、site 和关节索引
 def resolve_model_indices(entity) -> None:
-    if (_MODEL_INDICES.f_body_id >= 0 and _MODEL_INDICES.joint_ids
-            and _MODEL_INDICES.linkage_joint_ids):
+    if (_MODEL_INDICES.f_body_id >= 0 and _MODEL_INDICES.joint_ids and _MODEL_INDICES.linkage_joint_ids):
         return
 
     body_ids, _ = entity.find_bodies(["F_body_Link", "H_body_Link"], preserve_order=True)
