@@ -157,7 +157,8 @@ class TestSlalomTrainingSetup(unittest.TestCase):
 
     # 打乱模型关节顺序后，复位仍绑定正确部位和颈部默认角。
     def test_named_reset_survives_joint_reordering(self):
-        names = ("unused_joint",) + tuple(reversed(indices._ACT_JOINT_NAMES + indices.LINKAGE_JOINT_NAMES))
+        joint_names = tuple(indices._ACT_JOINT_NAMES) + tuple(indices.LINKAGE_JOINT_NAMES)
+        names = ("unused_joint",) + tuple(reversed(joint_names))
         joint_map = {name: i for i, name in enumerate(names)}
         recorded = {}
         robot = NS(

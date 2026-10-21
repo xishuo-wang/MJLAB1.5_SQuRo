@@ -50,6 +50,8 @@ _ACT_HR_LEG_IDS = (_ACT_HR_HIP_ID,      _ACT_HR_KNEE_ID)        # 右后腿: (12
 _ACT_LEG_F_IDS  = _ACT_FL_LEG_IDS + _ACT_FR_LEG_IDS             # 前腿合并: (4, 5, 6, 7)
 _ACT_LEG_H_IDS  = _ACT_HL_LEG_IDS + _ACT_HR_LEG_IDS             # 后腿合并: (10, 11, 12, 13)
 _ACT_LEG_IDS    = _ACT_LEG_F_IDS  + _ACT_LEG_H_IDS              # 全腿合并: (4, 5, 6, 7, 10, 11, 12, 13)
+_ACT_SHOULDER_IDS = (_ACT_FL_SHOULDER_ID, _ACT_FR_SHOULDER_ID)   # 前肩关节
+_ACT_HIP_IDS = (_ACT_HL_HIP_ID, _ACT_HR_HIP_ID)                  # 后髋关节
 
 
 # 脊柱索引
