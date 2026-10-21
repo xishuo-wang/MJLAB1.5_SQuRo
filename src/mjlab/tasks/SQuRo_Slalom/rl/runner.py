@@ -79,10 +79,11 @@ class SQuRoSlalomOnPolicyRunner(MjlabOnPolicyRunner):
     env.common_step_counter = int(self.env.unwrapped.common_step_counter)
 
   # 冻结策略在接触环境中跑一整轮，每环境只计第一个完整回合。
-  def _run_evaluation_sweep(self) -> list[dict]:
+  def _run_evaluation_sweep(self, seed: int) -> list[dict]:
     evaluation = self._get_evaluation_env()
     env = evaluation.unwrapped
     self._sync_evaluation_course()
+    torch.manual_seed(int(seed))
     policy = self.get_inference_policy(device=str(evaluation.device))
     results: list[dict] = []
     seen: set[int] = set()
@@ -120,8 +121,8 @@ class SQuRoSlalomOnPolicyRunner(MjlabOnPolicyRunner):
     try:
       with torch.random.fork_rng(devices=devices), torch.no_grad():
         for sweep in range(SPACING_REQUIRED_BATCHES):
-          torch.manual_seed(int(self.cfg.get("seed", 42)) + iteration + sweep)
-          batch_stats.append(measure(self._run_evaluation_sweep()))
+          batch_stats.append(measure(self._run_evaluation_sweep(
+            int(self.cfg.get("seed", 42)) + iteration + sweep)))
         assert self._evaluation_env is not None
         collision = obstacle_collision_enabled(self._evaluation_env.unwrapped)
         result = course.record_evaluation(batch_stats, iteration, collision)

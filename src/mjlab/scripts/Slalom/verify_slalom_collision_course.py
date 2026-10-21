@@ -76,9 +76,15 @@ class TestSlalomPassage(unittest.TestCase):
 def make_results(plan: dict, count: int = 1024) -> list[dict]:
     results = []
     for curvature, successes in plan.items():
-        results.extend({"curvature": curvature, "success": index < successes,
-                        "failure": "" if index < successes else "跌倒"}
-                       for index in range(count))
+        results.extend(
+            {
+                "curvature": curvature,
+                "success": index < successes,
+                "failure": "" if index < successes else "fallen",
+                "failure_code": 0 if index < successes else 4,
+            }
+            for index in range(count)
+        )
     return results
 
 

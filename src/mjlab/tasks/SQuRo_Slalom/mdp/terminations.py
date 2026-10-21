@@ -36,11 +36,21 @@ def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 绕杆穿越检测
+# Passage state detector for the slalom course.
+_FAILURE_NAMES = {
+    1: "not_passed",
+    2: "wrong_side",
+    3: "height_violation",
+    4: "fallen",
+    5: "timeout",
+}
+
+
 class PassMonitor:
     def __init__(self, env):
         self.env = env
         shape = (env.num_envs, PASSAGE_REQUIRED_OBSTACLES, 3)
+        self.seq = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.crossed = torch.zeros(shape, dtype=torch.bool, device=env.device)
         self.passed = torch.zeros(shape[:2], dtype=torch.bool, device=env.device)
         self.wrong_side = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -50,14 +60,14 @@ class PassMonitor:
         self.completed: list[dict] = []
 
 
-    # 仅清理重置环境的通过状态，已发布的结果继续由 runner 消费
+    # Clear passage state only for reset envs; published results stay for the runner.
     def reset(self, env_ids) -> None:
         for buffer in (self.crossed, self.passed, self.wrong_side, self.initialized):
             buffer[env_ids] = False
         self.last_done_step[env_ids] = -1
 
 
-    # 检查实际位置；足端与两段躯干均过杆后才累计通过
+    # Accumulate a pass once the rear extent clears each obstacle plane on the correct side.
     def update(self, centers: torch.Tensor, rear_extent: torch.Tensor) -> None:
         env = self.env
         command = env.command_manager._terms["slalom_cmd"]
@@ -84,7 +94,7 @@ class PassMonitor:
         self.initialized[:] = True
 
 
-    # 在真实回合结束时发布成绩；超时本身不能作为成功
+    # Publish one result per completed episode; timeout alone is not a success.
     def compute(self) -> None:
         env = self.env
         robot = env.scene["robot"]
@@ -94,31 +104,45 @@ class PassMonitor:
         feet = robot.data.site_pos_w[:, _MODEL_INDICES.foot_site_ids]
         rear_extent = torch.minimum(vertices[..., 0].amin(dim=(1, 2)), feet[..., 0].amin(dim=1))
         self.update(centers, rear_extent)
+        timeout = check_episode_timeout(env)
         fallen = check_fallen(env)
-        done = fallen | check_episode_timeout(env)
+        done = timeout | fallen
         command = env.command_manager._terms["slalom_cmd"]
         publish = done & command.phase1_mask & (self.last_done_step != env.common_step_counter)
         for env_id in publish.nonzero(as_tuple=False).flatten().tolist():
             self.last_done_step[env_id] = env.common_step_counter
             passed = int(self.passed[env_id].cumprod(dim=0).sum())
             wrong = bool(self.wrong_side[env_id])
-            failure = "跌倒" if fallen[env_id] else "错侧" if wrong else "未过三杆" if passed < PASSAGE_REQUIRED_OBSTACLES else ""
+            if fallen[env_id]:
+                failure_code = 4
+            elif wrong:
+                failure_code = 2
+            elif passed < PASSAGE_REQUIRED_OBSTACLES:
+                failure_code = 5 if timeout[env_id] else 1
+            else:
+                failure_code = 0
+            self.seq[env_id] += 1
             self.completed.append({
-                "success": failure == "", "failure": failure, "passed_obstacles": passed,
+                "seq": int(self.seq[env_id]),
+                "env_id": env_id,
+                "valid": True,  # dedicated evaluation envs are not episode-length filtered
+                "success": failure_code == 0,
+                "failure_code": failure_code,
+                "failure": _FAILURE_NAMES.get(failure_code, ""),
+                "passed_obstacles": passed,
                 "curvature": int(command.slalom_peak_curvature[env_id]),
                 "gait": float(command.command[env_id, CMD_GAIT_FREQ_IDS]),
-                "env_id": env_id,
             })
 
 
-    # 取走已结束回合，避免重复计数或无限积累
+    # Drain completed results so the runner can consume each one once.
     def consume(self) -> list[dict]:
         results, self.completed = self.completed, []
         return results
 
 
 
-# 记录绕杆成绩，不增加额外终止条件或奖励
+# Record slalom passage results as a side effect without adding termination or reward.
 def collect_passage_state(env) -> torch.Tensor:
     monitor = getattr(env, "_slalom_passage_monitor", None)
     if monitor is None:
