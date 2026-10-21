@@ -11,7 +11,7 @@ from mjlab.tasks.SQuRo_Slalom.mdp.reference import (
     curvature_from_spacing,
     get_slalom_geometry,
 )
-from mjlab.scripts._diagnostics import SLALOM_DIAGNOSTICS_ROOT
+from . import VIZ_PATH_OUTPUT_ROOT
 
 
 # 当前整数曲率对应的实际无直行路径。
@@ -24,7 +24,7 @@ NUM_OBSTACLES = 8                   # 显示杆数量
 X_RANGE = (0.0, 1.10)           # 显示 x 范围 (m)
 Y_RANGE = (-0.20, 0.20)         # 显示 y 范围 (m)
 N_SAMPLES = 400                 # 采样点数 (路径由 LUT 直接给出, 仅用于重采样)
-SAVE_PATH = SLALOM_DIAGNOSTICS_ROOT / "path" / "Viz_Slalom_Path.png"
+SAVE_PATH = VIZ_PATH_OUTPUT_ROOT / "Viz_Slalom_Path.png"
 
 
 # 生成 RL 实际使用的 base 期望路径 (接近段 + 多周期平滑 LUT)

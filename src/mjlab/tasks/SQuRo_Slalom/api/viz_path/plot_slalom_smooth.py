@@ -10,7 +10,7 @@
   - t>0: 起点 y0>0, 切换点 x>Rmin (等效转弯半径增大)
 
 用法:
-  uv run python src/mjlab/scripts/plot_slalom_smooth.py [--no-show] [--out xxx.png]
+  uv run python -B -m mjlab.tasks.SQuRo_Slalom.api.viz_path.plot_slalom_smooth [--no-show] [--out xxx.png]
 """
 import argparse
 import numpy as np

@@ -1,4 +1,5 @@
 import os
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
@@ -6,9 +7,11 @@ from matplotlib.path import Path as MplPath
 from matplotlib.patches import Polygon, Circle
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+from . import VIZ_PATH_OUTPUT_ROOT
+
 # ======================================================
 # 配置区
-OUTPUT_DIR = r"D:\MuJoCoLab_1.5\src\mjlab\scripts\Viz_Path\Result"      # 输出目录
+OUTPUT_DIR = str(VIZ_PATH_OUTPUT_ROOT / "reward")      # 输出目录
 OUTPUT_FILENAME = "corridor_slalom.png"                                 # 输出文件名
 
 # 机器人尺寸

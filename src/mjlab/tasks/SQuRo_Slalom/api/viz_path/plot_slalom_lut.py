@@ -1,6 +1,6 @@
 """Phase 1 绕杆 LUT 轨迹生成可视化
 
-展示 mdp/path.py 中 _generate_slalom_lut_one_period 的构造过程:
+展示 mdp/reference.py 中 _generate_slalom_lut_one_period 的构造过程:
   - 6 段: CW弧 → CCW弧 → 直行 → CCW弧 → CW弧 → 直行 (一个周期)
   - 弧段圆心/辅助圆/直行段
   - 杆位置 (y = OBSTACLE_Y) 与弧的几何关系
@@ -8,7 +8,7 @@
   - κ(s) 与 heading(s) 沿弧长分布
 
 用法:
-  uv run python src/mjlab/scripts/plot_slalom_lut.py [--n_periods 1]
+  uv run python -B -m mjlab.tasks.SQuRo_Slalom.api.viz_path.plot_slalom_lut [--n_periods 1]
       [--out xxx.png] [--no-show]
 """
 import argparse
