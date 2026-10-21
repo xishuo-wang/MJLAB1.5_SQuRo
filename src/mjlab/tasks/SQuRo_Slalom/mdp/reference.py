@@ -10,33 +10,33 @@ from typing import TYPE_CHECKING, Any
 from mjlab.utils.lab_api.math import matrix_from_quat
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import SPINE_FRONT_FRAME, SPINE_HIND_FRAME
 from .config import (
-    APPROACH_LENGTH,
     BASE_VEL,
-    CMD_CURVATURE_IDS,
-    CMD_GAIT_FREQ_IDS,
+    PHASE_LAG,
+    SMOOTH_VEL,
+    STRIDE_MIN,
+    SMOOTH_TIME,
     CMD_VEL_X_IDS,
-    CURVATURE_TARGET_MAX,
     F_SPINE1_LIMIT,
     H_SPINE1_LIMIT,
-    MAX_STRIDE_SCALE,
     NECK_YAW_LIMIT,
-    PHASE0_EPISODE_SECONDS,
-    PHASE_LAG,
-    REFERENCE_CURVATURE_BLEND,
+    APPROACH_LENGTH,
+    MAX_STRIDE_SCALE,
+    TABLE_RESOLUTION,
+    CMD_CURVATURE_IDS,
+    CMD_GAIT_FREQ_IDS,
     SLALOM_CURVATURE_MAX,
     SLALOM_CURVATURE_MIN,
-    SMOOTH_TIME,
-    SMOOTH_VEL,
+    CURVATURE_TARGET_MAX,
+    PHASE0_EPISODE_SECONDS,
+    REFERENCE_CURVATURE_BLEND,
     SPINE_REFERENCE_TIME_CONSTANT,
-    STRIDE_MIN,
-    TABLE_RESOLUTION,
 )
 from .curriculums import (
-    CURVATURE_TARGET,
     Rmin,
+    phase0_kappa_at,
+    CURVATURE_TARGET,
     SLALOM_CURVATURES,
     get_velocity_scale,
-    phase0_kappa_at,
 )
 from .indices import (
     _ACT_SPN_IDS,
@@ -164,11 +164,11 @@ def initialize_tables(device: torch.device | str, base_velocity: float = BASE_VE
     # 加载 CSV
     df_f = pd.read_csv(_BIO_DATA_DIR / "Trot_F.csv")
     df_h = pd.read_csv(_BIO_DATA_DIR / "Trot_H.csv")
-    phase_csv: np.ndarray = df_f["Phase"].values.astype(np.float64)
-    y_f: np.ndarray = df_f["Y_mean"].values.astype(np.float64)
-    z_f: np.ndarray = df_f["Z_mean"].values.astype(np.float64)
-    y_h: np.ndarray = df_h["Y_mean"].values.astype(np.float64)
-    z_h: np.ndarray = df_h["Z_mean"].values.astype(np.float64)
+    phase_csv: np.ndarray = df_f["Phase"].values.astype(np.float64) # type: ignore
+    y_f: np.ndarray = df_f["Y_mean"].values.astype(np.float64) # type: ignore
+    z_f: np.ndarray = df_f["Z_mean"].values.astype(np.float64) # type: ignore
+    y_h: np.ndarray = df_h["Y_mean"].values.astype(np.float64) # type: ignore
+    z_h: np.ndarray = df_h["Z_mean"].values.astype(np.float64) # type: ignore
 
     # 生成等距相位网格
     phases = np.linspace(0, 1, TABLE_RESOLUTION)
