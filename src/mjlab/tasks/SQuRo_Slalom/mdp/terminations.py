@@ -1,7 +1,12 @@
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
-from .config import CMD_GAIT_FREQ_IDS, PASSAGE_REQUIRED_OBSTACLES, PHASE0_EPISODE_SECONDS, OBSTACLE_RADIUS
+from .config import (
+    OBSTACLE_RADIUS,
+    CMD_GAIT_FREQ_IDS, 
+    PHASE0_EPISODE_SECONDS, 
+    PASSAGE_REQUIRED_OBSTACLES, 
+)
 from .indices import _MODEL_INDICES
 from .reference import project_body_envelopes
 
@@ -22,7 +27,7 @@ def check_fallen(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 一阶段保持二十秒，二阶段使用配置中的完整回合时长
+# 确认 Episode 时长：一阶段 20s，二阶段 30s
 def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
     phase1 = env.command_manager._terms["slalom_cmd"].phase1_mask  # type: ignore
     phase0_steps = min(env.max_episode_length, round(PHASE0_EPISODE_SECONDS / env.step_dt))
@@ -31,7 +36,7 @@ def check_episode_timeout(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# 按真实躯干与基座越过杆平面的时刻检查交替侧别，不依赖参考时钟
+# 绕杆穿越检测
 class PassMonitor:
     def __init__(self, env):
         self.env = env
