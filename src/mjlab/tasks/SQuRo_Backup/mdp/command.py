@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from mjlab.managers import CommandTermCfg
 from mjlab.managers.command_manager import CommandTerm
 from .events import apply_fallen_state
+from .entity import write_wall_mocap
 from .indices import _MODEL_INDICES, resolve_model_indices
 from .config import (
     T3,
@@ -279,7 +280,7 @@ class BackupCommand(CommandTerm):
         d = self._wall_d[env_ids]
         origins = getattr(self._env.scene, "env_origins", None)
         origin = origins[env_ids, 0] if origins is not None else torch.zeros_like(d)
-        entity.write_wall_x(self._env, -d + origin, torch.full_like(d, x_pos) + origin, env_ids=env_ids)
+        write_wall_mocap(entity, -d + origin, torch.full_like(d, x_pos) + origin, env_ids=env_ids)
         self.wall_x_neg_command[env_ids] = -d
         self.wall_x_pos_command[env_ids] = x_pos
 

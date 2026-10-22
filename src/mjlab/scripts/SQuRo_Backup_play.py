@@ -539,7 +539,7 @@ def run_play(cfg: PlayConfig):
         policy = runner.get_inference_policy(device=device)
         ent = env.unwrapped.scene.entities.get("restricted_space")
         if ent is not None:
-            got_neg, got_pos = ent.read_wall_x(env.unwrapped) # type: ignore
+            got_neg, got_pos = mdp_entity.read_wall_positions(ent) # type: ignore
             if (abs(float(got_neg[0]) - wall_x_neg) > 1e-4 or abs(float(got_pos[0]) - wall_x_pos) > 1e-4):
                 raise SystemExit(
                     f"墙位被改写了: 入口指定 ({wall_x_neg:+.4f}, {wall_x_pos:+.4f}), "

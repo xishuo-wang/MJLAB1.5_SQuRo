@@ -73,7 +73,7 @@ def main() -> None:
     policy = runner.get_inference_policy(device=cfg.device)
 
     ent = env.unwrapped.scene.entities["restricted_space"]
-    wall_ids = set(int(g) for g in ent.wall_geom_ids)
+    wall_ids = set(int(g) for g in mdp_entity.wall_geom_ids(ent))
     robot_ids = set(int(g) for g in
                     env.unwrapped.scene.entities["robot"].indexing.geom_ids.detach().cpu().tolist())
     nw = cfg.num_envs

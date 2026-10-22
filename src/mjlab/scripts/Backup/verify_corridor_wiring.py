@@ -54,7 +54,7 @@ def make_env(cfg: ProbeCfg, walls: tuple[float, float], collision: bool):
 
 # 把机器人放到指定 root x 并跑若干步, 返回 (墙接触对总数, x 末值)
 def run_probe(env, ent, start_x: float, steps: int) -> tuple[int, float]:
-    ids = ent.wall_geom_ids
+    ids = mdp_entity.wall_geom_ids(ent)
     asset = env.scene.entities["robot"]
     dtype = asset.data.root_link_pos_w.dtype
     root = torch.zeros(1, 13, device=env.device, dtype=dtype)
@@ -123,7 +123,7 @@ def main() -> None:
         walls = get_wall_positions(lv)
         env = make_env(cfg, walls, collision=False)
         ent = env.scene.entities["restricted_space"]
-        xs = [float(env.sim.mj_data.geom_xpos[g][0]) for g in ent.wall_geom_ids]
+        xs = [float(env.sim.mj_data.geom_xpos[g][0]) for g in mdp_entity.wall_geom_ids(ent)]
         print(f"  档位 {lv}: 墙世界 x={[round(x, 4) for x in xs]}  "
               f"实际内侧净宽 {ent.clear_width:.4f} m "
               f"(= 间距 {walls[1] - walls[0]:.4f} - 2×{WALL_HALF_THICKNESS})")
@@ -138,7 +138,7 @@ def main() -> None:
         cmd_term._resample_command(torch.arange(env.num_envs))
         cmd0 = cmd_term.command[0]
         assert cmd_term.command.shape[-1] == 9, "命令张量必须是 9 维 (末两维为墙位观测)"
-        phys_neg, phys_pos = ent.read_wall_x(env)
+        phys_neg, phys_pos = mdp_entity.read_wall_positions(ent)
         # 命令张量是 float32, 容差按 float32 给
         assert abs(float(cmd0[7]) - walls[0]) < 1e-6, "观测里的 −X 墙位与目标档位不一致"
         assert abs(float(cmd0[8]) - walls[1]) < 1e-6, "观测里的 +X 墙位与目标档位不一致"

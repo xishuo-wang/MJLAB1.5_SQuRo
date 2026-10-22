@@ -159,7 +159,7 @@ def _run_config(cfg: Cfg, dists: tuple[float, ...], collision: bool, iter_num: i
     # 逐环境墙位: 覆盖命令项每次重置采样的结果, 保证所有回合都是指定档位
     cmd._wall_d[all_ids] = d_t
     cmd._push_wall(all_ids)
-    got_neg, got_pos = scene.entities["restricted_space"].read_wall_x(env.unwrapped)
+    got_neg, got_pos = mdp_entity.read_wall_positions(scene.entities["restricted_space"])
     print(f"  自检 逐环境墙位 x_neg={[-round(float(v), 3) for v in got_neg]} "
           f"x_pos={round(float(got_pos[0]), 3)} 碰撞={'开' if collision else '关'}", flush=True)
     policy = policy_factory(env)

@@ -37,7 +37,7 @@ def np_(t) -> np.ndarray:
 # 用 no_grad 而非 inference_mode: 后者会把 step 里产生的张量 (含 reset 用的 env_ids) 标成
 # 推理张量, 之后再在 inference_mode 外做就地写就会报 "Inplace update to inference tensor"。
 def wall_hits(env, ent, steps: int, act) -> np.ndarray:
-    ids = set(ent.wall_geom_ids)
+    ids = set(mdp_entity.wall_geom_ids(ent))
     hits = np.zeros(env.num_envs, dtype=int)
     with torch.no_grad():
         for _ in range(steps):
@@ -68,19 +68,19 @@ def main() -> None:
 
     print("=" * 90)
     print(f"[1] nmocap={mjm.nmocap} nq={mjm.nq} nv={mjm.nv}")
-    print(f"    墙 body 全局下标 = {ent.wall_body_ids}  mocap 下标 = {ent.wall_mocap_ids}")
+    print(f"    墙 body 全局下标 = {mdp_entity.wall_body_ids(ent)}  mocap 下标 = {mdp_entity.wall_mocap_ids(ent)}")
     check(mjm.nmocap >= 2, "至少两面墙是 mocap body")
-    check(len(ent.wall_mocap_ids) == 2 and -1 not in ent.wall_mocap_ids,
+    check(len(mdp_entity.wall_mocap_ids(ent)) == 2 and -1 not in mdp_entity.wall_mocap_ids(ent),
           "两面墙都有有效 mocap 下标")
-    check(mjm.body_mocapid[ent.wall_body_ids[0]] != mjm.body_mocapid[ent.wall_body_ids[1]],
+    check(mjm.body_mocapid[mdp_entity.wall_body_ids(ent)[0]] != mjm.body_mocapid[mdp_entity.wall_body_ids(ent)[1]],
           "两面墙是两个独立 mocap body")
 
     print("\n[2] 逐环境写墙位 (CUDA 张量, 只写部分环境)")
     new_neg = torch.full((N,), -0.20, device="cuda:0")
     new_neg[:4] = torch.tensor([-0.06, -0.07, -0.08, -0.09], device="cuda:0")
-    ent.write_wall_x(env, new_neg, torch.full((N,), 0.05, device="cuda:0"))
+    mdp_entity.write_wall_mocap(ent, new_neg, torch.full((N,), 0.05, device="cuda:0"))
     env.sim.forward()
-    got, got_pos = ent.read_wall_x(env)
+    got, got_pos = mdp_entity.read_wall_positions(ent)
     want = np_(new_neg)
     check(bool(np.allclose(np_(got), want, atol=1e-5)),
           f"墙 geom 世界 x 与写入一致 (写入 {want.tolist()})")
@@ -92,7 +92,7 @@ def main() -> None:
     neg[0] = -0.048
     pos = torch.full((N,), 0.05, device="cuda:0")
     pos[0] = 0.048
-    ent.write_wall_x(env, neg, pos)
+    mdp_entity.write_wall_mocap(ent, neg, pos)
     h1 = wall_hits(env, ent, 200, act)
     check(h1[0] > 0, f"收紧的环境 0 出现墙接触 (计数 {h1[0]})")
     check(h1[1:].sum() == 0, f"其余环境无墙接触 (计数 {h1[1:].sum()})")
@@ -102,7 +102,7 @@ def main() -> None:
     # 把环境 0 的墙挪到远处: 旧位置不应再产生碰撞
     neg[0] = -0.20
     pos[0] = 0.20
-    ent.write_wall_x(env, neg, pos)
+    mdp_entity.write_wall_mocap(ent, neg, pos)
     h2 = wall_hits(env, ent, 100, act)
     check(h2.sum() == 0, f"墙挪开后全环境无墙接触 (计数 {h2.sum()})")
 
@@ -111,7 +111,7 @@ def main() -> None:
     cmd._wall_d.fill_(0.20)          # 先污染, 验证 reset 会重采
     env.reset()
     d_obs = -np_(cmd.wall_x_neg_command)
-    d_phys = -np_(ent.read_wall_x(env)[0])
+    d_phys = -np_(mdp_entity.read_wall_positions(ent)[0])
     check(bool(np.allclose(d_obs, d_phys, atol=1e-5)),
           "观测墙位与物理墙位一致 (不再广播 cfg 值)")
     check(bool(((d_obs >= 0.08 - 1e-6) & (d_obs <= 0.20 + 1e-6)).all()),
@@ -121,12 +121,12 @@ def main() -> None:
     check(bool(np.allclose(np_(cmd.wall_x_pos_command), 0.05, atol=1e-5)), "右墙观测恒为 +0.05")
 
     print("\n[5] 循环复位不换墙位")
-    before = np_(ent.read_wall_x(env)[0]).copy()
+    before = np_(mdp_entity.read_wall_positions(ent)[0]).copy()
     d_before = np_(cmd._wall_d).copy()
     with torch.no_grad():
         cmd._pending_cycle_reset[:] = True
         cmd._apply_cycle_reset(torch.ones(N, dtype=torch.bool, device="cuda:0"))
-    after = np_(ent.read_wall_x(env)[0])
+    after = np_(mdp_entity.read_wall_positions(ent)[0])
     check(bool(np.allclose(before, after, atol=1e-5)),
           "循环复位后物理墙位不变 (sim.reset 打回默认值的问题已修)")
     check(bool(np.allclose(d_before, np_(cmd._wall_d), atol=1e-5)),

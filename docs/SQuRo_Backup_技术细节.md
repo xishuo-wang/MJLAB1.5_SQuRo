@@ -2239,3 +2239,29 @@ uv run python -m mjlab.scripts.Backup.measure_ref_tracking_conditions 3.0 10.5
 显式惯量覆盖路径(`explicitinertial=True` + 由 `body_inertia`/`body_iquat` 重建 `fullinertia`)
 相对不覆盖的基线有约 **8%** 的时序偏移(前后方向 0 mm: 266/149; 无覆盖基线: 245/141)。
 **不影响顺序结论**; 但细比时间时应以"显式覆盖的 0 mm"为基准, 不要直接和不覆盖的基线比。
+
+## 代码排版与墙体接口整理（2026-10-23）
+
+本次仅统一排版、复位数据组织和墙体接口。训练参数、奖励公式、观测与动作顺序、仰卧初态、
+课程推进协议和检查点字段保持原值；最小内侧净宽仍为 9 cm。整理前源码为 `43be828`。
+
+- 任务目录采用四空格缩进、120 字符行宽，函数前使用简短中文用途注释。
+- `events.py` 将驱动与被动关节角分别组织为 `_ACT_JOINT_POS`、`_UNACT_JOINT_POS`，按名称解析的关节编号写入。
+- 驱动腿角继续来自 `LEG_INIT`，不维护第二份数值；`reset_model` 与回合内物理复位共用仰卧写入函数。
+- `entity.py` 的实体类负责配置与几何，索引查询和墙位读写使用模块函数，与 Hole 的组织方式一致。
+- 旧混合角列表 `JOINT_POSITIONS` 和墙体实例读写方法已移除，项目内入口与诊断脚本同步迁移。
+
+| 当前接口 | 用途 |
+| --- | --- |
+| `wall_geom_ids(entity)` | 查询两墙的全局几何编号 |
+| `wall_body_ids(entity)` | 查询两墙的全局刚体编号 |
+| `wall_mocap_ids(entity)` | 查询两墙的 mocap 编号 |
+| `write_wall_mocap(entity, x_neg, x_pos, env_ids=None)` | 仅更新所选环境的世界 x，保留 y/z 与朝向 |
+| `read_wall_positions(entity)` | 返回两墙世界 x 的独立副本 |
+
+墙位坐标仍由 command 加上环境原点后写入，观测保留相对墙位。读写访问实体绑定的仿真数据，
+与环境的 `sim.data` 为同一对象；无仿真替身仍支持写入无操作、读取零值。构建函数默认值和接触参数未改。
+
+排版检查：`uv run ruff format --no-cache --check --config "indent-width=4" --config "line-length=120" src/mjlab/tasks/SQuRo_Backup`。
+回归入口仍为 `uv run python -B -m mjlab.scripts.Backup.verify_backup_stage_rewards`。
+整理与同输入仿真对照记录位于 `logs/diagnostics/SQuRo_Backup/format_refactor_20261023/`。

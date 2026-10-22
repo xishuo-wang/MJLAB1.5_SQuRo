@@ -45,12 +45,11 @@ class RestrictedSpaceEntityCfg(EntityCfg):
 
 
 class RestrictedSpaceEntity(Entity):
+    cfg: RestrictedSpaceEntityCfg
+
     # 创建两面墙的实体与几何。
     def __init__(self, cfg: RestrictedSpaceEntityCfg):
         super().__init__(cfg)
-        self.cfg = cfg
-        self._wall_geoms: list = []
-        self._wall_bodies: list = []
         self._build_geometry()
 
     # 创建几何体
@@ -64,60 +63,17 @@ class RestrictedSpaceEntity(Entity):
                 pos=(center, 0.0, 0.0),
                 mocap=True,
             )
-            self._wall_bodies.append(body)
-            self._wall_geoms.append(
-                body.add_geom(
-                    name=f"{self.cfg.name}_wall_{tag}_geom",
-                    pos=(0.0, 0.0, half_h),
-                    size=(half_t, half_l, half_h),
-                    type=mujoco.mjtGeom.mjGEOM_BOX,
-                    rgba=self.cfg.rgba,
-                    contype=self.cfg.contype,
-                    conaffinity=self.cfg.conaffinity,
-                    solref=self.cfg.solref,
-                    solimp=self.cfg.solimp,
-                )
+            body.add_geom(
+                name=f"{self.cfg.name}_wall_{tag}_geom",
+                pos=(0.0, 0.0, half_h),
+                size=(half_t, half_l, half_h),
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                rgba=self.cfg.rgba,
+                contype=self.cfg.contype,
+                conaffinity=self.cfg.conaffinity,
+                solref=self.cfg.solref,
+                solimp=self.cfg.solimp,
             )
-
-    # 解析两面墙的全局几何编号。
-    @property
-    def wall_geom_ids(self) -> list[int]:
-        local, _ = self.find_geoms([f"{self.cfg.name}_wall_.*_geom"], preserve_order=True)
-        return list(self.indexing.geom_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
-
-    # 解析两面墙的全局刚体编号。
-    @property
-    def wall_body_ids(self) -> list[int]:
-        local, _ = self.find_bodies([f"{self.cfg.name}_wall_.*"], preserve_order=True)
-        return list(self.indexing.body_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
-
-    # 解析两面墙的 mocap 编号。
-    @property
-    def wall_mocap_ids(self) -> list[int]:
-        return [int(self.data.model.body_mocapid[b]) for b in self.wall_body_ids]
-
-    # 逐环境写墙位
-    def write_wall_x(self, env, x_neg, x_pos, env_ids=None) -> None:
-        sim = getattr(env, "sim", None)
-        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
-        if pos is None:
-            return
-        ids = slice(None) if env_ids is None else env_ids
-        mn, mp = self.wall_mocap_ids
-        for mocap_id, value in ((mn, x_neg), (mp, x_pos)):
-            if not torch.is_tensor(value):
-                value = torch.as_tensor(value, device=pos.device, dtype=pos.dtype)
-            pos[ids, mocap_id, 0] = value
-
-    # 读回逐环境墙位 (世界 x); 无仿真时返回全 0 (单测替身)
-    def read_wall_x(self, env) -> tuple:
-        sim = getattr(env, "sim", None)
-        pos = getattr(getattr(sim, "data", None), "mocap_pos", None)
-        if pos is None:
-            z = torch.zeros(1)
-            return z.clone(), z.clone()
-        mn, mp = self.wall_mocap_ids
-        return pos[:, mn, 0].clone(), pos[:, mp, 0].clone()
 
     # 读取配置模板的内侧净宽。
     @property
@@ -221,3 +177,50 @@ def configure_restricted_space(
     entities["restricted_space"] = cfg
     env_cfg.scene.entities = entities
     return cfg
+
+
+# 解析两面墙的全局几何编号。
+def wall_geom_ids(entity: RestrictedSpaceEntity) -> list[int]:
+    local, _ = entity.find_geoms([f"{entity.cfg.name}_wall_.*_geom"], preserve_order=True)
+    return list(entity.indexing.geom_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
+
+
+# 解析两面墙的全局刚体编号。
+def wall_body_ids(entity: RestrictedSpaceEntity) -> list[int]:
+    local, _ = entity.find_bodies([f"{entity.cfg.name}_wall_.*"], preserve_order=True)
+    return list(entity.indexing.body_ids[torch.tensor(local, dtype=torch.long)].cpu().tolist())
+
+
+# 解析两面墙的 mocap 编号。
+def wall_mocap_ids(entity: RestrictedSpaceEntity) -> list[int]:
+    return [int(entity.data.model.body_mocapid[body_id]) for body_id in wall_body_ids(entity)]
+
+
+# 逐环境写入两墙的世界 x，保留其他位置分量与朝向。
+def write_wall_mocap(
+    entity: RestrictedSpaceEntity,
+    x_neg: float | torch.Tensor,
+    x_pos: float | torch.Tensor,
+    env_ids: torch.Tensor | slice | None = None,
+) -> None:
+    data = getattr(getattr(entity, "data", None), "data", None)
+    pos = getattr(data, "mocap_pos", None)
+    if pos is None:
+        return
+    ids = slice(None) if env_ids is None else env_ids
+    mn, mp = wall_mocap_ids(entity)
+    for mocap_id, value in ((mn, x_neg), (mp, x_pos)):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value, device=pos.device, dtype=pos.dtype)
+        pos[ids, mocap_id, 0] = value
+
+
+# 读回两墙世界 x 的独立副本；无仿真时保留零值替身。
+def read_wall_positions(entity: RestrictedSpaceEntity) -> tuple[torch.Tensor, torch.Tensor]:
+    data = getattr(getattr(entity, "data", None), "data", None)
+    pos = getattr(data, "mocap_pos", None)
+    if pos is None:
+        zeros = torch.zeros(1)
+        return zeros.clone(), zeros.clone()
+    mn, mp = wall_mocap_ids(entity)
+    return pos[:, mn, 0].clone(), pos[:, mp, 0].clone()
