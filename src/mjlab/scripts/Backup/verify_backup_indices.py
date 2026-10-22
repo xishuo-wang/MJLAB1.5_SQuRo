@@ -61,7 +61,14 @@ class BackupIndicesTests(unittest.TestCase):
     def test_reset_matches_v01_with_permuted_model(self):
         legacy_ids = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23, 4, 5,
                       7, 9, 10, 11, 13, 15, 16, 17, 25, 27, 28, 29, 31, 33, 34, 35]
-        expected = dict(zip((self.xml_names[i] for i in legacy_ids), events.JOINT_POSITIONS, strict=True))
+        # 独立保留旧版标定值，不用新版复位常量生成期望结果。
+        legacy_positions = (
+            0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3,
+            0.0, 0.0, 0.0, 0.0, 0.0, -0.3,
+            -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
+            0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905,
+        )
+        expected = dict(zip((self.xml_names[i] for i in legacy_ids), legacy_positions, strict=True))
         robot = NamedModel(list(reversed(self.xml_names)))
         env = NS(device="cpu", scene=NS(entities={"robot": robot}))
         events.apply_fallen_state(env, torch.tensor([0]))

@@ -1,31 +1,45 @@
 from __future__ import annotations
 import torch
 from .config import LEG_INIT
-from .indices import _MODEL_INDICES, resolve_model_indices
+from .indices import (
+    _ACT_LEG_IDS,
+    _ACT_NECK_PITCH_ID,
+    _ACT_NUM,
+    _MODEL_INDICES,
+    resolve_model_indices,
+)
 
 
-# 重置所用关节位置
-JOINT_POSITIONS = (
-    list(LEG_INIT)
-    + [0, 0, 0, 0, 0, -0.3]
-    + [
-        -0.0943,
-        0.3867,
-        0.0943,
-        0.3862,
-        -0.0943,
-        0.3867,
-        0.0942,
-        -0.3862,
-        0.0978,
-        -0.3905,
-        -0.0978,
-        -0.3905,
-        0.0978,
-        -0.3905,
-        -0.0978,
-        -0.3905,
-    ]
+# 按执行器列序组织驱动关节角，腿角沿用统一配置。
+def _act_joint_positions() -> tuple[float, ...]:
+    positions = [0.0] * _ACT_NUM
+    for column, angle in zip(_ACT_LEG_IDS, LEG_INIT, strict=True):
+        positions[column] = angle
+    positions[_ACT_NECK_PITCH_ID] = -0.3
+    return tuple(positions)
+
+
+# 驱动关节的复位角度。
+_ACT_JOINT_POS = _act_joint_positions()
+
+# 非驱动关节的复位角度。
+_UNACT_JOINT_POS = (
+    -0.0943,
+    0.3867,
+    0.0943,
+    0.3862,
+    -0.0943,
+    0.3867,
+    0.0942,
+    -0.3862,
+    0.0978,
+    -0.3905,
+    -0.0978,
+    -0.3905,
+    0.0978,
+    -0.3905,
+    -0.0978,
+    -0.3905,
 )
 
 
@@ -48,8 +62,9 @@ def apply_fallen_state(env, env_ids: torch.Tensor) -> None:
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
     indices = _MODEL_INDICES
-    joint_ids = indices.joint_leg_ids + indices.joint_spn_ids + indices.joint_neck_ids + indices.linkage_joint_ids
-    for idx, position in zip(joint_ids, JOINT_POSITIONS, strict=True):
+    joint_ids = indices.joint_ids + indices.linkage_joint_ids
+    positions = _ACT_JOINT_POS + _UNACT_JOINT_POS
+    for idx, position in zip(joint_ids, positions, strict=True):
         joint_pos[:, idx] = position
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
