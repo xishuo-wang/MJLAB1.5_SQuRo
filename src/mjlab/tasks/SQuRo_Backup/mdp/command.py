@@ -29,17 +29,15 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-
-_GROUND_TH_S1 = 0.03            # 判定 S1 平躺高度阈值
-_GROUND_TH_S2 = 0.04            # 判定 S2 趴地高度阈值
-_P1_NOMINAL = P1_END            # 参考到达 S1 的名义时长
-_P2_NOMINAL = T3                # 参考达到 S2 的名义时长
-WINDOW_LATE_S = 0.50            # 时间段后的保留余量
-STAND_UPRIGHT_COS = 0.9         # 判定正置的背腹轴余弦下限
-STAND_MIN_HEIGHT = 0.05         # 判定站起的最低躯干高度
-STAND_UPRIGHT_COS_STAY = 0.8    # 维持站立窗口的宽松正置阈值
-STAND_MIN_HEIGHT_STAY = 0.045   # 维持站立窗口的宽松高度阈值
-
+_GROUND_TH_S1 = 0.03  # 判定 S1 平躺高度阈值
+_GROUND_TH_S2 = 0.04  # 判定 S2 趴地高度阈值
+_P1_NOMINAL = P1_END  # 参考到达 S1 的名义时长
+_P2_NOMINAL = T3  # 参考达到 S2 的名义时长
+WINDOW_LATE_S = 0.50  # 时间段后的保留余量
+STAND_UPRIGHT_COS = 0.9  # 判定正置的背腹轴余弦下限
+STAND_MIN_HEIGHT = 0.05  # 判定站起的最低躯干高度
+STAND_UPRIGHT_COS_STAY = 0.8  # 维持站立窗口的宽松正置阈值
+STAND_MIN_HEIGHT_STAY = 0.045  # 维持站立窗口的宽松高度阈值
 
 
 # 对含 NaN 的记录取有效值均值; 没有有效值时返回 0
@@ -49,9 +47,10 @@ def _mean_valid(values: torch.Tensor) -> float:
     return (torch.where(valid, values, torch.zeros_like(values)).sum() / count).item()
 
 
-
 class BackupCommand(CommandTerm):
     cfg: "BackupCommandCfg"
+
+    # 初始化翻正命令、阶段和回合状态。
     def __init__(self, cfg: "BackupCommandCfg", env: "ManagerBasedRlEnv"):
         for name in ("window_late_s",):
             value = getattr(cfg, name)
@@ -145,55 +144,55 @@ class BackupCommand(CommandTerm):
         t_range = self.cfg.resampling_time_range
         self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (t_range[1] - t_range[0]) + t_range[0]
 
-
+    # 读取九维翻正命令。
     @property
     def command(self) -> torch.Tensor:
         return self.command_tensor
 
-
+    # 读取当前阶段的实际运行时间。
     @property
     def stage_t(self) -> torch.Tensor:
         return self.t_phase
 
-
+    # 读取本步进入第二阶段的脉冲。
     @property
     def s1_transition_pulse(self) -> torch.Tensor:
         return self._last_advance1
 
-
+    # 读取本步进入第三阶段的脉冲。
     @property
     def s2_transition_pulse(self) -> torch.Tensor:
         return self._last_advance2
 
-
+    # 读取本步首次完成 S1 的脉冲。
     @property
     def s1_milestone_pulse(self) -> torch.Tensor:
         return self._last_s1_milestone
 
-
+    # 读取本步首次完成 S2 的脉冲。
     @property
     def s2_milestone_pulse(self) -> torch.Tensor:
         return self._last_s2_milestone
 
-
+    # 读取 S1 早到质量核使用的时间偏差。
     @property
     def s1_dev_early(self) -> torch.Tensor:
         return self._s1_criterion_first - _P1_NOMINAL * self.time_scale_command
 
-
+    # 读取 S2 早到质量核使用的时间偏差。
     @property
     def s2_dev_early(self) -> torch.Tensor:
         return self._s2_criterion_first - _P2_NOMINAL * self.time_scale_command
 
-
+    # 读取 S1 晚到质量核使用的时间偏差。
     @property
     def s1_dev_late(self) -> torch.Tensor:
         return self._s1_criterion_first - _P1_NOMINAL * self.time_scale_command
 
+    # 读取 S2 晚到质量核使用的时间偏差。
     @property
     def s2_dev_late(self) -> torch.Tensor:
         return self._s2_criterion_first - _P2_NOMINAL * self.time_scale_command
-
 
     # 建立 _resample_command / _clear_cycle_state 会写的全部缓冲
     def _ensure_buffers(self) -> None:
@@ -247,14 +246,12 @@ class BackupCommand(CommandTerm):
             self._wall_d = torch.zeros_like(self.t_phase)
             self._last_ep_wall_d = torch.zeros_like(self.t_phase)
 
-
     # 获取受限空间实体
     def _wall_entity(self):
         scene = getattr(self._env, "scene", None)
         if scene is None:
             return None
         return getattr(scene, "entities", {}).get("restricted_space")
-
 
     # 右墙的固定中心: 显式配置优先, 否则沿用场景实体的编译值
     def _wall_x_pos_fixed(self) -> float:
@@ -263,7 +260,6 @@ class BackupCommand(CommandTerm):
         entity = self._wall_entity()
         return float(entity.cfg.wall_x_pos) if entity is not None else 0.0
 
-
     # 左墙距离 d 的采样范围
     def _wall_bounds(self) -> tuple[float, float]:
         entity = self._wall_entity()
@@ -271,7 +267,6 @@ class BackupCommand(CommandTerm):
         lo = compiled if self.cfg.wall_d_min is None else float(self.cfg.wall_d_min)
         hi = compiled if self.cfg.wall_d_max is None else float(self.cfg.wall_d_max)
         return lo, max(lo, hi)
-
 
     # 把本回合的逐环境左墙距离推到物理 (mocap) 与观测。
     def _push_wall(self, env_ids: torch.Tensor) -> None:
@@ -288,7 +283,6 @@ class BackupCommand(CommandTerm):
         self.wall_x_neg_command[env_ids] = -d
         self.wall_x_pos_command[env_ids] = x_pos
 
-
     # 完整回合复位时逐环境采样本回合的墙位
     def _sample_wall(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
@@ -296,7 +290,12 @@ class BackupCommand(CommandTerm):
         weights = self.cfg.wall_bin_weights
         if weights is not None and hi > lo:
             d = sample_wall_distances(
-                n, lo, hi, float(self.cfg.wall_d_min_frac), weights, self.device,
+                n,
+                lo,
+                hi,
+                float(self.cfg.wall_d_min_frac),
+                weights,
+                self.device,
                 final_mode=self.cfg.wall_final_mode,
             )
         elif hi > lo:
@@ -312,11 +311,15 @@ class BackupCommand(CommandTerm):
         self._wall_d[env_ids] = d
         self._push_wall(env_ids)
 
-
     # 更新墙间距下界并让后续回合按新范围采样。
     def set_wall_curriculum(
-        self, d_min: float | None, d_max: float | None = None, frac: float | None = None,
-        *, bin_weights: list[float] | None = None, final_mode: bool = False,
+        self,
+        d_min: float | None,
+        d_max: float | None = None,
+        frac: float | None = None,
+        *,
+        bin_weights: list[float] | None = None,
+        final_mode: bool = False,
     ) -> None:
         self.cfg.wall_d_min = None if d_min is None else float(d_min)
         self.cfg.wall_d_max = None if d_max is None else float(d_max)
@@ -325,24 +328,23 @@ class BackupCommand(CommandTerm):
         self.cfg.wall_bin_weights = None if bin_weights is None else tuple(bin_weights)
         self.cfg.wall_final_mode = bool(final_mode)
 
-
     # 按课程采样 time_scale λ (episode 内固定)
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         self._ensure_buffers()
         n = len(env_ids)
         if n == 0:
             return
-        self.vel_command[env_ids] = 0.0                # 跌倒爬起无速度跟踪 (占位)
-        self.height_f_command[env_ids] = 0.055         # 期望前体高度 (命令占位)
-        self.height_h_command[env_ids] = 0.055         # 期望后体高度
-        self.gait_freq_command[env_ids] = 1.0          # 占位
-        self.curvature_command[env_ids] = 0.0          # 无转向
+        self.vel_command[env_ids] = 0.0  # 跌倒爬起无速度跟踪 (占位)
+        self.height_f_command[env_ids] = 0.055  # 期望前体高度 (命令占位)
+        self.height_h_command[env_ids] = 0.055  # 期望后体高度
+        self.gait_freq_command[env_ids] = 1.0  # 占位
+        self.curvature_command[env_ids] = 0.0  # 无转向
         if self.fixed_time_scale is not None:
             lam = torch.full((n,), float(self.fixed_time_scale), device=self.device)
         else:
             lam = get_curriculum_time_scale(self._env.common_step_counter, n, self.device)
-        self.time_scale_command[env_ids] = lam         # 参考时间缩放
-        self._sample_wall(env_ids)                     # 每回合重采墙位 (物理 + 观测 + 统计同源)
+        self.time_scale_command[env_ids] = lam  # 参考时间缩放
+        self._sample_wall(env_ids)  # 每回合重采墙位 (物理 + 观测 + 统计同源)
         self.phase[env_ids] = 0
         self.t_phase[env_ids] = 0.0
         self.retry[env_ids] = 0
@@ -375,7 +377,6 @@ class BackupCommand(CommandTerm):
         self._s1_hold_lost_count[env_ids] = 0.0
         self._clear_cycle_state(env_ids)
 
-
     # 清楚新循环内部状态
     def _clear_cycle_state(self, env_ids: torch.Tensor) -> None:
         self._stand_elapsed[env_ids] = 0.0
@@ -388,7 +389,7 @@ class BackupCommand(CommandTerm):
         self._early_s2_elapsed[env_ids] = 0.0
         self._s1_hold_lost[env_ids] = False
 
-
+    # 发布结束回合的统计，再重采样指定环境的命令。
     def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
         self._ensure_buffers()
         if isinstance(env_ids, torch.Tensor) and len(env_ids) > 0:
@@ -401,7 +402,7 @@ class BackupCommand(CommandTerm):
                 self._last_ep_success[ids] = self._ep_had_success[ids] & valid
                 self._last_ep_stood_pose[ids] = self._ep_stood_pose[ids] & valid
                 self._last_ep_stood_onset[ids] = self._ep_stood_onset[ids] & valid
-                self._last_ep_wall_d[ids] = self._wall_d[ids]     # 本回合墙位 (重采之前)
+                self._last_ep_wall_d[ids] = self._wall_d[ids]  # 本回合墙位 (重采之前)
                 self._last_ep_righted[ids] = self._ep_righted[ids]  # 独立考核首回合也发布原始翻正结果
                 self._ep_seq[ids] += 1
                 self._ep_index[ids] += 1
@@ -413,11 +414,10 @@ class BackupCommand(CommandTerm):
             self._righting_elapsed[env_ids] = 0.0
         return super().reset(env_ids)
 
-
+    # 执行命令更新并记录本步时长。
     def compute(self, dt: float) -> None:
         self._update_dt = dt
         super().compute(dt)
-
 
     # 身体段方向判定
     def _segment_u(self, idx: int) -> torch.Tensor:
@@ -432,77 +432,91 @@ class BackupCommand(CommandTerm):
         u = delta[:, 2] / norm.clamp_min(torch.finfo(sp.dtype).tiny)
         return torch.where(valid, u, torch.full_like(u, float("nan")))
 
-
+    # 读取前后躯干的腹背轴余弦。
     def _pose_cos(self) -> torch.Tensor:
         return torch.stack((self._segment_u(0), self._segment_u(1)), dim=1)
 
-
+    # 从腹背轴余弦判定 S1 与 S2 姿态。
     def _flags_from_cos(self, u: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         finite = torch.isfinite(u)
         threshold = self._pose_cos_threshold
         return finite & (u >= threshold), finite & (u <= -threshold)
 
-
+    # 计算当前 S1 与 S2 姿态标志。
     def _pose_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
         u = self._pose_cos()
         self._pose_cos_cache = u
         return self._flags_from_cos(u)
 
-
+    # 读取或建立本步姿态标志缓存。
     def _get_pose_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
         cached = getattr(self, "_pose_cache", None)
         if cached is None:
             return self._pose_flags()
         return cached
 
-
+    # 读取或建立本步腹背轴余弦缓存。
     def _get_pose_cos(self) -> torch.Tensor:
         cached = getattr(self, "_pose_cos_cache", None)
         if cached is None:
             return self._pose_cos()
         return cached
 
-
+    # 将指定方向的姿态余弦映射为进度。
     @staticmethod
     def _ramp(u: torch.Tensor, sign: float) -> torch.Tensor:
         return (sign * u).clamp(0.0, 1.0)
 
-
+    # 读取前后段进入 S1 的姿态进度。
     @property
     def progress_s1(self) -> torch.Tensor:
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
         return self._ramp(u[:, 1], 1.0)
 
-
+    # 读取前后段进入 S2 的姿态进度。
     @property
     def progress_s2(self) -> torch.Tensor:
         u = torch.nan_to_num(self._get_pose_cos(), nan=0.0)
         front = (u[:, 0].clamp(-1.0, 1.0) + 1.0) / 2.0
         return self._ramp(u[:, 1], 1.0) * front
 
-
+    # 计算前后躯干姿态与最低高度。
     def standing_metrics(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         u = self._pose_cos()
-        heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id), self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
+        heights = torch.stack(
+            (
+                self._body_height(_MODEL_INDICES.f_body_id),
+                self._body_height(_MODEL_INDICES.h_body_id),
+            ),
+            dim=1,
+        )
         u_floor = u.amin(dim=1)
         h_floor = heights.amin(dim=1)
         return u_floor, h_floor, self._joint_vel_rms()
 
-
+    # 计算严格与维持站立窗口的条件。
     def standing_state(self) -> tuple[torch.Tensor, torch.Tensor]:
         u = self._pose_cos()
-        heights = torch.stack((self._body_height(_MODEL_INDICES.f_body_id), self._body_height(_MODEL_INDICES.h_body_id)), dim=1)
+        heights = torch.stack(
+            (
+                self._body_height(_MODEL_INDICES.f_body_id),
+                self._body_height(_MODEL_INDICES.h_body_id),
+            ),
+            dim=1,
+        )
         valid = torch.isfinite(u).all(dim=1) & torch.isfinite(heights).all(dim=1)
         u_floor = u.amin(dim=1)
         h_floor = heights.amin(dim=1)
         standing = valid & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
         cone = float(self._pose_cos_threshold)
         orient = ((u_floor - cone) / (1.0 - cone)).clamp(0.0, 1.0)
-        height_progress = ((h_floor - STAND_GROUND_HEIGHT) / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(0.0, 1.0)
+        height_progress = ((h_floor - STAND_GROUND_HEIGHT) / (STAND_TARGET_HEIGHT - STAND_GROUND_HEIGHT)).clamp(
+            0.0, 1.0
+        )
         progress = orient * height_progress
         return standing, torch.where(valid, progress, torch.zeros_like(progress))
 
-
+    # 组合当前姿态与高度的站立条件。
     def stand_gate(self) -> tuple[torch.Tensor, torch.Tensor]:
         u_floor, h_floor, vel_rms = self.standing_metrics()
         finite = torch.isfinite(u_floor) & torch.isfinite(h_floor) & torch.isfinite(vel_rms)
@@ -510,25 +524,24 @@ class BackupCommand(CommandTerm):
         strict = finite & (u_floor > STAND_UPRIGHT_COS) & (h_floor > STAND_MIN_HEIGHT)
         return hold, strict
 
-
+    # 计算驱动关节速度的均方根。
     def _joint_vel_rms(self) -> torch.Tensor:
         vel = self._asset.data.joint_vel[:, _MODEL_INDICES.joint_ids]
         return vel.square().mean(dim=1).sqrt()
 
-
+    # 判断指定躯干是否正置。
     def _segment_upright(self, idx: int) -> torch.Tensor:
         upright, _ = self._get_pose_flags()
         return upright[:, idx]
 
-
+    # 判断指定躯干是否倒置。
     def _segment_inverted(self, idx: int) -> torch.Tensor:
         _, inverted = self._get_pose_flags()
         return inverted[:, idx]
 
-
+    # 读取指定躯干的世界高度。
     def _body_height(self, body_id: int) -> torch.Tensor:
         return self._asset.data.body_link_pos_w[:, body_id, 2]
-
 
     # 检测是否满足 S1 姿态
     def _check_S1(self) -> torch.Tensor:
@@ -537,7 +550,6 @@ class BackupCommand(CommandTerm):
         fz = self._body_height(_MODEL_INDICES.f_body_id)
         hz = self._body_height(_MODEL_INDICES.h_body_id)
         return f_inv & h_up & (fz < _GROUND_TH_S1) & (hz < _GROUND_TH_S1)
-
 
     # 检测是否满足 S2 姿态
     def _check_S2(self) -> torch.Tensor:
@@ -549,7 +561,6 @@ class BackupCommand(CommandTerm):
         standing, _ = self.standing_state()
         return grounded | standing
 
-
     # 超时复位前记录翻正确认, 独立于阶段时窗、站立速度和循环部分复位
     def record_righting_step(self) -> None:
         self._ensure_buffers()
@@ -559,18 +570,20 @@ class BackupCommand(CommandTerm):
         finally:
             self._pose_cache, self._pose_cos_cache = pose_cache, cos_cache
         self._righting_elapsed, confirmed = BackupCommand._update_confirmation(
-            self._righting_elapsed, righted, self._env.episode_length_buf > 0,
-            float(self._env.step_dt), float(self.cfg.pose_confirm_s),
+            self._righting_elapsed,
+            righted,
+            self._env.episode_length_buf > 0,
+            float(self._env.step_dt),
+            float(self.cfg.pose_confirm_s),
         )
         self._ep_righted |= confirmed
-
 
     # 检测是否处于双倒状态
     def _check_both_inverted(self) -> torch.Tensor:
         _, inverted = self._get_pose_flags()
         return inverted[:, 0] & inverted[:, 1]
 
-    
+    # 累计连续满足条件的时长并返回确认结果。
     @staticmethod
     def _update_confirmation(
         elapsed: torch.Tensor,
@@ -587,7 +600,7 @@ class BackupCommand(CommandTerm):
         confirmed = elapsed >= (duration - eps)
         return elapsed, confirmed
 
-
+    # 更新站立窗口和窗口内关节速度积分。
     @staticmethod
     def _update_stand_window(
         elapsed: torch.Tensor,
@@ -604,7 +617,6 @@ class BackupCommand(CommandTerm):
         nxt_t = torch.where(run, elapsed + step, zero)
         nxt_v = torch.where(run, vel_integral + step * speed, zero)
         return nxt_t, nxt_v
-
 
     # 更新命令
     def _update_command(self) -> None:
@@ -637,8 +649,20 @@ class BackupCommand(CommandTerm):
         self._pose_cache = None
         self._pose_cos_cache = None
 
-        self._s1_confirm_elapsed, s1_confirmed = BackupCommand._update_confirmation(self._s1_confirm_elapsed, s1_ok, running, real_dt, float(self.cfg.pose_confirm_s))
-        self._s2_confirm_elapsed, s2_confirmed = BackupCommand._update_confirmation(self._s2_confirm_elapsed, s2_ok, running, real_dt, float(self.cfg.pose_confirm_s))
+        self._s1_confirm_elapsed, s1_confirmed = BackupCommand._update_confirmation(
+            self._s1_confirm_elapsed,
+            s1_ok,
+            running,
+            real_dt,
+            float(self.cfg.pose_confirm_s),
+        )
+        self._s2_confirm_elapsed, s2_confirmed = BackupCommand._update_confirmation(
+            self._s2_confirm_elapsed,
+            s2_ok,
+            running,
+            real_dt,
+            float(self.cfg.pose_confirm_s),
+        )
         self._inverted_confirm_elapsed, inverted_confirmed = BackupCommand._update_confirmation(
             self._inverted_confirm_elapsed,
             both_inverted,
@@ -653,8 +677,16 @@ class BackupCommand(CommandTerm):
         close2 = expected2 + float(self.cfg.window_late_s)
         gated1 = p1 & (self.t_phase <= close1)
         gated2 = p2 & (self.t_phase <= close2)
-        self._s1_confirm_elapsed = torch.where(p1 & ~gated1, torch.zeros_like(self._s1_confirm_elapsed), self._s1_confirm_elapsed)
-        self._s2_confirm_elapsed = torch.where(p2 & ~gated2, torch.zeros_like(self._s2_confirm_elapsed), self._s2_confirm_elapsed)
+        self._s1_confirm_elapsed = torch.where(
+            p1 & ~gated1,
+            torch.zeros_like(self._s1_confirm_elapsed),
+            self._s1_confirm_elapsed,
+        )
+        self._s2_confirm_elapsed = torch.where(
+            p2 & ~gated2,
+            torch.zeros_like(self._s2_confirm_elapsed),
+            self._s2_confirm_elapsed,
+        )
         s1_confirmed = s1_confirmed & gated1
         s2_confirmed = s2_confirmed & gated2
         advance1 = p1 & s1_confirmed & (self.t_phase >= expected1)
@@ -677,9 +709,21 @@ class BackupCommand(CommandTerm):
         self.t_phase = torch.where(clear_timers, torch.zeros_like(self.t_phase), self.t_phase)
         self.retry = torch.where(retry_mask, self.retry + 1, self.retry)
         self.phase_command[:] = self.phase.float()
-        self._s1_confirm_elapsed = torch.where(clear_timers, torch.zeros_like(self._s1_confirm_elapsed), self._s1_confirm_elapsed)
-        self._s2_confirm_elapsed = torch.where(clear_timers, torch.zeros_like(self._s2_confirm_elapsed), self._s2_confirm_elapsed)
-        self._inverted_confirm_elapsed = torch.where(clear_timers, torch.zeros_like(self._inverted_confirm_elapsed), self._inverted_confirm_elapsed)
+        self._s1_confirm_elapsed = torch.where(
+            clear_timers,
+            torch.zeros_like(self._s1_confirm_elapsed),
+            self._s1_confirm_elapsed,
+        )
+        self._s2_confirm_elapsed = torch.where(
+            clear_timers,
+            torch.zeros_like(self._s2_confirm_elapsed),
+            self._s2_confirm_elapsed,
+        )
+        self._inverted_confirm_elapsed = torch.where(
+            clear_timers,
+            torch.zeros_like(self._inverted_confirm_elapsed),
+            self._inverted_confirm_elapsed,
+        )
         s1_milestone = advance1 & ~self._s1_awarded
         s2_milestone = advance2 & ~self._s2_awarded
         self._s1_awarded |= advance1
@@ -691,7 +735,12 @@ class BackupCommand(CommandTerm):
         self._s1_cycle_latched |= first1
         self._s2_cycle_latched |= first2
         nan = torch.full_like(self._s1_onset, float("nan"))
-        for buf in (self._s1_onset, self._s2_onset, self._s1_criterion_first, self._s2_criterion_first):
+        for buf in (
+            self._s1_onset,
+            self._s2_onset,
+            self._s1_criterion_first,
+            self._s2_criterion_first,
+        ):
             buf.copy_(torch.where(retry_mask, nan, buf))
         self._s1_cycle_latched &= ~retry_mask
         self._s2_cycle_latched &= ~retry_mask
@@ -716,7 +765,6 @@ class BackupCommand(CommandTerm):
             self._cycles_this_episode[pending] = 0
             self._pending_episode_reset = torch.zeros_like(pending)
 
-
     # 完成单次循环时的部分复位
     def _apply_cycle_reset(self, running: torch.Tensor) -> None:
         ids = self._pending_cycle_reset.nonzero(as_tuple=False).squeeze(-1)
@@ -739,20 +787,29 @@ class BackupCommand(CommandTerm):
         self._clear_cycle_state(ids)
         env.sim.forward()
 
-
     # 站立窗口的累积与完成的判定
-    def stand_reward_and_pulse(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def stand_reward_and_pulse(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         hold, strict = self.stand_gate()
         in_p3 = self.phase == 2
         running = self._env.episode_length_buf > 0
         active = hold & in_p3
         vel_rms = self.standing_metrics()[2]
         obs_t, obs_v = self._stand_elapsed, self._stand_vel_integral
-        self._stand_elapsed, self._stand_vel_integral = BackupCommand._update_stand_window(obs_t, obs_v, active, running, vel_rms, float(self._update_dt))
+        self._stand_elapsed, self._stand_vel_integral = BackupCommand._update_stand_window(
+            obs_t, obs_v, active, running, vel_rms, float(self._update_dt)
+        )
         steps = max(1.0, abs(STAND_CONFIRM_DURATION) / max(abs(float(self._update_dt)), 1e-9))
         eps = torch.finfo(self._stand_elapsed.dtype).eps * steps * 4.0
         mean_vel = self._stand_vel_integral / self._stand_elapsed.clamp_min(torch.finfo(self._stand_elapsed.dtype).tiny)
-        confirmed = active & running & strict & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps)) & (mean_vel <= STAND_VEL_MEAN_MAX)
+        confirmed = (
+            active
+            & running
+            & strict
+            & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps))
+            & (mean_vel <= STAND_VEL_MEAN_MAX)
+        )
         confirmed = confirmed & ~self._pending_cycle_reset
         held = active & running & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps))
         self._ep_stood_pose |= held & strict
@@ -769,17 +826,18 @@ class BackupCommand(CommandTerm):
             count = window.sum().clamp_min(1).to(self._stand_elapsed.dtype)
             log["Progress/standing"] = (strict & in_p3).float().mean().item()
             log["Progress/stand_hold"] = self._stand_elapsed.mean().item()
-            log["Progress/stand_mean_vel"] = (torch.where(window, mean_vel, torch.zeros_like(mean_vel)).sum() / count).item()
+            log["Progress/stand_mean_vel"] = (
+                torch.where(window, mean_vel, torch.zeros_like(mean_vel)).sum() / count
+            ).item()
         return obs_t, obs_v, mean_vel, confirmed
 
-
+    # 读取站立窗口内的平均关节速度。
     def windowed_mean_vel(self) -> torch.Tensor:
         elapsed = getattr(self, "_stand_elapsed", None)
         integral = getattr(self, "_stand_vel_integral", None)
         if elapsed is None or integral is None:
             return torch.full_like(self.t_phase, float("nan"))
         return integral / elapsed.clamp_min(torch.finfo(elapsed.dtype).tiny)
-
 
     # 消费本步的循环完成脉冲 — 奖励项调用后立刻清零, 保证恰好结算一次。
     def consume_cycle_end_pulse(self) -> torch.Tensor:
@@ -789,12 +847,16 @@ class BackupCommand(CommandTerm):
         self._last_cycle_end_pulse = torch.zeros_like(pulse)
         return pulse
 
-
+    # 读取本步成功结束翻正循环的脉冲。
     @property
     def cycle_completed_pulse(self) -> torch.Tensor:
-        return getattr(self, "_last_cycle_reset", torch.zeros(self.num_envs, dtype=torch.bool, device=self.device))
+        return getattr(
+            self,
+            "_last_cycle_reset",
+            torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
+        )
 
-
+    # 汇总姿态、阶段和循环诊断指标。
     def _update_metrics(self) -> None:
         self._ensure_buffers()
         log = self._env.extras["log"]
@@ -805,8 +867,15 @@ class BackupCommand(CommandTerm):
         log["Progress/s2_dev_s"] = _mean_valid(self.s2_dev_early)
         pose_cos = self._pose_cos()
         thr = self._pose_cos_threshold
-        stage = torch.where(pose_cos >= thr, torch.ones_like(pose_cos, dtype=torch.long), torch.where(pose_cos <= -thr, 
-                            -torch.ones_like(pose_cos, dtype=torch.long), torch.zeros_like(pose_cos, dtype=torch.long)))
+        stage = torch.where(
+            pose_cos >= thr,
+            torch.ones_like(pose_cos, dtype=torch.long),
+            torch.where(
+                pose_cos <= -thr,
+                -torch.ones_like(pose_cos, dtype=torch.long),
+                torch.zeros_like(pose_cos, dtype=torch.long),
+            ),
+        )
         stage = torch.where(torch.isfinite(pose_cos), stage, torch.zeros_like(stage))
         self._pose_stage = stage
         both_inv = (stage[:, 0] == -1) & (stage[:, 1] == -1)
@@ -839,21 +908,23 @@ class BackupCommand(CommandTerm):
         log["Cycle/per_episode"] = self._cycles_this_episode.float().mean().item()
         self._last_cycle_reset = torch.zeros_like(completed)
         reset_buf = getattr(self._env, "reset_buf", None)
-        self._pending_episode_reset = (reset_buf.clone() if reset_buf is not None else torch.zeros_like(completed))
+        self._pending_episode_reset = reset_buf.clone() if reset_buf is not None else torch.zeros_like(completed)
         log["Phase/p2"] = (self.phase == 1).float().mean().item()
         log["Gate/s1_pose"] = self._last_s1_ok.float().mean().item()
         log["Gate/s2_pose"] = self._last_s2_ok.float().mean().item()
 
-
+    # 保留命令项的调试可视化入口。
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         pass
-
 
 
 @dataclass(kw_only=True)
 class BackupCommandCfg(CommandTermCfg):
     asset_name: str = "robot"
-    resampling_time_range: Tuple[float, float] = (1000.0, 1000.0)   # 不重采样 (episode 内固定)
+    resampling_time_range: Tuple[float, float] = (
+        1000.0,
+        1000.0,
+    )  # 不重采样 (episode 内固定)
     debug_vis: bool = False
     fixed_time_scale: float | None = None
     window_late_s: float = WINDOW_LATE_S
@@ -875,5 +946,6 @@ class BackupCommandCfg(CommandTermCfg):
     viz: VizCfg = field(default_factory=VizCfg)
     class_type: type[CommandTerm] = BackupCommand
 
+    # 构建配置对应的运行对象。
     def build(self, env: "ManagerBasedRlEnv") -> CommandTerm:
         return self.class_type(self, env)

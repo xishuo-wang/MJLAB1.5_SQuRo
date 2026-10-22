@@ -7,16 +7,22 @@ from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import (
 )
 
 
-
 # 执行器关节名称
 _ACT_JOINT_NAMES = [
-    "F_spine1_joint", "F_body_joint",
-    "Neck_yaw_joint", "Neck_pitch_joint",
-    "FL_shoulder_joint", "FL_elbow_joint",
-    "FR_shoulder_joint", "FR_elbow_joint",
-    "H_spine1_joint", "H_body_joint",
-    "HL_hip_joint", "HL_knee_joint",
-    "HR_hip_joint", "HR_knee_joint",
+    "F_spine1_joint",
+    "F_body_joint",
+    "Neck_yaw_joint",
+    "Neck_pitch_joint",
+    "FL_shoulder_joint",
+    "FL_elbow_joint",
+    "FR_shoulder_joint",
+    "FR_elbow_joint",
+    "H_spine1_joint",
+    "H_body_joint",
+    "HL_hip_joint",
+    "HL_knee_joint",
+    "HR_hip_joint",
+    "HR_knee_joint",
 ]
 
 
@@ -46,10 +52,22 @@ _ACTUATED_JOINT_NAMES = _ACT_JOINT_NAMES
 
 # 闭链被动关节与足端名称。
 LINKAGE_JOINT_NAMES = (
-    "FL_shoulder1_joint", "FL_elbow1_joint", "FL_elbow2_joint", "FL_elbow3_joint",
-    "FR_shoulder1_joint", "FR_elbow1_joint", "FR_elbow2_joint", "FR_elbow3_joint",
-    "HL_hip1_joint", "HL_knee1_joint", "HL_knee2_joint", "HL_knee3_joint",
-    "HR_hip1_joint", "HR_knee1_joint", "HR_knee2_joint", "HR_knee3_joint",
+    "FL_shoulder1_joint",
+    "FL_elbow1_joint",
+    "FL_elbow2_joint",
+    "FL_elbow3_joint",
+    "FR_shoulder1_joint",
+    "FR_elbow1_joint",
+    "FR_elbow2_joint",
+    "FR_elbow3_joint",
+    "HL_hip1_joint",
+    "HL_knee1_joint",
+    "HL_knee2_joint",
+    "HL_knee3_joint",
+    "HR_hip1_joint",
+    "HR_knee1_joint",
+    "HR_knee2_joint",
+    "HR_knee3_joint",
 )
 BODY_NAMES = ("F_body_Link", "H_body_Link")
 FOOT_SITE_NAMES = ("FL_elbow_site", "FR_elbow_site", "HL_knee_site", "HR_knee_site")
@@ -57,10 +75,8 @@ FOOT_NAMES = tuple(name.split("_", 1)[0] for name in FOOT_SITE_NAMES)
 FOOT_GEOM_NAMES = tuple(f"{name}_foot_collision" for name in FOOT_NAMES)
 
 
-
 # 观测用配置
 ACTUATED_JOINT_CFG = SceneEntityCfg("robot", joint_names=tuple(_ACT_JOINT_NAMES))
-
 
 
 # 躯干朝向标记: 见 docs/SQuRo_Backup_技术细节.md §4
@@ -68,6 +84,7 @@ SEGMENT_BELLY_BACK_SITES = (
     ("F_body_belly_site", "F_body_back_site"),
     ("H_body_belly_site", "H_body_back_site"),
 )
+
 
 # 按名称解析当前实体的三段索引，不复用训练任务的全局缓存。
 def resolve_spine_deformation_indices(entity) -> tuple[int, int, int]:
@@ -78,7 +95,6 @@ def resolve_spine_deformation_indices(entity) -> tuple[int, int, int]:
     return int(front), int(center), int(hind)
 
 
-
 # action 张量中的腿/脊柱/颈部列索引（与 entity actuator 顺序一致）
 _ACTION_LEG_IDS = _ACT_LEG_IDS
 _ACTION_SPN_IDS = _ACT_SPN_IDS
@@ -87,39 +103,44 @@ _ACTION_SPN_LATERAL_ID = _ACT_F_SPINE1_ID
 _ACTION_SPN_BODY_IDS = _ACT_SPN_BODY_IDS
 
 
-
 # 执行器控制范围
 _ACTUATOR_CTRL_RANGE: dict[str, tuple[float, float]] = {
-    "F_spine1_joint":    (-0.6, 0.6),
-    "F_body_joint":      (-1.57, 1.57),
-    "Neck_yaw_joint":    (-0.8, 0.8),
-    "Neck_pitch_joint":  (-0.9, 0.9),
+    "F_spine1_joint": (-0.6, 0.6),
+    "F_body_joint": (-1.57, 1.57),
+    "Neck_yaw_joint": (-0.8, 0.8),
+    "Neck_pitch_joint": (-0.9, 0.9),
     "FL_shoulder_joint": (-1.5, 1.9),
-    "FL_elbow_joint":    (-1.8, 2.5),
+    "FL_elbow_joint": (-1.8, 2.5),
     "FR_shoulder_joint": (-1.5, 1.9),
-    "FR_elbow_joint":    (-1.8, 2.5),
-    "H_spine1_joint":    (-0.6, 0.6),
-    "H_body_joint":      (-1.57, 1.57),
-    "HL_hip_joint":      (-1.5, 0.8),
-    "HL_knee_joint":     (-0.5, 1.9),
-    "HR_hip_joint":      (-1.5, 0.8),
-    "HR_knee_joint":     (-0.5, 1.9),
+    "FR_elbow_joint": (-1.8, 2.5),
+    "H_spine1_joint": (-0.6, 0.6),
+    "H_body_joint": (-1.57, 1.57),
+    "HL_hip_joint": (-1.5, 0.8),
+    "HL_knee_joint": (-0.5, 1.9),
+    "HR_hip_joint": (-1.5, 0.8),
+    "HR_knee_joint": (-0.5, 1.9),
 }
-
 
 
 class ModelIndices:
     __slots__ = (
-        "f_body_id", "h_body_id",
+        "f_body_id",
+        "h_body_id",
         "foot_site_ids",
         "segment_belly_back_ids",
         "joint_ids",
         "linkage_joint_ids",
-        "joint_leg_ids", "joint_spn_ids", "joint_neck_ids",
-        "actuator_leg_ids", "actuator_spn_ids", "actuator_neck_ids",
-        "actuator_spn_lateral_id", "actuator_spn_body_ids",
+        "joint_leg_ids",
+        "joint_spn_ids",
+        "joint_neck_ids",
+        "actuator_leg_ids",
+        "actuator_spn_ids",
+        "actuator_neck_ids",
+        "actuator_spn_lateral_id",
+        "actuator_spn_body_ids",
     )
 
+    # 初始化待解析的模型索引。
     def __init__(self):
         self.f_body_id: int = -1
         self.h_body_id: int = -1
@@ -137,23 +158,28 @@ class ModelIndices:
         self.actuator_spn_body_ids: tuple[int, ...] = _ACTION_SPN_BODY_IDS
 
 
-
 _MODEL_INDICES = ModelIndices()
-
 
 
 # 完整解析身体、足端、背腹标记、驱动与闭链关节后一次写入缓存。
 def resolve_model_indices(entity) -> None:
-    if (_MODEL_INDICES.f_body_id >= 0 and len(_MODEL_INDICES.joint_ids) == _ACT_NUM
-            and len(_MODEL_INDICES.linkage_joint_ids) == len(LINKAGE_JOINT_NAMES)):
+    if (
+        _MODEL_INDICES.f_body_id >= 0
+        and len(_MODEL_INDICES.joint_ids) == _ACT_NUM
+        and len(_MODEL_INDICES.linkage_joint_ids) == len(LINKAGE_JOINT_NAMES)
+    ):
         return
 
     body_ids, body_names = entity.find_bodies(BODY_NAMES, preserve_order=True)
     site_ids, site_names = entity.find_sites(FOOT_SITE_NAMES, preserve_order=True)
     joint_ids, joint_names = entity.find_joints(_ACT_JOINT_NAMES, preserve_order=True)
     linkage_ids, linkage_names = entity.find_joints(LINKAGE_JOINT_NAMES, preserve_order=True)
-    if (tuple(body_names) != BODY_NAMES or tuple(site_names) != FOOT_SITE_NAMES
-            or list(joint_names) != _ACT_JOINT_NAMES or tuple(linkage_names) != LINKAGE_JOINT_NAMES):
+    if (
+        tuple(body_names) != BODY_NAMES
+        or tuple(site_names) != FOOT_SITE_NAMES
+        or list(joint_names) != _ACT_JOINT_NAMES
+        or tuple(linkage_names) != LINKAGE_JOINT_NAMES
+    ):
         raise ValueError("身体、足端或关节名称解析不完整或顺序不符")
 
     belly_back = []

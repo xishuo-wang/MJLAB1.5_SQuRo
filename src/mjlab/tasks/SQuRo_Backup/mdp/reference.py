@@ -25,46 +25,40 @@ if TYPE_CHECKING:
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-
 # 前置收腿段在参考表时间轴上的绝对位置
-P1_ONSET = T0                               # T1 起点
-P2_ONSET = T0 + T1 + T2                     # T3 起点
-P3_ONSET = T0 + T1 + T2 + T3                # T4 起点
-
+P1_ONSET = T0  # T1 起点
+P2_ONSET = T0 + T1 + T2  # T3 起点
+P3_ONSET = T0 + T1 + T2 + T3  # T4 起点
 
 
 # 躯干姿态参考的端点与翻正时刻
-ATTITUDE_SUPINE_U = -1.0                    # 仰卧时的姿态余弦
-ATTITUDE_PRONE_U = 1.0                      # 俯卧时的姿态余弦
-ATTITUDE_H_HOLD_T = 0.0                     # 后段开始翻正的名义时刻
-ATTITUDE_H_RIGHTED_T = 0.30                 # 后段翻正完成 (须早于 P1 段末)
-ATTITUDE_F_HOLD_T = 0.78                    # 前段开始翻正 (窗口窄是实测如此)
-ATTITUDE_F_RIGHTED_T = P2_SPAN              # 前段翻正完成 = P2 段末(段内), 使 P1 末参考正好是 S1 姿态
-
+ATTITUDE_SUPINE_U = -1.0  # 仰卧时的姿态余弦
+ATTITUDE_PRONE_U = 1.0  # 俯卧时的姿态余弦
+ATTITUDE_H_HOLD_T = 0.0  # 后段开始翻正的名义时刻
+ATTITUDE_H_RIGHTED_T = 0.30  # 后段翻正完成 (须早于 P1 段末)
+ATTITUDE_F_HOLD_T = 0.78  # 前段开始翻正 (窗口窄是实测如此)
+ATTITUDE_F_RIGHTED_T = P2_SPAN  # 前段翻正完成 = P2 段末(段内), 使 P1 末参考正好是 S1 姿态
 
 
 # 录制身体轨迹表的采集时序
-BODY_TRAJ_BUILD_END = 0.65                  # 录制表中 T1 末端
-BODY_TRAJ_P1_END = 0.80                     # 录制表中 P1 末端
-
+BODY_TRAJ_BUILD_END = 0.65  # 录制表中 T1 末端
+BODY_TRAJ_P1_END = 0.80  # 录制表中 P1 末端
 
 
 # 参考表总长 = 累计口径的 REFERENCE_TOTAL_TIME
 REF_TOTAL_TIME = REFERENCE_TOTAL_TIME
-_REF_DT = 0.005                             # 参考表分辨率 (s)
-_ACTION_END = P3_ONSET                      # 三段动作结束 (含前置段后的绝对时刻)
-_SEG1_END = P1_ONSET                        # T1 起点 = 0.50
-_SEG1_TAIL = P1_ONSET + T1                  # T1 末端 = T2 起点
-_SEG2_END = P2_ONSET                        # T2 末端 = T3 起点 = 1.30
+_REF_DT = 0.005  # 参考表分辨率 (s)
+_ACTION_END = P3_ONSET  # 三段动作结束 (含前置段后的绝对时刻)
+_SEG1_END = P1_ONSET  # T1 起点 = 0.50
+_SEG1_TAIL = P1_ONSET + T1  # T1 末端 = T2 起点
+_SEG2_END = P2_ONSET  # T2 末端 = T3 起点 = 1.30
 _TRANS_END = P3_ONSET + T4
-
 
 
 # 身体轨迹表
 _BODY_TRAJ_PATH = Path(__file__).parent / "Bio_Data" / "backup_body_traj.npy"
 _body_traj_cache: dict = {}
 _table_cache: dict = {}
-
 
 
 # 生成参考表
@@ -87,8 +81,18 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
                 leg[c] = leg_init[c] + u * (hold - leg_init[c])
         at_p2_end = p2_endpoint and abs(tn - _ACTION_END) < 1e-12
         if _SEG1_END <= tn < _ACTION_END or at_p2_end:
-            leg[0], leg[1], leg[2], leg[3] = FL_HOLD[0], FL_HOLD[1], FL_HOLD[0], FL_HOLD[1]
-            leg[4], leg[5], leg[6], leg[7] = HL_HOLD[0], HL_HOLD[1], HL_HOLD[0], HL_HOLD[1]
+            leg[0], leg[1], leg[2], leg[3] = (
+                FL_HOLD[0],
+                FL_HOLD[1],
+                FL_HOLD[0],
+                FL_HOLD[1],
+            )
+            leg[4], leg[5], leg[6], leg[7] = (
+                HL_HOLD[0],
+                HL_HOLD[1],
+                HL_HOLD[0],
+                HL_HOLD[1],
+            )
             if tn < _SEG1_TAIL:
                 u = (tn - _SEG1_END) / (_SEG1_TAIL - _SEG1_END)
                 f_sp1 = 0.6 * u
@@ -118,16 +122,16 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
 
         for c in range(8):
             ref[i, leg_col[c]] = leg[c]
-        ref[i, spn_col[0]] = f_sp1   # F_spine1
-        ref[i, spn_col[1]] = f_bd    # F_body
-        ref[i, spn_col[2]] = h_sp1   # H_spine1
-        ref[i, spn_col[3]] = h_bd    # H_body
+        ref[i, spn_col[0]] = f_sp1  # F_spine1
+        ref[i, spn_col[1]] = f_bd  # F_body
+        ref[i, spn_col[2]] = h_sp1  # H_spine1
+        ref[i, spn_col[3]] = h_bd  # H_body
         ref[i, list(_ACT_NECK_IDS)] = 0.0
 
     return t_grid, ref
 
 
-
+# 读取或生成当前设备上的关节参考表。
 def _get_ref_table(device: str) -> dict:
     if device in _table_cache:
         return _table_cache[device]
@@ -143,7 +147,6 @@ def _get_ref_table(device: str) -> dict:
     cache = {"t": t_t, "pos": pos_t, "vel": vel_t, "p2_pos": p2_pos, "p2_vel": p2_vel}
     _table_cache[device] = cache
     return cache
-
 
 
 # 加载身体轨迹表 (按设备缓存)
@@ -162,7 +165,6 @@ def _get_body_traj(device: str) -> dict:
     return cache
 
 
-
 # 将新动作时间映射回旧身体轨迹的采集时间, 只拉伸 P1 回收段
 def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
     t_rel = (t_nom - P1_ONSET).clamp(min=0.0)
@@ -176,9 +178,10 @@ def _body_traj_source_time(t_nom: torch.Tensor) -> torch.Tensor:
     )
 
 
-
 # 获取身体参考轨迹
-def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def get_body_reference(
+    env: "ManagerBasedRlEnv",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     lam = cmd_term.command[:, 5].clamp(min=0.1)
     phase = cmd_term.phase  # type: ignore[attr-defined]
@@ -201,12 +204,12 @@ def get_body_reference(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Te
     return y_f, z_f, y_h, z_h
 
 
-
 # 获取参考躯干姿态
 def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
     t_nom = _stage_t_nom(env) - P1_ONSET  # [N], 已按 λ 缩放
     climb = ATTITUDE_PRONE_U - ATTITUDE_SUPINE_U
 
+    # 生成躯干姿态余弦的线性过渡。
     def ramp(hold: float, righted: float) -> torch.Tensor:
         span = max(righted - hold, 1e-6)
         prog = ((t_nom - hold) / span).clamp(0.0, 1.0)
@@ -215,7 +218,6 @@ def get_reference_body_attitude(env: "ManagerBasedRlEnv") -> torch.Tensor:
     u_f = ramp(ATTITUDE_F_HOLD_T, ATTITUDE_F_RIGHTED_T)
     u_h = ramp(ATTITUDE_H_HOLD_T, ATTITUDE_H_RIGHTED_T)
     return torch.stack((u_f, u_h), dim=1)
-
 
 
 # 阶段时间映射到参考表绝对时间(含前置收腿段), 各段加自己的表起点
@@ -231,9 +233,10 @@ def _stage_t_nom(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return torch.where(phase == 0, p1_t, torch.where(phase == 1, p2_t, p3_t))
 
 
-
 # 获取参考关节状态
-def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, torch.Tensor]:
+def get_reference_joint_state(
+    env: "ManagerBasedRlEnv",
+) -> tuple[torch.Tensor, torch.Tensor]:
     cache = _get_ref_table(env.device)
     cmd_term = env.command_manager._terms["backup_cmd"]  # type: ignore[union-attr]
     cmd = cmd_term.command
@@ -250,6 +253,8 @@ def get_reference_joint_state(env: "ManagerBasedRlEnv") -> tuple[torch.Tensor, t
     pos = torch.where((phase == 1).unsqueeze(1), p2_pos, pos)
     vel = torch.where((phase == 1).unsqueeze(1), p2_vel, vel)
     endpoint_eps = 1e-6
-    holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | ((phase == 1) & (t_nom >= _ACTION_END - endpoint_eps))
+    holding = ((phase == 0) & (t_nom >= _SEG2_END - endpoint_eps)) | (
+        (phase == 1) & (t_nom >= _ACTION_END - endpoint_eps)
+    )
     vel = torch.where(holding.unsqueeze(1), torch.zeros_like(vel), vel)
     return pos, vel

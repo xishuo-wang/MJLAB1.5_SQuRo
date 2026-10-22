@@ -4,12 +4,29 @@ from .config import LEG_INIT
 from .indices import _MODEL_INDICES, resolve_model_indices
 
 
-
 # 重置所用关节位置
-JOINT_POSITIONS = list(LEG_INIT) + [0, 0, 0, 0, 0, -0.3] + [
-    -0.0943, 0.3867, 0.0943, 0.3862, -0.0943, 0.3867, 0.0942, -0.3862,
-    0.0978, -0.3905, -0.0978, -0.3905, 0.0978, -0.3905, -0.0978, -0.3905]
-
+JOINT_POSITIONS = (
+    list(LEG_INIT)
+    + [0, 0, 0, 0, 0, -0.3]
+    + [
+        -0.0943,
+        0.3867,
+        0.0943,
+        0.3862,
+        -0.0943,
+        0.3867,
+        0.0942,
+        -0.3862,
+        0.0978,
+        -0.3905,
+        -0.0978,
+        -0.3905,
+        0.0978,
+        -0.3905,
+        -0.0978,
+        -0.3905,
+    ]
+)
 
 
 # 把指定环境的机器人写回仰卧初态
@@ -37,7 +54,6 @@ def apply_fallen_state(env, env_ids: torch.Tensor) -> None:
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
 
-
 # 重置模型
 def reset_model(env, env_ids) -> None:
     n = len(env_ids)
@@ -46,13 +62,14 @@ def reset_model(env, env_ids) -> None:
     apply_fallen_state(env, env_ids)
 
 
-
 # 初始化受限空间状态
 def init_restricted_space(env, env_ids) -> None:
     entity = env.scene.entities.get("restricted_space")
     if entity is None:
         return
-    print(f"[INFO] 受限空间: 墙中心 x_neg={entity.cfg.wall_x_neg:+.4f} "
-          f"x_pos={entity.cfg.wall_x_pos:+.4f} m, "
-          f"实际内侧净宽 {entity.clear_width:.4f} m, "
-          f"碰撞 {'开' if entity.collision_enabled else '关'}")
+    print(
+        f"[INFO] 受限空间: 墙中心 x_neg={entity.cfg.wall_x_neg:+.4f} "
+        f"x_pos={entity.cfg.wall_x_pos:+.4f} m, "
+        f"实际内侧净宽 {entity.clear_width:.4f} m, "
+        f"碰撞 {'开' if entity.collision_enabled else '关'}"
+    )

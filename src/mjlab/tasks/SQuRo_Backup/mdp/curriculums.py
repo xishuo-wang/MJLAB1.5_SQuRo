@@ -5,47 +5,43 @@ import torch
 from typing import Any
 
 
-
-_STEPS_PER_ITER = 96            # 控制dt 0.01 s, 96 步覆盖 0.96 s
-
+_STEPS_PER_ITER = 96  # 控制dt 0.01 s, 96 步覆盖 0.96 s
 
 
 # 阶段相关定义
-STAGE1_1_ITER = 1000                # iter    0-1000: 纯模仿
-STAGE1_2_ITER = 2000                # iter 1000-2000: 时间缩放课程 (λ 下限 2.0 -> 1.0)
-STAGE1_3_ITER = 3000                # iter 2000-3000: 动作优化 (平滑权重第 2/3 档)
-STAGE2_1_ITER = 5000                # 旧阶段标记, 墙位改由独立考核推进
-STAGE2_2_ITER = 6000                # 旧阶段标记, 总训练预算由 CURRICULUM_MAX_ITER 管理
+STAGE1_1_ITER = 1000  # iter    0-1000: 纯模仿
+STAGE1_2_ITER = 2000  # iter 1000-2000: 时间缩放课程 (λ 下限 2.0 -> 1.0)
+STAGE1_3_ITER = 3000  # iter 2000-3000: 动作优化 (平滑权重第 2/3 档)
+STAGE2_1_ITER = 5000  # 旧阶段标记, 墙位改由独立考核推进
+STAGE2_2_ITER = 6000  # 旧阶段标记, 总训练预算由 CURRICULUM_MAX_ITER 管理
 _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER)
 
 
-
 # P1 冗余时间课程
-P1_SETTLE_MAX = 0.50                # P1 阶段最大冗余时间
-P1_SETTLE_MIN = 0.00                # P1 阶段最小冗余时间
-P1_SETTLE_START_ITER = 2000         # P1 阶段冗余时间课程开始轮数
-P1_SETTLE_END_ITER = 3000           # P1 阶段冗余时间课程结束轮数
-P1_CLOSE_FOLLOWS_SETTLE = False     # 重试截止不跟随 P1 冗余时间一起收缩
-
+P1_SETTLE_MAX = 0.50  # P1 阶段最大冗余时间
+P1_SETTLE_MIN = 0.00  # P1 阶段最小冗余时间
+P1_SETTLE_START_ITER = 2000  # P1 阶段冗余时间课程开始轮数
+P1_SETTLE_END_ITER = 3000  # P1 阶段冗余时间课程结束轮数
+P1_CLOSE_FOLLOWS_SETTLE = False  # 重试截止不跟随 P1 冗余时间一起收缩
 
 
 # 受限空间课程
-WALL_D_MAX = 0.20                       # 采样上限
-WALL_D_MIN_END = 0.06                   # 课程下限
-WALL_D_MIN_STEP = 0.01                  # 课程推进参数
-WALL_D_MIN_FRAC = 0.3                   # 取得最小间距的固定概率
-CURRICULUM_BATCH_EPISODES = 256         # 每批考核最低档有效回合下限
-CURRICULUM_BATCHES_REQUIRED = 2         # 同次考核两批均达标后推进课程
-WALL_X_POS = 0.05                       # +X 墙中心, 全程固定 (内侧 +0.040)
-WALL_X_NEG_START = -0.08                # −X 墙中心起点 (= 旧课程的末档, 便于续训对齐)
-WALL_X_NEG_END = -WALL_D_MIN_END        # −X 墙中心终点: 末档内侧净宽 0.090 m
-WALL_X_NEG_STEP = 0.005                 # -X 墙课程推进步
-CURRICULUM_START_ITER = STAGE1_3_ITER   # 受限空间课程开始轮数
-WALL_MIN_SUCCESS_RATE = 0.60           # 独立考核最低档翻正率门槛
+WALL_D_MAX = 0.20  # 采样上限
+WALL_D_MIN_END = 0.06  # 课程下限
+WALL_D_MIN_STEP = 0.01  # 课程推进参数
+WALL_D_MIN_FRAC = 0.3  # 取得最小间距的固定概率
+CURRICULUM_BATCH_EPISODES = 256  # 每批考核最低档有效回合下限
+CURRICULUM_BATCHES_REQUIRED = 2  # 同次考核两批均达标后推进课程
+WALL_X_POS = 0.05  # +X 墙中心, 全程固定 (内侧 +0.040)
+WALL_X_NEG_START = -0.08  # −X 墙中心起点 (= 旧课程的末档, 便于续训对齐)
+WALL_X_NEG_END = -WALL_D_MIN_END  # −X 墙中心终点: 末档内侧净宽 0.090 m
+WALL_X_NEG_STEP = 0.005  # -X 墙课程推进步
+CURRICULUM_START_ITER = STAGE1_3_ITER  # 受限空间课程开始轮数
+WALL_MIN_SUCCESS_RATE = 0.60  # 独立考核最低档翻正率门槛
 CURRICULUM_GATE_P_STOOD = WALL_MIN_SUCCESS_RATE  # 旧名兼容
-CURRICULUM_WINDOW_EPISODES = 3          # 每环境保留最近几个有效回合
-CURRICULUM_MIN_DWELL_ITER = 100         # 每档最短驻留轮数
-CURRICULUM_MAX_ITER = 9000              # 总预算, 与 STAGE2_2_ITER 解耦
+CURRICULUM_WINDOW_EPISODES = 3  # 每环境保留最近几个有效回合
+CURRICULUM_MIN_DWELL_ITER = 100  # 每档最短驻留轮数
+CURRICULUM_MAX_ITER = 9000  # 总预算, 与 STAGE2_2_ITER 解耦
 
 # 独立真实碰撞考核: 协议与 Hole 对齐, 训练仍保留真实墙碰撞
 WALL_EVALUATION_ENVS = 1024
@@ -64,12 +60,10 @@ WALL_BIN_EDGES = tuple(reversed(WALL_D_LEVELS))
 WALL_BIN_COUNT = len(WALL_BIN_EDGES) - 1
 
 
-
 # 时间缩放因子课程
-TIME_SCALE_MAX = 3.0                    # 时间缩放因子采样最大值
-TIME_SCALE_MIN_START = 2.0              # 时间缩放因子采样最小值开始
-TIME_SCALE_MIN_END = 1.0                # 时间缩放因子采样最小值结束
-
+TIME_SCALE_MAX = 3.0  # 时间缩放因子采样最大值
+TIME_SCALE_MIN_START = 2.0  # 时间缩放因子采样最小值开始
+TIME_SCALE_MIN_END = 1.0  # 时间缩放因子采样最小值结束
 
 
 # 脊柱误差缩放课程
@@ -78,49 +72,48 @@ SPN_AXIS_SCALE_STRICT: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
 SPN_AXIS_SCALE_RELAXED: tuple[float, float, float, float] = (0.5, 1.0, 0.5, 1.0)
 
 
-
 # 奖励权重课程曲线
 _CURVES: dict[str, tuple[float, ...]] = {
     # 奖励项
-    "weight_milestone_s1":      (10.0,),
-    "weight_milestone_s2":      (15.0,),
+    "weight_milestone_s1": (10.0,),
+    "weight_milestone_s2": (15.0,),
     "weight_milestone_success": (2.0,),
-    "weight_progress_s1":       (3.0,),
-    "weight_progress_s2":       (3.0,),
-    "weight_progress_s3":       (3.0,),
-    "weight_s1_shape":          (2.0,),
-    "weight_mimic_pos":         (10.0,),
-    "weight_mimic_vel":         (5.0,),
-    "weight_height":            (5.0,),
+    "weight_progress_s1": (3.0,),
+    "weight_progress_s2": (3.0,),
+    "weight_progress_s3": (3.0,),
+    "weight_s1_shape": (2.0,),
+    "weight_mimic_pos": (10.0,),
+    "weight_mimic_vel": (5.0,),
+    "weight_height": (5.0,),
     # 惩罚项
-    "weight_track_joint":       (1.0,),
-    "weight_spn_track":         (2.0,),
-    "weight_body_track":        (1.0,),
-    "weight_leg_action":        (1.0,),
-    "weight_leg_pose":          (6.0,),
-    "weight_stand":             (3.0,),
-    "weight_action_excess":     (0.5,),
-    "weight_smooth_L1_leg":     (0.1, 0.2, 0.4),
-    "weight_smooth_L1_spn":     (0.2, 0.2, 0.4),
-    "weight_smooth_L2_leg":     (0.1, 0.2, 0.4),
-    "weight_smooth_L2_spn":     (0.2, 0.2, 0.4),
-    "weight_energy":            (0.1,),
+    "weight_track_joint": (1.0,),
+    "weight_spn_track": (2.0,),
+    "weight_body_track": (1.0,),
+    "weight_leg_action": (1.0,),
+    "weight_leg_pose": (6.0,),
+    "weight_stand": (3.0,),
+    "weight_action_excess": (0.5,),
+    "weight_smooth_L1_leg": (0.1, 0.2, 0.4),
+    "weight_smooth_L1_spn": (0.2, 0.2, 0.4),
+    "weight_smooth_L2_leg": (0.1, 0.2, 0.4),
+    "weight_smooth_L2_spn": (0.2, 0.2, 0.4),
+    "weight_energy": (0.1,),
     # 非权重项
-    "sigma_leg_pos":            (10.0,),
-    "sigma_spn_pos":            (20.0,),
-    "sigma_neck_pos":           (10.0,),
-    "sigma_leg_vel":            (0.5,),
-    "sigma_spn_vel":            (0.5,),
-    "sigma_neck_vel":           (0.5,),
-    "sigma_height":             (500.0,),
-    "alpha_neck_pos":           (0.3,),
-    "alpha_neck_vel":           (0.3,),
+    "sigma_leg_pos": (10.0,),
+    "sigma_spn_pos": (20.0,),
+    "sigma_neck_pos": (10.0,),
+    "sigma_leg_vel": (0.5,),
+    "sigma_spn_vel": (0.5,),
+    "sigma_neck_vel": (0.5,),
+    "sigma_height": (500.0,),
+    "alpha_neck_pos": (0.3,),
+    "alpha_neck_vel": (0.3,),
 }
-
 
 
 # 奖励权重课程: 按当前训练 iter 返回各奖励项权重/σ
 class RewardWeightCurriculum:
+    # 读取当前训练步对应的奖励权重与尺度。
     def get_reward_weights(self, current_step: int) -> dict[str, float]:
         current_iter = current_step // _STEPS_PER_ITER
         result: dict[str, float] = {}
@@ -133,7 +126,7 @@ class RewardWeightCurriculum:
             result[name] = values[safe_idx]
         return result
 
-
+    # 汇总当前奖励课程阶段与权重。
     def get_current_stage_info(self, current_step: int) -> dict[str, Any]:
         current_iter = current_step // _STEPS_PER_ITER
         stage = 0
@@ -156,7 +149,6 @@ def get_curriculum_reward_weight(env, reward_name: str) -> float:
     return reward_weight_curriculum.get_reward_weights(env.common_step_counter).get(reward_name, 1.0)
 
 
-
 # 获取时间缩放因子
 def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.Tensor:
     iter_num = step_counter // _STEPS_PER_ITER
@@ -166,13 +158,11 @@ def get_curriculum_time_scale(step_counter: int, n: int, device: str) -> torch.T
     return lam_min + torch.rand(n, device=device) * (TIME_SCALE_MAX - lam_min)
 
 
-
 # 获取脊柱误差缩放
 def get_spn_axis_scale(step_counter: int) -> tuple[float, float, float, float]:
     if step_counter // _STEPS_PER_ITER < SPN_AXIS_RELAX_ITER:
         return SPN_AXIS_SCALE_STRICT
     return SPN_AXIS_SCALE_RELAXED
-
 
 
 # 获取训练阶段
@@ -189,18 +179,15 @@ assert abs(WALL_X_NEG_LEVELS[-1] - WALL_X_NEG_END) < 1e-9, WALL_X_NEG_LEVELS
 CURRICULUM_LEVELS = len(WALL_X_NEG_LEVELS)
 
 
-
 # 获取受限空间实体位置
 def get_wall_positions(level: int) -> tuple[float, float]:
     idx = min(max(int(level), 0), CURRICULUM_LEVELS - 1)
     return WALL_X_NEG_LEVELS[idx], WALL_X_POS
 
 
-
 # 获取对应的课程阶段
 def get_level_for_wall_x_neg(x_neg: float) -> int:
     return min(range(CURRICULUM_LEVELS), key=lambda i: abs(WALL_X_NEG_LEVELS[i] - float(x_neg)))
-
 
 
 # 获取 P1 余量
@@ -213,6 +200,7 @@ def get_p1_settle_margin(step_counter: int) -> float:
     frac = (it - P1_SETTLE_START_ITER) / float(P1_SETTLE_END_ITER - P1_SETTLE_START_ITER)
     return P1_SETTLE_MAX + frac * (P1_SETTLE_MIN - P1_SETTLE_MAX)
 
+
 # 按固定间距区间统计考核结果, 末区间包含采样上限
 def wall_bin_indices(distances: torch.Tensor) -> torch.Tensor:
     edges = distances.new_tensor(WALL_BIN_EDGES[1:-1])
@@ -221,8 +209,13 @@ def wall_bin_indices(distances: torch.Tensor) -> torch.Tensor:
 
 # 按区间权重采样连续墙位, 普通模式保留下界定点采样
 def sample_wall_distances(
-    count: int, lower: float, upper: float, minimum_fraction: float,
-    weights, device, final_mode: bool = False,
+    count: int,
+    lower: float,
+    upper: float,
+    minimum_fraction: float,
+    weights,
+    device,
+    final_mode: bool = False,
 ) -> torch.Tensor:
     if upper <= lower:
         return torch.full((int(count),), lower, device=device)
@@ -255,7 +248,6 @@ class WallCurriculumState:
         self.bin_weights = [1.0] * WALL_BIN_COUNT
         self.history: list[dict] = []
 
-
     # 普通模式每百轮考核, 最终模式每五百轮继续验收
     def should_evaluate(self, iteration: int) -> bool:
         if int(iteration) < CURRICULUM_START_ITER + WALL_EVALUATION_PRETRAIN_ITERATIONS:
@@ -265,21 +257,21 @@ class WallCurriculumState:
         interval = WALL_EVALUATION_FINAL_INTERVAL if self.final_level_passed else WALL_EVALUATION_INTERVAL
         return (int(iteration) - CURRICULUM_START_ITER) % interval == 0
 
-
     # 汇总一批首个完整回合, 普通模式按最低档翻正率判定
     def measure_batch(self, results: list[dict]) -> dict:
         eligible = [item for item in results if item.get("valid", True)]
         if any(
-            not isfinite(float(item["wall_d"]))
-            or not self.d_min - 1e-6 <= float(item["wall_d"]) <= self.d_max + 1e-6
+            not isfinite(float(item["wall_d"])) or not self.d_min - 1e-6 <= float(item["wall_d"]) <= self.d_max + 1e-6
             for item in eligible
         ):
             raise ValueError("考核回合墙位超出当前课程范围")
         if len({item["env_id"] for item in eligible}) != len(eligible):
             raise ValueError("同一环境的考核回合不得重复计分")
-        selected = eligible if self.final_level_passed else [
-            item for item in eligible if abs(float(item["wall_d"]) - self.d_min) <= 1e-6
-        ]
+        selected = (
+            eligible
+            if self.final_level_passed
+            else [item for item in eligible if abs(float(item["wall_d"]) - self.d_min) <= 1e-6]
+        )
         count = len(selected)
         successes = sum(int(item["success"]) for item in selected)
         bin_count = [0] * WALL_BIN_COUNT
@@ -293,15 +285,18 @@ class WallCurriculumState:
         enough = count > 0 if self.final_level_passed else count >= CURRICULUM_BATCH_EPISODES
         return {
             "mode": "final" if self.final_level_passed else "normal",
-            "wall_d_min": self.d_min, "wall_d_max": self.d_max,
-            "count": count, "successes": successes, "success_rate": rate,
+            "wall_d_min": self.d_min,
+            "wall_d_max": self.d_max,
+            "count": count,
+            "successes": successes,
+            "success_rate": rate,
             "passed": enough and rate >= threshold,
             "eligible": len(eligible),
             "eligible_successes": sum(int(item["success"]) for item in eligible),
-            "bin_count": bin_count, "bin_successes": bin_successes,
+            "bin_count": bin_count,
+            "bin_successes": bin_successes,
             "bin_rate": [bin_successes[i] / value if value else 0.0 for i, value in enumerate(bin_count)],
         }
-
 
     # 两批在同一档位完成后一次结算, 缺回合或跨档位结果拒绝写入
     def record_evaluation(self, batches: list[dict], iteration: int) -> dict:
@@ -321,7 +316,9 @@ class WallCurriculumState:
                 or sum(batch["bin_count"]) != int(batch["eligible"])
                 or not 0 <= int(batch["successes"]) <= int(batch["count"]) <= int(batch["eligible"])
                 or sum(batch["bin_successes"]) != int(batch["eligible_successes"])
-                or any(not 0 <= ok <= count for ok, count in zip(batch["bin_successes"], batch["bin_count"], strict=True))
+                or any(
+                    not 0 <= ok <= count for ok, count in zip(batch["bin_successes"], batch["bin_count"], strict=True)
+                )
             ):
                 raise ValueError("考核档位不一致或完整回合不足, 拒绝推进课程")
         passed = all(bool(batch["passed"]) for batch in batches)
@@ -335,10 +332,15 @@ class WallCurriculumState:
             for i, value in enumerate(bin_count)
         ]
         result = {
-            "iteration": int(iteration), "mode": mode, "passed": passed,
-            "sample_count": count, "successes": successes,
+            "iteration": int(iteration),
+            "mode": mode,
+            "passed": passed,
+            "sample_count": count,
+            "successes": successes,
             "success_rate": successes / max(1, count),
-            "previous_d_min": self.d_min, "advanced": False, "retreated": False,
+            "previous_d_min": self.d_min,
+            "advanced": False,
+            "retreated": False,
             "entered_final_mode": False,
             "bin_count": bin_count,
             "bin_rate": [bin_successes[i] / value if value else 0.0 for i, value in enumerate(bin_count)],
@@ -373,55 +375,74 @@ class WallCurriculumState:
                         self.bin_weights = [1.0] * WALL_BIN_COUNT
                         result["entered_final_mode"] = True
                     self.consecutive_success_evaluations = 0
-        result.update({
-            "d_min": self.d_min, "bin_weights": list(self.bin_weights),
-            "consecutive_failures": self.consecutive_failures,
-            "consecutive_success_evaluations": self.consecutive_success_evaluations,
-            "retreats": self.retreats, "final_accepted": self.final_accepted,
-        })
+        result.update(
+            {
+                "d_min": self.d_min,
+                "bin_weights": list(self.bin_weights),
+                "consecutive_failures": self.consecutive_failures,
+                "consecutive_success_evaluations": self.consecutive_success_evaluations,
+                "retreats": self.retreats,
+                "final_accepted": self.final_accepted,
+            }
+        )
         self.history.append(deepcopy(result))
         return result
-
 
     # 保存课程状态, 不保存未完成的考核批次
     def state_dict(self) -> dict:
         return {
-            "version": 1, "d_min": self.d_min, "d_max": self.d_max,
+            "version": 1,
+            "d_min": self.d_min,
+            "d_max": self.d_max,
             "level_start_iteration": self.level_start_iteration,
             "consecutive_success_evaluations": self.consecutive_success_evaluations,
             "consecutive_failures": self.consecutive_failures,
-            "retreats": self.retreats, "retreat_pending_advance": self.retreat_pending_advance,
-            "final_level_passed": self.final_level_passed, "final_accepted": self.final_accepted,
-            "bin_weights": list(self.bin_weights), "bin_edges": list(WALL_BIN_EDGES),
+            "retreats": self.retreats,
+            "retreat_pending_advance": self.retreat_pending_advance,
+            "final_level_passed": self.final_level_passed,
+            "final_accepted": self.final_accepted,
+            "bin_weights": list(self.bin_weights),
+            "bin_edges": list(WALL_BIN_EDGES),
             "history": deepcopy(self.history),
         }
-
 
     # 恢复课程并检查几何范围与采样权重
     def load_state_dict(self, state: dict) -> None:
         lower, upper = float(state["d_min"]), float(state["d_max"])
         weights = [float(value) for value in state["bin_weights"]]
         if (
-            int(state["version"]) != 1 or not isfinite(lower) or not isfinite(upper)
+            int(state["version"]) != 1
+            or not isfinite(lower)
+            or not isfinite(upper)
             or not WALL_D_MIN_END <= lower <= upper == WALL_D_MAX
             or len(weights) != WALL_BIN_COUNT
             or any(not isfinite(value) or value <= 0.0 for value in weights)
             or list(state["bin_edges"]) != list(WALL_BIN_EDGES)
             or (bool(state["final_level_passed"]) and abs(lower - WALL_D_MIN_END) > 1e-9)
             or (bool(state["final_accepted"]) and not bool(state["final_level_passed"]))
-            or any(int(state[name]) < 0 for name in (
-                "level_start_iteration", "consecutive_success_evaluations", "consecutive_failures", "retreats",
-            ))
+            or any(
+                int(state[name]) < 0
+                for name in (
+                    "level_start_iteration",
+                    "consecutive_success_evaluations",
+                    "consecutive_failures",
+                    "retreats",
+                )
+            )
         ):
             raise ValueError("检查点墙位课程范围或分档权重不兼容")
         self.d_min, self.d_max = lower, upper
         self.bin_weights = weights
-        for name in ("level_start_iteration", "consecutive_success_evaluations", "consecutive_failures", "retreats"):
+        for name in (
+            "level_start_iteration",
+            "consecutive_success_evaluations",
+            "consecutive_failures",
+            "retreats",
+        ):
             setattr(self, name, int(state[name]))
         for name in ("retreat_pending_advance", "final_level_passed", "final_accepted"):
             setattr(self, name, bool(state[name]))
         self.history = deepcopy(state["history"])
-
 
     # 保留最近完成的考核成绩, 换档后日志不清零
     def metrics(self) -> dict[str, Any]:

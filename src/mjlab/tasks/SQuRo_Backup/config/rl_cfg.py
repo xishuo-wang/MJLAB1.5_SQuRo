@@ -9,7 +9,7 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
 )
 
 
-
+# 创建翻正任务的 PPO 配置。
 def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
     return RslRlOnPolicyRunnerCfg(
         actor=RslRlModelCfg(
@@ -36,8 +36,8 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
             num_mini_batches=4,
             learning_rate=3.0e-4,
             schedule="adaptive",
-            gamma=0.99 ** 0.5,
-            lam=0.95 ** 0.5,
+            gamma=0.99**0.5,
+            lam=0.95**0.5,
             desired_kl=0.01,
             max_grad_norm=1.0,
         ),
@@ -45,10 +45,8 @@ def SQuRo_Backup_PPO_Runner_Cfg() -> RslRlOnPolicyRunnerCfg:
         save_interval=100,
         num_steps_per_env=_STEPS_PER_ITER,
         max_iterations=CURRICULUM_MAX_ITER,
-
         clip_actions=None,
         seed=42,
-
         resume=False,
         # load_run="2026-09-26_01-32-03",
         # load_checkpoint="model_3000.pt",

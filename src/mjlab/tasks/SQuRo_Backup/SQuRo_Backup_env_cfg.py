@@ -20,16 +20,14 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.asset_zoo.robots.SQuRo.SQuRo_constants import get_squro_robot_cfg
 
 
-
-ENABLE_RESTRICTED_SPACE = True                  # 受限空间开关
-RESTRICTED_SPACE_WIDTH: float | None = None     # 初始墙宽
-
+ENABLE_RESTRICTED_SPACE = True  # 受限空间开关
+RESTRICTED_SPACE_WIDTH: float | None = None  # 初始墙宽
 
 
+# 创建翻正任务的环境配置。
 def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # SQuRo 机器人配置
     SQURO_ROBOT_CFG = get_squro_robot_cfg()
-
 
     # 观测空间配置
     policy_terms = {
@@ -45,15 +43,12 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "backup_cmd"}),
     }
 
-
     critic_terms = {**policy_terms}
-
 
     observations = {
         "actor": ObservationGroupCfg(terms=policy_terms, concatenate_terms=True, enable_corruption=False),
         "critic": ObservationGroupCfg(terms=critic_terms, concatenate_terms=True, enable_corruption=False),
     }
-
 
     # 动作空间配置
     actions: dict[str, ActionTermCfg] = {
@@ -65,13 +60,11 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
     }
 
-
     # 事件配置
     events = {
         "reset_all": EventTermCfg(func=mdp.reset_model, mode="reset"),
         "init_restricted_space": EventTermCfg(func=mdp.init_restricted_space, mode="startup"),
     }
-
 
     # 奖励函数配置
     rewards = {
@@ -89,7 +82,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # 惩罚项
         "joint_track": RewardTermCfg(func=mdp.compute_joint_track_penalty, weight=1.0),
         "spn_track": RewardTermCfg(func=mdp.compute_spn_track_penalty, weight=1.0),
-        "body_track": RewardTermCfg(func=mdp.compute_body_track_penalty, weight=1.0),      
+        "body_track": RewardTermCfg(func=mdp.compute_body_track_penalty, weight=1.0),
         "leg_action": RewardTermCfg(func=mdp.compute_leg_action_penalty, weight=1.0),
         "leg_pose": RewardTermCfg(func=mdp.compute_leg_pos_penalty, weight=1.0),
         "stand_still": RewardTermCfg(func=mdp.compute_stand_reward, weight=1.0),
@@ -99,18 +92,15 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "energy": RewardTermCfg(func=mdp.compute_energy_penalty, weight=1.0),
     }
 
-
     # 终止条件配置
     terminations = {
         "timeout": TerminationTermCfg(func=mdp.righting_time_out, time_out=True),
     }
 
-
     # 足端碰撞体配置
     foot_names = ("FR", "FL", "HR", "HL")
     geom_names = tuple(f"{name}_foot_collision" for name in foot_names)
-    
-        
+
     # 足部接触传感器
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
@@ -122,7 +112,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         track_air_time=True,
     )
 
-
     # 命令系统配置
     commands: dict[str, CommandTermCfg] = {
         "backup_cmd": mdp.BackupCommandCfg(
@@ -130,7 +119,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             debug_vis=play,
         )
     }
-
 
     # 受限空间实体
     restricted_space_entities: dict = {}
@@ -145,7 +133,6 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             fixed_width=RESTRICTED_SPACE_WIDTH is not None,
             **wall_kwargs,
         )
-
 
     # 完整配置
     return ManagerBasedRlEnvCfg(

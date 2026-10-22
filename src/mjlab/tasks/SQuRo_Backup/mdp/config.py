@@ -1,28 +1,26 @@
 # 参考轨迹分段时长 (名义秒, 执行时乘以 λ)，相位机只有 P1/P2/P3 三相
-T0 = 0.50                               # P1 一阶段：前置收腿
-T1 = 0.65                               # P1 二阶段: 脊柱扭转
-T2 = 0.15                               # P1 三阶段: 扭转保持
-T3 = 0.15                               # P2 一阶段: 脊柱解扭
-T4 = 0.50                               # P3 一阶段: 腿部复位
-T5 = 1.05                               # P3 二阶段: 站立保持
-P1_END = T0 + T1 + T2                   # P1 名义段末、 S1 判决时刻：1.30
-P2_END = P1_END + T3                    # P2 名义段末、 S2 判决时刻：1.45
-P1_SPAN = T1 + T2                       # P1 段内、半翻正时刻：0.80  
-P2_SPAN = T1 + T2 + T3                  # P2 段内、翻正完成时刻：0.95  
-REFERENCE_TOTAL_TIME = P2_END + T4 + T5 # 参考轨迹总长：3.00  
-
+T0 = 0.50  # P1 一阶段：前置收腿
+T1 = 0.65  # P1 二阶段: 脊柱扭转
+T2 = 0.15  # P1 三阶段: 扭转保持
+T3 = 0.15  # P2 一阶段: 脊柱解扭
+T4 = 0.50  # P3 一阶段: 腿部复位
+T5 = 1.05  # P3 二阶段: 站立保持
+P1_END = T0 + T1 + T2  # P1 名义段末、 S1 判决时刻：1.30
+P2_END = P1_END + T3  # P2 名义段末、 S2 判决时刻：1.45
+P1_SPAN = T1 + T2  # P1 段内、半翻正时刻：0.80
+P2_SPAN = T1 + T2 + T3  # P2 段内、翻正完成时刻：0.95
+REFERENCE_TOTAL_TIME = P2_END + T4 + T5  # 参考轨迹总长：3.00
 
 
 # 腿部姿态
-LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)   # 站立状态腿关节角
-FL_HOLD = (-0.28, 0.55)                 # 前腿收缩状态关节角 (shoulder, elbow)
-HL_HOLD = (-1.50, -0.25)                # 后腿收缩状态关节角 (hip, knee)
-
+LEG_INIT = (0.1, -0.3, 0.1, -0.3, -0.1, 0.3, -0.1, 0.3)  # 站立状态腿关节角
+FL_HOLD = (-0.28, 0.55)  # 前腿收缩状态关节角 (shoulder, elbow)
+HL_HOLD = (-1.50, -0.25)  # 后腿收缩状态关节角 (hip, knee)
 
 
 # 判据
-STAND_GROUND_HEIGHT = 0.024             # 实测趴平时的躯干中心高度
-STAND_TARGET_HEIGHT = 0.055             # 实测站立时的躯干中心高度
-STAND_CONFIRM_DURATION = 1.0            # 判断站立成功所需的连续窗口时长
-STAND_VEL_MEAN_MAX = 4.5                # 判断站立成功所需的平均关节速度上限
+STAND_GROUND_HEIGHT = 0.024  # 实测趴平时的躯干中心高度
+STAND_TARGET_HEIGHT = 0.055  # 实测站立时的躯干中心高度
+STAND_CONFIRM_DURATION = 1.0  # 判断站立成功所需的连续窗口时长
+STAND_VEL_MEAN_MAX = 4.5  # 判断站立成功所需的平均关节速度上限
 STAND_STILL_FULL_SPEED = 2 * STAND_VEL_MEAN_MAX

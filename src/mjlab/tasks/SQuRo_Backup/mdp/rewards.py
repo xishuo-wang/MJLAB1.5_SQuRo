@@ -4,14 +4,23 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .config import STAND_STILL_FULL_SPEED, T4
 from .command import BackupCommand, _GROUND_TH_S1
-from .indices import _ACT_JOINT_NAMES, _ACT_NECK_IDS, _ACT_SPN_IDS, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
+from .indices import (
+    _ACT_JOINT_NAMES,
+    _ACT_NECK_IDS,
+    _ACT_SPN_IDS,
+    _ACTUATOR_CTRL_RANGE,
+    _MODEL_INDICES,
+)
 from .curriculums import get_curriculum_reward_weight, get_spn_axis_scale
-from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
+from .reference import (
+    get_reference_joint_state,
+    get_body_reference,
+    get_reference_body_attitude,
+)
 
 if TYPE_CHECKING:
     from mjlab.envs.mdp.actions import JointPositionAction
     from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
-
 
 
 # s1 里程碑奖励
@@ -24,7 +33,6 @@ def compute_s1_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return reward
 
 
-
 # s2 里程碑奖励
 def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -33,7 +41,6 @@ def compute_s2_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     quality = _milestone_time_quality(command.s2_dev_early, command.s2_dev_late, command.time_scale_command)
     reward = weight * pulse.float() * quality / env.step_dt
     return reward
-
 
 
 # 成功站立里程碑奖励
@@ -46,14 +53,12 @@ def compute_success_milestone_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return reward
 
 
-
 # s1 区间奖励
 def compute_s1_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     weight = get_curriculum_reward_weight(env, "weight_progress_s1")
     reward = weight * command.progress_s1 * _spine_track_kernel(env)
     return reward
-
 
 
 # s2 区间奖励：P2 及以后
@@ -64,7 +69,6 @@ def compute_s2_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return reward
 
 
-
 # s3 区间奖励：仅 P3
 def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -72,7 +76,6 @@ def compute_s3_progress_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_progress_s3")
     reward = weight * progress * (command.phase == 2)
     return reward
-
 
 
 # S1 姿态塑形奖励：仅 P1
@@ -90,9 +93,8 @@ def compute_s1_shape_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     ground = f_front * f_back
     shape = front_inverted * back_upright * ground
     weight = get_curriculum_reward_weight(env, "weight_s1_shape")
-    reward =  weight * shape * (command.phase == 0) * _spine_track_kernel(env)
+    reward = weight * shape * (command.phase == 0) * _spine_track_kernel(env)
     return reward
-
 
 
 # 关节位置模仿奖励
@@ -110,15 +112,14 @@ def compute_mimic_pos_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_pos")
     alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_pos")
-    mse_leg = torch.mean(error_leg ** 2, dim=1)
-    mse_spn = torch.mean(error_spn ** 2, dim=1)
-    mse_neck = torch.mean(error_neck ** 2, dim=1)
+    mse_leg = torch.mean(error_leg**2, dim=1)
+    mse_spn = torch.mean(error_spn**2, dim=1)
+    mse_neck = torch.mean(error_neck**2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = (reward_leg + reward_spn) / 2 + alpha_neck * reward_neck
     return reward * weight
-
 
 
 # 关节速度模仿奖励
@@ -136,15 +137,14 @@ def compute_mimic_vel_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_vel")
     sigma_neck = get_curriculum_reward_weight(env, "sigma_neck_vel")
     alpha_neck = get_curriculum_reward_weight(env, "alpha_neck_vel")
-    mse_leg = torch.mean(error_leg ** 2, dim=1)
-    mse_spn = torch.mean(error_spn ** 2, dim=1)
-    mse_neck = torch.mean(error_neck ** 2, dim=1)
+    mse_leg = torch.mean(error_leg**2, dim=1)
+    mse_spn = torch.mean(error_spn**2, dim=1)
+    mse_neck = torch.mean(error_neck**2, dim=1)
     reward_leg = torch.exp(-sigma_leg * mse_leg)
     reward_spn = torch.exp(-sigma_spn * mse_spn)
     reward_neck = torch.exp(-sigma_neck * mse_neck)
     reward = (reward_leg + reward_spn) / 2 + alpha_neck * reward_neck
     return reward * weight
-
 
 
 # 身体高度跟踪奖励
@@ -158,11 +158,10 @@ def compute_height_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     height_H_error = torch.abs(z_ref_H - H_body_height)
     sigma_height = get_curriculum_reward_weight(env, "sigma_height")
     w_height = get_curriculum_reward_weight(env, "weight_height")
-    r_height_F = torch.exp(-sigma_height * height_F_error ** 2)
-    r_height_H = torch.exp(-sigma_height * height_H_error ** 2)   
+    r_height_F = torch.exp(-sigma_height * height_F_error**2)
+    r_height_H = torch.exp(-sigma_height * height_H_error**2)
     Reward_height = w_height * (0.5 * r_height_F + 0.5 * r_height_H)
     return Reward_height
-
 
 
 # 关节跟踪惩罚
@@ -178,7 +177,6 @@ def compute_joint_track_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return -weight * cost
 
 
-
 # 脊柱动作跟踪惩罚
 def compute_spn_track_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     spn = _MODEL_INDICES.actuator_spn_ids
@@ -186,7 +184,6 @@ def compute_spn_track_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_spn_track")
     penalty = weight * _joint_target_cost(env, spn, _spn_axis_scale(env, ref_pos.device, ref_pos.dtype))
     return penalty
-
 
 
 # 躯干朝向跟踪惩罚
@@ -201,7 +198,6 @@ def compute_body_track_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return penalty
 
 
-
 # 腿部动作跟踪惩罚：仅 P3
 def compute_leg_action_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
@@ -209,7 +205,6 @@ def compute_leg_action_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_leg_action")
     penalty = weight * cost * (command.phase == 2)
     return penalty
-
 
 
 # 腿部姿态跟踪惩罚：仅 P3
@@ -239,18 +234,21 @@ def compute_leg_pos_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     return penalty
 
 
-
 # 站立静止奖励：仅 P3
 def compute_stand_reward(env: "ManagerBasedRlEnv") -> torch.Tensor:
     command = cast("BackupCommand", env.command_manager.get_term("backup_cmd"))
     hold, _ = command.stand_gate()
     mean_vel = command.windowed_mean_vel()
-    speed = torch.nan_to_num(mean_vel, nan=STAND_STILL_FULL_SPEED, posinf=STAND_STILL_FULL_SPEED, neginf=STAND_STILL_FULL_SPEED)
+    speed = torch.nan_to_num(
+        mean_vel,
+        nan=STAND_STILL_FULL_SPEED,
+        posinf=STAND_STILL_FULL_SPEED,
+        neginf=STAND_STILL_FULL_SPEED,
+    )
     still = (1.0 - speed / STAND_STILL_FULL_SPEED).clamp(0.0, 1.0)
     weight = get_curriculum_reward_weight(env, "weight_stand")
     reward = weight * (hold & (command.phase == 2)).float() * still
     return reward
-
 
 
 # 动作超出执行器范围惩罚
@@ -262,7 +260,6 @@ def compute_action_excess_penalty(env: "ManagerBasedRlEnv") -> torch.Tensor:
     weight = get_curriculum_reward_weight(env, "weight_action_excess")
     penalty = -weight * cost.mean(dim=1)
     return penalty
-
 
 
 # L1 动作平滑惩罚
@@ -279,7 +276,6 @@ def compute_action_L1_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty
 
 
-
 # L2 动作平滑惩罚
 def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     current_action = env.action_manager.action
@@ -294,7 +290,6 @@ def compute_action_L2_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty
 
 
-
 # 能耗惩罚
 def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     asset: Entity = env.scene["robot"]
@@ -306,7 +301,6 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
     return penalty
 
 
-
 # 缓存用变量
 _SPN_SCALE_CACHE: dict = {}
 _ERR_SCALE_CACHE: dict = {}
@@ -314,7 +308,6 @@ _CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 _JOINT_W_CACHE: dict = {}
 _NECK_NAMES = {_ACT_JOINT_NAMES[i] for i in _ACT_NECK_IDS}
 _SPN_NAMES = {_ACT_JOINT_NAMES[i] for i in _ACT_SPN_IDS}
-
 
 
 # 缓存脊柱四关节误差缩放
@@ -326,7 +319,6 @@ def _spn_axis_scale(env, device, dtype) -> torch.Tensor:
         s = torch.tensor(scale, device=device, dtype=dtype)
         _SPN_SCALE_CACHE[key] = s
     return s
-
 
 
 # 缓存执行器关节误差缩放
@@ -341,7 +333,6 @@ def _joint_error_scale(env, device, dtype) -> torch.Tensor:
     return s
 
 
-
 # 缓存执行器范围
 def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
     key = (tuple(names), str(device), str(dtype))
@@ -351,10 +342,12 @@ def _ctrl_range_tensors(names, device, dtype) -> tuple[torch.Tensor, torch.Tenso
         hi = [0.0] * len(names)
         for i, name in enumerate(names):
             lo[i], hi[i] = _ACTUATOR_CTRL_RANGE[name]
-        cached = (torch.tensor(lo, device=device, dtype=dtype), torch.tensor(hi, device=device, dtype=dtype))
+        cached = (
+            torch.tensor(lo, device=device, dtype=dtype),
+            torch.tensor(hi, device=device, dtype=dtype),
+        )
         _CTRL_RANGE_CACHE[key] = cached
     return cached
-
 
 
 # 缓存关节权重
@@ -362,15 +355,21 @@ def _joint_group_weights(device, dtype) -> torch.Tensor:
     key = (str(device), str(dtype))
     w = _JOINT_W_CACHE.get(key)
     if w is None:
-        w = torch.tensor([1.57 if n in _SPN_NAMES else 0.30 if n in _NECK_NAMES
-                          else 1.00 for n in _ACT_JOINT_NAMES], device=device, dtype=dtype)
+        w = torch.tensor(
+            [1.57 if n in _SPN_NAMES else 0.30 if n in _NECK_NAMES else 1.00 for n in _ACT_JOINT_NAMES],
+            device=device,
+            dtype=dtype,
+        )
         _JOINT_W_CACHE[key] = w
     return w
 
 
-
 # 按名称对齐关节目标成本
-def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...], scales: torch.Tensor | None = None) -> torch.Tensor:
+def _joint_target_cost(
+    env: "ManagerBasedRlEnv",
+    ref_columns: tuple[int, ...],
+    scales: torch.Tensor | None = None,
+) -> torch.Tensor:
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
     target = action_term.raw_action * action_term.scale + action_term.offset
     ref_pos, _ = get_reference_joint_state(env)
@@ -381,7 +380,6 @@ def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...], s
     return -torch.mean(error.square(), dim=1)
 
 
-
 # 里程碑奖励时间门控
 def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam: torch.Tensor) -> torch.Tensor:
     valid = torch.isfinite(dev_early) & torch.isfinite(dev_late)
@@ -390,10 +388,9 @@ def _milestone_time_quality(dev_early: torch.Tensor, dev_late: torch.Tensor, lam
     late_positive = l.clamp(min=0.0)
     early_negative = (-e).clamp(min=0.0)
     sigma_early = (0.40 * lam).clamp_min(1e-6)
-    q_early = torch.exp(-(early_negative / sigma_early) ** 2)
-    q_late = torch.exp(-(late_positive / 0.35) ** 2)
+    q_early = torch.exp(-((early_negative / sigma_early) ** 2))
+    q_late = torch.exp(-((late_positive / 0.35) ** 2))
     return torch.where(valid, q_early * q_late, torch.zeros_like(q_early))
-
 
 
 # 脊柱跟踪门控
@@ -403,6 +400,6 @@ def _spine_track_kernel(env: "ManagerBasedRlEnv") -> torch.Tensor:
     ref_pos, _ = get_reference_joint_state(env)
     error_spn = (joint_pos - ref_pos)[:, _MODEL_INDICES.actuator_spn_ids]
     error_spn = error_spn * _spn_axis_scale(env, error_spn.device, error_spn.dtype)
-    mse_spn = torch.mean(error_spn ** 2, dim=1)
+    mse_spn = torch.mean(error_spn**2, dim=1)
     sigma_spn = get_curriculum_reward_weight(env, "sigma_spn_pos")
     return torch.exp(-sigma_spn * mse_spn)

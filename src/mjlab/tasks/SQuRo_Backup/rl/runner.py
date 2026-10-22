@@ -36,9 +36,10 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
 )
 
 
-
 class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
     env: RslRlVecEnvWrapper
+
+    # 初始化训练、场景重建和独立考核状态。
     def __init__(self, env, train_cfg, log_dir=None, device="cpu") -> None:
         super().__init__(env, train_cfg, log_dir, device)
         self._corridor_device = device
@@ -47,7 +48,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._corridor_clip_actions = getattr(env, "clip_actions", None)
         self._corridor_render_mode = getattr(env.unwrapped, "render_mode", None)  # type: ignore
         entity = env.unwrapped.scene.entities.get("restricted_space")  # type: ignore
-        self._corridor_start_walls = (None if entity is None else (float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)))
+        self._corridor_start_walls = (
+            None if entity is None else (float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos))
+        )
         self._corridor_fixed = entity is not None and entity.cfg.fixed_width
         # 显式指定宽度
         self._corridor_fixed_by_cli = self._corridor_fixed
@@ -67,7 +70,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._push_wall_curriculum()
         self._force_wall_resample()
 
-
     # 懒初始化墙位课程状态
     def _ensure_wall_state(self) -> None:
         if not hasattr(self, "_evaluation_env"):
@@ -84,20 +86,18 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._dmin_batch_stood = 0
             self._dmin_batch_pass = 0
 
-
     # 清空当前档位的门控窗口
     def _reset_curriculum_window(self) -> None:
         n, w = self._corridor_num_envs, CURRICULUM_WINDOW_EPISODES
-        self._w_succ = torch.zeros(n, w, dtype=torch.bool)      # 稳定站立成功 (现行判据)
-        self._w_stood = torch.zeros(n, w, dtype=torch.bool)     # 站姿维持满窗口 (去速度项) <- 门控量
-        self._w_onset = torch.zeros(n, w, dtype=torch.bool)     # 站立窗口出现 (单帧, 诊断)
+        self._w_succ = torch.zeros(n, w, dtype=torch.bool)  # 稳定站立成功 (现行判据)
+        self._w_stood = torch.zeros(n, w, dtype=torch.bool)  # 站姿维持满窗口 (去速度项) <- 门控量
+        self._w_onset = torch.zeros(n, w, dtype=torch.bool)  # 站立窗口出现 (单帧, 诊断)
         self._w_head = torch.zeros(n, dtype=torch.long)
         self._w_fill = torch.zeros(n, dtype=torch.long)
         self._ep_seq_seen = torch.zeros(n, dtype=torch.long)
         self._dmin_batch_ep = 0
         self._dmin_batch_stood = 0
         self._dmin_batch_pass = 0
-
 
     # 阶段二 (开碰撞) 是否已生效
     def _collision_phase_on(self) -> bool:
@@ -106,7 +106,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         except Exception:
             return False
         return get_training_phase(step_counter) == 1
-
 
     # 拉取本轮新发布的回合结果, 更新每环境的滑动窗口
     def _ingest_episode_results(self) -> None:
@@ -130,28 +129,27 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1, max=CURRICULUM_WINDOW_EPISODES)
         self._ep_seq_seen[idx] = seq[idx]
 
-
     # 三个训练诊断率共用有效回合窗口, 不参与课程推进
     def _curriculum_metrics(self) -> tuple[float, float, float, bool, int]:
         n_valid = int(self._w_fill.sum())
         ready = bool((self._w_fill >= CURRICULUM_WINDOW_EPISODES).all())
         if n_valid == 0:
             return float("nan"), float("nan"), float("nan"), ready, 0
-        return (int(self._w_stood.sum()) / n_valid,
-                int(self._w_onset.sum()) / n_valid,
-                int(self._w_succ.sum()) / n_valid,
-                ready, n_valid)
-
+        return (
+            int(self._w_stood.sum()) / n_valid,
+            int(self._w_onset.sum()) / n_valid,
+            int(self._w_succ.sum()) / n_valid,
+            ready,
+            n_valid,
+        )
 
     # 兼容旧诊断入口: 训练回合不再推进墙位课程
     def _maybe_promote(self, it: int) -> bool:
         return False
 
-
     # 兼容旧诊断入口: 下界仅由独立考核结算
     def _maybe_lower_dmin(self, it: int) -> bool:
         return False
-
 
     # 把当前 d_min / 范围 / 下界采样比例推给命令项
     def _push_wall_curriculum(self, enabled: bool | None = None) -> None:
@@ -166,9 +164,13 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             setter(None, None, None)
             return
         course = self._wall_course
-        setter(course.d_min, course.d_max, WALL_D_MIN_FRAC,
-               bin_weights=list(course.bin_weights), final_mode=course.final_level_passed)
-
+        setter(
+            course.d_min,
+            course.d_max,
+            WALL_D_MIN_FRAC,
+            bin_weights=list(course.bin_weights),
+            final_mode=course.final_level_passed,
+        )
 
     # 获取命令项
     def _command_term(self) -> Any:
@@ -176,7 +178,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             return self.env.unwrapped.command_manager.get_term("backup_cmd")
         except Exception:
             return None
-
 
     # 按当前 (_corridor_fixed, _corridor_start_walls) 重新确定课程模式
     def _refresh_wall_mode(self) -> None:
@@ -186,7 +187,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if not self._wall_random:
             self._push_wall_curriculum(enabled=False)
             self._force_wall_resample()
-
 
     # 让正在进行的回合立刻改用当前课程范围
     def _force_wall_resample(self) -> None:
@@ -198,7 +198,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             cmd._resample_command(ids)
         except Exception as exc:
             print(f"[WARN] 墙位范围同步失败: {exc}")
-
 
     # 每轮把课程状态写进 tensorboard; 无样本时不写 (NaN 会污染曲线)
     def _log_curriculum(self, it: int) -> None:
@@ -225,14 +224,17 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             writer.add_scalar("Curriculum/p_onset", p_onset, it)
             writer.add_scalar("Curriculum/p_done", p_done, it)
 
-
-    def _corridor_compiled_state(self) -> tuple[tuple[float, float] | None, bool | None]:
+    # 读取当前编译场景的墙位与碰撞状态。
+    def _corridor_compiled_state(
+        self,
+    ) -> tuple[tuple[float, float] | None, bool | None]:
         entity = self.env.unwrapped.scene.entities.get("restricted_space")
         if entity is None:
             return None, None
-        return ((float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)),  # type: ignore
-                bool(entity.collision_enabled))  # type: ignore
-
+        return (
+            (float(entity.cfg.wall_x_neg), float(entity.cfg.wall_x_pos)),  # type: ignore
+            bool(entity.collision_enabled),
+        )  # type: ignore
 
     # 目标课程值
     def _corridor_target(self) -> tuple[tuple[float, float] | None, bool]:
@@ -244,7 +246,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if self._wall_random:
             return self._corridor_compiled_state()[0], collision
         return get_wall_positions(self._cur_level), collision
-
 
     # 判定是否需要重建
     def _corridor_change_needed(self) -> bool:
@@ -258,7 +259,6 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             return False
         return max(abs(a - b) for a, b in zip(walls, compiled_walls, strict=True)) > 1e-9
 
-
     # 清掉未结束回合的累计
     def _clear_logger_episode_state(self) -> None:
         logger = self.logger
@@ -266,16 +266,21 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             logger.ep_extras.clear()
         except AttributeError:
             pass
-        for name in ("cur_reward_sum", "cur_episode_length", "cur_ereward_sum", "cur_ireward_sum"):
+        for name in (
+            "cur_reward_sum",
+            "cur_episode_length",
+            "cur_ereward_sum",
+            "cur_ireward_sum",
+        ):
             buf = getattr(logger, name, None)
             if buf is not None:
                 buf.zero_()
 
-
     # 随机化各环境的回合相位
     def _randomize_episode_phase(self) -> None:
-        self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
-
+        self.env.episode_length_buf = torch.randint_like(
+            self.env.episode_length_buf, high=int(self.env.max_episode_length)
+        )
 
     # 重建环境
     def _apply_corridor_rebuild(self, refresh_obs: bool) -> "torch.Tensor | None":
@@ -290,7 +295,11 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         env_cfg.events.pop("init_restricted_space", None)
         env_cfg.seed = None
         mdp_entity.configure_restricted_space(env_cfg, wall_x_neg=neg, wall_x_pos=pos, enable_collision=collision)
-        new_env = ManagerBasedRlEnv(cfg=env_cfg, device=self._corridor_device, render_mode=self._corridor_render_mode)
+        new_env = ManagerBasedRlEnv(
+            cfg=env_cfg,
+            device=self._corridor_device,
+            render_mode=self._corridor_render_mode,
+        )
         new_env.common_step_counter = step_counter
         self.env = RslRlVecEnvWrapper(new_env, clip_actions=self._corridor_clip_actions)
         self.env.unwrapped.common_step_counter = step_counter
@@ -307,29 +316,32 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         except Exception as exc:
             print(f"[WARN] 旧环境关闭失败: {exc}")
         if self._wall_random:
-            print(f"[INFO] 受限空间重建: 碰撞={'开' if collision else '关'}, "
-                  f"随机墙位 d∈[{self._wall_d_min:.3f}, {WALL_D_MAX:.2f}] "
-                  f"x_pos={WALL_X_POS:.3f}, iter {step_counter // _STEPS_PER_ITER} "
-                  f"num_envs={self._corridor_num_envs}")
+            print(
+                f"[INFO] 受限空间重建: 碰撞={'开' if collision else '关'}, "
+                f"随机墙位 d∈[{self._wall_d_min:.3f}, {WALL_D_MAX:.2f}] "
+                f"x_pos={WALL_X_POS:.3f}, iter {step_counter // _STEPS_PER_ITER} "
+                f"num_envs={self._corridor_num_envs}"
+            )
             return self.env.get_observations().to(self.device) if refresh_obs else None
-        print(f"[INFO] 受限空间重建: 档位 {self._cur_level}/{CURRICULUM_LEVELS - 1}, "
-              f"墙 x_neg={neg:.4f} x_pos={pos:.4f} (净宽 {pos - neg - 0.02:.4f} m), "
-              f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
-              f"num_envs={self._corridor_num_envs}")
+        print(
+            f"[INFO] 受限空间重建: 档位 {self._cur_level}/{CURRICULUM_LEVELS - 1}, "
+            f"墙 x_neg={neg:.4f} x_pos={pos:.4f} (净宽 {pos - neg - 0.02:.4f} m), "
+            f"碰撞={'开' if collision else '关'}, iter {step_counter // _STEPS_PER_ITER} "
+            f"num_envs={self._corridor_num_envs}"
+        )
         return self.env.get_observations().to(self.device) if refresh_obs else None
-
-
 
     # 仅自动随机墙位课程在二阶段执行独立考核
     def _evaluation_enabled(self) -> bool:
         self._ensure_wall_state()
         command = self._command_term()
         return (
-            self._wall_random and not self._corridor_fixed
-            and self._collision_phase_on() and command is not None
+            self._wall_random
+            and not self._corridor_fixed
+            and self._collision_phase_on()
+            and command is not None
             and getattr(command.cfg, "fixed_time_scale", None) is None
         )
-
 
     # 独立考核复制训练场景与物理参数, 墙碰撞始终开启
     def _get_evaluation_env(self):
@@ -343,7 +355,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             if walls is None:
                 raise RuntimeError("墙位考核缺少受限空间实体")
             mdp_entity.configure_restricted_space(
-                cfg, wall_x_neg=walls[0], wall_x_pos=walls[1], enable_collision=True,
+                cfg,
+                wall_x_neg=walls[0],
+                wall_x_pos=walls[1],
+                enable_collision=True,
             )
             raw = ManagerBasedRlEnv(cfg=cfg, device=self._corridor_device, render_mode=None)
             raw.common_step_counter = int(self.env.unwrapped.common_step_counter)
@@ -353,11 +368,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             print(f"[墙位考核] 已创建真实碰撞环境: {WALL_EVALUATION_ENVS} 个", flush=True)
         return self._evaluation_env
 
-
     # 冻结确定性策略, 每个环境只统计首个完整回合
     def _run_evaluation_sweep(self, seed: int) -> list[dict]:
         random.seed(int(seed))
-        np.random.seed(int(seed) % (2 ** 32))
+        np.random.seed(int(seed) % (2**32))
         torch.random.default_generator.manual_seed(int(seed))
         device = torch.device(self.env.device)
         if device.type == "cuda":
@@ -368,8 +382,11 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         command = raw.command_manager.get_term("backup_cmd")
         course = self._wall_course
         command.set_wall_curriculum(
-            course.d_min, course.d_max, WALL_D_MIN_FRAC,
-            bin_weights=[1.0] * WALL_BIN_COUNT, final_mode=course.final_level_passed,
+            course.d_min,
+            course.d_max,
+            WALL_D_MIN_FRAC,
+            bin_weights=[1.0] * WALL_BIN_COUNT,
+            final_mode=course.final_level_passed,
         )
         policy = self.get_inference_policy(device=str(self.device))
         obs, _ = evaluation.reset()
@@ -385,18 +402,20 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 check_nan(obs, rewards, dones)
             completed = (command._ep_seq > sequence) & dones.bool() & ~seen
             for env_id in completed.nonzero(as_tuple=False).flatten().tolist():
-                results.append({
-                    "env_id": int(env_id), "valid": True,
-                    "success": bool(command._last_ep_righted[env_id]),
-                    "wall_d": float(command._last_ep_wall_d[env_id]),
-                })
+                results.append(
+                    {
+                        "env_id": int(env_id),
+                        "valid": True,
+                        "success": bool(command._last_ep_righted[env_id]),
+                        "wall_d": float(command._last_ep_wall_d[env_id]),
+                    }
+                )
             seen |= completed
             if bool(seen.all()):
                 break
         if len(results) != raw.num_envs:
             raise RuntimeError("独立真实碰撞考核缺少完整回合, 拒绝推进课程")
         return results
-
 
     # 两批同档考核全部完成后一次结算, 恢复训练随机状态与归一化模式
     def _maybe_evaluate_curriculum(self, iteration: int) -> None:
@@ -428,13 +447,19 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._push_wall_curriculum()
         seconds = time.perf_counter() - started
         for index, batch in enumerate(batches):
-            print(f"[墙位考核] iter {iteration} 第 {index + 1} 批: "
-                  f"{batch['count']} 个计分回合, 翻正率 {batch['success_rate']:.1%}, "
-                  f"达标={batch['passed']}", flush=True)
-        print(f"[墙位考核] 模式={result['mode']}, 达标={result['passed']}, "
-              f"d_min {result['previous_d_min']:.3f}->{course.d_min:.3f} m, "
-              f"推进={result['advanced']}, 退档={result['retreated']}, "
-              f"最终验收={course.final_accepted}", flush=True)
+            print(
+                f"[墙位考核] iter {iteration} 第 {index + 1} 批: "
+                f"{batch['count']} 个计分回合, 翻正率 {batch['success_rate']:.1%}, "
+                f"达标={batch['passed']}",
+                flush=True,
+            )
+        print(
+            f"[墙位考核] 模式={result['mode']}, 达标={result['passed']}, "
+            f"d_min {result['previous_d_min']:.3f}->{course.d_min:.3f} m, "
+            f"推进={result['advanced']}, 退档={result['retreated']}, "
+            f"最终验收={course.final_accepted}",
+            flush=True,
+        )
         if self.logger.writer is not None:
             values = {
                 "Curriculum/eval_righting_rate": result["success_rate"],
@@ -451,15 +476,18 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             directory = Path(self.logger.log_dir) / "collision_evaluations"
             directory.mkdir(parents=True, exist_ok=True)
             payload = {
-                **result, "batches": batches, "seconds": seconds,
-                "training_collision": True, "evaluation_collision": True,
+                **result,
+                "batches": batches,
+                "seconds": seconds,
+                "training_collision": True,
+                "evaluation_collision": True,
                 "success_criterion": "S2 姿态连续确认, 不要求站立或关节速度",
                 "course": course.state_dict(),
             }
             (directory / f"evaluation_{iteration:05d}.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
-
 
     # 训练循环: PPO 更新后独立考核, 考核样本不写入训练存储
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
@@ -495,24 +523,32 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 start = time.time()
                 with torch.inference_mode():
                     for _ in range(self.cfg["num_steps_per_env"]):
-                        actions = self.alg.act(obs) # type: ignore
+                        actions = self.alg.act(obs)  # type: ignore
                         obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
                         if self.cfg.get("check_for_nan", True):
                             check_nan(obs, rewards, dones)
-                        obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+                        obs, rewards, dones = (
+                            obs.to(self.device),
+                            rewards.to(self.device),
+                            dones.to(self.device),
+                        )
                         self.alg.process_env_step(obs, rewards, dones, extras)
-                        intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
+                        intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None
                         self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
                     stop = time.time()
                     collect_time = stop - start
                     start = stop
-                    self.alg.compute_returns(obs) # type: ignore
+                    self.alg.compute_returns(obs)  # type: ignore
                 loss_dict = self.alg.update()
                 learn_time = time.time() - start
                 self.current_learning_iteration = it
                 self.logger.log(
-                    it=it, start_it=start_it, total_it=total_it,
-                    collect_time=collect_time, learn_time=learn_time, loss_dict=loss_dict,
+                    it=it,
+                    start_it=start_it,
+                    total_it=total_it,
+                    collect_time=collect_time,
+                    learn_time=learn_time,
+                    loss_dict=loss_dict,
                     learning_rate=self.alg.learning_rate,
                     action_std=self.alg.get_policy().output_std,
                     rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
@@ -531,15 +567,25 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             finally:
                 if self.logger.writer is not None:
                     try:
-                        self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))
+                        self.save(
+                            os.path.join(
+                                self.logger.log_dir,
+                                f"model_{self.current_learning_iteration}.pt",
+                            )
+                        )
                     except Exception as exc:
                         print(f"[WARN] 最终检查点保存失败: {exc}")
                     finally:
                         self.logger.stop_logging_writer()
 
-
     # 继承训练
-    def load(self, path: str, load_cfg: dict | None = None, strict: bool = True, map_location: str | None = None) -> dict:
+    def load(
+        self,
+        path: str,
+        load_cfg: dict | None = None,
+        strict: bool = True,
+        map_location: str | None = None,
+    ) -> dict:
         self._ensure_wall_state()
         infos = super().load(path, load_cfg, strict, map_location)
         if self._corridor_start_walls is None:
@@ -552,27 +598,29 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         recorded_pos = saved.get("wall_x_pos")
         if saved.get("curriculum_level") is not None:
             level = min(max(int(saved["curriculum_level"]), 0), CURRICULUM_LEVELS - 1)
-            pair_matches = (
-                (recorded_neg is None or abs(WALL_X_NEG_LEVELS[level] - float(recorded_neg)) <= 1e-9)
-                and (recorded_pos is None or abs(WALL_X_POS - float(recorded_pos)) <= 1e-9)
+            pair_matches = (recorded_neg is None or abs(WALL_X_NEG_LEVELS[level] - float(recorded_neg)) <= 1e-9) and (
+                recorded_pos is None or abs(WALL_X_POS - float(recorded_pos)) <= 1e-9
             )
             if not pair_matches and recorded_neg is not None:
                 level = get_level_for_wall_x_neg(float(recorded_neg))
-                print(f"[WARN] 检查点档位 {saved['curriculum_level']} 与记录的墙位 "
-                      f"({float(recorded_neg):+.4f}, "
-                      f"{'?' if recorded_pos is None else format(float(recorded_pos), '+.4f')}) "
-                      f"不自洽 (档位表已改), 按墙位反查为第 {level} 档")
+                print(
+                    f"[WARN] 检查点档位 {saved['curriculum_level']} 与记录的墙位 "
+                    f"({float(recorded_neg):+.4f}, "
+                    f"{'?' if recorded_pos is None else format(float(recorded_pos), '+.4f')}) "
+                    f"不自洽 (档位表已改), 按墙位反查为第 {level} 档"
+                )
             self._cur_level = level
         elif recorded_neg is not None:
             self._cur_level = get_level_for_wall_x_neg(float(recorded_neg))
         elif saved.get("corridor_width") is not None:
             half = 0.5 * float(saved["corridor_width"])
             self._cur_level = get_level_for_wall_x_neg(-half)
-            print(f"[WARN] 旧格式检查点只记录对称间距 {saved['corridor_width']}, "
-                  f"已折算到第 {self._cur_level} 档 (x_neg={WALL_X_NEG_LEVELS[self._cur_level]})")
+            print(
+                f"[WARN] 旧格式检查点只记录对称间距 {saved['corridor_width']}, "
+                f"已折算到第 {self._cur_level} 档 (x_neg={WALL_X_NEG_LEVELS[self._cur_level]})"
+            )
         else:
-            print("[WARN] 检查点没有墙位记录, 课程档位按 0 处理; "
-                  "若这是自动课程 run, 回放请显式指定墙位")
+            print("[WARN] 检查点没有墙位记录, 课程档位按 0 处理; 若这是自动课程 run, 回放请显式指定墙位")
         self._cur_level_iter = int(saved.get("curriculum_iter", self.current_learning_iteration))
         self._cur_level_history = list(saved.get("curriculum_history") or [])
 
@@ -595,31 +643,31 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 print("[INFO] 旧检查点保留模型与训练进度, 墙位课程改由独立考核推进; 旧批次成绩不继承")
             self._wall_d_min = self._wall_course.d_min
             self._cur_level_iter = self._wall_course.level_start_iteration
-            
+
         # 锁死模式: 命令行显式指定墙位优先; 否则沿用检查点记录的标记
         if not self._corridor_fixed_by_cli and saved.get("corridor_fixed") is not None:
             self._corridor_fixed = bool(saved["corridor_fixed"])
             if self._corridor_fixed and saved.get("wall_x_neg") is not None:
-                self._corridor_start_walls = (float(saved["wall_x_neg"]),
-                                              float(saved["wall_x_pos"]))
+                self._corridor_start_walls = (
+                    float(saved["wall_x_neg"]),
+                    float(saved["wall_x_pos"]),
+                )
         self._refresh_wall_mode()
         self._reset_curriculum_window()
         if self._corridor_change_needed():
             compiled = self._corridor_compiled_state()
-            print(f"[INFO] 续训: 实际编译配置 {compiled} 与课程目标 "
-                  f"{self._corridor_target()} 不一致, 首次采样前重建")
+            print(f"[INFO] 续训: 实际编译配置 {compiled} 与课程目标 {self._corridor_target()} 不一致, 首次采样前重建")
             self._apply_corridor_rebuild(refresh_obs=False)
         else:
             self._push_wall_curriculum()
             self._force_wall_resample()
         return infos
 
-
     # 保存模型
     def save(self, path: str, infos=None):
         self._ensure_wall_state()
         walls, collision = self._corridor_compiled_state()
-        neg, pos = (walls if walls is not None else (None, None))
+        neg, pos = walls if walls is not None else (None, None)
         extra = {
             "wall_x_neg": neg,
             "wall_x_pos": pos,
@@ -637,7 +685,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         try:
             policy_dir, filename, onnx_path = self._get_export_paths(path)
             self.export_policy_to_onnx(str(policy_dir), filename)
-            run_name: str = (wandb.run.name if wandb.run else "local")  # type: ignore[assignment]
+            run_name: str = wandb.run.name if wandb.run else "local"  # type: ignore[assignment]
             metadata = get_base_metadata(self.env.unwrapped, run_name)
             attach_metadata_to_onnx(str(onnx_path), metadata)
             if wandb.run and self.cfg["upload_model"]:
