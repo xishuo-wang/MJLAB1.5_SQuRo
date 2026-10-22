@@ -8,6 +8,7 @@ import torch
 
 from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
 from mjlab.tasks.SQuRo_Backup.mdp import entity as E
+from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommandCfg
 from mjlab.tasks.SQuRo_Backup.rl import runner as runner_mod
 from mjlab.tasks.SQuRo_Backup.rl.runner import SQuRoBackupOnPolicyRunner
 
@@ -25,11 +26,22 @@ def compiled_state(env) -> tuple[tuple[float, float], bool]:
 class FakeCommand:
     # 只提供 runner 读的回合发布接口 (课程门控的输入); 真 command 的其余部分与本回归无关
     def __init__(self, n: int = 2):
+        self.device = torch.device("cpu")
+        self.cfg = BackupCommandCfg()
+        self.wall_updates = []
         self._ep_seq = torch.zeros(n, dtype=torch.long)
         self._last_ep_valid = torch.zeros(n, dtype=torch.bool)
         self._last_ep_success = torch.zeros(n, dtype=torch.bool)
         self._last_ep_stood_pose = torch.zeros(n, dtype=torch.bool)
         self._last_ep_stood_onset = torch.zeros(n, dtype=torch.bool)
+
+    # 保存推送范围, 物理写入由真环境验收覆盖
+    def set_wall_curriculum(self, lower, upper=None, fraction=None, **kwargs):
+        self.wall_updates.append((lower, upper, fraction, kwargs))
+
+    # 保留重采样调用顺序
+    def _resample_command(self, ids):
+        EVENTS.append("sample_wall")
 
     # 模拟"这些环境又结束了一个回合"; valid=False 表示被重建截短/初始化等无效回合。
     # stood/onset 默认跟随 success, 需要区分 (门控读 stood) 时显式传。
@@ -331,48 +343,22 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertEqual(compiled_state(r.env), (C.get_wall_positions(2), True))
         self.assertAlmostEqual(C.get_wall_positions(2)[1], C.WALL_X_POS, places=12)
 
-    # 门控三要素: 最短驻留、窗口填满、p_stood 达标 —— 缺一不可 (窗口只装有效回合)
-    def test_promotion_requires_dwell_window_and_gate(self):
-        r = self._build(3000, self._level0(), True)
-        n_slot = 2 * C.CURRICULUM_WINDOW_EPISODES      # 2 个环境 × 窗口长度
+    # 旧训练窗口即使完全达标, 也不能绕过独立考核推进
+    def test_training_window_never_advances_course(self):
+        r = self._build(3500, self._level0(), True)
+        for filled, stood in ((0, False), (2, True), (C.CURRICULUM_WINDOW_EPISODES, True)):
+            r._w_fill[:] = filled
+            r._w_stood[:] = stood
+            self.assertFalse(r._maybe_promote(3500))
+            self.assertEqual(r._cur_level, 0)
+            self.assertEqual(r._cur_level_history, [])
 
-        def fill(n_stood_slots, level_iter):
-            r._cur_level_iter = level_iter
-            r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-            r._w_stood[:] = False
-            if n_stood_slots:
-                r._w_stood[:, :n_stood_slots] = True
-
-        # 驻留不足
-        fill(n_slot, 3000)
-        self.assertFalse(r._maybe_promote(3000 + C.CURRICULUM_MIN_DWELL_ITER - 1))
-        self.assertEqual(r._cur_level, 0)
-        it = 3000 + C.CURRICULUM_MIN_DWELL_ITER
-        # 窗口未填满
-        fill(n_slot, 3000)
-        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES - 1
-        self.assertFalse(r._maybe_promote(it))
-        # p_stood 不达标: 2/6 = 0.33 < 0.60
-        fill(1, 3000)
-        self.assertFalse(r._maybe_promote(it))
-        # 三要素齐备 -> 推进一档, 且窗口被清空 (旧墙位的成绩不得用于新墙位)
-        # 4/6 = 0.67 >= 0.60
-        fill(2, 3000)
-        self.assertTrue(r._maybe_promote(it))
-        self.assertEqual(r._cur_level, 1)
-        self.assertEqual(r._cur_level_iter, it)
-        self.assertEqual(int(r._w_fill.sum()), 0)
-        self.assertEqual(r._cur_level_history[-1]["level"], 0)
-        self.assertAlmostEqual(r._cur_level_history[-1]["p_stood"], 4 / 6, places=6)
-
-    # 本批的核心语义: 门控读的是**站起来率** (不含速度), 而不是稳定站立成功率。
-    # 实测依据: 速度项在开墙前后完全相同 (5.638 vs 5.641 rad/s), 与墙位无关 —— 拿它当门控
-    # 会让课程等一个自己影响不了的条件 (2026-09-25 run 的 p_done 全程 0、5100 轮没动一档)。
-    def test_gate_uses_stood_rate_not_success_rate(self):
+    # 站姿确认与稳定站立仍分别记录, 两者都不推进课程
+    def test_stood_and_stable_success_remain_separate_diagnostics(self):
         r = self._build(3000, self._level0(), True)
         cmd = r.env.unwrapped.command_manager.get_term("backup_cmd")
         r._cur_level_iter = 3000
-        # 每个回合都"站起来了"但从未"稳定站立成功" -> 必须推进
+        # 每回合站姿确认成立, 但稳定站立未完成
         for _ in range(C.CURRICULUM_WINDOW_EPISODES):
             cmd.publish([0, 1], [False, False], stood=True)
             r._ingest_episode_results()
@@ -380,8 +366,8 @@ class CorridorRebuildTest(unittest.TestCase):
         self.assertTrue(ready)
         self.assertAlmostEqual(p_stood, 1.0, places=6)
         self.assertAlmostEqual(p_done, 0.0, places=6)
-        self.assertTrue(r._maybe_promote(3100), "站起来率达标就必须推进, 不受成功率为 0 阻挡")
-        self.assertEqual(r._cur_level, 1)
+        self.assertFalse(r._maybe_promote(3100), "训练诊断率不能代替独立翻正考核")
+        self.assertEqual(r._cur_level, 0)
 
     def test_gate_blocked_when_never_stood_up(self):
         r = self._build(3000, self._level0(), True)
@@ -404,7 +390,7 @@ class CorridorRebuildTest(unittest.TestCase):
         r._w_stood[:] = True
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         self.assertFalse(r._maybe_promote(C.CURRICULUM_START_ITER - 1), "起始轮数之前不得推进")
-        self.assertTrue(r._maybe_promote(C.CURRICULUM_START_ITER))
+        self.assertFalse(r._maybe_promote(C.CURRICULUM_START_ITER))
         # 锁死模式 (诊断/消融) 永不推进
         r2 = self._build(5000, (-0.125, 0.125), True, fixed=True)
         r2._cur_level_iter = 0
@@ -503,41 +489,39 @@ class CorridorRebuildTest(unittest.TestCase):
 
     # 升级必须**当轮**生效: 判门控之后立刻重建, 否则本轮采样仍跑在旧墙位上, 而
     # Curriculum/level 已经记成新档位 —— 档位与实际物理错开一轮 (审查: "升级晚一轮生效")。
-    def test_promotion_takes_effect_in_the_same_iteration(self):
-        r = self._build(3100, self._level0(), True)
-        r._cur_level_iter = 3000                       # 驻留已满
-        r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
-        r._w_stood[:] = True
+
+    # 训练采样结束后做考核, 新课程不得回写已经采集的 rollout
+    def test_evaluation_runs_after_ppo_update(self):
+        r = self._build(3500, self._level0(), True)
+        order = []
+        r.alg.update = lambda: order.append("update") or {}
+        r._maybe_evaluate_curriculum = lambda it: order.append(("evaluate", it))
         p1, p2 = self._patches()
         with p1, p2:
-            r.learn(1)                                 # 只跑 3100 这一轮
-        self.assertEqual(r._cur_level, 1, "本轮应已升级")
-        self.assertEqual(len(self.built), 1, "升级当轮就必须重建到新档位")
-        self.assertEqual(compiled_state(r.env),
-                         (C.get_wall_positions(1), True),
-                         "升级当轮编译值必须已是新档位的墙位")
+            r.learn(1)
+        self.assertEqual(order, ["update", ("evaluate", 3500)])
+        self.assertEqual(len(r.alg.obs_seen), C._STEPS_PER_ITER)
 
     # 更强的一条: 升级当轮**第一次 act() 之前**实际墙位就必须已是新档位 ——
     # "当轮晚些时候才重建"同样会被这条抓住。
-    def test_promotion_rebuilds_before_the_first_act(self):
+
+    # 只有碰撞阶段切换需要重建, 高训练成绩不会改变墙位或触发重建
+    def test_training_success_keeps_current_physics(self):
         r = self._build(3100, self._level0(), True)
-        r._cur_level_iter = 3000
         r._w_fill[:] = C.CURRICULUM_WINDOW_EPISODES
         r._w_stood[:] = True
-        seen: list = []
-        orig_act = r.alg.act
-
+        seen = []
+        original = r.alg.act
         def act(obs):
             seen.append(compiled_state(r.env))
-            return orig_act(obs)
-
+            return original(obs)
         r.alg.act = act
         p1, p2 = self._patches()
         with p1, p2:
             r.learn(1)
-        self.assertTrue(seen, "本轮必须至少采样一次")
-        self.assertEqual(seen[0], (C.get_wall_positions(1), True),
-                         "升级当轮第一次 act() 之前, 实际墙位必须已是新档位")
+        self.assertEqual(len(self.built), 0)
+        self.assertTrue(seen)
+        self.assertTrue(all(state == (self._level0(), True) for state in seen))
 
     def test_ingest_fills_window_from_published_episodes(self):
         r = self._build(3000, self._level0(), True)

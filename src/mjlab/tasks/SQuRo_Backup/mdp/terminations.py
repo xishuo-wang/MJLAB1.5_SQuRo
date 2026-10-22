@@ -8,6 +8,13 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
+# 记录当前物理步的翻正状态, 保持原有超时终止条件
+def righting_time_out(env: "ManagerBasedRlEnv") -> torch.Tensor:
+    command = cast(BackupCommand, env.command_manager.get_term("backup_cmd"))
+    command.record_righting_step()
+    return env.episode_length_buf >= env.max_episode_length
+
+
 
 # 判定站立是否成功
 def check_stand_success(env: "ManagerBasedRlEnv") -> torch.Tensor:

@@ -2,7 +2,7 @@
 # 覆盖此前审查要求但一直没有自动化证据的六项:
 #   [1] 回合成绩绑定到**本回合**墙位 (发布早于父类重采样; 结构性守卫)
 #   [2] 重建/物理条件变化时清空 d_min 批次统计
-#   [3] 批次门控: 只统计 d==d_min 的回合, 且要连续两批达标
+#   [3] 独立考核: 同次两批固定档位, 一次结算; 训练成绩只作诊断
 #   [4] 新建/重建后把课程范围推给命令项 (首回合不跑在范围之外)
 #   [5] 回放: 随机课程检查点默认取课程下界, 不用编译模板墙位
 #   [6] 墙位采样 frac 语义 (1.0 = 全部最窄档) 与 P1 沉降余量课程取值
@@ -82,32 +82,22 @@ def main() -> None:
     check((r._dmin_batch_ep, r._dmin_batch_stood, r._dmin_batch_pass) == (0, 0, 0),
           "批次计数与连续达标数被清零 (否则开碰撞后的第一批会来自无墙成绩)")
 
-    print("\n[3] 批次门控: 只算 d==d_min, 且要连续两批")
+
+    print("\n[3] 独立考核: 两批同档一次结算, 训练成绩不再推进")
     r = make_runner(d_min=0.10)
-    raw = C.CURRICULUM_BATCH_EPISODES
-    r._dmin_batch_ep, r._dmin_batch_stood = raw - 1, raw - 1
-    check(r._maybe_lower_dmin(r._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1) is False,
-          f"不足 {raw} 个回合时不结算")
-    r._dmin_batch_ep, r._dmin_batch_stood = raw, raw
-    it = r._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1
-    check(r._maybe_lower_dmin(it) is False, "第一批达标只记 1/2, 不降档")
-    check(r._dmin_batch_pass == 1 and r._dmin_batch_ep == 0, "第一批结算后计数清零")
-    r._dmin_batch_ep, r._dmin_batch_stood = raw, raw
-    check(r._maybe_lower_dmin(it) is True, "连续两批达标才降档")
-    check(abs(r._wall_d_min - 0.09) < 1e-9, f"d_min 降一档 (0.10 -> {r._wall_d_min:.3f})")
-    check(r._pushed and r._pushed[-1] is None, "降档后把新范围推给命令项")
-    # 未达标必须把连续计数打断
-    r2 = make_runner(d_min=0.10)
-    r2._dmin_batch_ep, r2._dmin_batch_stood = raw, raw
-    r2._maybe_lower_dmin(r2._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1)
-    r2._dmin_batch_ep, r2._dmin_batch_stood = raw, 0
-    r2._maybe_lower_dmin(r2._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1)
-    check(r2._dmin_batch_pass == 0, "一批不达标就把连续计数打断")
-    # 到下限不再降
-    r3 = make_runner(d_min=C.WALL_D_MIN_END)
-    r3._dmin_batch_ep, r3._dmin_batch_stood = raw, raw
-    check(r3._maybe_lower_dmin(r3._cur_level_iter + C.CURRICULUM_MIN_DWELL_ITER + 1) is False,
-          f"到达下限 {C.WALL_D_MIN_END} 后不再降档")
+    r._dmin_batch_ep, r._dmin_batch_stood = 1024, 1024
+    check(not r._maybe_lower_dmin(3500), "训练回合达标也不能推进课程")
+    course = C.WallCurriculumState()
+    course.d_min = 0.10
+    results = [
+        {"env_id": i, "valid": True, "wall_d": 0.10, "success": True}
+        for i in range(C.WALL_EVALUATION_ENVS)
+    ]
+    stats = [course.measure_batch(results), course.measure_batch(results)]
+    check(course.d_min == 0.10, "两批收集期间档位不变")
+    result = course.record_evaluation(stats, 3500)
+    check(result["advanced"] and abs(course.d_min - 0.09) < 1e-9, "两批独立翻正考核均通过, 只推进一档")
+    check(course.metrics()["success_rate"] == 1.0, "换档后日志保留刚完成的考核成绩")
 
     print("\n[4] 首回合必须遵守课程范围 (推送 + 强制重采)")
     seen: list = []
@@ -116,7 +106,7 @@ def main() -> None:
     r4._wall_random = True
     r4._wall_d_min = 0.08
     cmd_stub = SimpleNamespace(device=torch.device("cpu"),
-                               set_wall_curriculum=lambda a, b, c: seen.append(("set", a, b, c)),
+                               set_wall_curriculum=lambda a, b, c, **kw: seen.append(("set", a, b, c)),
                                _resample_command=lambda ids: seen.append(("resample", int(ids.numel()))))
     r4._command_term = lambda: cmd_stub
     r4._push_wall_curriculum()

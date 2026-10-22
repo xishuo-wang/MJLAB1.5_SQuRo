@@ -1,6 +1,10 @@
 import os
 import copy
+import json
+import random
 import time
+from pathlib import Path
+import numpy as np
 import torch
 import wandb
 from typing import Any
@@ -16,18 +20,16 @@ from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     _STEPS_PER_ITER,
     WALL_D_MIN_END,
-    WALL_D_MIN_STEP,
-    CURRICULUM_BATCH_EPISODES,
     CURRICULUM_BATCHES_REQUIRED,
-    CURRICULUM_GATE_P_STOOD,
     CURRICULUM_LEVELS,
-    CURRICULUM_MIN_DWELL_ITER,
-    CURRICULUM_START_ITER,
     CURRICULUM_WINDOW_EPISODES,
     WALL_D_MAX,
     WALL_D_MIN_FRAC,
     WALL_X_NEG_LEVELS,
     WALL_X_POS,
+    WALL_BIN_COUNT,
+    WALL_EVALUATION_ENVS,
+    WallCurriculumState,
     get_level_for_wall_x_neg,
     get_training_phase,
     get_wall_positions,
@@ -59,6 +61,8 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._dmin_batch_ep = 0
         self._dmin_batch_stood = 0
         self._dmin_batch_pass = 0
+        self._wall_course = WallCurriculumState()
+        self._evaluation_env = None
         self._reset_curriculum_window()
         self._push_wall_curriculum()
         self._force_wall_resample()
@@ -66,10 +70,15 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
     # 懒初始化墙位课程状态
     def _ensure_wall_state(self) -> None:
+        if not hasattr(self, "_evaluation_env"):
+            self._evaluation_env = None
         if not hasattr(self, "_wall_random"):
             self._wall_random = False
         if not hasattr(self, "_wall_d_min"):
             self._wall_d_min = WALL_D_MAX
+        if not hasattr(self, "_wall_course"):
+            self._wall_course = WallCurriculumState()
+            self._wall_course.d_min = self._wall_d_min
         if not hasattr(self, "_dmin_batch_ep"):
             self._dmin_batch_ep = 0
             self._dmin_batch_stood = 0
@@ -119,18 +128,10 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._w_onset[keep, head] = cmd._last_ep_stood_onset.detach().to("cpu")[keep]
             self._w_head[keep] = (head + 1) % CURRICULUM_WINDOW_EPISODES
             self._w_fill[keep] = torch.clamp(self._w_fill[keep] + 1, max=CURRICULUM_WINDOW_EPISODES)
-            if self._wall_random and self._collision_phase_on():
-                d = cmd._last_ep_wall_d.detach().to("cpu")[keep]
-                at_min = (d - self._wall_d_min).abs() < 1e-6
-                self._dmin_batch_ep += int(at_min.sum())
-                self._dmin_batch_stood += int(stood[at_min].sum())
         self._ep_seq_seen[idx] = seq[idx]
 
 
-    # 三个门控量 (分母相同, 都是窗口内的有效回合数):
-    #   p_stood : 站姿维持满确认窗口且当步严格几何 —— 课程推进读它
-    #   p_onset : 站立窗口出现过 (单帧, 备用/诊断)
-    #   p_done  : 稳定站立成功 (现行判据, 含关节速度判据) —— 任务进度
+    # 三个训练诊断率共用有效回合窗口, 不参与课程推进
     def _curriculum_metrics(self) -> tuple[float, float, float, bool, int]:
         n_valid = int(self._w_fill.sum())
         ready = bool((self._w_fill >= CURRICULUM_WINDOW_EPISODES).all())
@@ -142,74 +143,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 ready, n_valid)
 
 
-    # 门控达标后推进一档课程学习
+    # 兼容旧诊断入口: 训练回合不再推进墙位课程
     def _maybe_promote(self, it: int) -> bool:
-        self._ensure_wall_state()
-        if self._corridor_fixed:
-            return False
-        if self._wall_random:
-            return self._maybe_lower_dmin(it)
-        if self._cur_level >= CURRICULUM_LEVELS - 1:
-            return False
-        if it < CURRICULUM_START_ITER:
-            return False
-        if it - self._cur_level_iter < CURRICULUM_MIN_DWELL_ITER:
-            return False
-        if self._corridor_change_needed():
-            return False
-        p_stood, p_onset, p_done, ready, _ = self._curriculum_metrics()
-        if not ready or not (p_stood >= CURRICULUM_GATE_P_STOOD):
-            return False
-        self._cur_level_history.append({
-            "level": self._cur_level, "iter": it,
-            "wall_x_neg": WALL_X_NEG_LEVELS[self._cur_level],
-            "p_stood": p_stood, "p_onset": p_onset, "p_done": p_done,
-        })
-        self._cur_level += 1
-        self._cur_level_iter = it
-        self._reset_curriculum_window()
-        neg, pos = get_wall_positions(self._cur_level)
-        print(f"[INFO] 墙位课程推进: 第 {self._cur_level} 档 x_neg={neg:.4f} x_pos={pos:.4f} "
-              f"(净宽 {pos - neg - 0.02:.4f} m), iter {it}, "
-              f"上档 p_stood={p_stood:.3f} p_onset={p_onset:.3f} p_done={p_done:.3f}")
-        return True
+        return False
 
 
-    # 随机墙位课程
+    # 兼容旧诊断入口: 下界仅由独立考核结算
     def _maybe_lower_dmin(self, it: int) -> bool:
-        if self._wall_d_min <= WALL_D_MIN_END + 1e-9:
-            return False
-        if it < CURRICULUM_START_ITER:
-            return False
-        if it - self._cur_level_iter < CURRICULUM_MIN_DWELL_ITER:
-            return False
-        if self._corridor_change_needed():
-            return False
-        if self._dmin_batch_ep < CURRICULUM_BATCH_EPISODES:
-            return False
-        p_stood = self._dmin_batch_stood / max(1, self._dmin_batch_ep)
-        n_ep = self._dmin_batch_ep
-        self._dmin_batch_ep = 0
-        self._dmin_batch_stood = 0
-        self._dmin_batch_pass = self._dmin_batch_pass + 1 if p_stood >= CURRICULUM_GATE_P_STOOD else 0
-        print(f"[INFO] d_min 批次结算: d_min={self._wall_d_min:.3f} "
-              f"{n_ep} 个回合 p_stood={p_stood:.3f} -> 连续达标 {self._dmin_batch_pass}/"
-              f"{CURRICULUM_BATCHES_REQUIRED}")
-        if self._dmin_batch_pass < CURRICULUM_BATCHES_REQUIRED:
-            return False
-        self._cur_level_history.append({
-            "d_min": self._wall_d_min, "iter": it, "batch_episodes": n_ep,
-            "p_stood": p_stood,
-        })
-        self._wall_d_min = max(WALL_D_MIN_END, round(self._wall_d_min - WALL_D_MIN_STEP, 6))
-        self._dmin_batch_pass = 0
-        self._cur_level_iter = it
-        self._reset_curriculum_window()
-        self._push_wall_curriculum()
-        print(f"[INFO] 墙位课程推进: d_min={self._wall_d_min:.3f} "
-              f"(净宽下限 {self._wall_d_min + WALL_X_POS - 0.02:.4f} m), iter {it}, "
-              f"上档 p_stood={p_stood:.3f}")
-        return True
+        return False
 
 
     # 把当前 d_min / 范围 / 下界采样比例推给命令项
@@ -224,7 +165,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if enabled is False or not self._wall_random:
             setter(None, None, None)
             return
-        setter(self._wall_d_min, WALL_D_MAX, WALL_D_MIN_FRAC)
+        course = self._wall_course
+        setter(course.d_min, course.d_max, WALL_D_MIN_FRAC,
+               bin_weights=list(course.bin_weights), final_mode=course.final_level_passed)
 
 
     # 获取命令项
@@ -268,11 +211,13 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if self._wall_random:
             neg, pos = -self._wall_d_min, WALL_X_POS
             writer.add_scalar("Curriculum/wall_d_min", self._wall_d_min, it)
-            writer.add_scalar("Curriculum/dmin_batch_episodes", self._dmin_batch_ep, it)
-            writer.add_scalar("Curriculum/dmin_batch_pass", self._dmin_batch_pass, it)
-            if self._dmin_batch_ep > 0:
-                writer.add_scalar("Curriculum/dmin_p_stood", self._dmin_batch_stood / self._dmin_batch_ep, it)
-        writer.add_scalar("Curriculum/wall_width", pos - neg - 0.02, it)
+            stats = self._wall_course.metrics()
+            writer.add_scalar("Curriculum/final_mode", int(stats["final_mode"]), it)
+            writer.add_scalar("Curriculum/final_accepted", int(stats["final_accepted"]), it)
+            if self._wall_course.history:
+                writer.add_scalar("Curriculum/eval_righting_rate", stats["success_rate"], it)
+        thickness = self.env.unwrapped.scene.entities["restricted_space"].cfg.wall_half_thickness
+        writer.add_scalar("Curriculum/wall_width", pos - neg - 2 * thickness, it)
         writer.add_scalar("Curriculum/window_ready", float(ready), it)
         if n_valid > 0:
             writer.add_scalar("Curriculum/n_valid_episodes", n_valid, it)
@@ -374,7 +319,149 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         return self.env.get_observations().to(self.device) if refresh_obs else None
 
 
-    # 训练循环
+
+    # 仅自动随机墙位课程在二阶段执行独立考核
+    def _evaluation_enabled(self) -> bool:
+        self._ensure_wall_state()
+        command = self._command_term()
+        return (
+            self._wall_random and not self._corridor_fixed
+            and self._collision_phase_on() and command is not None
+            and getattr(command.cfg, "fixed_time_scale", None) is None
+        )
+
+
+    # 独立考核复制训练场景与物理参数, 墙碰撞始终开启
+    def _get_evaluation_env(self):
+        if self._evaluation_env is None:
+            cfg = copy.deepcopy(self._corridor_env_cfg)
+            cfg.scene.num_envs = WALL_EVALUATION_ENVS
+            cfg.events.pop("init_restricted_space", None)
+            cfg.seed = None
+            cfg.commands["backup_cmd"].debug_vis = False
+            walls, _ = self._corridor_compiled_state()
+            if walls is None:
+                raise RuntimeError("墙位考核缺少受限空间实体")
+            mdp_entity.configure_restricted_space(
+                cfg, wall_x_neg=walls[0], wall_x_pos=walls[1], enable_collision=True,
+            )
+            raw = ManagerBasedRlEnv(cfg=cfg, device=self._corridor_device, render_mode=None)
+            raw.common_step_counter = int(self.env.unwrapped.common_step_counter)
+            self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self._corridor_clip_actions)
+            if not raw.scene.entities["restricted_space"].collision_enabled:
+                raise RuntimeError("独立考核环境未开启真实墙碰撞")
+            print(f"[墙位考核] 已创建真实碰撞环境: {WALL_EVALUATION_ENVS} 个", flush=True)
+        return self._evaluation_env
+
+
+    # 冻结确定性策略, 每个环境只统计首个完整回合
+    def _run_evaluation_sweep(self, seed: int) -> list[dict]:
+        random.seed(int(seed))
+        np.random.seed(int(seed) % (2 ** 32))
+        torch.random.default_generator.manual_seed(int(seed))
+        device = torch.device(self.env.device)
+        if device.type == "cuda":
+            torch.cuda.default_generators[device.index or 0].manual_seed(int(seed))
+        evaluation = self._get_evaluation_env()
+        raw = evaluation.unwrapped
+        raw.common_step_counter = int(self.env.unwrapped.common_step_counter)
+        command = raw.command_manager.get_term("backup_cmd")
+        course = self._wall_course
+        command.set_wall_curriculum(
+            course.d_min, course.d_max, WALL_D_MIN_FRAC,
+            bin_weights=[1.0] * WALL_BIN_COUNT, final_mode=course.final_level_passed,
+        )
+        policy = self.get_inference_policy(device=str(self.device))
+        obs, _ = evaluation.reset()
+        if bool((raw.episode_length_buf != 0).any()):
+            raise RuntimeError("独立考核必须从完整回合起点开始")
+        sequence = command._ep_seq.clone()
+        seen = torch.zeros(raw.num_envs, device=raw.device, dtype=torch.bool)
+        results: list[dict] = []
+        for _ in range(raw.max_episode_length + 1):
+            actions = policy(obs.to(self.device)).to(evaluation.device)
+            obs, rewards, dones, _ = evaluation.step(actions)
+            if self.cfg.get("check_for_nan", True):
+                check_nan(obs, rewards, dones)
+            completed = (command._ep_seq > sequence) & dones.bool() & ~seen
+            for env_id in completed.nonzero(as_tuple=False).flatten().tolist():
+                results.append({
+                    "env_id": int(env_id), "valid": True,
+                    "success": bool(command._last_ep_righted[env_id]),
+                    "wall_d": float(command._last_ep_wall_d[env_id]),
+                })
+            seen |= completed
+            if bool(seen.all()):
+                break
+        if len(results) != raw.num_envs:
+            raise RuntimeError("独立真实碰撞考核缺少完整回合, 拒绝推进课程")
+        return results
+
+
+    # 两批同档考核全部完成后一次结算, 恢复训练随机状态与归一化模式
+    def _maybe_evaluate_curriculum(self, iteration: int) -> None:
+        self._ensure_wall_state()
+        course = self._wall_course
+        if not self._evaluation_enabled() or not course.should_evaluate(iteration):
+            return
+        if self.is_distributed:
+            raise RuntimeError("独立真实碰撞考核仅支持单卡训练")
+        if self._corridor_change_needed():
+            raise RuntimeError("训练场景物理配置尚未同步, 拒绝结算墙位课程")
+        numpy_state, python_state = np.random.get_state(), random.getstate()
+        device = torch.device(self.env.device)
+        devices = [device.index or 0] if device.type == "cuda" else []
+        batches: list[dict] = []
+        started = time.perf_counter()
+        try:
+            with torch.random.fork_rng(devices=devices), torch.no_grad():
+                for sweep in range(CURRICULUM_BATCHES_REQUIRED):
+                    results = self._run_evaluation_sweep(int(self.cfg.get("seed", 42)) + iteration + sweep)
+                    batches.append(course.measure_batch(results))
+                result = course.record_evaluation(batches, iteration)
+        finally:
+            np.random.set_state(numpy_state)
+            random.setstate(python_state)
+            self.alg.train_mode()
+        self._wall_d_min = course.d_min
+        self._cur_level_iter = course.level_start_iteration
+        self._push_wall_curriculum()
+        seconds = time.perf_counter() - started
+        for index, batch in enumerate(batches):
+            print(f"[墙位考核] iter {iteration} 第 {index + 1} 批: "
+                  f"{batch['count']} 个计分回合, 翻正率 {batch['success_rate']:.1%}, "
+                  f"达标={batch['passed']}", flush=True)
+        print(f"[墙位考核] 模式={result['mode']}, 达标={result['passed']}, "
+              f"d_min {result['previous_d_min']:.3f}->{course.d_min:.3f} m, "
+              f"推进={result['advanced']}, 退档={result['retreated']}, "
+              f"最终验收={course.final_accepted}", flush=True)
+        if self.logger.writer is not None:
+            values = {
+                "Curriculum/eval_righting_rate": result["success_rate"],
+                "Curriculum/eval_passed": int(result["passed"]),
+                "Curriculum/eval_seconds": seconds,
+                "Curriculum/retreat_count": course.retreats,
+                "Curriculum/final_mode": int(course.final_level_passed),
+                "Curriculum/final_accepted": int(course.final_accepted),
+            }
+            values.update({f"Curriculum/bin{i}_righting_rate": rate for i, rate in enumerate(result["bin_rate"])})
+            for name, value in values.items():
+                self.logger.writer.add_scalar(name, value, iteration)
+        if self.logger.log_dir is not None:
+            directory = Path(self.logger.log_dir) / "collision_evaluations"
+            directory.mkdir(parents=True, exist_ok=True)
+            payload = {
+                **result, "batches": batches, "seconds": seconds,
+                "training_collision": True, "evaluation_collision": True,
+                "success_criterion": "S2 姿态连续确认, 不要求站立或关节速度",
+                "course": course.state_dict(),
+            }
+            (directory / f"evaluation_{iteration:05d}.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+
+
+    # 训练循环: PPO 更新后独立考核, 考核样本不写入训练存储
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
         self._randomize_ep_len = bool(init_at_random_ep_len)
         if self._randomize_ep_len:
@@ -397,53 +484,58 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
 
         start_it = self.current_learning_iteration
         total_it = start_it + num_learning_iterations
-        for it in range(start_it, total_it):
-            self._ingest_episode_results()
-            self._maybe_promote(it)
-            if self._corridor_start_walls is not None and self._corridor_change_needed():
-                obs = self._apply_corridor_rebuild(refresh_obs=True)
-            self._log_curriculum(it)
-            start = time.time()
-            with torch.inference_mode():
-                for _ in range(self.cfg["num_steps_per_env"]):
-                    actions = self.alg.act(obs) # type: ignore
-                    obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
-                    if self.cfg.get("check_for_nan", True):
-                        check_nan(obs, rewards, dones)
-                    obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
-                    self.alg.process_env_step(obs, rewards, dones, extras)
-                    intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
-                    self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
-
-                stop = time.time()
-                collect_time = stop - start
-                start = stop
-                self.alg.compute_returns(obs) # type: ignore
-
-            loss_dict = self.alg.update()
-
-            stop = time.time()
-            learn_time = stop - start
-            self.current_learning_iteration = it
-
-            self.logger.log(
-                it=it,
-                start_it=start_it,
-                total_it=total_it,
-                collect_time=collect_time,
-                learn_time=learn_time,
-                loss_dict=loss_dict,
-                learning_rate=self.alg.learning_rate,
-                action_std=self.alg.get_policy().output_std,
-                rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
-            )
-
-            if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
-                self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
-
-        if self.logger.writer is not None:
-            self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt")) # type: ignore
-            self.logger.stop_logging_writer()
+        try:
+            for it in range(start_it, total_it):
+                self._ingest_episode_results()
+                if self._corridor_start_walls is not None and self._corridor_change_needed():
+                    obs = self._apply_corridor_rebuild(refresh_obs=True)
+                if self.is_distributed and self._evaluation_enabled():
+                    raise ValueError("独立真实碰撞考核仅支持单卡训练")
+                self._log_curriculum(it)
+                start = time.time()
+                with torch.inference_mode():
+                    for _ in range(self.cfg["num_steps_per_env"]):
+                        actions = self.alg.act(obs) # type: ignore
+                        obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
+                        if self.cfg.get("check_for_nan", True):
+                            check_nan(obs, rewards, dones)
+                        obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+                        self.alg.process_env_step(obs, rewards, dones, extras)
+                        intrinsic_rewards = (self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None)
+                        self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+                    stop = time.time()
+                    collect_time = stop - start
+                    start = stop
+                    self.alg.compute_returns(obs) # type: ignore
+                loss_dict = self.alg.update()
+                learn_time = time.time() - start
+                self.current_learning_iteration = it
+                self.logger.log(
+                    it=it, start_it=start_it, total_it=total_it,
+                    collect_time=collect_time, learn_time=learn_time, loss_dict=loss_dict,
+                    learning_rate=self.alg.learning_rate,
+                    action_std=self.alg.get_policy().output_std,
+                    rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
+                )
+                self._maybe_evaluate_curriculum(it)
+                if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
+                    self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))
+        finally:
+            try:
+                if self._evaluation_env is not None:
+                    try:
+                        self._evaluation_env.close()
+                    except Exception as exc:
+                        print(f"[WARN] 考核环境关闭失败: {exc}")
+                    self._evaluation_env = None
+            finally:
+                if self.logger.writer is not None:
+                    try:
+                        self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))
+                    except Exception as exc:
+                        print(f"[WARN] 最终检查点保存失败: {exc}")
+                    finally:
+                        self.logger.stop_logging_writer()
 
 
     # 继承训练
@@ -484,14 +576,25 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         self._cur_level_iter = int(saved.get("curriculum_iter", self.current_learning_iteration))
         self._cur_level_history = list(saved.get("curriculum_history") or [])
 
-        # 随机墙位课程: 直接恢复下界
-        if self._wall_random and saved.get("wall_d_min") is not None:
-            self._wall_d_min = float(saved["wall_d_min"])
-            self._dmin_batch_ep = 0
-            self._dmin_batch_stood = 0
-            self._dmin_batch_pass = 0
-            print(f"[INFO] 续训: 恢复随机墙位课程 d_min={self._wall_d_min:.3f} "
-                  f"(范围 [{self._wall_d_min:.3f}, {WALL_D_MAX:.2f}])")
+        # 新检查点恢复完整课程, 旧检查点只迁移墙位下界与驻留起点
+        if self._wall_random:
+            if saved.get("wall_course"):
+                self._wall_course.load_state_dict(saved["wall_course"])
+            else:
+                distance = saved.get("wall_d_min")
+                if distance is None and recorded_neg is not None:
+                    distance = -float(recorded_neg)
+                if distance is None and saved.get("corridor_width") is not None:
+                    distance = float(saved["corridor_width"]) / 2
+                if distance is not None:
+                    lower = min(WALL_D_MAX, max(WALL_D_MIN_END, float(distance)))
+                    if abs(lower - float(distance)) > 1e-9:
+                        print(f"[WARN] 旧墙位下界 {float(distance):.3f} m 超出当前课程范围, 调整为 {lower:.3f} m")
+                    self._wall_course.d_min = lower
+                self._wall_course.level_start_iteration = self._cur_level_iter
+                print("[INFO] 旧检查点保留模型与训练进度, 墙位课程改由独立考核推进; 旧批次成绩不继承")
+            self._wall_d_min = self._wall_course.d_min
+            self._cur_level_iter = self._wall_course.level_start_iteration
             
         # 锁死模式: 命令行显式指定墙位优先; 否则沿用检查点记录的标记
         if not self._corridor_fixed_by_cli and saved.get("corridor_fixed") is not None:
@@ -527,10 +630,12 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             "curriculum_iter": self._cur_level_iter,
             "curriculum_history": list(self._cur_level_history),
             "wall_d_min": (self._wall_d_min if self._wall_random else None),
+            "wall_course": (self._wall_course.state_dict() if self._wall_random else None),
+            "evaluation_envs": WALL_EVALUATION_ENVS,
         }
         super().save(path, infos={**(infos or {}), "corridor_state": extra})
-        policy_dir, filename, onnx_path = self._get_export_paths(path)
         try:
+            policy_dir, filename, onnx_path = self._get_export_paths(path)
             self.export_policy_to_onnx(str(policy_dir), filename)
             run_name: str = (wandb.run.name if wandb.run else "local")  # type: ignore[assignment]
             metadata = get_base_metadata(self.env.unwrapped, run_name)
@@ -538,4 +643,4 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             if wandb.run and self.cfg["upload_model"]:
                 wandb.save(str(onnx_path), base_path=str(policy_dir))
         except Exception as e:
-            print(f"[WARN] ONNX export failed (training continues): {e}")
+            print(f"[WARN] ONNX 导出失败, 训练继续: {e}")

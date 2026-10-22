@@ -19,7 +19,9 @@ from .curriculums import (
     P1_SETTLE_MAX,
     get_p1_settle_margin,
     P1_CLOSE_FOLLOWS_SETTLE,
+    WALL_D_MIN_FRAC,
     get_curriculum_time_scale,
+    sample_wall_distances,
 )
 
 if TYPE_CHECKING:
@@ -195,6 +197,10 @@ class BackupCommand(CommandTerm):
 
     # 建立 _resample_command / _clear_cycle_state 会写的全部缓冲
     def _ensure_buffers(self) -> None:
+        if not hasattr(self, "_ep_righted"):
+            self._ep_righted = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._last_ep_righted = torch.zeros_like(self.phase, dtype=torch.bool)
+            self._righting_elapsed = torch.zeros_like(self.t_phase)
         if not hasattr(self, "_s1_onset"):
             self._s1_onset = torch.full_like(self.t_phase, float("nan"))
             self._s2_onset = torch.full_like(self.t_phase, float("nan"))
@@ -287,7 +293,13 @@ class BackupCommand(CommandTerm):
     def _sample_wall(self, env_ids: torch.Tensor) -> None:
         n = len(env_ids)
         lo, hi = self._wall_bounds()
-        if hi > lo:
+        weights = self.cfg.wall_bin_weights
+        if weights is not None and hi > lo:
+            d = sample_wall_distances(
+                n, lo, hi, float(self.cfg.wall_d_min_frac), weights, self.device,
+                final_mode=self.cfg.wall_final_mode,
+            )
+        elif hi > lo:
             d = torch.empty(n, device=self.device).uniform_(lo, hi)
             frac = float(self.cfg.wall_d_min_frac)
             if frac >= 1.0:
@@ -302,11 +314,16 @@ class BackupCommand(CommandTerm):
 
 
     # 更新墙间距下界并让后续回合按新范围采样。
-    def set_wall_curriculum(self, d_min: float | None, d_max: float | None = None, frac: float | None = None) -> None:
+    def set_wall_curriculum(
+        self, d_min: float | None, d_max: float | None = None, frac: float | None = None,
+        *, bin_weights: list[float] | None = None, final_mode: bool = False,
+    ) -> None:
         self.cfg.wall_d_min = None if d_min is None else float(d_min)
         self.cfg.wall_d_max = None if d_max is None else float(d_max)
         if frac is not None:
             self.cfg.wall_d_min_frac = float(frac)
+        self.cfg.wall_bin_weights = None if bin_weights is None else tuple(bin_weights)
+        self.cfg.wall_final_mode = bool(final_mode)
 
 
     # 按课程采样 time_scale λ (episode 内固定)
@@ -385,12 +402,15 @@ class BackupCommand(CommandTerm):
                 self._last_ep_stood_pose[ids] = self._ep_stood_pose[ids] & valid
                 self._last_ep_stood_onset[ids] = self._ep_stood_onset[ids] & valid
                 self._last_ep_wall_d[ids] = self._wall_d[ids]     # 本回合墙位 (重采之前)
+                self._last_ep_righted[ids] = self._ep_righted[ids]  # 独立考核首回合也发布原始翻正结果
                 self._ep_seq[ids] += 1
                 self._ep_index[ids] += 1
             self._ep_had_success[env_ids] = False
             self._ep_cycle_count[env_ids] = 0
             self._ep_stood_pose[env_ids] = False
             self._ep_stood_onset[env_ids] = False
+            self._ep_righted[env_ids] = False
+            self._righting_elapsed[env_ids] = 0.0
         return super().reset(env_ids)
 
 
@@ -528,6 +548,21 @@ class BackupCommand(CommandTerm):
         grounded = f_up & h_up & torch.isfinite(fz) & torch.isfinite(hz) & (fz < _GROUND_TH_S2) & (hz < _GROUND_TH_S2)
         standing, _ = self.standing_state()
         return grounded | standing
+
+
+    # 超时复位前记录翻正确认, 独立于阶段时窗、站立速度和循环部分复位
+    def record_righting_step(self) -> None:
+        self._ensure_buffers()
+        pose_cache, cos_cache = self._pose_cache, self._pose_cos_cache
+        try:
+            righted = self._check_S2()
+        finally:
+            self._pose_cache, self._pose_cos_cache = pose_cache, cos_cache
+        self._righting_elapsed, confirmed = BackupCommand._update_confirmation(
+            self._righting_elapsed, righted, self._env.episode_length_buf > 0,
+            float(self._env.step_dt), float(self.cfg.pose_confirm_s),
+        )
+        self._ep_righted |= confirmed
 
 
     # 检测是否处于双倒状态
@@ -827,8 +862,10 @@ class BackupCommandCfg(CommandTermCfg):
     inverted_confirm_s: float = 0.15
     wall_d_min: float | None = None
     wall_d_max: float | None = None
-    wall_d_min_frac: float = 0.3
+    wall_d_min_frac: float = WALL_D_MIN_FRAC
     wall_x_pos: float | None = None
+    wall_bin_weights: tuple[float, ...] | None = None
+    wall_final_mode: bool = False
 
     @dataclass
     class VizCfg:

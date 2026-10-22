@@ -102,7 +102,7 @@ def SQuRo_Backup_Env_Cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     # 终止条件配置
     terminations = {
-        "timeout": TerminationTermCfg(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True),
+        "timeout": TerminationTermCfg(func=mdp.righting_time_out, time_out=True),
     }
 
 

@@ -1,4 +1,6 @@
 from __future__ import annotations
+from copy import deepcopy
+from math import isfinite
 import torch
 from typing import Any
 
@@ -12,8 +14,8 @@ _STEPS_PER_ITER = 96            # 控制dt 0.01 s, 96 步覆盖 0.96 s
 STAGE1_1_ITER = 1000                # iter    0-1000: 纯模仿
 STAGE1_2_ITER = 2000                # iter 1000-2000: 时间缩放课程 (λ 下限 2.0 -> 1.0)
 STAGE1_3_ITER = 3000                # iter 2000-3000: 动作优化 (平滑权重第 2/3 档)
-STAGE2_1_ITER = 5000                # iter 3000-5000: 受限空间课程 (开碰撞, a 0.40 -> 0.20)
-STAGE2_2_ITER = 6000                # iter 5000-6000: 受限空间动作优化 (= 总训练轮数)
+STAGE2_1_ITER = 5000                # 旧阶段标记, 墙位改由独立考核推进
+STAGE2_2_ITER = 6000                # 旧阶段标记, 总训练预算由 CURRICULUM_MAX_ITER 管理
 _STAGES = (0, STAGE1_1_ITER, STAGE1_2_ITER)
 
 
@@ -32,17 +34,34 @@ WALL_D_MAX = 0.20                       # 采样上限
 WALL_D_MIN_END = 0.06                   # 课程下限
 WALL_D_MIN_STEP = 0.01                  # 课程推进参数
 WALL_D_MIN_FRAC = 0.3                   # 取得最小间距的固定概率
-CURRICULUM_BATCH_EPISODES = 256         # 累计 256 个最小间距回合后结算
-CURRICULUM_BATCHES_REQUIRED = 2         # 连续 2 次达标后推进课程
+CURRICULUM_BATCH_EPISODES = 256         # 每批考核最低档有效回合下限
+CURRICULUM_BATCHES_REQUIRED = 2         # 同次考核两批均达标后推进课程
 WALL_X_POS = 0.05                       # +X 墙中心, 全程固定 (内侧 +0.040)
 WALL_X_NEG_START = -0.08                # −X 墙中心起点 (= 旧课程的末档, 便于续训对齐)
-WALL_X_NEG_END = -0.05                  # −X 墙中心终点 = 课程下界 (末档净宽 0.080, 两侧对称)
+WALL_X_NEG_END = -WALL_D_MIN_END        # −X 墙中心终点: 末档内侧净宽 0.090 m
 WALL_X_NEG_STEP = 0.005                 # -X 墙课程推进步
 CURRICULUM_START_ITER = STAGE1_3_ITER   # 受限空间课程开始轮数
-CURRICULUM_GATE_P_STOOD = 0.60          # 推进课程所需环境达标率
+WALL_MIN_SUCCESS_RATE = 0.60           # 独立考核最低档翻正率门槛
+CURRICULUM_GATE_P_STOOD = WALL_MIN_SUCCESS_RATE  # 旧名兼容
 CURRICULUM_WINDOW_EPISODES = 3          # 每环境保留最近几个有效回合
 CURRICULUM_MIN_DWELL_ITER = 100         # 每档最短驻留轮数
 CURRICULUM_MAX_ITER = 9000              # 总预算, 与 STAGE2_2_ITER 解耦
+
+# 独立真实碰撞考核: 协议与 Hole 对齐, 训练仍保留真实墙碰撞
+WALL_EVALUATION_ENVS = 1024
+WALL_EVALUATION_INTERVAL = 100
+WALL_EVALUATION_PRETRAIN_ITERATIONS = 500
+WALL_EVALUATION_FINAL_INTERVAL = 500
+WALL_FINAL_ACCEPT_RATE = 0.80
+WALL_RETREAT_FAILURE_LIMIT = 5
+WALL_RETREAT_REQUIRED_PASSES = 2
+WALL_BIN_WEIGHT_GAIN = 2.0
+WALL_D_LEVELS = tuple(
+    round(WALL_D_MAX - i * WALL_D_MIN_STEP, 6)
+    for i in range(round((WALL_D_MAX - WALL_D_MIN_END) / WALL_D_MIN_STEP) + 1)
+)
+WALL_BIN_EDGES = tuple(reversed(WALL_D_LEVELS))
+WALL_BIN_COUNT = len(WALL_BIN_EDGES) - 1
 
 
 
@@ -193,3 +212,226 @@ def get_p1_settle_margin(step_counter: int) -> float:
         return P1_SETTLE_MIN
     frac = (it - P1_SETTLE_START_ITER) / float(P1_SETTLE_END_ITER - P1_SETTLE_START_ITER)
     return P1_SETTLE_MAX + frac * (P1_SETTLE_MIN - P1_SETTLE_MAX)
+
+# 按固定间距区间统计考核结果, 末区间包含采样上限
+def wall_bin_indices(distances: torch.Tensor) -> torch.Tensor:
+    edges = distances.new_tensor(WALL_BIN_EDGES[1:-1])
+    return torch.bucketize(distances.contiguous(), edges, right=True)
+
+
+# 按区间权重采样连续墙位, 普通模式保留下界定点采样
+def sample_wall_distances(
+    count: int, lower: float, upper: float, minimum_fraction: float,
+    weights, device, final_mode: bool = False,
+) -> torch.Tensor:
+    if upper <= lower:
+        return torch.full((int(count),), lower, device=device)
+    edges = torch.tensor(WALL_BIN_EDGES, device=device, dtype=torch.float32)
+    low = edges[:-1].clamp_min(lower)
+    high = edges[1:].clamp_max(upper)
+    active = high > low
+    weight_tensor = torch.as_tensor(weights, device=device, dtype=torch.float32)
+    indices = torch.multinomial(weight_tensor * active, int(count), replacement=True)
+    distances = low[indices] + torch.rand(int(count), device=device) * (high - low)[indices]
+    if not final_mode:
+        pick = torch.rand(int(count), device=device) < minimum_fraction
+        distances = torch.where(pick, torch.full_like(distances, lower), distances)
+    return distances
+
+
+# 墙间距课程状态: 只消费独立真实碰撞考核, 不消费训练回合成绩
+class WallCurriculumState:
+    # 初始化墙位范围与独立考核计数
+    def __init__(self, level_start_iteration: int = CURRICULUM_START_ITER):
+        self.d_min = WALL_D_MAX
+        self.d_max = WALL_D_MAX
+        self.level_start_iteration = int(level_start_iteration)
+        self.consecutive_success_evaluations = 0
+        self.consecutive_failures = 0
+        self.retreats = 0
+        self.retreat_pending_advance = False
+        self.final_level_passed = False
+        self.final_accepted = False
+        self.bin_weights = [1.0] * WALL_BIN_COUNT
+        self.history: list[dict] = []
+
+
+    # 普通模式每百轮考核, 最终模式每五百轮继续验收
+    def should_evaluate(self, iteration: int) -> bool:
+        if int(iteration) < CURRICULUM_START_ITER + WALL_EVALUATION_PRETRAIN_ITERATIONS:
+            return False
+        if self.history and int(iteration) <= int(self.history[-1]["iteration"]):
+            return False
+        interval = WALL_EVALUATION_FINAL_INTERVAL if self.final_level_passed else WALL_EVALUATION_INTERVAL
+        return (int(iteration) - CURRICULUM_START_ITER) % interval == 0
+
+
+    # 汇总一批首个完整回合, 普通模式按最低档翻正率判定
+    def measure_batch(self, results: list[dict]) -> dict:
+        eligible = [item for item in results if item.get("valid", True)]
+        if any(
+            not isfinite(float(item["wall_d"]))
+            or not self.d_min - 1e-6 <= float(item["wall_d"]) <= self.d_max + 1e-6
+            for item in eligible
+        ):
+            raise ValueError("考核回合墙位超出当前课程范围")
+        if len({item["env_id"] for item in eligible}) != len(eligible):
+            raise ValueError("同一环境的考核回合不得重复计分")
+        selected = eligible if self.final_level_passed else [
+            item for item in eligible if abs(float(item["wall_d"]) - self.d_min) <= 1e-6
+        ]
+        count = len(selected)
+        successes = sum(int(item["success"]) for item in selected)
+        bin_count = [0] * WALL_BIN_COUNT
+        bin_successes = [0] * WALL_BIN_COUNT
+        distances = torch.tensor([float(item["wall_d"]) for item in eligible])
+        for index, item in zip(wall_bin_indices(distances).tolist(), eligible, strict=True):
+            bin_count[index] += 1
+            bin_successes[index] += int(item["success"])
+        rate = successes / max(1, count)
+        threshold = WALL_FINAL_ACCEPT_RATE if self.final_level_passed else WALL_MIN_SUCCESS_RATE
+        enough = count > 0 if self.final_level_passed else count >= CURRICULUM_BATCH_EPISODES
+        return {
+            "mode": "final" if self.final_level_passed else "normal",
+            "wall_d_min": self.d_min, "wall_d_max": self.d_max,
+            "count": count, "successes": successes, "success_rate": rate,
+            "passed": enough and rate >= threshold,
+            "eligible": len(eligible),
+            "eligible_successes": sum(int(item["success"]) for item in eligible),
+            "bin_count": bin_count, "bin_successes": bin_successes,
+            "bin_rate": [bin_successes[i] / value if value else 0.0 for i, value in enumerate(bin_count)],
+        }
+
+
+    # 两批在同一档位完成后一次结算, 缺回合或跨档位结果拒绝写入
+    def record_evaluation(self, batches: list[dict], iteration: int) -> dict:
+        mode = "final" if self.final_level_passed else "normal"
+        if len(batches) != CURRICULUM_BATCHES_REQUIRED:
+            raise ValueError("独立考核必须收齐同次的两批结果")
+        if self.history and int(iteration) <= int(self.history[-1]["iteration"]):
+            raise ValueError("同一轮考核不得重复结算")
+        for batch in batches:
+            if (
+                batch["mode"] != mode
+                or abs(float(batch["wall_d_min"]) - self.d_min) > 1e-9
+                or abs(float(batch["wall_d_max"]) - self.d_max) > 1e-9
+                or int(batch["eligible"]) != WALL_EVALUATION_ENVS
+                or len(batch["bin_count"]) != WALL_BIN_COUNT
+                or len(batch["bin_successes"]) != WALL_BIN_COUNT
+                or sum(batch["bin_count"]) != int(batch["eligible"])
+                or not 0 <= int(batch["successes"]) <= int(batch["count"]) <= int(batch["eligible"])
+                or sum(batch["bin_successes"]) != int(batch["eligible_successes"])
+                or any(not 0 <= ok <= count for ok, count in zip(batch["bin_successes"], batch["bin_count"], strict=True))
+            ):
+                raise ValueError("考核档位不一致或完整回合不足, 拒绝推进课程")
+        passed = all(bool(batch["passed"]) for batch in batches)
+        count = sum(int(batch["count"]) for batch in batches)
+        successes = sum(int(batch["successes"]) for batch in batches)
+        bin_count = [sum(int(batch["bin_count"][i]) for batch in batches) for i in range(WALL_BIN_COUNT)]
+        bin_successes = [sum(int(batch["bin_successes"][i]) for batch in batches) for i in range(WALL_BIN_COUNT)]
+        target = WALL_FINAL_ACCEPT_RATE if self.final_level_passed else WALL_MIN_SUCCESS_RATE
+        self.bin_weights = [
+            1.0 + WALL_BIN_WEIGHT_GAIN * max(0.0, target - bin_successes[i] / value) if value else 1.0
+            for i, value in enumerate(bin_count)
+        ]
+        result = {
+            "iteration": int(iteration), "mode": mode, "passed": passed,
+            "sample_count": count, "successes": successes,
+            "success_rate": successes / max(1, count),
+            "previous_d_min": self.d_min, "advanced": False, "retreated": False,
+            "entered_final_mode": False,
+            "bin_count": bin_count,
+            "bin_rate": [bin_successes[i] / value if value else 0.0 for i, value in enumerate(bin_count)],
+            "batch_passed": [bool(batch["passed"]) for batch in batches],
+        }
+        if self.final_level_passed:
+            self.final_accepted |= passed
+        else:
+            self.consecutive_success_evaluations = self.consecutive_success_evaluations + 1 if passed else 0
+            self.consecutive_failures = 0 if passed else self.consecutive_failures + 1
+            previous = [value for value in WALL_D_LEVELS if value > self.d_min + 1e-9]
+            if not passed and self.consecutive_failures >= WALL_RETREAT_FAILURE_LIMIT and previous:
+                self.d_min = min(previous)
+                self.retreats += 1
+                self.retreat_pending_advance = True
+                self.consecutive_failures = 0
+                self.consecutive_success_evaluations = 0
+                self.level_start_iteration = int(iteration)
+                result["retreated"] = True
+            else:
+                required = WALL_RETREAT_REQUIRED_PASSES if self.retreat_pending_advance else 1
+                ready = int(iteration) - self.level_start_iteration >= CURRICULUM_MIN_DWELL_ITER
+                if passed and ready and self.consecutive_success_evaluations >= required:
+                    if self.d_min > WALL_D_MIN_END + 1e-9:
+                        self.d_min = max(WALL_D_MIN_END, round(self.d_min - WALL_D_MIN_STEP, 6))
+                        self.level_start_iteration = int(iteration)
+                        self.retreat_pending_advance = False
+                        result["advanced"] = True
+                    else:
+                        self.final_level_passed = True
+                        self.consecutive_failures = 0
+                        self.bin_weights = [1.0] * WALL_BIN_COUNT
+                        result["entered_final_mode"] = True
+                    self.consecutive_success_evaluations = 0
+        result.update({
+            "d_min": self.d_min, "bin_weights": list(self.bin_weights),
+            "consecutive_failures": self.consecutive_failures,
+            "consecutive_success_evaluations": self.consecutive_success_evaluations,
+            "retreats": self.retreats, "final_accepted": self.final_accepted,
+        })
+        self.history.append(deepcopy(result))
+        return result
+
+
+    # 保存课程状态, 不保存未完成的考核批次
+    def state_dict(self) -> dict:
+        return {
+            "version": 1, "d_min": self.d_min, "d_max": self.d_max,
+            "level_start_iteration": self.level_start_iteration,
+            "consecutive_success_evaluations": self.consecutive_success_evaluations,
+            "consecutive_failures": self.consecutive_failures,
+            "retreats": self.retreats, "retreat_pending_advance": self.retreat_pending_advance,
+            "final_level_passed": self.final_level_passed, "final_accepted": self.final_accepted,
+            "bin_weights": list(self.bin_weights), "bin_edges": list(WALL_BIN_EDGES),
+            "history": deepcopy(self.history),
+        }
+
+
+    # 恢复课程并检查几何范围与采样权重
+    def load_state_dict(self, state: dict) -> None:
+        lower, upper = float(state["d_min"]), float(state["d_max"])
+        weights = [float(value) for value in state["bin_weights"]]
+        if (
+            int(state["version"]) != 1 or not isfinite(lower) or not isfinite(upper)
+            or not WALL_D_MIN_END <= lower <= upper == WALL_D_MAX
+            or len(weights) != WALL_BIN_COUNT
+            or any(not isfinite(value) or value <= 0.0 for value in weights)
+            or list(state["bin_edges"]) != list(WALL_BIN_EDGES)
+            or (bool(state["final_level_passed"]) and abs(lower - WALL_D_MIN_END) > 1e-9)
+            or (bool(state["final_accepted"]) and not bool(state["final_level_passed"]))
+            or any(int(state[name]) < 0 for name in (
+                "level_start_iteration", "consecutive_success_evaluations", "consecutive_failures", "retreats",
+            ))
+        ):
+            raise ValueError("检查点墙位课程范围或分档权重不兼容")
+        self.d_min, self.d_max = lower, upper
+        self.bin_weights = weights
+        for name in ("level_start_iteration", "consecutive_success_evaluations", "consecutive_failures", "retreats"):
+            setattr(self, name, int(state[name]))
+        for name in ("retreat_pending_advance", "final_level_passed", "final_accepted"):
+            setattr(self, name, bool(state[name]))
+        self.history = deepcopy(state["history"])
+
+
+    # 保留最近完成的考核成绩, 换档后日志不清零
+    def metrics(self) -> dict[str, Any]:
+        last = self.history[-1] if self.history else {}
+        return {
+            "wall_d_min": self.d_min,
+            "success_rate": float(last.get("success_rate", 0.0)),
+            "sample_count": int(last.get("sample_count", 0)),
+            "passed": bool(last.get("passed", False)),
+            "final_mode": self.final_level_passed,
+            "final_accepted": self.final_accepted,
+            "retreats": self.retreats,
+        }
