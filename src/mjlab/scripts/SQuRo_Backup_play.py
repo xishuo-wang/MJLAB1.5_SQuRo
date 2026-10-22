@@ -14,7 +14,14 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import (
+    FOOT_NAMES,
+    FOOT_SITE_NAMES,
+    _ACT_JOINT_NAMES,
+    _MODEL_INDICES,
+    resolve_foot_force_ids,
+    resolve_model_indices,
+)
 from mjlab.tasks.SQuRo_Backup.api.spine_reader import SQuRoSpineDeformation
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     STAGE1_3_ITER,
@@ -152,21 +159,14 @@ class JointDataRecorder:
         self.data_records = []
         self.step_count = 0
 
-        # 14 个驱动关节
-        self.joint_names = [
-            'F_spine1', 'F_body',
-            'Neck_yaw', 'Neck_pitch',
-            'FL_shoulder', 'FL_elbow',
-            'FR_shoulder', 'FR_elbow',
-            'H_spine1', 'H_body',
-            'HL_hip', 'HL_knee',
-            'HR_hip', 'HR_knee',
-        ]
+        # CSV 名称沿用原有执行器顺序。
+        self.joint_names = [name.removesuffix('_joint') for name in _ACT_JOINT_NAMES]
         self._joint_ids_resolved = False
         self.action_names = self.joint_names
-        self.foot_names = ['FL', 'FR', 'HL', 'HR']
-        self.foot_site_names = ['FL_elbow_site', 'FR_elbow_site', 'HL_knee_site', 'HR_knee_site']
+        self.foot_names = list(FOOT_NAMES)
+        self.foot_site_names = list(FOOT_SITE_NAMES)
         self._foot_site_ids = None
+        self._foot_force_ids = None
         # 实际脊柱形变角读取器: 懒创建 (需要实体), 见 docs/SQuRo_实际脊柱形变角.md
         self._spine_reader: SQuRoSpineDeformation | None = None
 
@@ -189,7 +189,10 @@ class JointDataRecorder:
 
         # 足端接触力
         contact_sensor = unwrapped.scene["feet_ground_contact"]
-        feet_contact = contact_sensor.data.force.flatten(start_dim=1)
+        if self._foot_force_ids is None:
+            self._foot_force_ids = resolve_foot_force_ids(contact_sensor)
+        feet_contact = contact_sensor.data.force.reshape(contact_sensor.data.force.shape[0], -1, 3)
+        feet_contact = feet_contact[:, self._foot_force_ids, :].flatten(start_dim=1)
         for i, name in enumerate(self.foot_names):
             record[f'contact_{name}_x'] = float(feet_contact[env_idx, i * 3].item())
             record[f'contact_{name}_y'] = float(feet_contact[env_idx, i * 3 + 1].item())

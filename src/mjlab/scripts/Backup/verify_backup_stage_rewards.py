@@ -10,7 +10,14 @@ import torch
 from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommand, BackupCommandCfg
 from mjlab.tasks.SQuRo_Backup.mdp import reference, rewards, events
 from mjlab.tasks.SQuRo_Backup.mdp.rewards import _milestone_time_quality
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, _ACTUATED_JOINT_NAMES
+from mjlab.tasks.SQuRo_Backup.mdp.indices import (
+    BODY_NAMES,
+    FOOT_SITE_NAMES,
+    LINKAGE_JOINT_NAMES,
+    SEGMENT_BELLY_BACK_SITES,
+    _MODEL_INDICES,
+    _ACTUATED_JOINT_NAMES,
+)
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _CURVES
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import _STEPS_PER_ITER
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import SPN_AXIS_RELAX_ITER
@@ -152,12 +159,15 @@ def make_env(phases):
                write_joint_state_to_sim=lambda *a, **kw: None, num_joints=36,
                # apply_fallen_state 会调 resolve_model_indices; 单测里 f_body_id 已被 setUp
                # 预置成 0/1, 该函数会提前 return, 所以这里只需保证被调用时不抛异常。
-               find_bodies=lambda *a, **kw: ([], []),
-               find_sites=lambda *a, **kw: ([], []),
-               find_joints=lambda *a, **kw: ([], []),
+               find_bodies=lambda names, **kw: ([BODY_NAMES.index(name) for name in names], list(names)),
+               find_sites=lambda names, **kw: ([test_sites.index(name) for name in names], list(names)),
+               find_joints=lambda names, **kw: ([test_joints.index(name) for name in names], list(names)),
                # 脊柱跟踪核(姿态进度项的乘法门控)会读 joint_pos; 默认全零 = 完全跟住参考,
                # 门控值为 1 -> 进度项行为与门控前一致。要测门控本身就在用例里替换这份 data。
                data=NS(joint_pos=torch.zeros(n, 14)))
+
+    test_sites = list(FOOT_SITE_NAMES) + [name for pair in SEGMENT_BELLY_BACK_SITES for name in pair]
+    test_joints = list(_ACTUATED_JOINT_NAMES) + list(LINKAGE_JOINT_NAMES)
 
     # scene 替身: 既支持 env.scene["robot"] 也支持 env.scene.reset(ids)/.entities,
     # 因为生产代码两条路径都会走 (apply_fallen_state 用 entities, 复位用 reset)。

@@ -1,13 +1,7 @@
 from __future__ import annotations
 import torch
 from .config import LEG_INIT
-from .indices import resolve_model_indices
-
-
-
-# 重置所用关节索引
-JOINT_INDICES = [6, 8, 12, 14, 24, 26, 30, 32, 1, 3, 21, 23, 4, 5] + [
-    7, 9, 10, 11, 13, 15, 16, 17, 25, 27, 28, 29, 31, 33, 34, 35]
+from .indices import _MODEL_INDICES, resolve_model_indices
 
 
 
@@ -36,9 +30,10 @@ def apply_fallen_state(env, env_ids: torch.Tensor) -> None:
     # 关节: 零速度 + 站立初始角
     joint_pos = torch.zeros(n, robot_entity.num_joints, device=env.device)
     joint_vel = torch.zeros(n, robot_entity.num_joints, device=env.device)
-    for i, idx in enumerate(JOINT_INDICES):
-        if idx < robot_entity.num_joints:
-            joint_pos[:, idx] = JOINT_POSITIONS[i]
+    indices = _MODEL_INDICES
+    joint_ids = indices.joint_leg_ids + indices.joint_spn_ids + indices.joint_neck_ids + indices.linkage_joint_ids
+    for idx, position in zip(joint_ids, JOINT_POSITIONS, strict=True):
+        joint_pos[:, idx] = position
     robot_entity.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
 

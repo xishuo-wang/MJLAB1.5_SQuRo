@@ -18,7 +18,7 @@ from mjlab.scripts.SQuRo_Backup_Replay import (
     T_SEG4_END,
 )
 from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.SQuRo_Backup.mdp.indices import resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACT_LEG_IDS, _ACT_SPN_IDS, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.SQuRo_Backup.mdp import config as T
 # 任务包已删除该派生常量; 累计口径边界 = P2_END + T4 (与 reference._TRANS_END 同值 1.95)
@@ -35,8 +35,8 @@ from mjlab.tasks.SQuRo_Backup.mdp.reference import P1_ONSET as _P1_ONSET
 #   因此在同一物理状态上必须逐帧一致 —— 这里直接断言该点, 并同时记录
 #   手调脚本自身的相位推进与训练 command 的相位推进是否同步。
 
-SPINE_IDX = [0, 1, 8, 9]
-LEG_IDX = [4, 5, 6, 7, 10, 11, 12, 13]
+SPINE_IDX = list(_ACT_SPN_IDS)
+LEG_IDX = list(_ACT_LEG_IDS)
 ALL_IDX = SPINE_IDX + LEG_IDX
 # 参考表存的是 float32, 且比对要走一次线性插值, 故容差不能取 1e-6 (约为 f32 在 1.57 处的
 # 一个 ulp); 1e-5 rad 相对量程仍是 1e-5 量级, 足以发现真实公式分歧。

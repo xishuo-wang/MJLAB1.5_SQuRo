@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from typing import TYPE_CHECKING
+from .indices import _ACT_LEG_IDS, _ACT_NECK_IDS, _ACT_NUM, _ACT_SPN_IDS
 from .config import (
     T0,
     T1,
@@ -70,9 +71,9 @@ _table_cache: dict = {}
 def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray, np.ndarray]:
     n = int(REF_TOTAL_TIME / _REF_DT) + 1
     t_grid = np.linspace(0.0, REF_TOTAL_TIME, n)
-    ref = np.zeros((n, 14), dtype=np.float64)
-    leg_col = (4, 5, 6, 7, 10, 11, 12, 13)
-    spn_col = (0, 1, 8, 9)
+    ref = np.zeros((n, _ACT_NUM), dtype=np.float64)
+    leg_col = _ACT_LEG_IDS
+    spn_col = _ACT_SPN_IDS
     leg_init = np.array(LEG_INIT, dtype=np.float64)
 
     for i, tn in enumerate(t_grid):
@@ -121,8 +122,7 @@ def _generate_reference_table(*, p2_endpoint: bool = False) -> tuple[np.ndarray,
         ref[i, spn_col[1]] = f_bd    # F_body
         ref[i, spn_col[2]] = h_sp1   # H_spine1
         ref[i, spn_col[3]] = h_bd    # H_body
-        ref[i, 2] = 0.0              # Neck_yaw
-        ref[i, 3] = 0.0              # Neck_pitch
+        ref[i, list(_ACT_NECK_IDS)] = 0.0
 
     return t_grid, ref
 

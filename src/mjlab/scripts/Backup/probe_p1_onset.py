@@ -13,12 +13,12 @@ import torch
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES, resolve_model_indices
+from mjlab.tasks.SQuRo_Backup.mdp.indices import _ACT_SPN_IDS, _MODEL_INDICES, resolve_model_indices
 from mjlab.tasks.SQuRo_Backup.mdp.reference import get_reference_joint_state
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.scripts.SQuRo_Backup_Replay import T_OFFSET, slow1_target
 
-SPINE_IDX = (0, 1, 8, 9)
+SPINE_IDX = _ACT_SPN_IDS
 
 
 # 取参考关节角 (按参考表顺序), 并把名义时间对齐到手调脚本的 time1 padding

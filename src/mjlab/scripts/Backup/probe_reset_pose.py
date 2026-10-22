@@ -62,7 +62,7 @@ def main() -> None:
         print(f"零动作静止测试 ({cfg.settle_steps} 步 = {cfg.settle_steps * env.step_dt:.2f} s):")
         print("%6s %10s | %s" % ("step", "基座高度", " | ".join("%-18s" % n.replace("_joint", "") for n in names)))
         print("%6s %10s | %s" % ("", "", " | ".join("%8s%9s" % ("角", "速度") for _ in names)))
-        zero = torch.zeros(1, 14, device=env.device)
+        zero = torch.zeros(env.action_space.shape, device=env.device)
         for i in range(cfg.settle_steps + 1):
             if i % 10 == 0:
                 b = float(asset.data.body_link_pos_w[0, 0, 2])

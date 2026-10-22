@@ -14,8 +14,16 @@ from mjlab.viewer import NativeMujocoViewer
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommandCfg
-from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END
 from mjlab.tasks.SQuRo_Backup.mdp.indices import (
+    _ACT_F_SPINE1_ID,
+    _ACT_F_BODY_ID,
+    _ACT_H_SPINE1_ID,
+    _ACT_H_BODY_ID,
+    _ACT_LEG_IDS,
+    _ACT_LEG_F_IDS,
+    _ACT_LEG_H_IDS,
+    _ACT_NUM,
+    _ACT_SPN_IDS,
     _MODEL_INDICES,
     resolve_model_indices,
 )
@@ -53,47 +61,46 @@ def slow1_target(current_time: float, scale: float = 10.0) -> list[float]:
     time3 = time2 + T2 * scale
     time4 = time3 + T3 * scale
     time5_end = time4 + T4 * scale
-    r = [0.0, 0.0, 0.0, 0.0, *LEG_INIT[:4], 0.0, 0.0, *LEG_INIT[4:]]
+    r = [0.0] * _ACT_NUM
+    for column, position in zip(_ACT_LEG_IDS, LEG_INIT, strict=True):
+        r[column] = position
     if current_time <= time0:
         return r
     if current_time < time1:
         # P0: 只把腿从站立角插到支撑角, 脊柱与颈保持 0 (与 mdp/reference.py 的 P0 分支同构)
         u = (current_time - time0) / max(time1 - time0, 1e-9)
         for c in range(4):
-            r[4 + c] = LEG_INIT[c] + u * (FL_HOLD[c % 2] - LEG_INIT[c])
-            r[10 + c] = LEG_INIT[4 + c] + u * (HL_HOLD[c % 2] - LEG_INIT[4 + c])
+            r[_ACT_LEG_F_IDS[c]] = LEG_INIT[c] + u * (FL_HOLD[c % 2] - LEG_INIT[c])
+            r[_ACT_LEG_H_IDS[c]] = LEG_INIT[4 + c] + u * (HL_HOLD[c % 2] - LEG_INIT[4 + c])
         return r
-    r[4], r[5] = FL_HOLD; r[6], r[7] = FL_HOLD
-    r[10], r[11] = HL_HOLD; r[12], r[13] = HL_HOLD
+    for i, column in enumerate(_ACT_LEG_IDS):
+        r[column] = FL_HOLD[i % 2] if i < len(_ACT_LEG_F_IDS) else HL_HOLD[i % 2]
     if current_time < time2:
         u = (current_time - time1) / (time2 - time1)
-        r[0] = 0.6 * u
-        r[1] = -1.57 * u
-        r[8] = 0.6 * u 
-        r[9] = 1.57 * u
+        r[_ACT_F_SPINE1_ID] = 0.6 * u
+        r[_ACT_F_BODY_ID] = -1.57 * u
+        r[_ACT_H_SPINE1_ID] = 0.6 * u
+        r[_ACT_H_BODY_ID] = 1.57 * u
     elif current_time < time3:
         u = (current_time - time2) / (time3 - time2)
-        r[0] = 0.6 - 0.4 * u
-        r[1] = -1.57
-        r[8] = 0.6 - 0.8 * u
-        r[9] = 1.57
+        r[_ACT_F_SPINE1_ID] = 0.6 - 0.4 * u
+        r[_ACT_F_BODY_ID] = -1.57
+        r[_ACT_H_SPINE1_ID] = 0.6 - 0.8 * u
+        r[_ACT_H_BODY_ID] = 1.57
     elif current_time < time4:
         u = (current_time - time3) / (time4 - time3)
-        r[0] = 0.2 + 0.4 * u
-        r[1] = -1.57 + 1.57 * u
-        r[8] = -0.2 + 0.2 * u
-        r[9] = 1.57 - 1.57 * u
+        r[_ACT_F_SPINE1_ID] = 0.2 + 0.4 * u
+        r[_ACT_F_BODY_ID] = -1.57 + 1.57 * u
+        r[_ACT_H_SPINE1_ID] = -0.2 + 0.2 * u
+        r[_ACT_H_BODY_ID] = 1.57 - 1.57 * u
     else:
         # T4: 腿从支撑角平滑回站立角；F_spine1 承接 T3 末端在过渡段内线性回零，
         # 其余脊柱保持零；之后保持站立。与 mdp/reference.py 的 T4 必须逐字一致。
         u = min(1.0, (current_time - time4) / (time5_end - time4))
-        r[4] = FL_HOLD[0] + u * (LEG_INIT[0] - FL_HOLD[0])
-        r[5] = FL_HOLD[1] + u * (LEG_INIT[1] - FL_HOLD[1])
-        r[6], r[7] = r[4], r[5]
-        r[10] = HL_HOLD[0] + u * (LEG_INIT[4] - HL_HOLD[0])
-        r[11] = HL_HOLD[1] + u * (LEG_INIT[5] - HL_HOLD[1])
-        r[12], r[13] = r[10], r[11]
-        r[0] = 0.6 * (1.0 - u)
+        for i, column in enumerate(_ACT_LEG_IDS):
+            hold = FL_HOLD[i % 2] if i < len(_ACT_LEG_F_IDS) else HL_HOLD[i % 2]
+            r[column] = hold + u * (LEG_INIT[i] - hold)
+        r[_ACT_F_SPINE1_ID] = 0.6 * (1.0 - u)
     return r
 
 
@@ -307,8 +314,8 @@ class StateMachinePolicy:
         self._step_cnt += 1
         jp = self.asset.data.joint_pos[0, _MODEL_INDICES.joint_ids]
         self._spn_ts.append(self._elapsed)
-        self._spn_ref.append([target[0], target[1], target[8], target[9]])
-        self._spn_act.append([jp[0].item(), jp[1].item(), jp[8].item(), jp[9].item()])
+        self._spn_ref.append([target[i] for i in _ACT_SPN_IDS])
+        self._spn_act.append([jp[i].item() for i in _ACT_SPN_IDS])
         return action.unsqueeze(0)
 
 

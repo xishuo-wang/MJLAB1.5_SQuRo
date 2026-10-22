@@ -4,7 +4,7 @@ from mjlab.entity import Entity
 from typing import TYPE_CHECKING, cast
 from .config import STAND_STILL_FULL_SPEED, T4
 from .command import BackupCommand, _GROUND_TH_S1
-from .indices import _ACTUATED_JOINT_NAMES, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
+from .indices import _ACT_JOINT_NAMES, _ACT_NECK_IDS, _ACT_SPN_IDS, _ACTUATOR_CTRL_RANGE, _MODEL_INDICES
 from .curriculums import get_curriculum_reward_weight, get_spn_axis_scale
 from .reference import get_reference_joint_state, get_body_reference, get_reference_body_attitude
 
@@ -307,14 +307,13 @@ def compute_energy_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 
-# ===================================================================================================================
 # 缓存用变量
 _SPN_SCALE_CACHE: dict = {}
 _ERR_SCALE_CACHE: dict = {}
 _CTRL_RANGE_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 _JOINT_W_CACHE: dict = {}
-_NECK_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (2, 3)}
-_SPN_NAMES = {_ACTUATED_JOINT_NAMES[i] for i in (0, 1, 8, 9)}
+_NECK_NAMES = {_ACT_JOINT_NAMES[i] for i in _ACT_NECK_IDS}
+_SPN_NAMES = {_ACT_JOINT_NAMES[i] for i in _ACT_SPN_IDS}
 
 
 
@@ -336,7 +335,7 @@ def _joint_error_scale(env, device, dtype) -> torch.Tensor:
     key = (str(device), str(dtype), scale)
     s = _ERR_SCALE_CACHE.get(key)
     if s is None:
-        s = torch.ones(len(_ACTUATED_JOINT_NAMES), device=device, dtype=dtype)
+        s = torch.ones(len(_ACT_JOINT_NAMES), device=device, dtype=dtype)
         s[list(_MODEL_INDICES.actuator_spn_ids)] = torch.tensor(scale, device=device, dtype=dtype)
         _ERR_SCALE_CACHE[key] = s
     return s
@@ -364,7 +363,7 @@ def _joint_group_weights(device, dtype) -> torch.Tensor:
     w = _JOINT_W_CACHE.get(key)
     if w is None:
         w = torch.tensor([1.57 if n in _SPN_NAMES else 0.30 if n in _NECK_NAMES
-                          else 1.00 for n in _ACTUATED_JOINT_NAMES], device=device, dtype=dtype)
+                          else 1.00 for n in _ACT_JOINT_NAMES], device=device, dtype=dtype)
         _JOINT_W_CACHE[key] = w
     return w
 
@@ -375,7 +374,7 @@ def _joint_target_cost(env: "ManagerBasedRlEnv", ref_columns: tuple[int, ...], s
     action_term = cast("JointPositionAction", env.action_manager.get_term("joint_pos"))
     target = action_term.raw_action * action_term.scale + action_term.offset
     ref_pos, _ = get_reference_joint_state(env)
-    target_columns = tuple(action_term.target_names.index(_ACTUATED_JOINT_NAMES[i]) for i in ref_columns)
+    target_columns = tuple(action_term.target_names.index(_ACT_JOINT_NAMES[i]) for i in ref_columns)
     error = target[:, target_columns] - ref_pos[:, ref_columns]
     if scales is not None:
         error = error * scales
