@@ -52,6 +52,7 @@ WALL_FINAL_ACCEPT_RATE = 0.80
 WALL_RETREAT_FAILURE_LIMIT = 5
 WALL_RETREAT_REQUIRED_PASSES = 2
 WALL_BIN_WEIGHT_GAIN = 2.0
+WALL_CURRICULUM_STATE_VERSION = 2  # 首次尝试翻正考核, 不继承旧版通过成绩
 WALL_D_LEVELS = tuple(
     round(WALL_D_MAX - i * WALL_D_MIN_STEP, 6)
     for i in range(round((WALL_D_MAX - WALL_D_MIN_END) / WALL_D_MIN_STEP) + 1)
@@ -257,7 +258,7 @@ class WallCurriculumState:
         interval = WALL_EVALUATION_FINAL_INTERVAL if self.final_level_passed else WALL_EVALUATION_INTERVAL
         return (int(iteration) - CURRICULUM_START_ITER) % interval == 0
 
-    # 汇总一批首个完整回合, 普通模式按最低档翻正率判定
+    # 汇总每环境的首次尝试成绩, 普通模式按最低档翻正率判定。
     def measure_batch(self, results: list[dict]) -> dict:
         eligible = [item for item in results if item.get("valid", True)]
         if any(
@@ -298,7 +299,7 @@ class WallCurriculumState:
             "bin_rate": [bin_successes[i] / value if value else 0.0 for i, value in enumerate(bin_count)],
         }
 
-    # 两批在同一档位完成后一次结算, 缺回合或跨档位结果拒绝写入
+    # 两批在同一档位完成后一次结算, 缺样本或跨档位结果拒绝写入。
     def record_evaluation(self, batches: list[dict], iteration: int) -> dict:
         mode = "final" if self.final_level_passed else "normal"
         if len(batches) != CURRICULUM_BATCHES_REQUIRED:
@@ -320,7 +321,7 @@ class WallCurriculumState:
                     not 0 <= ok <= count for ok, count in zip(batch["bin_successes"], batch["bin_count"], strict=True)
                 )
             ):
-                raise ValueError("考核档位不一致或完整回合不足, 拒绝推进课程")
+                raise ValueError("考核档位不一致或首次尝试结果不足, 拒绝推进课程")
         passed = all(bool(batch["passed"]) for batch in batches)
         count = sum(int(batch["count"]) for batch in batches)
         successes = sum(int(batch["successes"]) for batch in batches)
@@ -391,7 +392,7 @@ class WallCurriculumState:
     # 保存课程状态, 不保存未完成的考核批次
     def state_dict(self) -> dict:
         return {
-            "version": 1,
+            "version": WALL_CURRICULUM_STATE_VERSION,
             "d_min": self.d_min,
             "d_max": self.d_max,
             "level_start_iteration": self.level_start_iteration,
@@ -408,10 +409,11 @@ class WallCurriculumState:
 
     # 恢复课程并检查几何范围与采样权重
     def load_state_dict(self, state: dict) -> None:
+        version = int(state["version"])
         lower, upper = float(state["d_min"]), float(state["d_max"])
         weights = [float(value) for value in state["bin_weights"]]
         if (
-            int(state["version"]) != 1
+            version not in (1, WALL_CURRICULUM_STATE_VERSION)
             or not isfinite(lower)
             or not isfinite(upper)
             or not WALL_D_MIN_END <= lower <= upper == WALL_D_MAX
@@ -431,6 +433,10 @@ class WallCurriculumState:
             )
         ):
             raise ValueError("检查点墙位课程范围或分档权重不兼容")
+        if version == 1:
+            state = WallCurriculumState(int(state["level_start_iteration"])).state_dict()
+            state.update(d_min=lower, d_max=upper)
+            weights = state["bin_weights"]
         self.d_min, self.d_max = lower, upper
         self.bin_weights = weights
         for name in (

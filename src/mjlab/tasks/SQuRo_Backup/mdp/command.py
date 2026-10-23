@@ -812,6 +812,8 @@ class BackupCommand(CommandTerm):
             & (mean_vel <= STAND_VEL_MEAN_MAX)
         )
         confirmed = confirmed & ~self._pending_cycle_reset
+        if self.cfg.single_attempt_evaluation:
+            confirmed &= ~self._ep_had_success
         held = active & running & (self._stand_elapsed >= (STAND_CONFIRM_DURATION - eps))
         self._ep_stood_pose |= held & strict
         stand_active = active & running
@@ -820,7 +822,8 @@ class BackupCommand(CommandTerm):
         self._ep_had_success |= confirmed
         self._ep_cycle_count += confirmed.long()
         self._last_cycle_end_pulse |= confirmed
-        self._pending_cycle_reset |= confirmed
+        if not self.cfg.single_attempt_evaluation:
+            self._pending_cycle_reset |= confirmed
         log = getattr(self._env, "extras", {}).get("log") if hasattr(self._env, "extras") else None
         if log is not None:
             window = active & running & (self._stand_elapsed > 0.0)
@@ -931,6 +934,7 @@ class BackupCommandCfg(CommandTermCfg):
     window_late_s: float = WINDOW_LATE_S
     pose_angle_tolerance_deg: float = 45.0
     pose_confirm_s: float = 0.10
+    single_attempt_evaluation: bool = False  # 独立考核只完成一次, 不重启翻正循环
     inverted_confirm_s: float = 0.15
     wall_d_min: float | None = None
     wall_d_max: float | None = None

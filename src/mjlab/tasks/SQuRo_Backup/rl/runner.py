@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import wandb
-from typing import Any
+from typing import Any, cast
 from rsl_rl.utils import check_nan
 from mjlab.rl.exporter_utils import (
     get_base_metadata,
@@ -17,6 +17,8 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.SQuRo_Backup.mdp import entity as mdp_entity
+from mjlab.tasks.SQuRo_Backup.mdp.command import BackupCommand, BackupCommandCfg
+from mjlab.tasks.SQuRo_Backup.mdp.config import P1_END, T3
 from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     _STEPS_PER_ITER,
     WALL_D_MIN_END,
@@ -29,6 +31,9 @@ from mjlab.tasks.SQuRo_Backup.mdp.curriculums import (
     WALL_X_POS,
     WALL_BIN_COUNT,
     WALL_EVALUATION_ENVS,
+    WALL_CURRICULUM_STATE_VERSION,
+    P1_SETTLE_MAX,
+    TIME_SCALE_MAX,
     WallCurriculumState,
     get_level_for_wall_x_neg,
     get_training_phase,
@@ -214,7 +219,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             writer.add_scalar("Curriculum/final_mode", int(stats["final_mode"]), it)
             writer.add_scalar("Curriculum/final_accepted", int(stats["final_accepted"]), it)
             if self._wall_course.history:
-                writer.add_scalar("Curriculum/eval_righting_rate", stats["success_rate"], it)
+                writer.add_scalar("Curriculum/eval_first_attempt_righting_rate", stats["success_rate"], it)
         thickness = self.env.unwrapped.scene.entities["restricted_space"].cfg.wall_half_thickness
         writer.add_scalar("Curriculum/wall_width", pos - neg - 2 * thickness, it)
         writer.add_scalar("Curriculum/window_ready", float(ready), it)
@@ -350,7 +355,15 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             cfg.scene.num_envs = WALL_EVALUATION_ENVS
             cfg.events.pop("init_restricted_space", None)
             cfg.seed = None
-            cfg.commands["backup_cmd"].debug_vis = False
+            command_cfg = cast(BackupCommandCfg, cfg.commands["backup_cmd"])
+            command_cfg.debug_vis = False
+            command_cfg.single_attempt_evaluation = True
+            # 覆盖最大 λ 下两段首次尝试, 为离散时间边界各保留一个控制步。
+            step_dt = cfg.sim.mujoco.timestep * cfg.decimation
+            attempt_duration = (
+                (P1_END + P1_SETTLE_MAX + T3) * TIME_SCALE_MAX + 2 * command_cfg.window_late_s + 2 * step_dt
+            )
+            cfg.episode_length_s = min(cfg.episode_length_s, attempt_duration)
             walls, _ = self._corridor_compiled_state()
             if walls is None:
                 raise RuntimeError("墙位考核缺少受限空间实体")
@@ -365,10 +378,14 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
             self._evaluation_env = RslRlVecEnvWrapper(raw, clip_actions=self._corridor_clip_actions)
             if not raw.scene.entities["restricted_space"].collision_enabled:
                 raise RuntimeError("独立考核环境未开启真实墙碰撞")
-            print(f"[墙位考核] 已创建真实碰撞环境: {WALL_EVALUATION_ENVS} 个", flush=True)
+            print(
+                f"[墙位考核] 已创建真实碰撞环境: {WALL_EVALUATION_ENVS} 个, "
+                f"首次尝试时长上限 {raw.max_episode_length * raw.step_dt:.2f} s",
+                flush=True,
+            )
         return self._evaluation_env
 
-    # 冻结确定性策略, 每个环境只统计首个完整回合
+    # 冻结确定性策略, 每环境只取首次尝试, 全批结果收齐即结束。
     def _run_evaluation_sweep(self, seed: int) -> list[dict]:
         random.seed(int(seed))
         np.random.seed(int(seed) % (2**32))
@@ -379,7 +396,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         evaluation = self._get_evaluation_env()
         raw = evaluation.unwrapped
         raw.common_step_counter = int(self.env.unwrapped.common_step_counter)
-        command = raw.command_manager.get_term("backup_cmd")
+        command = cast(BackupCommand, raw.command_manager.get_term("backup_cmd"))
         course = self._wall_course
         command.set_wall_curriculum(
             course.d_min,
@@ -395,26 +412,45 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         sequence = command._ep_seq.clone()
         seen = torch.zeros(raw.num_envs, device=raw.device, dtype=torch.bool)
         results: list[dict] = []
-        for _ in range(raw.max_episode_length + 1):
+        for step in range(raw.max_episode_length + 1):
             actions = policy(obs.to(self.device)).to(evaluation.device)
             obs, rewards, dones, _ = evaluation.step(actions)
             if self.cfg.get("check_for_nan", True):
                 check_nan(obs, rewards, dones)
             completed = (command._ep_seq > sequence) & dones.bool() & ~seen
-            for env_id in completed.nonzero(as_tuple=False).flatten().tolist():
+            if bool((dones.bool() & ~completed & ~seen).any()):
+                raise RuntimeError("独立真实碰撞考核出现异常提前复位, 拒绝推进课程")
+            righted = torch.where(completed, command._last_ep_righted, command._ep_righted)
+            restarted = (
+                command._last_retry_mask
+                | command._last_back_to_p1
+                | command._last_back_to_p2
+                | command._last_cycle_reset
+            )
+            # 首次结果立即收集; 同步出现翻正确认与重试时按失败计。
+            finished = ~seen & (righted | restarted | completed)
+            distances = torch.where(completed, command._last_ep_wall_d, command._wall_d)
+            for env_id in finished.nonzero(as_tuple=False).flatten().tolist():
+                success = bool(righted[env_id] and not restarted[env_id])
                 results.append(
                     {
                         "env_id": int(env_id),
                         "valid": True,
-                        "success": bool(command._last_ep_righted[env_id]),
-                        "wall_d": float(command._last_ep_wall_d[env_id]),
+                        "success": success,
+                        "wall_d": float(distances[env_id]),
+                        "duration_s": (step + 1) * float(raw.step_dt),
+                        "end_reason": "翻正确认"
+                        if success
+                        else "阶段重试或重新开始"
+                        if bool(restarted[env_id])
+                        else "超时",
                     }
                 )
-            seen |= completed
+            seen |= finished
             if bool(seen.all()):
                 break
         if len(results) != raw.num_envs:
-            raise RuntimeError("独立真实碰撞考核缺少完整回合, 拒绝推进课程")
+            raise RuntimeError("独立真实碰撞考核缺少首次尝试结果, 拒绝推进课程")
         return results
 
     # 两批同档考核全部完成后一次结算, 恢复训练随机状态与归一化模式
@@ -449,7 +485,7 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         for index, batch in enumerate(batches):
             print(
                 f"[墙位考核] iter {iteration} 第 {index + 1} 批: "
-                f"{batch['count']} 个计分回合, 翻正率 {batch['success_rate']:.1%}, "
+                f"{batch['count']} 个计分回合, 首次尝试翻正率 {batch['success_rate']:.1%}, "
                 f"达标={batch['passed']}",
                 flush=True,
             )
@@ -462,17 +498,20 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         )
         if self.logger.writer is not None:
             values = {
-                "Curriculum/eval_righting_rate": result["success_rate"],
+                "Curriculum/eval_first_attempt_righting_rate": result["success_rate"],
                 "Curriculum/eval_passed": int(result["passed"]),
                 "Curriculum/eval_seconds": seconds,
                 "Curriculum/retreat_count": course.retreats,
                 "Curriculum/final_mode": int(course.final_level_passed),
                 "Curriculum/final_accepted": int(course.final_accepted),
             }
-            values.update({f"Curriculum/bin{i}_righting_rate": rate for i, rate in enumerate(result["bin_rate"])})
+            values.update(
+                {f"Curriculum/bin{i}_first_attempt_righting_rate": rate for i, rate in enumerate(result["bin_rate"])}
+            )
             for name, value in values.items():
                 self.logger.writer.add_scalar(name, value, iteration)
         if self.logger.log_dir is not None:
+            assert self._evaluation_env is not None, "独立考核环境缺失, 无法记录时长"
             directory = Path(self.logger.log_dir) / "collision_evaluations"
             directory.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -481,7 +520,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
                 "seconds": seconds,
                 "training_collision": True,
                 "evaluation_collision": True,
-                "success_criterion": "S2 姿态连续确认, 不要求站立或关节速度",
+                "success_criterion": "首次翻正确认前无阶段重试或重新开始; S2 连续确认, 不要求站立或关节速度",
+                "evaluation_episode_length_s": self._evaluation_env.unwrapped.max_episode_length
+                * self._evaluation_env.unwrapped.step_dt,
                 "course": course.state_dict(),
             }
             (directory / f"evaluation_{iteration:05d}.json").write_text(
@@ -628,6 +669,9 @@ class SQuRoBackupOnPolicyRunner(MjlabOnPolicyRunner):
         if self._wall_random:
             if saved.get("wall_course"):
                 self._wall_course.load_state_dict(saved["wall_course"])
+                if int(saved["wall_course"]["version"]) < WALL_CURRICULUM_STATE_VERSION:
+                    self._wall_course.level_start_iteration = self.current_learning_iteration
+                    print("[INFO] 旧考核仅迁移当前墙位, 首次尝试翻正标准需重新考核; 旧通过状态与成绩不继承")
             else:
                 distance = saved.get("wall_d_min")
                 if distance is None and recorded_neg is not None:

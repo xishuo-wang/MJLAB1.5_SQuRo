@@ -12,10 +12,11 @@ from mjlab.scripts.Backup import verify_backup_corridor_rebuild as rebuild
 from mjlab.scripts.Backup.verify_backup_stage_rewards import make_env
 from mjlab.tasks.SQuRo_Backup.mdp import curriculums as C
 from mjlab.tasks.SQuRo_Backup.mdp.indices import _MODEL_INDICES
+from mjlab.tasks.SQuRo_Backup.mdp.config import STAND_CONFIRM_DURATION
 from mjlab.tasks.SQuRo_Backup.mdp.terminations import righting_time_out
 
 
-# 一批独立环境首回合: 最低档 256 个, 其余使用宽墙位
+# 一批独立环境首次尝试: 最低档 256 个, 其余使用宽墙位
 def evaluation_results(lower: float, passed: bool = True, minimum_count: int = 256) -> list[dict]:
     return [
         {"env_id": i, "valid": True, "wall_d": lower if i < minimum_count else C.WALL_D_MAX,
@@ -66,6 +67,23 @@ class WallStateTests(unittest.TestCase):
         results[102]["success"] = False
         self.assertFalse(self.course.measure_batch(results)["passed"])
         self.assertFalse(self.course.measure_batch(evaluation_results(0.10, minimum_count=255))["passed"])
+
+    # 核对重试后翻正不补首次成绩, 不能推进或通过最终验收。
+    def test_episode_righting_without_first_attempt_cannot_pass(self):
+        for final in (False, True):
+            course = C.WallCurriculumState()
+            course.d_min = C.WALL_D_MIN_END
+            course.final_level_passed = final
+            results = evaluation_results(course.d_min, passed=False)
+            for item in results:
+                item["episode_righted"] = True
+            stats = course.measure_batch(results)
+            self.assertEqual(stats["success_rate"], 0.0)
+            self.assertNotIn("episode_righting_rate", stats)
+            settled = course.record_evaluation([stats, copy.deepcopy(stats)], 3500)
+            self.assertFalse(settled["passed"])
+            self.assertFalse(settled["advanced"])
+            self.assertFalse(course.final_accepted)
 
     # 核对同档两批只推进一次并保留成绩
     def test_two_batches_commit_one_step_and_keep_last_metrics(self):
@@ -158,6 +176,28 @@ class WallStateTests(unittest.TestCase):
                 restored.load_state_dict(invalid)
             self.assertEqual(restored.state_dict(), saved)
 
+    # 核对旧考核只迁移几何, 不继承通过状态、历史和难例权重。
+    def test_legacy_episode_criterion_is_requalified(self):
+        self.course.d_min = C.WALL_D_MIN_END
+        self.course.final_level_passed = True
+        self.course.final_accepted = True
+        self.course.consecutive_success_evaluations = 3
+        self.course.consecutive_failures = 2
+        self.course.bin_weights[0] = 2.5
+        self.course.history = [{"iteration": 8500, "success_rate": 1.0}]
+        saved = self.course.state_dict()
+        saved["version"] = 1
+        self.course.load_state_dict(saved)
+        self.assertEqual(self.course.d_min, C.WALL_D_MIN_END)
+        self.assertEqual(self.course.d_max, C.WALL_D_MAX)
+        self.assertFalse(self.course.final_level_passed)
+        self.assertFalse(self.course.final_accepted)
+        self.assertEqual(self.course.history, [])
+        self.assertEqual(self.course.consecutive_success_evaluations, 0)
+        self.assertEqual(self.course.consecutive_failures, 0)
+        self.assertEqual(self.course.bin_weights, [1.0] * C.WALL_BIN_COUNT)
+        self.assertEqual(self.course.state_dict()["version"], C.WALL_CURRICULUM_STATE_VERSION)
+
     # 核对考核轮次与环境编号去重
     def test_duplicate_event_or_environment_rejected(self):
         self.course.record_evaluation(batches(self.course, (False, False)), 3500)
@@ -244,6 +284,18 @@ class RightingSnapshotTests(unittest.TestCase):
         self.cmd._ep_righted[:] = True
         self.cmd._resample_command(torch.arange(2))
         self.assertTrue(bool(self.cmd._ep_righted.all()))
+
+    # 核对独立考核达到站立窗口后也不重启第二个翻正循环。
+    def test_single_attempt_evaluation_does_not_repeat_success_or_reset(self):
+        self.cmd.cfg.single_attempt_evaluation = True
+        self.cmd.phase[:] = 2
+        for _ in range(round(STAND_CONFIRM_DURATION / self.env.step_dt) + 20):
+            self.cmd.stand_reward_and_pulse()
+        self.assertTrue(bool(self.cmd._ep_had_success.all()))
+        self.assertTrue(bool((self.cmd._ep_cycle_count == 1).all()))
+        self.assertFalse(bool(self.cmd._pending_cycle_reset.any()))
+        self.cmd._update_command()
+        self.assertFalse(self.env.reset_calls["sim"])
 
     # 核对旁路统计不改变既有姿态缓存
     def test_recording_preserves_existing_pose_caches(self):
@@ -370,29 +422,54 @@ class EvaluationIsolationTests(unittest.TestCase):
             self.runner.load("unused")
         self.assertEqual(self.runner._wall_course.state_dict(), saved)
 
-    # 核对每环境只统计首个完整回合并拒绝缺回合
-    def test_first_full_episode_per_environment_only(self):
+    # 核对旧标准的最终通过状态在续训时退回当前墙距重新考核。
+    def test_resume_legacy_course_restarts_qualification_at_current_iteration(self):
+        course = self.runner._wall_course
+        course.d_min = C.WALL_D_MIN_END
+        course.final_level_passed = True
+        course.final_accepted = True
+        saved = course.state_dict()
+        saved["version"] = 1
+        self.runner.current_learning_iteration = 8999
+        infos = {"corridor_state": {"wall_course": saved}}
+        with patch("mjlab.rl.runner.MjlabOnPolicyRunner.load", return_value=infos):
+            self.runner.load("unused")
+        self.assertEqual(course.d_min, C.WALL_D_MIN_END)
+        self.assertEqual(course.level_start_iteration, 8999)
+        self.assertFalse(course.final_level_passed)
+        self.assertFalse(course.final_accepted)
+        self.assertEqual(course.history, [])
+
+    # 核对首次尝试确定后立即收集, 全批收齐即退出而不等待超时。
+    def test_first_attempt_per_environment_stops_before_episode_timeout(self):
         command = SimpleNamespace(
             _ep_seq=torch.zeros(3, dtype=torch.long),
+            _ep_righted=torch.zeros(3, dtype=torch.bool),
             _last_ep_righted=torch.zeros(3, dtype=torch.bool),
+            _last_retry_mask=torch.zeros(3, dtype=torch.bool),
+            _last_back_to_p1=torch.zeros(3, dtype=torch.bool),
+            _last_back_to_p2=torch.zeros(3, dtype=torch.bool),
+            _last_cycle_reset=torch.zeros(3, dtype=torch.bool),
             _last_ep_wall_d=torch.tensor([0.10, 0.12, 0.20]),
+            _wall_d=torch.tensor([0.10, 0.12, 0.20]),
             set_wall_curriculum=lambda *args, **kwargs: None,
         )
         raw = SimpleNamespace(
-            common_step_counter=0, num_envs=3, max_episode_length=4, device="cpu",
+            common_step_counter=0, num_envs=3, max_episode_length=20, step_dt=0.01, device="cpu",
             episode_length_buf=torch.zeros(3),
             command_manager=SimpleNamespace(get_term=lambda name: command),
         )
         steps = [0]
-        # 在不同物理步结束环境回合并发布结果
+        # 首次成功和重试在不同控制步出现, 不触发完整回合超时。
         def step(actions):
             steps[0] += 1
             dones = torch.zeros(3, dtype=torch.bool)
-            ids = [0] if steps[0] == 2 else ([1] if steps[0] == 3 else [0, 2] if steps[0] == 4 else [])
-            for index in ids:
-                command._ep_seq[index] += 1
-                command._last_ep_righted[index] = steps[0] == 2
-                dones[index] = True
+            command._last_retry_mask.zero_()
+            if steps[0] == 2:
+                command._ep_righted[0] = True
+                command._last_retry_mask[1] = True
+            if steps[0] == 3:
+                command._ep_righted[2] = True
             return torch.zeros(3, 2), None, dones, {}
         wrapper = SimpleNamespace(
             unwrapped=raw, device="cpu", reset=lambda: (torch.zeros(3, 2), {}),
@@ -404,9 +481,97 @@ class EvaluationIsolationTests(unittest.TestCase):
         self.assertEqual(len(results), 3)
         self.assertTrue(results[0]["success"])
         self.assertEqual([item["env_id"] for item in results], [0, 1, 2])
+        self.assertEqual([item["success"] for item in results], [True, False, True])
+        self.assertEqual(steps[0], 3)
         command._ep_seq.zero_()
-        steps[0] = -10
-        with self.assertRaisesRegex(RuntimeError, "缺少完整回合"):
+        command._ep_righted.zero_()
+        steps[0] = -100
+        with self.assertRaisesRegex(RuntimeError, "缺少首次尝试结果"):
+            self.runner._run_evaluation_sweep(12)
+
+    # 核对首尝试、阶段重试、循环复位、同帧事件与末步确认的计分。
+    def test_first_attempt_latches_before_full_episode_reset(self):
+        n = 10
+        command = SimpleNamespace(
+            _ep_seq=torch.zeros(n, dtype=torch.long),
+            _ep_righted=torch.zeros(n, dtype=torch.bool),
+            _last_ep_righted=torch.zeros(n, dtype=torch.bool),
+            _last_retry_mask=torch.zeros(n, dtype=torch.bool),
+            _last_back_to_p1=torch.zeros(n, dtype=torch.bool),
+            _last_back_to_p2=torch.zeros(n, dtype=torch.bool),
+            _last_cycle_reset=torch.zeros(n, dtype=torch.bool),
+            _last_ep_wall_d=torch.full((n,), 0.10),
+            _wall_d=torch.full((n,), 0.10),
+            set_wall_curriculum=lambda *args, **kwargs: None,
+        )
+        raw = SimpleNamespace(
+            common_step_counter=0, num_envs=n, max_episode_length=5, step_dt=0.01, device="cpu",
+            episode_length_buf=torch.zeros(n),
+            command_manager=SimpleNamespace(get_term=lambda name: command),
+        )
+        steps = [0]
+
+        # 模拟真实顺序: 物理判定、阶段事件, 末步发布快照再清空当前回合。
+        def step(actions):
+            steps[0] += 1
+            tick = steps[0]
+            for name in ("_last_retry_mask", "_last_back_to_p1", "_last_back_to_p2", "_last_cycle_reset"):
+                getattr(command, name).zero_()
+            if tick == 1:
+                command._last_retry_mask[1] = True
+                command._last_cycle_reset[6] = True
+                command._last_back_to_p1[7] = True
+                command._last_back_to_p2[8] = True
+            if tick == 2:
+                command._ep_righted[[0, 3, 5]] = True
+                command._last_retry_mask[[2, 5]] = True
+            if tick == 3:
+                command._ep_righted[[1, 6, 7, 8]] = True
+                command._last_cycle_reset[3] = True
+            if tick == 4:
+                command._ep_righted[2] = True
+                command._last_retry_mask[3] = True
+            dones = torch.full((n,), tick == 5, dtype=torch.bool)
+            if tick == 5:
+                command._ep_righted[9] = True
+                command._last_ep_righted.copy_(command._ep_righted)
+                command._ep_righted.zero_()
+                command._ep_seq += 1
+            return torch.zeros(n, 2), None, dones, {}
+
+        wrapper = SimpleNamespace(
+            unwrapped=raw, device="cpu", reset=lambda: (torch.zeros(n, 2), {}), step=step,
+        )
+        self.runner._get_evaluation_env = lambda: wrapper
+        self.runner.get_inference_policy = lambda device: (lambda obs: torch.zeros(n, 14))
+        results = self.runner._run_evaluation_sweep(12)
+        results.sort(key=lambda row: row["env_id"])
+        self.assertEqual(
+            [row["success"] for row in results],
+            [True, False, False, True, False, False, False, False, False, True],
+        )
+        self.assertEqual(
+            [row["end_reason"] for row in results],
+            ["翻正确认", "阶段重试或重新开始", "阶段重试或重新开始", "翻正确认", "超时", "阶段重试或重新开始",
+             "阶段重试或重新开始", "阶段重试或重新开始", "阶段重试或重新开始", "翻正确认"],
+        )
+
+    # 核对未跑满完整回合的异常复位不能用下一回合补成绩。
+    def test_unexpected_partial_episode_end_is_rejected(self):
+        command = SimpleNamespace(
+            _ep_seq=torch.zeros(1, dtype=torch.long), set_wall_curriculum=lambda *args, **kwargs: None,
+        )
+        raw = SimpleNamespace(
+            common_step_counter=0, num_envs=1, max_episode_length=5, device="cpu",
+            episode_length_buf=torch.zeros(1), command_manager=SimpleNamespace(get_term=lambda name: command),
+        )
+        wrapper = SimpleNamespace(
+            unwrapped=raw, device="cpu", reset=lambda: (torch.zeros(1, 2), {}),
+            step=lambda actions: (torch.zeros(1, 2), None, torch.ones(1, dtype=torch.bool), {}),
+        )
+        self.runner._get_evaluation_env = lambda: wrapper
+        self.runner.get_inference_policy = lambda device: (lambda obs: torch.zeros(1, 14))
+        with self.assertRaisesRegex(RuntimeError, "异常提前复位"):
             self.runner._run_evaluation_sweep(12)
 
 
